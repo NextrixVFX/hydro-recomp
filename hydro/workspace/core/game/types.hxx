@@ -9,6 +9,7 @@
 #include <workspace/core/entity/gfx.hxx>
 #include <workspace/core/entity/trigger.hxx>
 #include <workspace/core/entity/pfx.hxx>
+#include <workspace/core/world/surface.hxx>
 
 #include <cstring>
 
@@ -981,6 +982,9 @@ inline std::shared_ptr< void > entity_state_for( const std::string& cls )
         static_pfx_construct( s->defaults );
         return s;
     }
+    // The water classes (world/surface.hxx).
+    if ( auto water = water_entity_state_for( cls ) )
+        return water;
     return nullptr;
 }
 
@@ -1018,6 +1022,8 @@ inline void entity_load_properties( entity_t& entity, const value_t& properties 
         static_pfx_state_t* s = static_cast< static_pfx_state_t* >( entity.m_state.get( ) );
         static_pfx_load( s->value, properties, s->defaults );
     }
+    else if ( water_kind_of( entity.m_type ) != water_kind_none && entity.m_state )
+        water_entity_load( *static_cast< water_entity_state_t* >( entity.m_state.get( ) ), properties );
 }
 
 // The template mark's property step (each node's vt+0x1C): default = value.
@@ -1051,6 +1057,11 @@ inline void entity_mark_properties( entity_t& entity )
     else if ( entity.m_type == "VuStaticPfxEntity" && entity.m_state )
     {
         static_pfx_state_t* s = static_cast< static_pfx_state_t* >( entity.m_state.get( ) );
+        s->defaults = s->value;
+    }
+    else if ( water_kind_of( entity.m_type ) != water_kind_none && entity.m_state )
+    {
+        water_entity_state_t* s = static_cast< water_entity_state_t* >( entity.m_state.get( ) );
         s->defaults = s->value;
     }
 }
