@@ -1589,10 +1589,19 @@ inline bool verify_template_properties( )
     return failed == 0;
 }
 
+#include <workspace/utility/checks/world.hxx>
+#include <workspace/utility/checks/ui.hxx>
+#include <workspace/utility/checks/boat.hxx>
+#include <workspace/utility/checks/water.hxx>
+
 // Every oracle-backed check on game code.
 inline bool verify_game( )
 {
     bool ok = true;
+    ok = verify_world_all( ) && ok;
+    ok = verify_ui_all( ) && ok;
+    ok = verify_boat_all( ) && ok;
+    ok = verify_water_all( ) && ok;
     ok = verify_template_properties( ) && ok;
     ok = verify_coronas( ) && ok;
     ok = verify_prop_models( ) && ok;
