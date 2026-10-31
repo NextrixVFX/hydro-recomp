@@ -1,5 +1,6 @@
 #pragma once
 
+#include <workspace/core/boat/sections.hxx>
 #include <workspace/core/entity/object.hxx>
 
 #include <algorithm>
@@ -68,4 +69,30 @@ inline std::vector< image_object_t > ai_driver_construct( )
     // there sets the .data byte 0x758F8A - the dev config is compiled out
     // (slot 6 0x4FDB70 returns the static null container), so never.
     return g;
+}
+// The drivers' load (vtable slot 2, postLoad's driver->load(container
+// ["Driver"]); thiscall, retn 4). VuDriverEntity's 0x40EAC0 (VuHumanDriver /
+// VuGhostDriver): "Name" (tag 4) into the string at +0x60.
+inline void driver_entity_load( boat_strings_t& strings, const value_t& container )
+{
+    section_string( strings, 0x60, member( container, "Name" ) );
+}
+
+// VuAiDriver's 0x40B8A0 (also VuAiUiDriver / VuAiNuisanceDriver's slot 2):
+// the name, then +0x98 = maxss(half the boat's aabb width in x, in y) from
+// the boat (+0x5C) +0x270 / +0x280 (min / max) - (hi - lo) * 0.5 (0x6F765C)
+// per lane, x kept only when strictly greater (a NaN or an equal x gives y).
+// postLoad calls it BEFORE 0x420A70 writes that aabb: on a fresh boat it
+// reads the ctor's zeros.
+inline void ai_driver_load( std::uint8_t* driver, boat_strings_t& strings, const value_t& container, const std::uint8_t* boat )
+{
+    section_string( strings, 0x60, member( container, "Name" ) );
+    float lo[ 2 ], hi[ 2 ];
+    std::memcpy( lo, boat + 0x270, 8 );
+    std::memcpy( hi, boat + 0x280, 8 );
+    const float half = 0.5f;
+    const float y = ( hi[ 1 ] - lo[ 1 ] ) * half;
+    const float x = ( hi[ 0 ] - lo[ 0 ] ) * half;
+    const float r = x > y ? x : y;
+    std::memcpy( driver + 0x98, &r, 4 );
 }

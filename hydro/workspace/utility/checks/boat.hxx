@@ -255,11 +255,64 @@ inline bool verify_boat_ai_driver( )
     return failed == 0;
 }
 
+// ai_driver_load / driver_entity_load (boat/driver.hxx) against retail's
+// 0x40B8A0 / 0x40EAC0 (oracle case boat_driver_load): every byte of the
+// driver block outside its +0x60 string, and the string's text.
+inline bool verify_boat_driver_load( )
+{
+    const unsigned* d = g_golden_boat_driver_load_synthetic;
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( d + 1 );
+    const value_t doc = c_reader( std::vector< std::uint8_t >( raw, raw + d[ 0 ] ) ).parse( );
+    auto text = []( const unsigned*& s )
+    {
+        const unsigned length = *s++;
+        std::string out( reinterpret_cast< const char* >( s ), length );
+        s += ( length + 3 ) / 4;
+        return out;
+    };
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_driver_load_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_driver_load_words + g_golden_boat_driver_load_offsets[ index ];
+        const unsigned address = *s++;
+        const std::string name = text( s );
+        std::uint8_t boat[ 0x290 ]{};
+        std::memcpy( boat + 0x270, s, 16 );
+        std::memcpy( boat + 0x280, s + 4, 16 );
+        s += 8;
+        std::uint8_t image[ 0xD4 ];
+        std::memcpy( image, s, 0xD4 );
+        s += 0xD4 / 4;
+        const unsigned char* want = reinterpret_cast< const unsigned char* >( s );
+        s += 0xD4 / 4;
+        const std::string want_string = text( s );
+        boat_strings_t strings{ { 0x60, "" } };
+        if ( address == 0x40B8A0u )
+            ai_driver_load( image, strings, member( doc, name.c_str( ) ), boat );
+        else
+            driver_entity_load( strings, member( doc, name.c_str( ) ) );
+        int bad = -1;
+        for ( int at = 0; at < 0xD4 && bad < 0; ++at )
+            if ( ( at < 0x60 || at >= 0x78 ) && image[ at ] != want[ at ] )
+                bad = at;
+        if ( bad < 0 && strings[ 0x60 ] != want_string )
+            bad = 0x10060;
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "driver load 0x%X vector %d differs from retail at byte 0x%X", address, static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the drivers' load 0x40B8A0 / 0x40EAC0 match retail: %d vectors", static_cast< int >( g_golden_boat_driver_load_count ) );
+    else
+        LOG_ERROR( "driver load FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_driver_load_count ) );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
     ok = verify_boat_sections( ) && ok;
     ok = verify_boat_engine( ) && ok;
     ok = verify_boat_ai_driver( ) && ok;
+    ok = verify_boat_driver_load( ) && ok;
     return ok;
 }
