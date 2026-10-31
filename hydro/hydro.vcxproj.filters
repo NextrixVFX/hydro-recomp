@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="impl">
+      <UniqueIdentifier>{9a5653c1-67d0-54c1-a45b-b531a6876b5e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="impl\engine">
+      <UniqueIdentifier>{6c1ae5e6-659e-541c-af9a-b824a9f4dd00}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace">
+      <UniqueIdentifier>{de6d9c9c-d2fd-5370-af77-8b077944404b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace\core">
+      <UniqueIdentifier>{ce1ab834-7cdf-5475-a5ca-3631180d2b66}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace\core\assets">
+      <UniqueIdentifier>{66085fd8-b7de-5c62-b96f-9dffa6ffcaae}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace\core\boat">
+      <UniqueIdentifier>{b7de5dd6-3464-5527-b2f1-4525d3064f83}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace\core\game">
+      <UniqueIdentifier>{231cf902-4666-55f6-a81c-cf1bc560f180}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace\core\light">
+      <UniqueIdentifier>{1d2c592b-af21-5230-b344-fced1378e6e9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace\core\trigger">
+      <UniqueIdentifier>{75d54d9f-4cc4-59df-9bb7-b8b58cd2a0d0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace\core\world">
+      <UniqueIdentifier>{10f6b410-6628-5c8a-ba73-eef168e61159}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace\utility">
+      <UniqueIdentifier>{7d7beff5-138a-5386-a875-0e95733090cb}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cxx" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="impl\includes.hxx">
+      <Filter>impl</Filter>
+    </ClInclude>
+    <ClInclude Include="impl\engine\engine.hxx">
+      <Filter>impl\engine</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\check.hxx">
+      <Filter>workspace\utility</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\fluid.hxx">
+      <Filter>workspace\utility</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\assets\animation.hxx">
+      <Filter>workspace\core\assets</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\assets\font.hxx">
+      <Filter>workspace\core\assets</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\assets\model.hxx">
+      <Filter>workspace\core\assets</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\assets\skin.hxx">
+      <Filter>workspace\core\assets</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\assets\texture.hxx">
+      <Filter>workspace\core\assets</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\boat\entity.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\boat\fluid.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\boat\hull.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\boat\math.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\boat\parts.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\boat\steer.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\boat\tick.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\boat\update.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\game\game.hxx">
+      <Filter>workspace\core\game</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\game\input.hxx">
+      <Filter>workspace\core\game</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\light\rig.hxx">
+      <Filter>workspace\core\light</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\trigger\set.hxx">
+      <Filter>workspace\core\trigger</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\trigger\volume.hxx">
+      <Filter>workspace\core\trigger</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\world\control.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\world\pfx.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\world\query.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\world\transform.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\world\water.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\world\wave.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\world\world.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>

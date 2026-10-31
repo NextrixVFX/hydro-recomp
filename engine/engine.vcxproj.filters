@@ -1,0 +1,276 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="impl">
+      <UniqueIdentifier>{2a1ccbcb-e0f5-5ae1-be04-adaa37296931}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="impl\inflate">
+      <UniqueIdentifier>{c5723e72-b8d4-50f3-8d9a-2d332569c676}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace">
+      <UniqueIdentifier>{410cba3c-2682-527b-b364-dc85533f56d2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace\core">
+      <UniqueIdentifier>{093abc1f-f8d3-50bf-903f-3eaa259a9f2c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace\core\assets">
+      <UniqueIdentifier>{3bbc6625-94b3-51aa-809a-1363426d6a54}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace\core\collision">
+      <UniqueIdentifier>{4d363de9-f5d9-5966-8eef-2eda8609e591}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace\core\dynamics">
+      <UniqueIdentifier>{1e3056a7-6d8f-5be2-b715-6b9aa28365f4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace\core\entity">
+      <UniqueIdentifier>{e20204a3-cb37-54f6-9f7e-3de6a02de1dc}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace\core\render">
+      <UniqueIdentifier>{a7116a4f-7175-50e6-9128-14b25f7c5da8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace\core\scene">
+      <UniqueIdentifier>{a6426778-30af-52c0-8d3a-49f3441dd454}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="workspace\utility">
+      <UniqueIdentifier>{e4ff542c-a603-532f-aff9-c8214fab46d2}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="workspace\core\rendering\window\window.cxx">
+      <Filter>workspace\core\rendering\window</Filter>
+    </ClCompile>
+    <ClCompile Include="workspace\core\rendering\device\device.cxx">
+      <Filter>workspace\core\rendering\device</Filter>
+    </ClCompile>
+    <ClCompile Include="workspace\core\rendering\swap\swap.cxx">
+      <Filter>workspace\core\rendering\swap</Filter>
+    </ClCompile>
+    <ClCompile Include="workspace\core\runtime\runtime.cxx">
+      <Filter>workspace\core\runtime</Filter>
+    </ClCompile>
+    <ClCompile Include="workspace\core\draw\draw.cxx">
+      <Filter>workspace\core\draw</Filter>
+    </ClCompile>
+    <ClCompile Include="workspace\core\rendering\target\target.cxx">
+      <Filter>workspace\core\rendering\target</Filter>
+    </ClCompile>
+    <ClCompile Include="workspace\core\rendering\shader\shader.cxx">
+      <Filter>workspace\core\rendering\shader</Filter>
+    </ClCompile>
+    <ClCompile Include="workspace\core\viewport\viewport.cxx">
+      <Filter>workspace\core\viewport</Filter>
+    </ClCompile>
+    <ClCompile Include="workspace\core\sort\sort.cxx">
+      <Filter>workspace\core\sort</Filter>
+    </ClCompile>
+    <ClCompile Include="workspace\core\light\light.cxx">
+      <Filter>workspace\core\light</Filter>
+    </ClCompile>
+    <ClCompile Include="workspace\core\scene\scene.cxx">
+      <Filter>workspace\core\scene</Filter>
+    </ClCompile>
+    <ClCompile Include="workspace\core\composer\composer.cxx">
+      <Filter>workspace\core\composer</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="impl\engine.hxx">
+      <Filter>impl</Filter>
+    </ClInclude>
+    <ClInclude Include="impl\host.hxx">
+      <Filter>impl</Filter>
+    </ClInclude>
+    <ClInclude Include="impl\includes.hxx">
+      <Filter>impl</Filter>
+    </ClInclude>
+    <ClInclude Include="impl\inflate\puff.h">
+      <Filter>impl\inflate</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\bench.hxx">
+      <Filter>workspace\core</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\runtime.hxx">
+      <Filter>workspace\core</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\boat.hxx">
+      <Filter>workspace\utility</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\broad.hxx">
+      <Filter>workspace\utility</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\collide.hxx">
+      <Filter>workspace\utility</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\crash.hxx">
+      <Filter>workspace\utility</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\golden.hxx">
+      <Filter>workspace\utility</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\logger.hxx">
+      <Filter>workspace\utility</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\math.hxx">
+      <Filter>workspace\utility</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\meshes.hxx">
+      <Filter>workspace\utility</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\narrow.hxx">
+      <Filter>workspace\utility</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\random.hxx">
+      <Filter>workspace\utility</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\solver.hxx">
+      <Filter>workspace\utility</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\trace.hxx">
+      <Filter>workspace\utility</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\verify.hxx">
+      <Filter>workspace\utility</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\assets\archive.hxx">
+      <Filter>workspace\core\assets</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\assets\reader.hxx">
+      <Filter>workspace\core\assets</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\assets\tree.hxx">
+      <Filter>workspace\core\assets</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\boxbox.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\broadphase.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\bvh.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\compound.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\concave.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\convex.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\dbvt.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\detector.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\dispatch.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\epa.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\gjk.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\pairs.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\polytope.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\simplex.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\sphere.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\support.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\world.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\dynamics\body.hxx">
+      <Filter>workspace\core\dynamics</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\dynamics\contact.hxx">
+      <Filter>workspace\core\dynamics</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\dynamics\finish.hxx">
+      <Filter>workspace\core\dynamics</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\dynamics\island.hxx">
+      <Filter>workspace\core\dynamics</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\dynamics\iterate.hxx">
+      <Filter>workspace\core\dynamics</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\dynamics\manager.hxx">
+      <Filter>workspace\core\dynamics</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\dynamics\row.hxx">
+      <Filter>workspace\core\dynamics</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\dynamics\setup.hxx">
+      <Filter>workspace\core\dynamics</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\dynamics\step.hxx">
+      <Filter>workspace\core\dynamics</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\dynamics\world.hxx">
+      <Filter>workspace\core\dynamics</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\dynamics\writeback.hxx">
+      <Filter>workspace\core\dynamics</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\entity\bind.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\entity\light.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\entity\schema.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\render\device.hxx">
+      <Filter>workspace\core\render</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\render\mesh.hxx">
+      <Filter>workspace\core\render</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\render\shader.hxx">
+      <Filter>workspace\core\render</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\render\swap.hxx">
+      <Filter>workspace\core\render</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\render\target.hxx">
+      <Filter>workspace\core\render</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\render\window.hxx">
+      <Filter>workspace\core\render</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\scene\composer.hxx">
+      <Filter>workspace\core\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\scene\draw.hxx">
+      <Filter>workspace\core\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\scene\light.hxx">
+      <Filter>workspace\core\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\scene\scene.hxx">
+      <Filter>workspace\core\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\scene\screen.hxx">
+      <Filter>workspace\core\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\scene\sort.hxx">
+      <Filter>workspace\core\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\scene\viewport.hxx">
+      <Filter>workspace\core\scene</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>

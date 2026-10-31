@@ -1,0 +1,841 @@
+#pragma once
+
+#include <workspace/utility/fluid.hxx>
+#include <workspace/core/world/control.hxx>
+#include <workspace/core/world/wave.hxx>
+#include <workspace/core/world/transform.hxx>
+#include <workspace/core/boat/parts.hxx>
+#include <workspace/utility/golden.hxx>
+#include <workspace/utility/logger.hxx>
+
+#include <cmath>
+#include <cstring>
+#include <string>
+#include <vector>
+
+// The game side of the differential oracle.
+//
+// engine/workspace/utility/verify.hxx holds the checks for engine maths. This
+// holds the ones for game code, because the engine must not include a game
+// header to test it - the separation is the point, not an inconvenience.
+
+// whirlpool_vertex against VuWaterWhirlpoolWave's kernel @0x5a1ad0.
+//
+// THE BAR HERE IS BIT EXACTNESS, unlike the euler check. That one compares
+// against x87 `fsincos` at 80-bit internal precision and can only agree to
+// within float rounding. This kernel uses nothing but multiplies, adds,
+// divides and square roots, all of which IEEE-754 specifies exactly, so a
+// statement-for-statement transliteration reproduces retail's bits, and
+// anything less than exact is worth failing on.
+//
+// WHAT THIS CHECK WAS MEASURED TO CATCH, AND WHAT IT WAS NOT. Three
+// perturbations were compiled and run against it rather than reasoned about:
+//
+//   swapping the two CROSSED swirl terms   fails 6 of 10 vectors
+//   reordering the normalising sum          passes - undetected
+//   dropping the radius epsilon entirely    passes at the original 8 samples
+//
+// So the earlier claim here that "any deviation means the order was changed"
+// was wrong: at a radius of 20 the epsilon is far below the ULP and the sum's
+// three terms reorder exactly. Two samples at a radius of 1e-4 were added so
+// the epsilon is a tenth of a percent and does move the answer. The sum's
+// operand order is still NOT covered by any sample, and saying so is better
+// than implying it is.
+inline bool verify_whirlpool( )
+{
+    double worst = 0.0;
+    int checked = 0;
+    int failed = 0;
+
+    for ( std::size_t index = 0; index < g_golden_whirlpool_count; ++index )
+    {
+        const golden_whirlpool_t& sample = g_golden_whirlpool[ index ];
+        whirlpool_t wave{};
+        wave.centre_x = sample.m_wave[ 0 ];
+        wave.centre_y = sample.m_wave[ 1 ];
+        wave.outer_radius = sample.m_wave[ 2 ];
+        wave.inner_radius = sample.m_wave[ 3 ];
+        wave.depth = sample.m_wave[ 4 ];
+        wave.angular_speed = sample.m_wave[ 5 ];
+        wave.linear_speed = sample.m_wave[ 6 ];
+
+        // Zeroed exactly as the oracle's vertex was, so what comes out is one
+        // wave's contribution and nothing else.
+        float displacement[ 3 ]{};
+        float height = 0.0f;
+        whirlpool_vertex( wave, sample.m_point[ 0 ], sample.m_point[ 1 ],
+            displacement, height );
+
+        const float ours[ 4 ] = { displacement[ 0 ], displacement[ 1 ],
+            displacement[ 2 ], height };
+        double local_worst = 0.0;
+        for ( int slot = 0; slot < 4; ++slot )
+        {
+            const double delta = std::fabs( static_cast< double >( ours[ slot ] )
+                - static_cast< double >( sample.m_out[ slot ] ) );
+            if ( delta > local_worst )
+                local_worst = delta;
+        }
+        ++checked;
+        if ( local_worst > worst )
+            worst = local_worst;
+        if ( local_worst != 0.0 )
+        {
+            ++failed;
+            // %g, not %f: two samples sit at a radius of 1e-4 and %.2f prints
+            // both of them as "0.00 0.00", which makes a real failure
+            // unidentifiable. Found by reading an actual failure.
+            LOG_ERROR( "whirlpool_vertex differs from the kernel at point %.6g %.6g by %.3e",
+                sample.m_point[ 0 ], sample.m_point[ 1 ], local_worst );
+        }
+    }
+
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "whirlpool_vertex matches VuWaterWhirlpoolWave's kernel @0x5a1ad0 on %d vectors, worst deviation %.3e",
+            checked, worst );
+    }
+    else
+    {
+        LOG_ERROR( "whirlpool_vertex FAILED %d of %d vectors against the kernel @0x5a1ad0",
+            failed, checked );
+    }
+    return failed == 0;
+}
+
+// directional_vertex against VuWaterDirectionalWave's base kernel @0x59b110.
+//
+// THIS ONE CALLS cos AND sin, so bit exactness is not a given the way it is
+// for the whirlpool. Retail's x86 CRT takes a double; ours promotes and
+// narrows to match. The threshold is reported either way, and the honest
+// reading of the number printed is in the commit that added it.
+inline bool verify_directional( )
+{
+    double worst = 0.0;
+    int checked = 0;
+    int failed = 0;
+
+    for ( std::size_t index = 0; index < g_golden_directional_count; ++index )
+    {
+        const golden_directional_t& sample = g_golden_directional[ index ];
+        directional_t wave{};
+        wave.amplitude = sample.m_wave[ 0 ];
+        wave.wavenumber = sample.m_wave[ 1 ];
+        wave.phase_scale = sample.m_wave[ 2 ];
+        wave.edge_b = sample.m_wave[ 3 ];
+        wave.edge_a = sample.m_wave[ 4 ];
+        wave.clock = sample.m_wave[ 5 ];
+        std::memcpy( wave.transform, sample.m_matrix, sizeof( wave.transform ) );
+
+        float displacement[ 3 ]{};
+        float height = 0.0f;
+        directional_vertex( wave, sample.m_point[ 0 ], sample.m_point[ 1 ],
+            displacement, height );
+
+        const float ours[ 4 ] = { displacement[ 0 ], displacement[ 1 ],
+            displacement[ 2 ], height };
+        double local_worst = 0.0;
+        for ( int slot = 0; slot < 4; ++slot )
+        {
+            const double delta = std::fabs( static_cast< double >( ours[ slot ] )
+                - static_cast< double >( sample.m_out[ slot ] ) );
+            if ( delta > local_worst )
+                local_worst = delta;
+        }
+        ++checked;
+        if ( local_worst > worst )
+            worst = local_worst;
+        if ( local_worst > 1.0e-6 )
+        {
+            ++failed;
+            LOG_ERROR( "directional_vertex differs from the kernel at point %.6g %.6g by %.3e",
+                sample.m_point[ 0 ], sample.m_point[ 1 ], local_worst );
+        }
+    }
+
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "directional_vertex matches VuWaterDirectionalWave's kernel @0x59b110 on %d vectors, worst deviation %.3e",
+            checked, worst );
+    }
+    else
+    {
+        LOG_ERROR( "directional_vertex FAILED %d of %d vectors against the kernel @0x59b110",
+            failed, checked );
+    }
+    return failed == 0;
+}
+
+// flow_vertex against VuWaterDirectionalFlowWave's base kernel @0x59c7c0.
+// No transcendentals here, so the bar is bit exactness as it is for the
+// whirlpool.
+inline bool verify_flow( )
+{
+    double worst = 0.0;
+    int checked = 0;
+    int failed = 0;
+
+    for ( std::size_t index = 0; index < g_golden_flow_count; ++index )
+    {
+        const golden_flow_t& sample = g_golden_flow[ index ];
+        flow_t wave{};
+        wave.flow[ 0 ] = sample.m_wave[ 0 ];
+        wave.flow[ 1 ] = sample.m_wave[ 1 ];
+        wave.flow[ 2 ] = sample.m_wave[ 2 ];
+        wave.edge_b = sample.m_wave[ 3 ];
+        wave.edge_a = sample.m_wave[ 4 ];
+        std::memcpy( wave.transform, sample.m_matrix, sizeof( wave.transform ) );
+
+        float displacement[ 3 ]{};
+        float height = 0.0f;
+        flow_vertex( wave, sample.m_point[ 0 ], sample.m_point[ 1 ],
+            displacement, height );
+
+        const float ours[ 4 ] = { displacement[ 0 ], displacement[ 1 ],
+            displacement[ 2 ], height };
+        double local_worst = 0.0;
+        for ( int slot = 0; slot < 4; ++slot )
+        {
+            const double delta = std::fabs( static_cast< double >( ours[ slot ] )
+                - static_cast< double >( sample.m_out[ slot ] ) );
+            if ( delta > local_worst )
+                local_worst = delta;
+        }
+        ++checked;
+        if ( local_worst > worst )
+            worst = local_worst;
+        if ( local_worst != 0.0 )
+        {
+            ++failed;
+            LOG_ERROR( "flow_vertex differs from the kernel at point %.6g %.6g by %.3e",
+                sample.m_point[ 0 ], sample.m_point[ 1 ], local_worst );
+        }
+    }
+
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "flow_vertex matches VuWaterDirectionalFlowWave's kernel @0x59c7c0 on %d vectors, worst deviation %.3e",
+            checked, worst );
+    }
+    else
+    {
+        LOG_ERROR( "flow_vertex FAILED %d of %d vectors against the kernel @0x59c7c0",
+            failed, checked );
+    }
+    return failed == 0;
+}
+
+// ramp_vertex against VuWaterRampWave's base kernel @0x5a2c10. No
+// transcendentals, so the bar is bit exactness.
+inline bool verify_ramp( )
+{
+    double worst = 0.0;
+    int checked = 0;
+    int failed = 0;
+
+    for ( std::size_t index = 0; index < g_golden_ramp_count; ++index )
+    {
+        const golden_ramp_t& sample = g_golden_ramp[ index ];
+        ramp_t wave{};
+        wave.blend_height = sample.m_wave[ 0 ];
+        wave.band = sample.m_wave[ 1 ];
+        wave.curve = sample.m_wave[ 2 ];
+        wave.slope = sample.m_wave[ 3 ];
+        for ( int axis = 0; axis < 3; ++axis )
+        {
+            wave.flow_inner[ axis ] = sample.m_wave[ 4 + axis ];
+            wave.flow_outer[ axis ] = sample.m_wave[ 7 + axis ];
+        }
+        wave.along_x = sample.m_along[ 0 ];
+        wave.along_y = sample.m_along[ 1 ];
+        wave.along_offset = sample.m_along[ 2 ];
+
+        float displacement[ 3 ]{};
+        float height = 0.0f;
+        ramp_vertex( wave, sample.m_point[ 0 ], sample.m_point[ 1 ],
+            displacement, height );
+
+        const float ours[ 4 ] = { displacement[ 0 ], displacement[ 1 ],
+            displacement[ 2 ], height };
+        double local_worst = 0.0;
+        for ( int slot = 0; slot < 4; ++slot )
+        {
+            const double delta = std::fabs( static_cast< double >( ours[ slot ] )
+                - static_cast< double >( sample.m_out[ slot ] ) );
+            if ( delta > local_worst )
+                local_worst = delta;
+        }
+        ++checked;
+        if ( local_worst > worst )
+            worst = local_worst;
+        if ( local_worst != 0.0 )
+        {
+            ++failed;
+            LOG_ERROR( "ramp_vertex differs from the kernel at point %.6g %.6g by %.3e",
+                sample.m_point[ 0 ], sample.m_point[ 1 ], local_worst );
+        }
+    }
+
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "ramp_vertex matches VuWaterRampWave's kernel @0x5a2c10 on %d vectors, worst deviation %.3e",
+            checked, worst );
+    }
+    else
+    {
+        LOG_ERROR( "ramp_vertex FAILED %d of %d vectors against the kernel @0x5a2c10",
+            failed, checked );
+    }
+    return failed == 0;
+}
+
+// bump_vertex against VuWaterBumpWave's base kernel @0x5a4140. This one calls
+// cos, so the threshold is loose for the same reason the directional's is.
+inline bool verify_bump( )
+{
+    double worst = 0.0;
+    int checked = 0;
+    int failed = 0;
+
+    for ( std::size_t index = 0; index < g_golden_bump_count; ++index )
+    {
+        const golden_bump_t& sample = g_golden_bump[ index ];
+        bump_t wave{};
+        wave.amplitude = sample.m_wave[ 0 ];
+        wave.edge_a = sample.m_wave[ 1 ];
+        std::memcpy( wave.transform, sample.m_matrix, sizeof( wave.transform ) );
+
+        float displacement[ 3 ]{};
+        float height = 0.0f;
+        bump_vertex( wave, sample.m_point[ 0 ], sample.m_point[ 1 ],
+            displacement, height );
+
+        const float ours[ 4 ] = { displacement[ 0 ], displacement[ 1 ],
+            displacement[ 2 ], height };
+        double local_worst = 0.0;
+        for ( int slot = 0; slot < 4; ++slot )
+        {
+            const double delta = std::fabs( static_cast< double >( ours[ slot ] )
+                - static_cast< double >( sample.m_out[ slot ] ) );
+            if ( delta > local_worst )
+                local_worst = delta;
+        }
+        ++checked;
+        if ( local_worst > worst )
+            worst = local_worst;
+        if ( local_worst > 1.0e-6 )
+        {
+            ++failed;
+            LOG_ERROR( "bump_vertex differs from the kernel at point %.6g %.6g by %.3e",
+                sample.m_point[ 0 ], sample.m_point[ 1 ], local_worst );
+        }
+    }
+
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "bump_vertex matches VuWaterBumpWave's kernel @0x5a4140 on %d vectors, worst deviation %.3e",
+            checked, worst );
+    }
+    else
+    {
+        LOG_ERROR( "bump_vertex FAILED %d of %d vectors against the kernel @0x5a4140",
+            failed, checked );
+    }
+    return failed == 0;
+}
+
+// point_wave_vertex against VuWaterPointWave's base kernel, inlined in slot 3
+// @0x5a3510. Calls cos and sin, so the threshold is loose for the same reason
+// the directional's is.
+inline bool verify_point_wave( )
+{
+    double worst = 0.0;
+    int checked = 0;
+    int failed = 0;
+    int live = 0;
+
+    for ( std::size_t index = 0; index < g_golden_point_wave_count; ++index )
+    {
+        const golden_point_wave_t& sample = g_golden_point_wave[ index ];
+        point_wave_t wave{};
+        wave.centre_x = sample.m_wave[ 0 ];
+        wave.centre_y = sample.m_wave[ 1 ];
+        wave.tail_width = sample.m_wave[ 2 ];
+        wave.amplitude = sample.m_wave[ 3 ];
+        wave.inner_radius = sample.m_wave[ 4 ];
+        wave.outer_radius = sample.m_wave[ 5 ];
+        wave.phase_scale = sample.m_wave[ 6 ];
+        wave.clock = sample.m_wave[ 7 ];
+        wave.rate = sample.m_wave[ 8 ];
+        wave.amplitude_scale = sample.m_wave[ 9 ];
+        wave.slope = sample.m_wave[ 10 ];
+
+        float displacement[ 3 ]{};
+        float height = 0.0f;
+        point_wave_vertex( wave, sample.m_point[ 0 ], sample.m_point[ 1 ],
+            displacement, height );
+
+        const float ours[ 4 ] = { displacement[ 0 ], displacement[ 1 ],
+            displacement[ 2 ], height };
+        double local_worst = 0.0;
+        for ( int slot = 0; slot < 4; ++slot )
+        {
+            const double delta = std::fabs( static_cast< double >( ours[ slot ] )
+                - static_cast< double >( sample.m_out[ slot ] ) );
+            if ( delta > local_worst )
+                local_worst = delta;
+        }
+        ++checked;
+        if ( sample.m_out[ 2 ] != 0.0f || sample.m_out[ 3 ] != 0.0f )
+            ++live;
+        if ( local_worst > worst )
+            worst = local_worst;
+        if ( local_worst > 1.0e-5 )
+        {
+            ++failed;
+            LOG_ERROR( "point_wave_vertex differs from the kernel at point %.6g %.6g by %.3e",
+                sample.m_point[ 0 ], sample.m_point[ 1 ], local_worst );
+        }
+    }
+
+    if ( failed == 0 )
+    {
+        // The live count is reported because most of this kernel's branches
+        // REJECT the vertex: a sample set that happened to reject all of them
+        // would pass while measuring nothing, and that nearly happened - three
+        // samples sat outside the ring until they were moved.
+        LOG_SUCCESS( "point_wave_vertex matches VuWaterPointWave's kernel @0x5a3510 on %d vectors (%d producing output), worst deviation %.3e",
+            checked, live, worst );
+    }
+    else
+    {
+        LOG_ERROR( "point_wave_vertex FAILED %d of %d vectors against the kernel @0x5a3510",
+            failed, checked );
+    }
+    return failed == 0;
+}
+
+// banked_turn_vertex against VuWaterBankedTurnWave's base kernel @0x5a55c0.
+// Calls acos and cos, so the threshold is loose for the same reason the
+// directional's is.
+inline bool verify_banked_turn( )
+{
+    double worst = 0.0;
+    int checked = 0;
+    int failed = 0;
+    int live = 0;
+
+    for ( std::size_t index = 0; index < g_golden_banked_turn_count; ++index )
+    {
+        const golden_banked_turn_t& sample = g_golden_banked_turn[ index ];
+        banked_turn_t wave{};
+        wave.centre_x = sample.m_wave[ 0 ];
+        wave.centre_y = sample.m_wave[ 1 ];
+        wave.outer_radius = sample.m_wave[ 2 ];
+        wave.inner_radius = sample.m_wave[ 3 ];
+        wave.amplitude = sample.m_wave[ 4 ];
+        wave.edge = sample.m_wave[ 5 ];
+        wave.direction_x = sample.m_wave[ 6 ];
+        wave.direction_y = sample.m_wave[ 7 ];
+        wave.extent = sample.m_wave[ 8 ];
+
+        float displacement[ 3 ]{};
+        float height = 0.0f;
+        banked_turn_vertex( wave, sample.m_point[ 0 ], sample.m_point[ 1 ],
+            displacement, height );
+
+        const float ours[ 4 ] = { displacement[ 0 ], displacement[ 1 ],
+            displacement[ 2 ], height };
+        double local_worst = 0.0;
+        for ( int slot = 0; slot < 4; ++slot )
+        {
+            const double delta = std::fabs( static_cast< double >( ours[ slot ] )
+                - static_cast< double >( sample.m_out[ slot ] ) );
+            if ( delta > local_worst )
+                local_worst = delta;
+        }
+        ++checked;
+        if ( sample.m_out[ 3 ] != 0.0f )
+            ++live;
+        if ( local_worst > worst )
+            worst = local_worst;
+        if ( local_worst > 1.0e-5 )
+        {
+            ++failed;
+            LOG_ERROR( "banked_turn_vertex differs from the kernel at point %.6g %.6g by %.3e",
+                sample.m_point[ 0 ], sample.m_point[ 1 ], local_worst );
+        }
+    }
+
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "banked_turn_vertex matches VuWaterBankedTurnWave's kernel @0x5a55c0 on %d vectors (%d producing output), worst deviation %.3e",
+            checked, live, worst );
+    }
+    else
+    {
+        LOG_ERROR( "banked_turn_vertex FAILED %d of %d vectors against the kernel @0x5a55c0",
+            failed, checked );
+    }
+    return failed == 0;
+}
+
+// control_advance against VuAnimationControl's advance @0x516300. Compares
+// the resulting time bit for bit (mulss, addss, minss, maxss and subtraction
+// only) and the exact sequence of names the listener received.
+inline bool verify_advance( )
+{
+    std::vector< timed_event_t > events;
+    for ( std::size_t index = 0; index < sizeof( g_golden_advance_events ) / sizeof( float ); ++index )
+    {
+        timed_event_t event{};
+        event.time = g_golden_advance_events[ index ];
+        event.name = "E" + std::to_string( index );
+        events.push_back( event );
+    }
+
+    int checked = 0;
+    int failed = 0;
+    int fires = 0;
+    for ( std::size_t index = 0; index < g_golden_advance_count; ++index )
+    {
+        const golden_advance_t& sample = g_golden_advance[ index ];
+        animation_control_t control{};
+        control.end = g_golden_advance_end;
+        control.loop = g_golden_advance_loop;
+        control.looping = sample.m_in[ 0 ] != 0.0f;
+        control.factor = sample.m_in[ 1 ];
+        control.time = sample.m_in[ 2 ];
+        control.events = sample.m_in[ 4 ] != 0.0f ? &events : nullptr;
+
+        std::vector< std::string > fired;
+        control_advance( control, sample.m_in[ 3 ], sample.m_in[ 5 ] != 0.0f,
+            [ &fired ]( const std::string& name, const value_t* ) { fired.push_back( name ); } );
+
+        bool same = std::memcmp( &control.time, &sample.m_time, sizeof( float ) ) == 0
+            && static_cast< int >( fired.size( ) ) == sample.m_count;
+        for ( int slot = 0; same && slot < sample.m_count; ++slot )
+            same = fired[ slot ] == sample.m_fired[ slot ];
+        ++checked;
+        fires += sample.m_count;
+        if ( !same )
+        {
+            ++failed;
+            LOG_ERROR( "control_advance differs from @0x516300 at vector %d: time %.9g vs %.9g, %d fires vs %d",
+                static_cast< int >( index ), control.time, sample.m_time,
+                static_cast< int >( fired.size( ) ), sample.m_count );
+        }
+    }
+
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "control_advance matches VuAnimationControl's advance @0x516300 on %d vectors (%d fires, same order), time bit exact",
+            checked, fires );
+    }
+    else
+    {
+        LOG_ERROR( "control_advance FAILED %d of %d vectors against @0x516300", failed, checked );
+    }
+    return failed == 0;
+}
+
+// transform_component_t against retail's VuTransformComponent: its ctor, the
+// Position / Rotation / Scale loads and the recalc 0x534340 / 0x534AA0, on
+// Properties maps from the Hydroelectric project and hand-built ones; the last
+// documents under a parent world. Every word of both matrices and lanes 0-2 of
+// rotation and scale (and of the world euler without a parent) bit exact.
+inline bool verify_transform_load( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_transform_load_count; ++index )
+    {
+        const unsigned* s = g_golden_transform_load_words + g_golden_transform_load_offsets[ index ];
+        const bool parented = s[ 0 ] != 0;
+        const unsigned size = s[ 1 ];
+        const unsigned char* raw = reinterpret_cast< const unsigned char* >( s + 2 );
+        const unsigned* want = s + 2 + ( size + 3 ) / 4;
+        const value_t properties = c_reader( std::vector< std::uint8_t >( raw, raw + size ) ).parse( );
+        float parent_world[ 16 ];
+        std::memcpy( parent_world, g_golden_transform_load_parent, sizeof( parent_world ) );
+
+        transform_component_t c{};
+        transform_construct( c );
+        transform_load( c, properties );
+        transform_recalc( c, parented ? parent_world : nullptr );
+
+        unsigned ours[ 44 ];
+        std::memcpy( ours, c.local, 64 );
+        std::memcpy( ours + 16, c.world, 64 );
+        std::memcpy( ours + 32, c.rotation, 16 );
+        std::memcpy( ours + 36, c.world_rotation, 16 );
+        std::memcpy( ours + 40, c.scale, 16 );
+        int bad = -1;
+        for ( int word = 0; word < 44 && bad < 0; ++word )
+        {
+            if ( word % 4 == 3 && word >= 32 )
+                continue;
+            if ( word >= 36 && word < 40 && parented )
+                continue;
+            if ( ours[ word ] != want[ word ] )
+                bad = word;
+        }
+        if ( bad >= 0 )
+        {
+            ++failed;
+            LOG_ERROR( "VuTransformComponent document %d differs at word %d (+0x%X): ours %08x, retail %08x",
+                static_cast< int >( index ), bad, 0x10 + 4 * bad, ours[ bad ], want[ bad ] );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "transform_component_t matches retail's VuTransformComponent load + recalc 0x534340 on %d documents, every compared word exact",
+            static_cast< int >( g_golden_transform_load_count ) );
+    else
+        LOG_ERROR( "transform_component_t FAILED %d of %d documents against 0x534340", failed,
+            static_cast< int >( g_golden_transform_load_count ) );
+    return failed == 0;
+}
+
+// One retail image off the boat_parts stream against ours: every byte the
+// ctor wrote (the mask) equal, outside `skip` (indeterminate bytes); the heap
+// pointer slots exactly the ones ours owns. Returns the first bad offset, or
+// -1. Advances `s` past the image.
+inline int parts_compare( const unsigned*& s, const std::uint8_t* ours, std::size_t size,
+    std::vector< int > owned, std::vector< std::pair< int, int > > skip = {},
+    std::vector< std::pair< int, int > > selfs = {} )
+{
+    const unsigned n = *s++;
+    const unsigned char* bytes = reinterpret_cast< const unsigned char* >( s );
+    s += ( n + 3 ) / 4;
+    const unsigned char* mask = reinterpret_cast< const unsigned char* >( s );
+    s += ( n + 3 ) / 4;
+    const unsigned pointers = *s++;
+    std::vector< int > theirs( s, s + pointers );
+    s += pointers;
+    // Pointers into the object itself (a property bound to a member), as
+    // (slot, the member's offset).
+    const unsigned self_count = *s++;
+    std::vector< std::pair< int, int > > their_selfs;
+    for ( unsigned k = 0; k < self_count; ++k, s += 2 )
+        their_selfs.emplace_back( static_cast< int >( s[ 0 ] ), static_cast< int >( s[ 1 ] ) );
+    if ( n != size || theirs != owned || their_selfs != selfs )
+        return -2;
+    for ( unsigned at = 0; at < n; ++at )
+    {
+        bool skipped = false;
+        for ( const auto& range : skip )
+            skipped = skipped || ( static_cast< int >( at ) >= range.first && static_cast< int >( at ) < range.second );
+        if ( mask[ at ] && !skipped && bytes[ at ] != ours[ at ] )
+            return static_cast< int >( at );
+    }
+    return -1;
+}
+
+// The VuBoatEntity ctor pieces (boat/parts.hxx) against retail's run of each
+// (oracle case boat_parts): 0x41B400, 0x41CA50, 0x5240C0, 0x4192E0 and the big
+// splash 0x415D60 reading the real ConstantDB (the golden vujb_read document
+// 0, parsed by c_reader). Every written byte, every owned pointer, the string.
+inline bool verify_boat_parts( )
+{
+    const unsigned* cdb = g_golden_vujb_words + g_golden_vujb_offsets[ 0 ];
+    const unsigned char* cdb_raw = reinterpret_cast< const unsigned char* >( cdb + 2 );
+    const value_t constant_db = c_reader( std::vector< std::uint8_t >( cdb_raw, cdb_raw + cdb[ 1 ] ) ).parse( );
+    const std::vector< int > object_pointers = { 52, 56, 68 };
+    int failed = 0;
+    auto report = [ &failed ]( const char* what, int bad )
+    {
+        if ( bad == -1 )
+            return;
+        ++failed;
+        LOG_ERROR( "boat ctor piece %s differs from retail at byte %d (-2: size or pointer slots)", what, bad );
+    };
+    for ( std::size_t index = 0; index < g_golden_boat_parts_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_parts_words + g_golden_boat_parts_offsets[ index ];
+        if ( index == 0 )
+        {
+            boat_41b400_t o;
+            boat_41b400( o );
+            report( "0x41B400", parts_compare( s, o.image, sizeof( o.image ), {} ) );
+        }
+        else if ( index == 1 )
+        {
+            boat_41ca50_t o;
+            boat_41ca50( o );
+            report( "0x41CA50", parts_compare( s, o.image, sizeof( o.image ), {} ) );
+        }
+        else if ( index == 2 )
+        {
+            auto o = boat_5240c0( );
+            report( "0x5240C0", parts_compare( s, o->image, sizeof( o->image ), object_pointers ) );
+        }
+        else if ( index == 3 )
+        {
+            boat_4192e0_t o;
+            boat_4192e0( o, 0x12345678u );
+            report( "0x4192E0", parts_compare( s, o.image, sizeof( o.image ), { 52 }, { { 164, 168 }, { 180, 184 } } ) );
+            if ( *s++ != 1 || *s++ != 52 )
+                report( "0x4192E0 +0x34", -2 );
+            else
+                report( "0x4192E0 +0x34", parts_compare( s, o.at_34->image, sizeof( o.at_34->image ), object_pointers ) );
+        }
+        else if ( index == 5 )
+        {
+            boat_40fe00_t o;
+            boat_40fe00( o, 0x12345678u );
+            report( "0x40FE00", parts_compare( s, o.image, sizeof( o.image ), {} ) );
+        }
+        else if ( index == 6 )
+        {
+            boat_413590_t o;
+            boat_413590( o, 0x12345678u );
+            report( "0x413590", parts_compare( s, o.image, sizeof( o.image ), { 48 } ) );
+        }
+        else if ( index == 7 )
+        {
+            boat_409750_t o;
+            boat_409750( o, 0x12345678u );
+            report( "0x409750", parts_compare( s, o.image, sizeof( o.image ), {} ) );
+        }
+        else if ( index == 8 )
+        {
+            boat_410d90_t o;
+            boat_410d90( o, 0x12345678u );
+            report( "0x410D90", parts_compare( s, o.image, sizeof( o.image ), { 156 }, { { 180, 184 }, { 196, 200 } } ) );
+        }
+        else if ( index == 9 )
+        {
+            boat_4131e0_t o;
+            std::uint8_t a5[ 16 ];
+            for ( int k = 0; k < 16; ++k )
+                a5[ k ] = static_cast< std::uint8_t >( 0x40 + k );
+            boat_4131e0( o, 0x3FA00000u, 0x11111111u, 0x22222222u, a5 );
+            report( "0x4131E0", parts_compare( s, o.image, sizeof( o.image ), {} ) );
+        }
+        else if ( index == 10 )
+        {
+            boat_41b1b0_t o;
+            boat_41b1b0( o );
+            report( "0x41B1B0", parts_compare( s, o.image, sizeof( o.image ), {} ) );
+        }
+        else if ( index == 11 )
+        {
+            vu_3d_layout_t o;
+            vu_3d_layout( o, 0x12345678u );
+            report( "0x50B8D0", parts_compare( s, o.image, sizeof( o.image ), {}, { { 36, 40 }, { 52, 56 } } ) );
+        }
+        else if ( index == 12 )
+        {
+            vu_3d_draw_t o;
+            vu_3d_draw( o, 0x12345678u, 1 );
+            report( "0x531A40", parts_compare( s, o.image, sizeof( o.image ), { 4 }, { { 48, 52 }, { 64, 68 } } ) );
+            const unsigned subs = *s++;
+            const unsigned strings = *s++;
+            const unsigned nodes = *s++;
+            if ( subs != 0 || strings != 0 || nodes != 2 )
+                report( "0x531A40 property list", -2 );
+            else
+            {
+                report( "0x531A40 \"Reflect\"", parts_compare( s, o.properties[ 0 ].image, 0x1C, { 16 }, {},
+                    { { 24, o.properties[ 0 ].member } } ) );
+                report( "0x531A40 \"Shadow\"", parts_compare( s, o.properties[ 1 ].image, 0x1C, {}, {},
+                    { { 24, o.properties[ 1 ].member } } ) );
+            }
+        }
+        else if ( index == 13 )
+        {
+            vu_animated_model_t o;
+            vu_animated_model( o );
+            report( "0x532080", parts_compare( s, o.image, sizeof( o.image ), {}, { { 56, 60 }, { 72, 76 } } ) );
+        }
+        else if ( index >= 14 && index <= 17 )
+        {
+            // The oracle's targets: the VuStrings at ARG_BASE + 0x7100 / 0x7140
+            // / 0x7180 / 0x71C0 (13, 27, 15 and 16 characters).
+            static const char* const values[ 4 ] = { "ReflectTarget", "Generic/Water/SplashOutLong", "ExactlyFifteen!",
+                "SixteenCharacter" };
+            static const std::uint32_t targets[ 4 ] = { 0x30007100u, 0x30007140u, 0x30007180u, 0x300071C0u };
+            static const char* const names[ 4 ] = { "0x406B70 (13, inline)", "0x406B70 (27, heap)", "0x406B70 (15, inline)",
+                "0x406B70 (16, heap)" };
+            const std::string value = values[ index - 14 ];
+            const bool longer = value.size( ) > 15;
+            vu_string_property_t o;
+            vu_string_property( o, 0x006CDEA0u, targets[ index - 14 ], value );
+            const char* what = names[ index - 14 ];
+            report( what, parts_compare( s, o.image, sizeof( o.image ), o.heap ? std::vector< int >{ 20, 44 } : std::vector< int >{} ) );
+            const unsigned subs = *s++;
+            const unsigned strings = *s++;
+            bool same = subs == 0 && strings == ( longer ? 2u : 0u );
+            for ( unsigned k = 0; same && k < strings; ++k )
+            {
+                const unsigned at = *s++;
+                const unsigned length = *s++;
+                const std::string want( reinterpret_cast< const char* >( s ), length );
+                s += ( length + 3 ) / 4;
+                same = ( at == 20 && o.fallback == want ) || ( at == 44 && o.current == want );
+            }
+            if ( !same )
+                report( what, -2 );
+        }
+        else
+        {
+            boat_splash_t o;
+            boat_splash( o, 0x12345678u, constant_db );
+            report( "0x415D60", parts_compare( s, o.image, sizeof( o.image ), { 380, 460 } ) );
+            if ( *s++ != 1 || *s++ != 460 )
+                report( "0x415D60 +0x1CC", -2 );
+            else
+                report( "0x415D60 +0x1CC", parts_compare( s, o.at_1cc->image, sizeof( o.at_1cc->image ), object_pointers ) );
+            const unsigned strings = *s++;
+            const unsigned at = *s++;
+            const unsigned length = *s++;
+            const std::string want( reinterpret_cast< const char* >( s ), length );
+            if ( strings != 1 || at != 380 || o.pfx != want )
+                report( "0x415D60 +0x17C string", -2 );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "boat ctor pieces 0x41B400 / 0x41CA50 / 0x5240C0 / 0x4192E0 / 0x415D60 / 0x40FE00 / 0x413590 / 0x409750 / 0x410D90 / 0x4131E0 / 0x41B1B0 / 0x50B8D0 / 0x531A40 / 0x532080 / 0x406B70 match retail: every written byte, "
+                     "pointer slot and the ConstantDB BigSplash reads" );
+    else
+        LOG_ERROR( "boat ctor pieces FAILED %d checks against retail", failed );
+    return failed == 0;
+}
+
+// Every oracle-backed check on game code.
+inline bool verify_game( )
+{
+    bool ok = true;
+    ok = verify_boat_parts( ) && ok;
+    ok = verify_transform_load( ) && ok;
+    ok = verify_advance( ) && ok;
+    ok = verify_whirlpool( ) && ok;
+    ok = verify_directional( ) && ok;
+    ok = verify_flow( ) && ok;
+    ok = verify_ramp( ) && ok;
+    ok = verify_bump( ) && ok;
+    ok = verify_point_wave( ) && ok;
+    ok = verify_banked_turn( ) && ok;
+    ok = verify_fluid_prepare( ) && ok;
+    ok = verify_fluid_solve( ) && ok;
+    ok = verify_hull_forces( ) && ok;
+    ok = verify_hull_fluid( ) && ok;
+    ok = verify_hull_invert( ) && ok;
+    ok = verify_hull_steer( ) && ok;
+    ok = verify_hull_update( ) && ok;
+    ok = verify_boat_tick( ) && ok;
+    ok = verify_linstep( ) && ok;
+    ok = verify_boat_d570( ) && ok;
+    ok = verify_curve( ) && ok;
+    ok = verify_quat( ) && ok;
+    ok = verify_qmul( ) && ok;
+    ok = verify_qaxis( ) && ok;
+    ok = verify_boat_4760( ) && ok;
+    ok = verify_boat_4010( ) && ok;
+    ok = verify_tick_thunk( ) && ok;
+    ok = verify_boat_enable( ) && ok;
+    ok = verify_euler_x87( ) && ok;
+    ok = verify_boat_19c0( ) && ok;
+    ok = verify_boat_disable( ) && ok;
+    ok = verify_boat_teardown( ) && ok;
+    return ok;
+}

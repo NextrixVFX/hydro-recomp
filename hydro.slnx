@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+  </Configurations>
+  <Project Path="engine/engine.vcxproj" Id="e4a1c8d0-2b57-4f1e-9c33-7a6d5e1b0c84" />
+  <Project Path="hydro/hydro.vcxproj" Id="f5b2d9e1-3c68-4a2f-8d44-8b7e6f2c1d95" />
+</Solution>

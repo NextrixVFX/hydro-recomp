@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{e4a1c8d0-2b57-4f1e-9c33-7a6d5e1b0c84}</ProjectGuid>
+    <RootNamespace>engine</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>engine</ProjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\masm.props" />
+  </ImportGroup>
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <!-- The oracle's golden vectors live outside the repository (they embed asset bytes):
+       hydro-tools/oracle/golden.py writes them here. Override with /p:HydroGoldenDir=... -->
+  <PropertyGroup>
+    <HydroGoldenDir Condition="'$(HydroGoldenDir)' == ''">$(MSBuildThisFileDirectory)..\..\hydro-tools\oracle\generated\</HydroGoldenDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>$(ProjectDir)..\build\$(ProjectName)\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)..\build\$(ProjectName)\$(Configuration)\Intermediates\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(ProjectDir)..\build\$(ProjectName)\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)..\build\$(ProjectName)\$(Configuration)\Intermediates\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(HydroGoldenDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
+      <LanguageStandard_C>stdclatest</LanguageStandard_C>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(HydroGoldenDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
+      <LanguageStandard_C>stdclatest</LanguageStandard_C>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup>
+    <PostBuildEvent>
+      <Command>if not exist "$(ProjectDir)..\hydro\impl\engine\$(Configuration)" mkdir "$(ProjectDir)..\hydro\impl\engine\$(Configuration)"
+copy /Y "$(TargetPath)" "$(ProjectDir)..\hydro\impl\engine\$(Configuration)\engine.lib"
+copy /Y "$(ProjectDir)impl\engine.hxx" "$(ProjectDir)..\hydro\impl\engine\engine.hxx"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="entry.cxx" />
+    <MASM Include="x87.asm" />
+    <ClCompile Include="$(HydroGoldenDir)part0.cxx" Condition="Exists('$(HydroGoldenDir)part0.cxx')" />
+    <ClCompile Include="$(HydroGoldenDir)part1.cxx" Condition="Exists('$(HydroGoldenDir)part1.cxx')" />
+    <ClCompile Include="$(HydroGoldenDir)part2.cxx" Condition="Exists('$(HydroGoldenDir)part2.cxx')" />
+    <ClCompile Include="$(HydroGoldenDir)part3.cxx" Condition="Exists('$(HydroGoldenDir)part3.cxx')" />
+    <ClCompile Include="$(HydroGoldenDir)part4.cxx" Condition="Exists('$(HydroGoldenDir)part4.cxx')" />
+    <ClCompile Include="$(HydroGoldenDir)part5.cxx" Condition="Exists('$(HydroGoldenDir)part5.cxx')" />
+    <ClCompile Include="$(HydroGoldenDir)part6.cxx" Condition="Exists('$(HydroGoldenDir)part6.cxx')" />
+    <ClCompile Include="$(HydroGoldenDir)part7.cxx" Condition="Exists('$(HydroGoldenDir)part7.cxx')" />
+    <ClCompile Include="impl\inflate\puff.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="impl\engine.hxx" />
+    <ClInclude Include="impl\host.hxx" />
+    <ClInclude Include="impl\includes.hxx" />
+    <ClInclude Include="impl\inflate\puff.h" />
+    <ClInclude Include="workspace\core\bench.hxx" />
+    <ClInclude Include="workspace\core\runtime.hxx" />
+    <ClInclude Include="workspace\utility\boat.hxx" />
+    <ClInclude Include="workspace\utility\broad.hxx" />
+    <ClInclude Include="workspace\utility\collide.hxx" />
+    <ClInclude Include="workspace\utility\crash.hxx" />
+    <ClInclude Include="workspace\utility\golden.hxx" />
+    <ClInclude Include="workspace\utility\logger.hxx" />
+    <ClInclude Include="workspace\utility\math.hxx" />
+    <ClInclude Include="workspace\utility\meshes.hxx" />
+    <ClInclude Include="workspace\utility\narrow.hxx" />
+    <ClInclude Include="workspace\utility\random.hxx" />
+    <ClInclude Include="workspace\utility\solver.hxx" />
+    <ClInclude Include="workspace\utility\trace.hxx" />
+    <ClInclude Include="workspace\utility\verify.hxx" />
+    <ClInclude Include="workspace\core\assets\archive.hxx" />
+    <ClInclude Include="workspace\core\assets\reader.hxx" />
+    <ClInclude Include="workspace\core\assets\tree.hxx" />
+    <ClInclude Include="workspace\core\collision\boxbox.hxx" />
+    <ClInclude Include="workspace\core\collision\broadphase.hxx" />
+    <ClInclude Include="workspace\core\collision\bvh.hxx" />
+    <ClInclude Include="workspace\core\collision\compound.hxx" />
+    <ClInclude Include="workspace\core\collision\concave.hxx" />
+    <ClInclude Include="workspace\core\collision\convex.hxx" />
+    <ClInclude Include="workspace\core\collision\dbvt.hxx" />
+    <ClInclude Include="workspace\core\collision\detector.hxx" />
+    <ClInclude Include="workspace\core\collision\dispatch.hxx" />
+    <ClInclude Include="workspace\core\collision\epa.hxx" />
+    <ClInclude Include="workspace\core\collision\gjk.hxx" />
+    <ClInclude Include="workspace\core\collision\pairs.hxx" />
+    <ClInclude Include="workspace\core\collision\polytope.hxx" />
+    <ClInclude Include="workspace\core\collision\simplex.hxx" />
+    <ClInclude Include="workspace\core\collision\sphere.hxx" />
+    <ClInclude Include="workspace\core\collision\support.hxx" />
+    <ClInclude Include="workspace\core\collision\world.hxx" />
+    <ClInclude Include="workspace\core\dynamics\body.hxx" />
+    <ClInclude Include="workspace\core\dynamics\contact.hxx" />
+    <ClInclude Include="workspace\core\dynamics\finish.hxx" />
+    <ClInclude Include="workspace\core\dynamics\island.hxx" />
+    <ClInclude Include="workspace\core\dynamics\iterate.hxx" />
+    <ClInclude Include="workspace\core\dynamics\manager.hxx" />
+    <ClInclude Include="workspace\core\dynamics\row.hxx" />
+    <ClInclude Include="workspace\core\dynamics\setup.hxx" />
+    <ClInclude Include="workspace\core\dynamics\step.hxx" />
+    <ClInclude Include="workspace\core\dynamics\world.hxx" />
+    <ClInclude Include="workspace\core\dynamics\writeback.hxx" />
+    <ClInclude Include="workspace\core\entity\bind.hxx" />
+    <ClInclude Include="workspace\core\entity\light.hxx" />
+    <ClInclude Include="workspace\core\entity\schema.hxx" />
+    <ClInclude Include="workspace\core\render\device.hxx" />
+    <ClInclude Include="workspace\core\render\mesh.hxx" />
+    <ClInclude Include="workspace\core\render\shader.hxx" />
+    <ClInclude Include="workspace\core\render\swap.hxx" />
+    <ClInclude Include="workspace\core\render\target.hxx" />
+    <ClInclude Include="workspace\core\render\window.hxx" />
+    <ClInclude Include="workspace\core\scene\composer.hxx" />
+    <ClInclude Include="workspace\core\scene\draw.hxx" />
+    <ClInclude Include="workspace\core\scene\light.hxx" />
+    <ClInclude Include="workspace\core\scene\scene.hxx" />
+    <ClInclude Include="workspace\core\scene\screen.hxx" />
+    <ClInclude Include="workspace\core\scene\sort.hxx" />
+    <ClInclude Include="workspace\core\scene\viewport.hxx" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\masm.targets" />
+  </ImportGroup>
+</Project>

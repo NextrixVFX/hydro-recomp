@@ -1,0 +1,50 @@
+# ---- IDE state ----------------------------------------------------------
+.vs/
+*.suo
+*.user
+*.VC.db
+*.ipch
+
+# ---- build output -------------------------------------------------------
+build/
+**/intermediates/
+*.obj
+*.pdb
+*.ipdb
+*.iobj
+*.ilk
+*.exp
+*.lib
+*.tlog
+*.recipe
+*.lastbuildstate
+
+# ---- never versioned: the game and anything derived from its data -------
+# The game install (HydroThunder.exe, Base.apf) and the oracle's golden data,
+# which embeds asset bytes, live OUTSIDE this repository (see README.md). These
+# patterns are a backstop in case a copy ever lands inside it.
+*.apf
+*.xbla
+*.DMP
+*.dmp
+*.exe
+golden_data.hxx
+golden.json
+golden_x87.json
+engine/golden/
+
+# ---- reverse engineering databases --------------------------------------
+*.i64
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+*.idb
+
+# ---- bench and scratch output -------------------------------------------
+*.bmp
+run_*/
+*.log
+__pycache__/
+*.pyc
