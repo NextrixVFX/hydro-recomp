@@ -150,10 +150,9 @@ inline bool verify_wake_kernels( )
 }
 
 // The wave entities' wave creation against retail's slot 6 on every rectangular ocean, circular ocean,
-// banked turn and whirlpool entity of Hydroelectric (loaded by retail's VuEntity::load): every word the
-// recreated descriptor + constructor defines must equal the word retail's wave object holds. The
-// directional and bump entities are captured but NOT recreated (their constructors build a matrix through
-// 0x40b5f0 / 0x410ab0 / 0x4157c0, unread) - they are counted, not checked.
+// banked turn, whirlpool, directional and bump entity of Hydroelectric (loaded by retail's VuEntity::load):
+// every word the recreated descriptor + constructor defines must equal the word retail's wave object holds -
+// for the directional and bump that includes both 16-word frames (the matrix and its inverse).
 inline bool verify_wave_bridges( )
 {
     int checked = 0;
@@ -173,6 +172,8 @@ inline bool verify_wave_bridges( )
         case 1: w = circular_ocean_create( s ); break;
         case 2: w = banked_turn_create( s ); break;
         case 3: w = whirlpool_create( s ); break;
+        case 4: w = directional_create( s ); break;
+        case 5: w = bump_create( s ); break;
         default: ++skipped; continue;
         }
         ++checked;
@@ -196,7 +197,7 @@ inline bool verify_wave_bridges( )
     }
     if ( failed == 0 )
     {
-        LOG_SUCCESS( "the wave entities' creation (0x5d8ce0 / 0x5d9340 / 0x5d35f0 / 0x5d7d90 -> the wave ctors) matches retail on %d Hydroelectric entities, %d words (%d directional / bump captured, not recreated)",
+        LOG_SUCCESS( "the wave entities' creation (0x5d8ce0 / 0x5d9340 / 0x5d35f0 / 0x5d7d90 / 0x5d9d40 / 0x5d3e70 -> the wave ctors) matches retail on %d Hydroelectric entities, %d words (%d of an unknown kind)",
             checked, words, skipped );
     }
     else
@@ -444,6 +445,39 @@ inline bool verify_pfx_ticks( )
     return failed == 0;
 }
 
+// The wave frame's matrix helpers against retail: 0x40b5f0 (rotation about z, x87 fsincos under Unicorn),
+// VuMatrix_fromScale @0x407db0 and VuMatrix_identity @0x410a40 - all 16 words of each output.
+inline bool verify_matrix_helpers( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_matrix_helpers_count; ++index )
+    {
+        const golden_matrix_helper_t& g = g_golden_matrix_helpers[ index ];
+        float m[ 16 ];
+        if ( g.m_fn == 0 )
+            wave_matrix_rotation_z( m, g.m_in[ 0 ] );
+        else if ( g.m_fn == 1 )
+            wave_matrix_scale( m, g.m_in );
+        else
+            wave_matrix_identity( m );
+        if ( std::memcmp( m, g.m_words, 64 ) != 0 )
+        {
+            ++failed;
+            LOG_ERROR( "matrix helper %d on %.9g differs from retail", g.m_fn, g.m_in[ 0 ] );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the wave frame's matrix helpers (0x40b5f0 / 0x407db0 / 0x410a40) match retail on %d outputs, all 16 words",
+            static_cast< int >( g_golden_matrix_helpers_count ) );
+    }
+    else
+    {
+        LOG_ERROR( "the matrix helpers FAILED %d of %d", failed, static_cast< int >( g_golden_matrix_helpers_count ) );
+    }
+    return failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
@@ -453,5 +487,6 @@ inline bool verify_water_all( )
     ok = verify_water_tick( ) && ok;
     ok = verify_wave_ticks( ) && ok;
     ok = verify_pfx_ticks( ) && ok;
+    ok = verify_matrix_helpers( ) && ok;
     return ok;
 }
