@@ -554,9 +554,47 @@ inline bool verify_script_graph( )
     return failed == 0;
 }
 
+// animated_model_select against Vu3dDrawAnimatedModelComponent's draw 0x61DB60
+// (oracle case animated_model_draw): whether the instance is drawn and the
+// colour / lighting written first, one failure per vector.
+inline bool verify_animated_model_draw( )
+{
+    int failed = 0;
+    int drawn = 0;
+    for ( std::size_t k = 0; k < g_golden_animated_draws_count; ++k )
+    {
+        const golden_animated_draw_t& g = g_golden_animated_draws[ k ];
+        model_draw_t c;
+        model_draw_construct( c, true );
+        c.color = g.m_color;
+        c.draw_distance = draw_bits( g.m_draw );
+        c.dynamic_lighting = static_cast< std::uint8_t >( g.m_dynamic );
+        float lo[ 3 ], hi[ 3 ], eye[ 3 ];
+        for ( int a = 0; a < 3; ++a )
+        {
+            lo[ a ] = draw_bits( g.m_min[ a ] );
+            hi[ a ] = draw_bits( g.m_max[ a ] );
+            eye[ a ] = draw_bits( g.m_eye[ a ] );
+        }
+        const animated_draw_t ours = animated_model_select( c, lo, hi, eye, g.m_skip != 0 );
+        const bool same = ours.drawn == ( g.m_drawn != 0 ) && ( !ours.drawn || ( ours.color == g.m_wf8 && ours.dynamic_lighting == g.m_bfc ) );
+        drawn += g.m_drawn;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "animated model draw: vector %d drawn %d (0x%08X %d), retail %d (0x%08X %d)", static_cast< int >( k ), ours.drawn ? 1 : 0,
+                ours.color, ours.dynamic_lighting, g.m_drawn, g.m_wf8, g.m_bfc );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "animated_model_select matches Vu3dDrawAnimatedModelComponent's draw 0x61DB60 on %d vectors (%d drawn): drawn, colour "
+                     "and lighting bit for bit", static_cast< int >( g_golden_animated_draws_count ), drawn );
+    else
+        LOG_ERROR( "animated_model_select FAILED %d vectors", failed );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_animated_model_draw( ) && ok;
     ok = verify_script_graph( ) && ok;
     ok = verify_prop_draw_matrix( ) && ok;
     ok = verify_light_rig( ) && ok;

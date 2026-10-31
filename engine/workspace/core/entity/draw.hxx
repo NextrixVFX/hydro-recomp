@@ -107,6 +107,38 @@ struct static_draw_t
     std::uint8_t dynamic_lighting;
 };
 
+// Vu3dDrawAnimatedModelComponent's draw 0x61DB60 up to the model instance's
+// draw 0x532AD0 (on +0x68 with the matrix +0x104 - the GPU side, a hook). The
+// draw params' +0x2D byte (`skip`) set: nothing at all. Otherwise the distance
+// from `eye` to the world aabb's centre (+0x24 / +0x34) against Draw Distance
+// (+0x60): drawn only when Draw Distance^2 is STRICTLY greater (comiss / jbe -
+// unordered draws nothing), first copying Color (+0x5C) to +0xF8 and Dynamic
+// Lighting (+0x64) to +0xFC. No LOD, no reflection model, no fade.
+struct animated_draw_t
+{
+    bool drawn;
+    std::uint32_t color;
+    std::uint8_t dynamic_lighting;
+};
+
+inline animated_draw_t animated_model_select( const model_draw_t& c, const float* aabb_min, const float* aabb_max, const float* eye, bool skip )
+{
+    animated_draw_t out{ false, 0u, 0 };
+    if ( skip )
+        return out;
+    const float half = draw_bits( 0x3F000000u );
+    const float dx = ( aabb_max[ 0 ] + aabb_min[ 0 ] ) * half - eye[ 0 ];
+    const float dy = ( aabb_max[ 1 ] + aabb_min[ 1 ] ) * half - eye[ 1 ];
+    const float dz = ( aabb_max[ 2 ] + aabb_min[ 2 ] ) * half - eye[ 2 ];
+    const float dist2 = ( dy * dy + dx * dx ) + dz * dz;
+    if ( !( c.draw_distance * c.draw_distance > dist2 ) )
+        return out;
+    out.drawn = true;
+    out.color = c.color;
+    out.dynamic_lighting = c.dynamic_lighting;
+    return out;
+}
+
 inline static_draw_t static_model_select( const model_draw_t& c, const float* aabb_min, const float* aabb_max, const float* eye,
     bool reflection_pass, bool skip, float fade )
 {
