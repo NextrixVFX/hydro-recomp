@@ -813,6 +813,77 @@ inline bool verify_fountain_emit( )
     return failed == 0;
 }
 
+// water_best_wake against VuWater's wake lookup @0x5296c0 (surface lookup @0x52aec0, wave walk @0x52b270,
+// VuBestWakeFinder @0x421e50, the record blend @0x52bf10): the hold built through water_hold_add as retail's
+// 0x529a90 built it (verified by verify_water_waves), then 48 queries; the finder's +0x14 after each.
+inline bool verify_wake_lookup( )
+{
+    water_hold_t w{};
+    water_tree_init( w.surface_tree );
+    w.surfaces.resize( g_golden_wl_surfaces_count );
+    for ( std::size_t i = 0; i < g_golden_wl_surfaces_count; ++i )
+    {
+        const golden_wl_surface_t& g = g_golden_wl_surfaces[ i ];
+        water_held_surface_t& s = w.surfaces[ i ];
+        std::memcpy( s.rows, g.m_rows, 64 );
+        s.below = g.m_below;
+        s.above = g.m_above;
+        s.z_low = g.m_z[ 0 ];
+        s.z_high = g.m_z[ 1 ];
+        s.half[ 0 ] = g.m_half[ 0 ];
+        s.half[ 1 ] = g.m_half[ 1 ];
+        water_tree_init( s.waves );
+        water_tree_add( w.surface_tree, static_cast< int >( i ), g.m_rect );
+    }
+    w.pool.resize( 200 );
+    for ( int i = 0; i < 200; ++i )
+        w.pool[ i ].next = i + 1 < 200 ? i + 1 : -1;
+    w.pool_free = 0;
+    w.pool_count = 200;
+    for ( std::size_t k = 0; k < g_golden_wl_waves_count; ++k )
+    {
+        const golden_wl_wave_t& g = g_golden_wl_waves[ k ];
+        water_held_wave_t v{};
+        std::memcpy( v.box, g.m_bounds, 32 );
+        v.centre[ 0 ] = g.m_bounds[ 8 ];
+        v.centre[ 1 ] = g.m_bounds[ 9 ];
+        v.radius = g.m_bounds[ 10 ];
+        v.wake = g.m_kind == 0;
+        v.wake_data.inner_ratio = g.m_head[ 0 ];
+        v.wake_data.outer_ratio = g.m_head[ 1 ];
+        v.wake_data.scale = g.m_head[ 2 ];
+        v.wake_data.a = wake_record( g.m_a );
+        v.wake_data.b = wake_record( g.m_b );
+        w.waves.push_back( v );
+        water_hold_add( w, static_cast< int >( k ) );
+    }
+    int failed = 0;
+    int live = 0;
+    for ( std::size_t i = 0; i < g_golden_wl_queries_count; ++i )
+    {
+        const golden_wl_query_t& q = g_golden_wl_queries[ i ];
+        water_wake_finder_t f{};
+        f.point[ 0 ] = q.m_finder[ 0 ];
+        f.point[ 1 ] = q.m_finder[ 1 ];
+        f.direction[ 0 ] = q.m_finder[ 2 ];
+        f.direction[ 1 ] = q.m_finder[ 3 ];
+        f.best = q.m_finder[ 4 ];
+        water_best_wake( w, q.m_skip != 0, q.m_point, f );
+        if ( q.m_best != q.m_finder[ 4 ] )
+            ++live;
+        if ( std::memcmp( &f.best, &q.m_best, 4 ) != 0 && ++failed <= 3 )
+            LOG_ERROR( "water_best_wake query %d: ours %.9g retail %.9g", static_cast< int >( i ), f.best, q.m_best );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "water_best_wake matches VuWater's wake lookup @0x5296c0 (0x52aec0 / 0x52b270 / 0x421e50 / 0x52bf10) on %d queries (%d changing the answer)",
+            static_cast< int >( g_golden_wl_queries_count ), live );
+        return true;
+    }
+    LOG_ERROR( "water_best_wake FAILED %d of %d queries", failed, static_cast< int >( g_golden_wl_queries_count ) );
+    return false;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
@@ -825,6 +896,7 @@ inline bool verify_water_all( )
     ok = verify_matrix_helpers( ) && ok;
     ok = verify_water_tree( ) && ok;
     ok = verify_water_waves( ) && ok;
+    ok = verify_wake_lookup( ) && ok;
     ok = verify_quad_pattern_tick( ) && ok;
     ok = verify_geom_pattern_tick( ) && ok;
     ok = verify_fountain_emit( ) && ok;

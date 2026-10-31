@@ -1,5 +1,7 @@
 #pragma once
 
+#include <workspace/core/world/wave.hxx>
+
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -272,6 +274,8 @@ struct water_held_surface_t
     float z_low = 0.0f;
     float z_high = 0.0f;
     float half[ 2 ]{};
+    float below = 0.0f;   // +0x28, read by the point lookup @0x52aec0
+    float above = 0.0f;   // +0x2C
     water_tree_t waves;
 };
 
@@ -282,6 +286,10 @@ struct water_held_wave_t
     float radius = 0.0f;
     bool point = false;
     int entries = -1;   // +0x40: the first pool node, -1 none
+    // its type chain (vt slot 1) includes VuWaterWakeWave's descriptor 0x7368b8 - the only waves the wake
+    // lookup @0x5296c0 evaluates - and then its two records
+    bool wake = false;
+    wake_wave_t wake_data{};
 };
 
 struct water_pool_node_t
@@ -412,5 +420,148 @@ inline void water_hold_remove( water_hold_t& w, int wave )
         w.pool[ e ].next = w.pool_free;
         ++w.pool_count;
         w.pool_free = e;
+    }
+}
+// ---------------------------------------------------------------------------
+// THE WAKE LOOKUP @0x5296c0 (thiscall water; const VuVector4* point,
+// VuBestWakeFinder* finder; retn 8) - what the boat's Decision tick 0x41f740
+// asks: the best-aligned live wake under a point.
+//
+//   if water +0x18 (skip waves) is set: nothing.
+//   0x52aec0 walks the surface tree at (x, y) (point-in-box, second child
+//   first) and keeps the LAST surface whose space holds the point:
+//   half_x >= |lx|, half_y >= |ly|, above (+0x2C) >= lz >= -below (+0x28).
+//   0x52b270 walks that surface's wave tree at (x, y); each leaf whose type
+//   chain includes VuWaterWakeWave (0x7368b8) and whose circle (+0x2C / +0x30,
+//   radius +0x34) holds the point goes to the finder, VuBestWakeFinder
+//   @0x421e50; any other leaf is passed over (the flat-wake type 0x7368c0 is
+//   looked for and nothing done with it).
+//
+// The finder, by retail offset: +0x04 the point (x, y) the wake is sampled
+// at, +0x0C / +0x10 a direction, +0x14 the answer (only ever raised).
+struct water_wake_finder_t
+{
+    float point[ 2 ]{};
+    float direction[ 2 ]{};
+    float best = 0.0f;
+};
+
+// 0x52bf10 (thiscall wake; const float* xy, record* out; al): the wake's two
+// records blended at the point as wake_vertex blends them, into `out`, with
+// the same three rejections (between the cross-sections, inside the blended
+// radius, the ring has travelled out to it). out->w (+12) is a stack word
+// retail never writes: left untouched here.
+inline bool wake_segment( const wake_wave_t& wave, float x, float y, wake_record_t& out )
+{
+    const wake_record_t& a = wave.a;
+    const wake_record_t& b = wave.b;
+    const float da = ( a.direction_y * ( y - a.y ) ) + ( a.direction_x * ( x - a.x ) );
+    const float db = ( b.direction_y * ( y - b.y ) ) + ( b.direction_x * ( x - b.x ) );
+    if ( water_tree_ge( db * da, 0.0f ) )
+        return false;
+    const float t = db / ( db - da );
+    const float s = 1.0f - t;
+    auto blend = [ & ]( float av, float bv ) { return ( av * t ) + ( bv * s ); };
+    out.x = blend( a.x, b.x );
+    out.y = blend( a.y, b.y );
+    out.z = blend( a.z, b.z );
+    out.radius = ( b.radius * s ) + ( a.radius * t );
+    const float d2 = ( ( y - out.y ) * ( y - out.y ) ) + ( ( x - out.x ) * ( x - out.x ) );
+    if ( !_mm_comigt_ss( _mm_set_ss( out.radius * out.radius ), _mm_set_ss( d2 ) ) )
+        return false;
+    out.age = ( b.age * s ) + ( a.age * t );
+    out.speed = ( b.speed * s ) + ( a.speed * t );
+    const float travelled = _mm_cvtss_f32( _mm_max_ss( _mm_setzero_ps( ),
+        _mm_set_ss( _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( d2 ) ) ) - ( wave.inner_ratio * out.radius ) ) ) );
+    if ( !_mm_comigt_ss( _mm_set_ss( out.age - ( travelled / out.speed ) ), _mm_setzero_ps( ) ) )
+        return false;
+    out.life = ( b.life * s ) + ( a.life * t );
+    out.amplitude = ( b.amplitude * s ) + ( a.amplitude * t );
+    out.direction_y = blend( a.direction_y, b.direction_y );
+    out.direction_x = blend( a.direction_x, b.direction_x );
+    out.frequency = ( b.frequency * s ) + ( a.frequency * t );
+    out.fade_time = ( b.fade_time * s ) + ( a.fade_time * t );
+    return true;
+}
+
+// VuBestWakeFinder @0x421e50 (thiscall finder, wake): score = alignment *
+// freshness, alignment = clamp( direction . the record's direction, 0, 1 ),
+// freshness = clamp( (2 - age) * 0.5263158, 0, 1 ) (both minss with 1 then
+// maxss with 0, retail's order); the answer is raised to it (maxss).
+inline void best_wake_process( water_wake_finder_t& f, const wake_wave_t& wave )
+{
+    wake_record_t r{};
+    if ( !wake_segment( wave, f.point[ 0 ], f.point[ 1 ], r ) )
+        return;
+    auto clamp01 = []( float v ) {
+        const float m = _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( 1.0f ), _mm_set_ss( v ) ) );
+        return _mm_cvtss_f32( _mm_max_ss( _mm_setzero_ps( ), _mm_set_ss( m ) ) );
+    };
+    const float align = clamp01( ( f.direction[ 1 ] * r.direction_y ) + ( f.direction[ 0 ] * r.direction_x ) );
+    const float fresh = clamp01( ( 2.0f - r.age ) * 0.5263158f );
+    f.best = _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( f.best ), _mm_set_ss( fresh * align ) ) );
+}
+
+// @0x5296c0. `skip_waves` is water +0x18.
+inline void water_best_wake( const water_hold_t& w, bool skip_waves, const float* point, water_wake_finder_t& finder )
+{
+    if ( skip_waves || w.surface_tree.root < 0 )
+        return;
+    const float px = point[ 0 ];
+    const float py = point[ 1 ];
+    auto inside = [ & ]( const float* r ) {
+        return water_tree_ge( px, r[ 0 ] ) && water_tree_ge( py, r[ 1 ] ) && water_tree_ge( r[ 2 ], px ) && water_tree_ge( r[ 3 ], py );
+    };
+    int found = -1;
+    std::vector< int > stack{ w.surface_tree.root };
+    while ( !stack.empty( ) )
+    {
+        const int n = stack.back( );
+        stack.pop_back( );
+        const water_tree_node_t& node = w.surface_tree.nodes[ n ];
+        if ( !inside( node.rect ) )
+            continue;
+        if ( node.second >= 0 )
+        {
+            stack.push_back( node.first );
+            stack.push_back( node.second );
+            continue;
+        }
+        const water_held_surface_t& s = w.surfaces[ node.first ];
+        const float* m = s.rows;
+        const float lx = ( ( ( m[ 4 ] * point[ 1 ] ) + ( point[ 0 ] * m[ 0 ] ) ) + ( m[ 8 ] * point[ 2 ] ) ) + m[ 12 ];
+        const float ly = ( ( ( m[ 1 ] * point[ 0 ] ) + ( m[ 5 ] * point[ 1 ] ) ) + ( m[ 9 ] * point[ 2 ] ) ) + m[ 13 ];
+        const float lz = ( ( ( m[ 2 ] * point[ 0 ] ) + ( m[ 6 ] * point[ 1 ] ) ) + ( m[ 10 ] * point[ 2 ] ) ) + m[ 14 ];
+        if ( water_tree_ge( s.half[ 0 ], std::fabs( lx ) ) && water_tree_ge( s.half[ 1 ], std::fabs( ly ) ) &&
+             water_tree_ge( s.above, lz ) && water_tree_ge( lz, -s.below ) )
+            found = node.first;
+    }
+    if ( found < 0 )
+        return;
+    const water_tree_t& t = w.surfaces[ found ].waves;
+    if ( t.root < 0 )
+        return;
+    stack.assign( 1, t.root );
+    while ( !stack.empty( ) )
+    {
+        const int n = stack.back( );
+        stack.pop_back( );
+        const water_tree_node_t& node = t.nodes[ n ];
+        if ( !inside( node.rect ) )
+            continue;
+        if ( node.second >= 0 )
+        {
+            stack.push_back( node.first );
+            stack.push_back( node.second );
+            continue;
+        }
+        const water_held_wave_t& v = w.waves[ node.first ];
+        if ( !v.wake )
+            continue;
+        // the circle test is against the QUERY point; the finder samples the wake at its own +0x04
+        const float dy = v.centre[ 1 ] - py;
+        const float dx = v.centre[ 0 ] - px;
+        if ( _mm_comigt_ss( _mm_set_ss( v.radius * v.radius ), _mm_set_ss( ( dy * dy ) + ( dx * dx ) ) ) )
+            best_wake_process( finder, v.wake_data );
     }
 }
