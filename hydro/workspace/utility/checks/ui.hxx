@@ -101,15 +101,54 @@ inline bool verify_ui_projects( )
     return failed == 0;
 }
 
+// One ui_state_t's nodes against retail's golden nodes (name, class, then the
+// target bit for bit / text exactly); returns the mismatches.
+inline int ui_compare_nodes( const ui_state_t& s, int first, int count, const char* where, const char* entity, int& compared, int& logged )
+{
+    if ( s.m_count != count )
+    {
+        if ( ++logged <= 8 )
+            LOG_ERROR( "ui: %s '%s' has %d nodes, retail %d", where, entity, s.m_count, count );
+        return 1;
+    }
+    int failed = 0;
+    for ( int n = 0; n < s.m_count; ++n )
+    {
+        const golden_ui_node_t& node = g_golden_ui_nodes[ first + n ];
+        const ui_property_row_t& row = *s.m_rows[ n ];
+        const ui_slot_t& slot = s.m_value[ n ];
+        ++compared;
+        bool same = std::strcmp( row.m_name, node.m_name ) == 0 && row.m_vtable == node.m_vtable;
+        if ( same && node.m_kind == 1 )
+            same = slot.m_text == node.m_text;
+        else if ( same && node.m_kind == 2 )
+        {
+            const int width = ui_width( row.m_kind );
+            for ( int w = 0; w < width; ++w )
+                same = same && slot.m_bits[ w ] == node.m_bits[ w ];
+        }
+        else if ( same )
+            same = false;  // retail's target was not read: a class the case does not know
+        if ( !same )
+        {
+            ++failed;
+            if ( ++logged <= 8 )
+                LOG_ERROR( "ui: %s '%s'.%s = 0x%X '%s', retail 0x%X '%s'", where, entity, node.m_name, slot.m_bits[ 0 ],
+                    slot.m_text.c_str( ), node.m_bits[ 0 ], node.m_text ? node.m_text : "" );
+        }
+    }
+    return failed;
+}
+
 // The UI property loads (ui_entity_load_properties over schema.hxx's rows)
 // against every property node retail's load left, entity by entity, in the
-// same projects: each node of a class whose rows are recreated compared - its
-// name and class, then its target bit for bit (text exactly). Nodes of types
-// without rows are counted as skipped (said, not compared).
+// same projects. Nodes of types without rows are counted as skipped (said,
+// not compared).
 inline bool verify_ui_properties( )
 {
     const ui_loaded_t& loaded = ui_loaded( );
     int failed = 0;
+    int logged = 0;
     int compared = 0;
     int skipped = 0;
     for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
@@ -128,34 +167,8 @@ inline bool verify_ui_properties( )
                 skipped += want.m_nodes;
                 continue;
             }
-            const ui_state_t* s = static_cast< const ui_state_t* >( have.m_state.get( ) );
-            if ( s->m_count != want.m_nodes )
-            {
-                if ( ++failed <= 8 )
-                    LOG_ERROR( "ui properties: %s '%s' has %d nodes, retail %d", project.m_asset, want.m_name, s->m_count, want.m_nodes );
-                continue;
-            }
-            for ( int n = 0; n < s->m_count; ++n )
-            {
-                const golden_ui_node_t& node = g_golden_ui_nodes[ want.m_first_node + n ];
-                const ui_property_row_t& row = s->m_rows[ n ];
-                const ui_slot_t& slot = s->m_value[ n ];
-                ++compared;
-                bool same = std::strcmp( row.m_name, node.m_name ) == 0 && row.m_vtable == node.m_vtable;
-                if ( same && node.m_kind == 1 )
-                    same = slot.m_text == node.m_text;
-                else if ( same && node.m_kind == 2 )
-                {
-                    const int width = ui_width( row.m_kind );
-                    for ( int w = 0; w < width; ++w )
-                        same = same && slot.m_bits[ w ] == node.m_bits[ w ];
-                }
-                else if ( same )
-                    same = false;  // retail's target was not read: a class the case does not know
-                if ( !same && ++failed <= 8 )
-                    LOG_ERROR( "ui properties: %s '%s'.%s = 0x%X '%s', retail 0x%X '%s'", project.m_asset, want.m_name, node.m_name,
-                        slot.m_bits[ 0 ], slot.m_text.c_str( ), node.m_bits[ 0 ], node.m_text ? node.m_text : "" );
-            }
+            failed += ui_compare_nodes( *static_cast< const ui_state_t* >( have.m_state.get( ) ), want.m_first_node, want.m_nodes,
+                project.m_asset, want.m_name, compared, logged );
         }
     }
     if ( failed == 0 )
@@ -168,10 +181,91 @@ inline bool verify_ui_properties( )
     return failed == 0;
 }
 
+// The components after the same loads: each entity's +0x48 list (vtables, in
+// order) against retail's, then every node of a component with a state - the
+// transform (hydro world/transform.hxx: Position = local row 3, Rotation,
+// Scale) and the captured ones (ui_components_for) - bit for bit.
+inline bool verify_ui_components( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0;
+    int logged = 0;
+    int compared = 0;
+    int lists = 0;
+    for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+    {
+        const golden_ui_project_t& project = g_golden_ui_projects[ p ];
+        const auto& tree = loaded.trees[ p ];
+        if ( tree.size( ) != static_cast< std::size_t >( project.m_count ) )
+            continue;
+        for ( int k = 0; k < project.m_count; ++k )
+        {
+            const golden_ui_entity_t& want = g_golden_ui_entities[ project.m_first + k ];
+            entity_t& have = const_cast< entity_t& >( *tree[ k ].second );
+            ++lists;
+            bool same = have.m_components.size( ) == static_cast< std::size_t >( want.m_components );
+            for ( int c = 0; same && c < want.m_components; ++c )
+                same = have.m_components[ c ].m_vtable == g_golden_ui_components[ want.m_first_component + c ].m_vtable;
+            if ( !same )
+            {
+                ++failed;
+                if ( ++logged <= 8 )
+                    LOG_ERROR( "ui components: %s '%s' has %d components, retail %d (or a vtable differs)", project.m_asset, want.m_name,
+                        static_cast< int >( have.m_components.size( ) ), want.m_components );
+                continue;
+            }
+            for ( int c = 0; c < want.m_components; ++c )
+            {
+                const golden_ui_component_t& gc = g_golden_ui_components[ want.m_first_component + c ];
+                entity_component_t& component = have.m_components[ c ];
+                if ( component.m_vtable == k_transform_component_vtable && component.m_state )
+                {
+                    const transform_state_t* s = static_cast< const transform_state_t* >( component.m_state.get( ) );
+                    const float* lanes[ 3 ] = { s->c.local + 12, s->c.rotation, s->c.scale };
+                    for ( int n = 0; n < gc.m_nodes && n < 3; ++n )
+                    {
+                        const golden_ui_node_t& node = g_golden_ui_nodes[ gc.m_first_node + n ];
+                        std::uint32_t bits[ 3 ];
+                        std::memcpy( bits, lanes[ n ], sizeof( bits ) );
+                        ++compared;
+                        if ( gc.m_nodes != 3 || node.m_kind != 2 || bits[ 0 ] != node.m_bits[ 0 ] || bits[ 1 ] != node.m_bits[ 1 ] ||
+                             bits[ 2 ] != node.m_bits[ 2 ] )
+                        {
+                            ++failed;
+                            if ( ++logged <= 8 )
+                                LOG_ERROR( "ui components: %s '%s' transform %s = 0x%X, retail 0x%X", project.m_asset, want.m_name,
+                                    node.m_name, bits[ 0 ], node.m_bits[ 0 ] );
+                        }
+                    }
+                }
+                else if ( ui_is_component_state( have, component ) )
+                    failed += ui_compare_nodes( *static_cast< const ui_state_t* >( component.m_state.get( ) ), gc.m_first_node, gc.m_nodes,
+                        project.m_asset, want.m_name, compared, logged );
+                else if ( gc.m_nodes != 0 )
+                {
+                    ++failed;
+                    if ( ++logged <= 8 )
+                        LOG_ERROR( "ui components: %s '%s' component 0x%X has %d nodes retail and no state here", project.m_asset,
+                            want.m_name, gc.m_vtable, gc.m_nodes );
+                }
+            }
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the front end's components match retail's after VuEntity::load's Components step (0x501F70 / 0x502010) on %d "
+                     "projects: %d component lists (vtables in order), %d node targets bit for bit (transform Position / "
+                     "Rotation / Scale, VuScriptComponent Enable, VuUIDrawComponent Depth, Vu3dDrawComponent Reflect / Shadow)",
+            static_cast< int >( g_golden_ui_projects_count ), lists, compared );
+    else
+        LOG_ERROR( "the front end's components FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
     ok = verify_ui_projects( ) && ok;
     ok = verify_ui_properties( ) && ok;
+    ok = verify_ui_components( ) && ok;
     return ok;
 }

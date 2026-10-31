@@ -36,7 +36,7 @@ inline int ui_width( ui_kind_t kind )
 
 struct ui_state_t
 {
-    const ui_property_row_t* m_rows = nullptr;  // this class's first row in g_ui_property_rows
+    std::vector< const ui_property_row_t* > m_rows;  // the nodes in list order
     int m_count = 0;
     std::vector< ui_slot_t > m_value;
     std::vector< ui_slot_t > m_defaults;
@@ -56,24 +56,42 @@ inline const ui_property_row_t* ui_rows_for( const std::string& cls, int& count 
     return first;
 }
 
-// The state a captured front-end type's ctor leaves: every target at its node's default.
+// The state a ctor leaves for these nodes: every target at its node's default.
+inline std::shared_ptr< ui_state_t > ui_state_of( std::vector< const ui_property_row_t* > rows )
+{
+    auto s = std::make_shared< ui_state_t >( );
+    s->m_count = static_cast< int >( rows.size( ) );
+    s->m_defaults.resize( rows.size( ) );
+    for ( std::size_t k = 0; k < rows.size( ); ++k )
+    {
+        std::memcpy( s->m_defaults[ k ].m_bits, rows[ k ]->m_default, sizeof( rows[ k ]->m_default ) );
+        s->m_defaults[ k ].m_text = rows[ k ]->m_text;
+    }
+    s->m_value = s->m_defaults;
+    s->m_rows = std::move( rows );
+    return s;
+}
+
 inline std::shared_ptr< ui_state_t > ui_state_construct( const std::string& cls )
 {
     int count = 0;
-    const ui_property_row_t* rows = ui_rows_for( cls, count );
-    if ( !rows )
+    const ui_property_row_t* first = ui_rows_for( cls, count );
+    if ( !first )
         return nullptr;
-    auto s = std::make_shared< ui_state_t >( );
-    s->m_rows = rows;
-    s->m_count = count;
-    s->m_defaults.resize( count );
+    std::vector< const ui_property_row_t* > rows;
     for ( int k = 0; k < count; ++k )
-    {
-        std::memcpy( s->m_defaults[ k ].m_bits, rows[ k ].m_default, sizeof( rows[ k ].m_default ) );
-        s->m_defaults[ k ].m_text = rows[ k ].m_text;
-    }
-    s->m_value = s->m_defaults;
-    return s;
+        rows.push_back( first + k );
+    return ui_state_of( std::move( rows ) );
+}
+
+// A ctor-made component's nodes (g_ui_component_rows for this owner and component vtable), or none.
+inline std::vector< const ui_property_row_t* > ui_component_rows_for( const std::string& owner, std::uint32_t component )
+{
+    std::vector< const ui_property_row_t* > rows;
+    for ( const ui_component_row_t& row : g_ui_component_rows )
+        if ( row.m_component == component && owner == row.m_row.m_class )
+            rows.push_back( &row.m_row );
+    return rows;
 }
 
 // One node's vt+8 load on the entity's "Properties": the class's load (reset to
@@ -171,7 +189,7 @@ inline void ui_entity_load_properties( entity_t& entity, const value_t& properti
     }
     ui_state_t* s = static_cast< ui_state_t* >( entity.m_state.get( ) );
     for ( int k = 0; k < s->m_count; ++k )
-        ui_load_slot( s->m_rows[ k ], properties, s->m_value[ k ], s->m_defaults[ k ] );
+        ui_load_slot( *s->m_rows[ k ], properties, s->m_value[ k ], s->m_defaults[ k ] );
 }
 
 // The template mark's property step: each node's vt+0x1C - default = value.
@@ -186,6 +204,55 @@ inline void ui_entity_mark_properties( entity_t& entity )
     s->m_defaults = s->m_value;
 }
 
+// The components: entity_components_constructed (types.hxx: the transform, the
+// model draws) plus a ui_state_t for every other ctor-made component with
+// captured nodes (VuScriptComponent "Enable", VuUIDrawComponent "Depth",
+// Vu3dDrawComponent "Reflect" / "Shadow"). Their loads are 0x501F70's /
+// 0x502010's node loads; each component's post-load (vt+0xC / vt+0x10) and the
+// mark's vt+0x20 are hooks.
+inline std::vector< entity_component_t > ui_components_for( const std::string& cls )
+{
+    std::vector< entity_component_t > out = entity_components_constructed( cls );
+    for ( entity_component_t& c : out )
+        if ( !c.m_state )
+        {
+            std::vector< const ui_property_row_t* > rows = ui_component_rows_for( cls, c.m_vtable );
+            if ( !rows.empty( ) )
+                c.m_state = ui_state_of( std::move( rows ) );
+        }
+    return out;
+}
+
+inline bool ui_is_component_state( const entity_t& owner, const entity_component_t& component )
+{
+    return component.m_state && component.m_vtable != k_transform_component_vtable &&
+           component.m_vtable != k_static_model_component_vtable && component.m_vtable != k_animated_model_component_vtable &&
+           !ui_component_rows_for( owner.m_type, component.m_vtable ).empty( );
+}
+
+inline void ui_load_component( entity_t& owner, entity_component_t& component, const value_t& properties, bool override )
+{
+    if ( !ui_is_component_state( owner, component ) )
+    {
+        entity_load_component( owner, component, properties, override );
+        return;
+    }
+    ui_state_t* s = static_cast< ui_state_t* >( component.m_state.get( ) );
+    for ( int k = 0; k < s->m_count; ++k )
+        ui_load_slot( *s->m_rows[ k ], properties, s->m_value[ k ], s->m_defaults[ k ] );
+}
+
+inline void ui_mark_component( entity_t& owner, entity_component_t& component )
+{
+    if ( !ui_is_component_state( owner, component ) )
+    {
+        entity_mark_component( owner, component );
+        return;
+    }
+    ui_state_t* s = static_cast< ui_state_t* >( component.m_state.get( ) );
+    s->m_defaults = s->m_value;
+}
+
 // The world as the front end's projects load: the registry, the captured ctor
 // facts and components (types.hxx), the templates by name, and the UI property
 // callbacks above.
@@ -195,9 +262,9 @@ inline entity_world_t ui_world( const entity_registry_t& registry, std::function
     world.m_registry = &registry;
     world.m_ctor_for = entity_ctor_for;
     world.m_template = std::move( templates );
-    world.m_components_for = entity_components_constructed;
-    world.m_component_load = entity_load_component;
-    world.m_component_mark = entity_mark_component;
+    world.m_components_for = ui_components_for;
+    world.m_component_load = ui_load_component;
+    world.m_component_mark = ui_mark_component;
     world.m_state_for = ui_entity_state_for;
     world.m_properties_load = ui_entity_load_properties;
     world.m_properties_mark = ui_entity_mark_properties;
