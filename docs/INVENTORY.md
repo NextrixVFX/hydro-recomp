@@ -52,14 +52,15 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 
 ## Reachability
 
-A static reference graph built from the binary alone (`hydro-tools/census/callgraph.py`): direct calls and jumps, every function address taken in code, and every vtable or function table a code reference points at (all of its slots). **race** = reached from what a race creates and runs on: every entity type HydroelectricRace and the three race HUD projects instantiate (templates expanded), VuRaceGame / VuGame / VuGameMode, VuBoatEntity and its drivers, every asset and particle class, and the engine services a race runs (draw, gfx, sort, dynamics, collision, water, lens water, tire tracks, foliage, pfx, lights, triggers, track, AI, boats, input, control methods, audio, voice-over, subtitles, fade, events, ticks, viewports) with their tick methods. That service list is a judgement: front end, online, save, achievements, sign-in, cloud, leaderboards, unlocks and message boxes are left out. **entry** = reached from the PE entry but not from the race. **dead** = referenced by nothing reachable.
+A static reference graph built from the binary alone (`hydro-tools/census/callgraph.py`): direct calls and jumps, every function address taken in code, and every vtable or function table a code reference points at (all of its slots). **race** = reached from what a race creates and runs on: every entity type HydroelectricRace and the three race HUD projects instantiate (templates expanded), VuRaceGame / VuGame / VuGameMode, VuBoatEntity and its drivers, every asset and particle class, and the engine services a race runs (draw, gfx, sort, dynamics, collision, water, lens water, tire tracks, foliage, pfx, lights, triggers, track, AI, boats, input, control methods, audio, voice-over, subtitles, fade, events, ticks, viewports) with their tick methods. That service list is a judgement. **game** = the rest of what is IN SCOPE for 1:1 - reached from the PE entry with the walk stopped at the platform services, which includes the menus, screens and front end (the user: menus and UI are a core part of the game and must be 1:1). **service** = reached only through a platform service - achievements, cloud saves, leaderboards, sign-in, title storage, licensing, analytics, community, profiles, HTTP / net and the Xbox Live types - which the user scoped OUT of 1:1: they are re-made for the target platform. **dead** = referenced by nothing reachable.
 
 Over-approximate (a referenced vtable brings every slot) and under-approximate (a function pointer stored in data that no code reference reaches the start of is missed) - a bound, not a trace.
 
 | tier | functions | verified | callee | cited | absent | runtime / STL / thunk | platform layer | game + engine logic not verified |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | race | 4905 | 377 | 171 | 175 | 4182 | 68 | 610 | 3874 |
-| entry | 2883 | 13 | 24 | 8 | 2838 | 122 | 411 | 2337 |
+| game | 2431 | 13 | 24 | 8 | 2386 | 77 | 313 | 2028 |
+| service | 452 | 0 | 0 | 0 | 452 | 45 | 98 | 309 |
 | dead | 850 | 2 | 1 | 0 | 847 | 61 | 126 | 661 |
 
 ## Where to look
