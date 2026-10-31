@@ -117,6 +117,7 @@
     <ClInclude Include="workspace\core\boat\entity.hxx" />
     <ClInclude Include="workspace\core\boat\fluid.hxx" />
     <ClInclude Include="workspace\core\boat\hull.hxx" />
+    <ClInclude Include="workspace\core\boat\load.hxx" />
     <ClInclude Include="workspace\core\boat\math.hxx" />
     <ClInclude Include="workspace\core\boat\parts.hxx" />
     <ClInclude Include="workspace\core\boat\sections.hxx" />
@@ -130,8 +131,12 @@
     <ClInclude Include="workspace\core\light\rig.hxx" />
     <ClInclude Include="workspace\core\trigger\set.hxx" />
     <ClInclude Include="workspace\core\trigger\volume.hxx" />
+    <ClInclude Include="workspace\core\ui\button.hxx" />
     <ClInclude Include="workspace\core\ui\entity.hxx" />
+    <ClInclude Include="workspace\core\ui\flow.hxx" />
+    <ClInclude Include="workspace\core\ui\fsm.hxx" />
     <ClInclude Include="workspace\core\ui\schema.hxx" />
+    <ClInclude Include="workspace\core\ui\screen.hxx" />
     <ClInclude Include="workspace\core\world\animate.hxx" />
     <ClInclude Include="workspace\core\world\control.hxx" />
     <ClInclude Include="workspace\core\world\entities.hxx" />
@@ -140,6 +145,7 @@
     <ClInclude Include="workspace\core\world\motion.hxx" />
     <ClInclude Include="workspace\core\world\pfx.hxx" />
     <ClInclude Include="workspace\core\world\query.hxx" />
+    <ClInclude Include="workspace\core\world\surface.hxx" />
     <ClInclude Include="workspace\core\world\transform.hxx" />
     <ClInclude Include="workspace\core\world\tree.hxx" />
     <ClInclude Include="workspace\core\world\water.hxx" />

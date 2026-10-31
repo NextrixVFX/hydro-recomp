@@ -61,6 +61,10 @@ inline void property_float( const value_t& properties, const char* name, float& 
         target = parsed;
 }
 
+// VuPercentageProperty and VuStaticIntEnumProperty live in entity/values.hxx
+// (property_percentage, property_choice_t, property_enum) - recreated twice,
+// independently, by two readings of 0x43E580 / 0x503600 / 0x5037C0 that agreed.
+
 // VuBasicProperty<VuVector3,8>: load 0x409280, value read 0x409330 through the
 // vec3 parse 0x4FDC60 (false: nothing stored, the lanes it wrote before failing
 // stay in its own temporary); the filter copies; stored only if a lane differs

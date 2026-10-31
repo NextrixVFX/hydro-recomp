@@ -307,6 +307,7 @@ struct water_hold_t
     std::vector< water_pool_node_t > pool;
     int pool_free = -1;
     int pool_count = 0;
+    int list = -1;   // +0x30: the wave list's head pool node (its leaf = the wave), -1 none
 };
 
 // 0x529c60 (water, wave, surface).

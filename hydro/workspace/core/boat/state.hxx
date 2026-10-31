@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <string>
+#include <xmmintrin.h>
 
 // Small per-frame state helpers of the boat's Decision tick (VuBoatEntity
 // vtable slot 13 0x41EFF0), on the boat image (construct.hxx's offsets) and
@@ -212,4 +214,110 @@ inline void boat_nose_probe( std::uint8_t* boat, const std::uint8_t* body, const
         }
     }
     state_put_f( boat, 0x480, 0.0f );
+}
+// 0x41F9D0 (__usercall: ecx the boat, xmm1 dt), the boost sub-tick of the
+// Decision tick. Energy +0x310 is fed from the pending +0x314 by min(pending,
+// dt * 8) (`minss`: a NaN rate passes); the clock +0x318 advances by dt and a
+// change of fistp(clock * 4) (round to nearest) sets +0x31C to the new count,
+// +0x324 = 1.0, +0x320 = 2.0; no pending -> clock 0. While +0x324 > 0 it runs
+// down to max(t - dt, 0) and +0x320 to max(v - dt * 4, 1.0) (`maxss`: NaN ->
+// the constant); else +0x31C = 0. Boosting (+0x32C): energy -= dt, the flag
+// cleared when ordered 0 >= energy, +0x308 set, +0x46B set or +0x304 clear;
+// +0x47C += dt. Not boosting: energy > 0, the animation's +0x78 == 2, +0x308
+// 0, +0x46B 0 and +0x304 set start it (+0x32C = +0x32D = 1); +0x47C = 0. Then
+// energy = max(0, min(16, e)) and the peak +0x328 = max(peak, energy). For a
+// driver with slots 14 and 12 (the human player): the FMOD UI sounds - a
+// platform HOOK (`sound`, the event name; retail: _itoa_s / strcpy_s /
+// strcat_s, FMOD getEvent 0x64C348 then start 0x64C354 when it succeeds) -
+// "Global/UI_and_Menu/boost_x" + the new count when it changed; then while
+// boosting with one local player (g 0x759060 +4 == 1): energy below 3 ->
+// +0x478 -= dt and at ordered 0 >= it, +0x478 = 0.5 (0.25 below 1.5) and the
+// low-boost beep; else +0x478 = 0. Crossing from >= 3 to < 3 with +0x47C >
+// 6: g 0x758FEC vt+0x1C(boat, "BoostLow") (`stats`, a platform service).
+struct boat_boost_hooks_t
+{
+    void* user = nullptr;
+    void ( *sound )( void* user, const std::string& event ) = nullptr;
+    void ( *stats )( void* user, const char* name ) = nullptr;
+};
+
+inline void boat_boost( std::uint8_t* boat, const std::uint8_t* animation, bool slot12, bool slot14, std::uint32_t local_players,
+    float dt, const boat_boost_hooks_t& hooks )
+{
+    auto gt = []( float a, float b ) { return _mm_comigt_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) != 0; };   // ordered a > b
+    auto ge = []( float a, float b ) { return _mm_comige_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) != 0; };   // ordered a >= b
+    auto minss = []( float a, float b ) { return _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); };
+    auto maxss = []( float a, float b ) { return _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); };
+    const float old_energy = state_f( boat, 0x310 );
+    float pending = state_f( boat, 0x314 );
+    std::int32_t count = 0;
+    if ( gt( pending, 0.0f ) )
+    {
+        const float step = minss( dt * 8.0f, pending );
+        state_put_f( boat, 0x310, old_energy + step );
+        state_put_f( boat, 0x314, pending - step );
+        const std::int32_t a = state_fistp( state_f( boat, 0x318 ) * 4.0f );
+        const float clock = state_f( boat, 0x318 ) + dt;
+        state_put_f( boat, 0x318, clock );
+        const std::int32_t b = state_fistp( clock * 4.0f );
+        if ( a != b )
+        {
+            count = b;
+            std::memcpy( boat + 0x31C, &b, 4 );
+            state_put_f( boat, 0x324, 1.0f );
+            state_put_f( boat, 0x320, 2.0f );
+        }
+    }
+    else
+        image_put32( boat, 0x318, 0 );
+    if ( gt( state_f( boat, 0x324 ), 0.0f ) )
+    {
+        state_put_f( boat, 0x324, maxss( state_f( boat, 0x324 ) - dt, 0.0f ) );
+        state_put_f( boat, 0x320, maxss( state_f( boat, 0x320 ) - dt * 4.0f, 1.0f ) );
+    }
+    else
+        image_put32( boat, 0x31C, 0 );
+    std::int32_t w308;
+    std::memcpy( &w308, boat + 0x308, 4 );
+    if ( boat[ 0x32C ] )
+    {
+        const float e = state_f( boat, 0x310 ) - dt;
+        state_put_f( boat, 0x310, e );
+        if ( ge( 0.0f, e ) || w308 != 0 || boat[ 0x46B ] || !boat[ 0x304 ] )
+            boat[ 0x32C ] = 0;
+        state_put_f( boat, 0x47C, state_f( boat, 0x47C ) + dt );
+    }
+    else
+    {
+        std::int32_t a78;
+        std::memcpy( &a78, animation + 0x78, 4 );
+        if ( gt( state_f( boat, 0x310 ), 0.0f ) && a78 == 2 && w308 == 0 && !boat[ 0x46B ] && boat[ 0x304 ] )
+            boat[ 0x32C ] = boat[ 0x32D ] = 1;
+        image_put32( boat, 0x47C, 0 );
+    }
+    const float energy = maxss( 0.0f, minss( 16.0f, state_f( boat, 0x310 ) ) );
+    state_put_f( boat, 0x310, energy );
+    state_put_f( boat, 0x328, maxss( state_f( boat, 0x328 ), energy ) );
+    if ( !slot14 || !slot12 )
+        return;
+    if ( count && hooks.sound )
+        hooks.sound( hooks.user, "Global/UI_and_Menu/boost_x" + std::to_string( count ) );
+    if ( !boat[ 0x32C ] || local_players != 1 )
+        return;
+    const float now = state_f( boat, 0x310 );
+    if ( gt( 3.0f, now ) )
+    {
+        const float t = state_f( boat, 0x478 ) - dt;
+        state_put_f( boat, 0x478, t );
+        if ( ge( 0.0f, t ) )
+        {
+            state_put_f( boat, 0x478, gt( 1.5f, now ) ? 0.25f : 0.5f );
+            if ( hooks.sound )
+                hooks.sound( hooks.user, "Global/UI_and_menu/low_boost_beep" );
+        }
+    }
+    else
+        image_put32( boat, 0x478, 0 );
+    if ( ge( old_energy, 3.0f ) && gt( 3.0f, state_f( boat, 0x310 ) ) && gt( state_f( boat, 0x47C ), 6.0f ) && hooks.stats )
+        hooks.stats( hooks.user, "BoostLow" );
 }
