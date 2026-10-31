@@ -61,6 +61,9 @@ struct entity_t
     std::vector< std::unique_ptr< entity_t > > m_children;  // +0x38
     std::string m_template;                             // +0x4C: the VuTemplateAsset an instance came from
     std::vector< entity_component_t > m_components;     // +0x48, in list order
+    // The entity's own properties (its +0x44 nodes' targets and defaults), for
+    // a type whose properties are recreated; null otherwise (a hook).
+    std::shared_ptr< void > m_state;
     // Set when an ancestor's world changed after this entity's own transform
     // was computed: retail's 0x534C00(1) child walk would then update it, and
     // that walk is not recreated - so this entity's world is unknown.
@@ -84,6 +87,11 @@ struct entity_world_t
     // The template mark's component step (0x501FE0: each property node's
     // vt+0x1C, then the component's vt+0x20). Null or unknown: a hook.
     std::function< void( entity_t& owner, entity_component_t& component ) > m_component_mark;
+    // The entity's own properties: its state as its ctor leaves it, the "Properties" load (each node's vt+8;
+    // on a normal load and on a template override alike), and the mark's property step (each node's vt+0x1C).
+    std::function< std::shared_ptr< void >( const std::string& cls ) > m_state_for;
+    std::function< void( entity_t& entity, const value_t& properties ) > m_properties_load;
+    std::function< void( entity_t& entity ) > m_properties_mark;
 };
 
 // 0x500690, the child order (std::sort's comparator in 0x501810): a child with
@@ -147,6 +155,8 @@ inline void entity_mark_template( entity_t& entity, const entity_world_t& world 
 {
     if ( entity.m_template.empty( ) )
         entity.m_flags |= 2;
+    if ( world.m_properties_mark )
+        world.m_properties_mark( entity );
     for ( entity_component_t& component : entity.m_components )
         if ( world.m_component_mark )
             world.m_component_mark( entity, component );
@@ -158,12 +168,15 @@ inline void entity_mark_template( entity_t& entity, const entity_world_t& world 
 // type (its facts), the template instantiator 0x556E70, or an UNKNOWN node.
 // Null where retail's create returns null (a template whose asset or root type
 // is missing) and where the type is not registered.
+inline std::unique_ptr< entity_t > entity_instantiate_template( const std::string& type, const entity_world_t& world );
+
 inline std::unique_ptr< entity_t > entity_create( const std::string& type, const entity_world_t& world )
 {
     const std::uint32_t create = world.m_registry->create_for( type );
     if ( !create )
         return nullptr;
-    if ( create != k_template_create )
+    if ( create == k_template_create )
+        return entity_instantiate_template( type, world );
     {
         auto entity = std::make_unique< entity_t >( );
         entity->m_type = type;
@@ -172,10 +185,17 @@ inline std::unique_ptr< entity_t > entity_create( const std::string& type, const
         entity->m_flags = entity->m_ctor ? entity->m_ctor->m_flags : 0;
         if ( entity->m_ctor && world.m_components_for )
             entity->m_components = world.m_components_for( type );
+        if ( entity->m_ctor && world.m_state_for )
+            entity->m_state = world.m_state_for( type );
         return entity;
     }
-    // 0x556E70: the asset is the name after the '#' (0x555690); its root type is
-    // VuProject.RootEntity.type when that is a string, else "" (0x556520).
+}
+
+// The template instantiator 0x556E70 itself, for a type "#<name>": the asset is
+// the name after the '#' (0x555690); its root type is VuProject.RootEntity.type
+// when that is a string, else "" (0x556520).
+inline std::unique_ptr< entity_t > entity_instantiate_template( const std::string& type, const entity_world_t& world )
+{
     const std::string name = type.substr( 1 );
     const value_t* asset = world.m_template ? world.m_template( name ) : nullptr;
     if ( !asset )
@@ -247,7 +267,8 @@ inline void entity_load_override( entity_t& entity, const value_t& data, const e
         const value_t* found = overrides.tag == 6 ? find( overrides, child->m_name ) : nullptr;
         entity_load_override( *child, found ? *found : null, world );
     }
-    // "Properties" (each property's vt+8) - hooks until the classes are recreated.
+    if ( world.m_properties_load )
+        world.m_properties_load( entity, member( data, "Properties" ) );
     entity_load_components( entity, member( data, "Components" ), world, true );
     // The entity's vt+0xC follows - a hook.
 }
@@ -308,7 +329,8 @@ inline void entity_load( entity_t& entity, const value_t* data, const entity_wor
         return;
     }
     entity_load_children( entity, member( *data, "ChildEntities" ), world );
-    // "Properties" (each property's vt+8) - hooks until the classes are recreated.
+    if ( world.m_properties_load )
+        world.m_properties_load( entity, member( *data, "Properties" ) );
     entity_load_components( entity, member( *data, "Components" ), world, false );
     // The entity's vt+8 postLoad follows - a hook.
 }

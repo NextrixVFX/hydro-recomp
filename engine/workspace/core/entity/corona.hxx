@@ -64,11 +64,10 @@ inline void corona_construct( corona_properties_t& c )
 }
 
 // The property loads in the ctor's registration order (schema.hxx's), each
-// defaulting to its target's value at registration.
-inline void corona_load( corona_properties_t& c, const value_t& properties )
+// reset first to its node's default `d`: the ctor's values (corona_construct)
+// until a template mark makes the loaded values the defaults (vt+0x1C).
+inline void corona_load( corona_properties_t& c, const value_t& properties, const corona_properties_t& d )
 {
-    corona_properties_t d;
-    corona_construct( d );
     property_bool( properties, "Initially Visible", c.initially_visible, d.initially_visible );
     property_string( properties, "Texture Name", c.texture_name, d.texture_name );
     property_float( properties, "Rotation Speed", c.rotation_speed, d.rotation_speed, true );

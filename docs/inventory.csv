@@ -174,11 +174,11 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x406960,141,sub_406960,VuSentientUpsellResponded,VuSentientUpsellResponded+12,engine core / math / containers,absent,,False,False
 0x4069F0,112,sub_4069F0,,,engine core / math / containers (by address),absent,,False,False
 0x406A60,6,sub_406A60,VuBasicProperty<...>; btTriangleShape,VuBasicProperty<...>+1; btTriangleShape+22; btTriangleShape+23,physics (Bullet),verified,engine/workspace/core/collision/detector.hxx,False,False
-0x406A70,21,sub_406A70,VuAssetNameProperty; VuAssetProperty<...>; VuAudioEventNameProperty; VuAudioReverbNameProperty; VuBaseAssetProperty; VuBasicProperty<...>; VuConstStringEnumProperty; VuDBEntryProperty; VuInputAxisEnumProperty; VuInputButtonEnumProperty; VuStaticStringEnumProperty; VuUIEventEnumProperty,VuUIEventEnumProperty+7; VuBasicProperty<...>+7; VuAssetProperty<...>+7; VuInputAxisEnumProperty+7; VuInputButtonEnumProperty+7; VuAudioEventNameProperty+7,audio,absent,,False,False
+0x406A70,21,sub_406A70,VuAssetNameProperty; VuAssetProperty<...>; VuAudioEventNameProperty; VuAudioReverbNameProperty; VuBaseAssetProperty; VuBasicProperty<...>; VuConstStringEnumProperty; VuDBEntryProperty; VuInputAxisEnumProperty; VuInputButtonEnumProperty; VuStaticStringEnumProperty; VuUIEventEnumProperty,VuUIEventEnumProperty+7; VuBasicProperty<...>+7; VuAssetProperty<...>+7; VuInputAxisEnumProperty+7; VuInputButtonEnumProperty+7; VuAudioEventNameProperty+7,audio,callee,,False,False
 0x406A90,21,sub_406A90,VuAssetNameProperty; VuAssetProperty<...>; VuAudioEventNameProperty; VuAudioReverbNameProperty; VuBaseAssetProperty; VuBasicProperty<...>; VuConstStringEnumProperty; VuDBEntryProperty; VuInputAxisEnumProperty; VuInputButtonEnumProperty; VuStaticStringEnumProperty; VuUIEventEnumProperty,VuUIEventEnumProperty+8; VuBasicProperty<...>+8; VuAssetProperty<...>+8; VuInputAxisEnumProperty+8; VuInputButtonEnumProperty+8; VuAudioEventNameProperty+8,audio,absent,,False,False
 0x406AB0,55,sub_406AB0,VuAssetNameProperty; VuAssetProperty<...>; VuAudioEventNameProperty; VuAudioReverbNameProperty; VuBaseAssetProperty; VuBasicProperty<...>; VuConstStringEnumProperty; VuDBEntryProperty; VuInputAxisEnumProperty; VuInputButtonEnumProperty; VuStaticStringEnumProperty; VuUIEventEnumProperty,VuUIEventEnumProperty+9; VuUIEventEnumProperty+10; VuBasicProperty<...>+9; VuBasicProperty<...>+10; VuAssetProperty<...>+9; VuAssetProperty<...>+10,audio,verified,engine/workspace/core/entity/property.hxx,False,False
 0x406AF0,6,sub_406AF0,VuAngleProperty; VuBasicProperty<...>; VuMetroThread; VuPercentageProperty; btTriangleShape,VuBasicProperty<...>+1; VuAngleProperty+1; VuPercentageProperty+1; VuMetroThread+6; btTriangleShape+26,physics (Bullet),absent,,False,False
-0x406B00,9,sub_406B00,VuAngleProperty; VuBasicProperty<...>; VuPercentageProperty; VuStaticIntEnumProperty,VuBasicProperty<...>+7; VuBasicProperty<...>+7; VuBasicProperty<...>+7; VuAngleProperty+7; VuPercentageProperty+7; VuStaticIntEnumProperty+7,entity / component / script framework,absent,,False,False
+0x406B00,9,sub_406B00,VuAngleProperty; VuBasicProperty<...>; VuPercentageProperty; VuStaticIntEnumProperty,VuBasicProperty<...>+7; VuBasicProperty<...>+7; VuBasicProperty<...>+7; VuAngleProperty+7; VuPercentageProperty+7; VuStaticIntEnumProperty+7,entity / component / script framework,callee,,False,False
 0x406B10,9,sub_406B10,VuAngleProperty; VuBasicProperty<...>; VuPercentageProperty; VuStaticIntEnumProperty,VuBasicProperty<...>+8; VuBasicProperty<...>+8; VuBasicProperty<...>+8; VuAngleProperty+8; VuPercentageProperty+8; VuStaticIntEnumProperty+8,entity / component / script framework,absent,,False,False
 0x406B20,12,sub_406B20,VuBasicProperty<...>,VuBasicProperty<...>+9; VuBasicProperty<...>+10,entity / component / script framework,verified,engine/workspace/core/entity/property.hxx,False,False
 0x406B30,6,sub_406B30,VuBasicProperty<...>; VuD3d11Gfx; VuDynamicsWorldImpl; btDiscreteDynamicsWorld; btTriangleShape,VuBasicProperty<...>+1; VuDynamicsWorldImpl+27; VuD3d11Gfx+53; btTriangleShape+19; btDiscreteDynamicsWorld+27,physics (Bullet),absent,,False,False
@@ -4644,7 +4644,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x501260,117,sub_501260,,,unattributed,absent,,False,False
 0x5012E0,26,sub_5012E0,,,unattributed,absent,,False,False
 0x501300,713,loader_00501300_load_name,,,unattributed,verified,engine/workspace/core/entity/node.hxx; engine/workspace/core/entity/registry.hxx; hydro/workspace/utility/check.hxx,False,False
-0x5015D0,208,loader_005015D0_load_ChildEntities,,,unattributed,verified,engine/workspace/core/entity/node.hxx; hydro/workspace/utility/check.hxx,False,False
+0x5015D0,208,loader_005015D0_load_ChildEntities,,,unattributed,verified,engine/workspace/core/entity/node.hxx; hydro/workspace/core/game/types.hxx; hydro/workspace/utility/check.hxx,False,False
 0x5016A0,92,sub_5016A0,,,unattributed,verified,engine/workspace/core/entity/node.hxx; hydro/workspace/utility/check.hxx,False,False
 0x501700,267,sub_501700,,,unattributed,verified,engine/workspace/core/entity/node.hxx; engine/workspace/core/entity/registry.hxx,False,False
 0x501810,239,sub_501810,,,unattributed,verified,engine/workspace/core/entity/node.hxx,False,False
@@ -4686,8 +4686,8 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x503BA0,458,sub_503BA0,,,entity / component / script framework (by address),absent,,False,False
 0x503D70,324,VuScriptComponent_load_Connections,VuScriptComponent,VuScriptComponent+3,entity / component / script framework,callee,,False,False
 0x503EC0,982,sub_503EC0,VuScriptComponent,VuScriptComponent+6,entity / component / script framework,absent,,False,False
-0x5042A0,126,sub_5042A0,VuScriptComponent,VuScriptComponent+8,entity / component / script framework,absent,,False,False
-0x504320,303,sub_504320,VuScriptComponent,VuScriptComponent+4,entity / component / script framework,absent,,False,False
+0x5042A0,126,sub_5042A0,VuScriptComponent,VuScriptComponent+8,entity / component / script framework,callee,,False,False
+0x504320,303,sub_504320,VuScriptComponent,VuScriptComponent+4,entity / component / script framework,callee,,False,False
 0x504450,787,sub_504450,VuScriptComponent,VuScriptComponent+7,entity / component / script framework,absent,,False,False
 0x504770,243,VuScriptComponent_findPlug,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/world.hxx,False,False
 0x504870,259,sub_504870,,,entity / component / script framework (by address),absent,,False,False

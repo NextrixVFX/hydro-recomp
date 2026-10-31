@@ -3,6 +3,7 @@
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/entity/registry.hxx>
 #include <workspace/core/world/transform.hxx>
+#include <workspace/core/entity/corona.hxx>
 
 #include <cstring>
 
@@ -726,6 +727,48 @@ inline void entity_mark_component( entity_t&, entity_component_t& component )
     std::memcpy( s->position, s->c.local + 12, sizeof( s->position ) );
     std::memcpy( s->rotation, s->c.rotation, sizeof( s->rotation ) );
     std::memcpy( s->scale, s->c.scale, sizeof( s->scale ) );
+}
+
+// The entity properties recreated so far - VuCoronaEntity's: the targets and
+// each node's default (the ctor's values; a template mark makes the loaded
+// values the defaults).
+struct corona_state_t
+{
+    corona_properties_t value;
+    corona_properties_t defaults;
+};
+
+inline std::shared_ptr< void > entity_state_for( const std::string& cls )
+{
+    if ( cls == "VuCoronaEntity" )
+    {
+        auto s = std::make_shared< corona_state_t >( );
+        corona_construct( s->value );
+        corona_construct( s->defaults );
+        return s;
+    }
+    return nullptr;
+}
+
+// VuEntity::load's "Properties" step (0x5009D0 and the override load 0x5015D0
+// alike): each property node's vt+8 load, reset to its default first.
+inline void entity_load_properties( entity_t& entity, const value_t& properties )
+{
+    if ( entity.m_type == "VuCoronaEntity" && entity.m_state )
+    {
+        corona_state_t* s = static_cast< corona_state_t* >( entity.m_state.get( ) );
+        corona_load( s->value, properties, s->defaults );
+    }
+}
+
+// The template mark's property step (each node's vt+0x1C): default = value.
+inline void entity_mark_properties( entity_t& entity )
+{
+    if ( entity.m_type == "VuCoronaEntity" && entity.m_state )
+    {
+        corona_state_t* s = static_cast< corona_state_t* >( entity.m_state.get( ) );
+        s->defaults = s->value;
+    }
 }
 
 // entity_components_for with each recreated component's state constructed:

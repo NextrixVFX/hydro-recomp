@@ -1413,7 +1413,9 @@ inline bool verify_coronas( )
         }
         corona_properties_t c;
         corona_construct( c );
-        corona_load( c, member( member( *node, "data" ), "Properties" ) );
+        corona_properties_t defaults;
+        corona_construct( defaults );
+        corona_load( c, member( member( *node, "data" ), "Properties" ), defaults );
         const std::uint32_t ours[ 17 ] = { c.initially_visible, word( c.rotation_speed ), word( c.rotation_axis[ 0 ] ),
             word( c.rotation_axis[ 1 ] ), word( c.rotation_axis[ 2 ] ), 0u, word( c.draw_distance ), word( c.fade_distance ),
             word( c.query_radius ), word( c.cone ), word( c.penumbra ), c.back_light, c.texture_color, c.screen_space,
@@ -1438,10 +1440,87 @@ inline bool verify_coronas( )
     return failed == 0;
 }
 
+// An entity's own properties through a template (oracle case
+// load_template_properties): the hand-built template instantiated
+// (entity_instantiate_template = 0x556E70), its mark making the loaded values
+// the defaults (vt+0x1C), then the instance's override load (0x5015D0) - each
+// corona's values compared with retail's, bit for bit, as verify_coronas does.
+inline bool verify_template_properties( )
+{
+    const auto parse = []( const unsigned* words, std::size_t bytes )
+    {
+        const unsigned char* raw = reinterpret_cast< const unsigned char* >( words );
+        return c_reader( std::vector< std::uint8_t >( raw, raw + bytes ) ).parse( );
+    };
+    const value_t templ = parse( g_golden_template_properties_template, g_golden_template_properties_template_bytes );
+    const value_t override_doc = parse( g_golden_template_properties_override, g_golden_template_properties_override_bytes );
+    std::vector< std::string > names( g_golden_entity_templates, g_golden_entity_templates + g_golden_entity_templates_count );
+    const entity_registry_t registry = build_entity_registry( names );
+    entity_world_t world;
+    world.m_registry = &registry;
+    world.m_ctor_for = entity_ctor_for;
+    world.m_template = [ &templ ]( const std::string& name ) -> const value_t* { return name == "SynthCorona" ? &templ : nullptr; };
+    world.m_components_for = entity_components_constructed;
+    world.m_component_load = entity_load_component;
+    world.m_component_mark = entity_mark_component;
+    world.m_state_for = entity_state_for;
+    world.m_properties_load = entity_load_properties;
+    world.m_properties_mark = entity_mark_properties;
+    std::unique_ptr< entity_t > instance = entity_instantiate_template( "#SynthCorona", world );
+    if ( !instance )
+    {
+        LOG_ERROR( "template properties: the instance was not created" );
+        return false;
+    }
+    entity_load( *instance, &member( member( member( override_doc, "VuProject" ), "RootEntity" ), "data" ), world );
+    const auto word = []( float f )
+    {
+        std::uint32_t b;
+        std::memcpy( &b, &f, sizeof( b ) );
+        return b;
+    };
+    int failed = 0;
+    int compared = 0;
+    for ( std::size_t k = 0; k < g_golden_template_properties_count; ++k )
+    {
+        const golden_corona_t& want = g_golden_template_properties[ k ];
+        const entity_t* e = k < instance->m_children.size( ) ? instance->m_children[ k ].get( ) : nullptr;
+        if ( !e || e->m_name != want.m_name || !e->m_state )
+        {
+            LOG_ERROR( "template properties: corona %d ('%s') missing", static_cast< int >( k ), want.m_name );
+            ++failed;
+            continue;
+        }
+        const corona_properties_t& c = static_cast< const corona_state_t* >( e->m_state.get( ) )->value;
+        const std::uint32_t ours[ 17 ] = { c.initially_visible, word( c.rotation_speed ), word( c.rotation_axis[ 0 ] ),
+            word( c.rotation_axis[ 1 ] ), word( c.rotation_axis[ 2 ] ), 0u, word( c.draw_distance ), word( c.fade_distance ),
+            word( c.query_radius ), word( c.cone ), word( c.penumbra ), c.back_light, c.texture_color, c.screen_space,
+            word( c.texture_size ), word( c.rotation_offset ), word( c.rotation_amount ) };
+        for ( int p = 0; p < 17; ++p )
+        {
+            if ( p == 5 )
+                continue;
+            ++compared;
+            if ( ours[ p ] != want.m_values[ p ] && ++failed <= 8 )
+                LOG_ERROR( "template properties: '%s' value %d is 0x%08X, retail 0x%08X", want.m_name, p, ours[ p ], want.m_values[ p ] );
+        }
+        ++compared;
+        if ( c.texture_name != want.m_texture_name && ++failed <= 8 )
+            LOG_ERROR( "template properties: '%s' Texture Name is '%s', retail '%s'", want.m_name, c.texture_name.c_str( ), want.m_texture_name );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "an entity's properties through a template (0x556E70, the mark's vt+0x1C, the override 0x5015D0) match retail: "
+                     "%d coronas, %d values", static_cast< int >( g_golden_template_properties_count ), compared );
+    else
+        LOG_ERROR( "template properties FAILED %d checks", failed );
+    return failed == 0;
+}
+
 // Every oracle-backed check on game code.
 inline bool verify_game( )
 {
     bool ok = true;
+    ok = verify_template_properties( ) && ok;
     ok = verify_coronas( ) && ok;
     ok = verify_load_components( ) && ok;
     ok = verify_dynamic_lights( ) && ok;
