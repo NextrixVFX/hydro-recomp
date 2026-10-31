@@ -1,7 +1,11 @@
 #pragma once
 
 #include <workspace/core/ui/entity.hxx>
+#include <workspace/core/ui/button.hxx>
 #include <workspace/core/ui/flow.hxx>
+
+#include <array>
+#include <cstdio>
 
 // The ui area's oracle-backed checks (one file per parallel agent; included by check.hxx after every
 // shared check, so anything above is usable here). verify_ui_all runs them all.
@@ -393,9 +397,117 @@ inline bool verify_ui_front_end( )
     return failed == 0;
 }
 
+inline std::string ui_hex( const ui_params_t& p )
+{
+    static const char* digits = "0123456789abcdef";
+    std::string s;
+    for ( int k = 0; k < p.m_size; ++k )
+    {
+        s += digits[ p.m_bytes[ k ] >> 4 ];
+        s += digits[ p.m_bytes[ k ] & 15 ];
+    }
+    return s;
+}
+
+// c_ui_button (hydro core/ui/button.hxx) against retail's VuBarracudaUIButtonEntity
+// handlers (oracle case ui_button): the id of "Main/Buttons/Play" (0x500D50 /
+// 0x500BF0), then every scripted step - the VuRetVal, the broadcasts / fires
+// (params byte for byte) / sounds in order, the state bytes, the press state,
+// String ID.
+inline bool verify_ui_button( )
+{
+    std::vector< std::array< std::string, 3 > > log;
+    ui_button_hooks_t hooks;
+    hooks.m_broadcast = [ &log ]( std::uint32_t hash, const ui_params_t& p )
+    {
+        char h[ 16 ];
+        std::snprintf( h, sizeof( h ), "0x%08X", hash );
+        log.push_back( { "broadcast", h, ui_hex( p ) } );
+    };
+    // The case observes a fire where it is delivered - at the one fake connection each connected plug has
+    // (NavLeft has none: its fire reaches nobody and leaves no record).
+    hooks.m_fire = [ &log ]( const char* plug, const ui_params_t& p )
+    {
+        if ( std::strcmp( plug, "NavLeft" ) != 0 )
+            log.push_back( { "fire", plug, ui_hex( p ) } );
+    };
+    hooks.m_connections = []( const char* plug ) { return std::strcmp( plug, "NavLeft" ) == 0 ? 0 : 1; };
+    hooks.m_sound = [ &log ]( const char* name ) { log.push_back( { "sound", name, "" } ); };
+    c_ui_button b( ui_entity_id( "Main/Buttons/Play" ), hooks );
+    int failed = 0;
+    auto bad = [ &failed ]( const char* what, int step )
+    {
+        if ( ++failed <= 8 )
+            LOG_ERROR( "ui button: %s differs from retail (step %d)", what, step );
+    };
+    if ( b.m_id != g_golden_btn_id )
+        bad( "the entity id", -1 );
+    for ( std::size_t s = 0; s < g_golden_btn_steps_count; ++s )
+    {
+        const golden_btn_step_t& st = g_golden_btn_steps[ s ];
+        const int step = static_cast< int >( s );
+        const std::string op = st.m_op;
+        ui_params_t p;
+        for ( int k = 0; k < st.m_records; ++k )
+        {
+            const golden_btn_record_t& r = g_golden_btn_records[ st.m_first_record + k ];
+            if ( r.m_kind == 4 )
+                p.add_string( r.m_text );
+            else if ( r.m_kind == 8 )
+                ui_params_add( p, 1, b.m_id );
+            else if ( r.m_kind != 9 )
+                ui_params_add( p, static_cast< std::uint32_t >( r.m_kind ), r.m_value );
+        }
+        log.clear( );
+        std::string ret;
+        if ( op == "write" )
+        {
+            const unsigned w = g_golden_btn_records[ st.m_first_record ].m_value;
+            if ( ( w & 0xFFFF ) == 106 )
+                b.m_can_focus = ( w >> 16 ) != 0;
+            else
+                bad( "an unknown write", step );
+        }
+        else if ( op == "SetFocus" ) { b.set_focus( ); ret = "0000000000000000"; }
+        else if ( op == "SetStringID" ) { b.set_string_id( p ); ret = "0000000000000000"; }
+        else if ( op == "Enable" ) { b.enable( ); ret = "0000000000000000"; }
+        else if ( op == "Disable" ) { b.disable( ); ret = "0000000000000000"; }
+        else if ( op == "IsEnabled" ) ret = b.is_enabled( ) ? "0000000300000001" : "0000000300000000";
+        else if ( op == "OnUISetFocus" ) b.on_set_focus( p );
+        else if ( op == "OnUITick" ) b.on_tick( );
+        else if ( op == "OnUIEvent" ) b.on_event( p );
+        else
+            bad( "an unknown op", step );
+        if ( ( st.m_ret ? std::string( st.m_ret ) : std::string( ) ) != ret )
+            bad( "the VuRetVal", step );
+        bool same = log.size( ) == static_cast< std::size_t >( st.m_logs );
+        for ( int k = 0; same && k < st.m_logs; ++k )
+        {
+            const golden_btn_log_t& g = g_golden_btn_logs[ st.m_first_log + k ];
+            same = log[ k ][ 0 ] == g.m_kind && log[ k ][ 1 ] == g.m_a && log[ k ][ 2 ] == ( g.m_b ? g.m_b : "" );
+        }
+        if ( !same )
+            bad( "the hooks reached", step );
+        char state[ 32 ];
+        std::snprintf( state, sizeof( state ), "%02x%02x%02x.%02x%02x%02x%02x%02x", b.m_enabled, b.m_label, b.m_can_focus, b.m_focused,
+            b.m_want_focus, b.m_touched, b.m_touch_press, b.m_touch_release );
+        if ( std::string( state ) != st.m_state || b.m_press != st.m_press || b.m_string_id != st.m_string || b.m_touch_unknown )
+            bad( "the button's state", step );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_button matches retail's VuBarracudaUIButtonEntity (SetFocus 0x4428E0, SetStringID 0x442980, Enable / Disable / "
+                     "IsEnabled, OnUISetFocus 0x442A40, OnUITick 0x442A90, OnUIEvent 0x442D60, the id 0x500D50 / 0x500BF0) on %d steps - "
+                     "returns, broadcasts / fires / sounds with their params, state bytes, String ID",
+            static_cast< int >( g_golden_btn_steps_count ) );
+    else
+        LOG_ERROR( "the front end's button FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_button( ) && ok;
     ok = verify_ui_front_end( ) && ok;
     ok = verify_ui_projects( ) && ok;
     ok = verify_ui_properties( ) && ok;
