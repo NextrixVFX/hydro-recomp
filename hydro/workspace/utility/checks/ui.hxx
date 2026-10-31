@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/ui/entity.hxx>
+#include <workspace/core/ui/flow.hxx>
 
 // The ui area's oracle-backed checks (one file per parallel agent; included by check.hxx after every
 // shared check, so anything above is usable here). verify_ui_all runs them all.
@@ -261,9 +262,141 @@ inline bool verify_ui_components( )
     return failed == 0;
 }
 
+// c_front_end (hydro core/ui/flow.hxx) against retail's VuFrontEndGameMode run
+// end to end (oracle case front_end_flow): the ctor's event registrations
+// (name -> handler), the FSM it builds (states: name, flag, hash, the four
+// delegates' functions; transitions; conditions: name, hash, value / pulse),
+// TransitionDuration from the real ConstantDB; then every step of the scripted
+// flow (fade writes, the start, ticks, the eight handlers) - the tick's return,
+// the hooks reached in order (sound / project load / analytics) and the whole
+// state after: next mode, next / current screen, the stack, the settings
+// depth, gameutil's operation / screen, the FSM's state, its time bit for bit,
+// every condition, the fade manager.
+inline bool verify_ui_front_end( )
+{
+    const unsigned* cdb = g_golden_vujb_words + g_golden_vujb_offsets[ 0 ];
+    const unsigned char* cdb_raw = reinterpret_cast< const unsigned char* >( cdb + 2 );
+    const value_t constant_db = c_reader( std::vector< std::uint8_t >( cdb_raw, cdb_raw + cdb[ 1 ] ) ).parse( );
+    std::vector< std::pair< std::string, std::string > > log;
+    front_end_engine_t engine;
+    engine.m_display = []( int& w, int& h ) { w = 1280; h = 720; };
+    engine.m_sound = [ &log ]( const char* name ) { log.push_back( { "sound", name } ); };
+    engine.m_load_project = [ &log ]( const std::string& name ) { log.push_back( { "load", name } ); return 0; };
+    engine.m_analytics = [ &log ]( const char* event, const std::string& ) { log.push_back( { "analytics", event } ); };
+    c_front_end fe( engine, constant_db );
+    int failed = 0;
+    auto bad = [ &failed ]( const char* what, int step )
+    {
+        if ( ++failed <= 8 )
+            LOG_ERROR( "ui front end: %s differs from retail (step %d)", what, step );
+    };
+    std::uint32_t td = 0;
+    std::memcpy( &td, &fe.m_transition_duration, 4 );
+    if ( td != g_golden_fe_transition_duration )
+        bad( "TransitionDuration", -1 );
+    if ( fe.m_events.size( ) != g_golden_fe_registered_count )
+        bad( "the event registrations", -1 );
+    for ( std::size_t k = 0; k < g_golden_fe_registered_count && k < fe.m_events.size( ); ++k )
+        if ( std::strcmp( fe.m_events[ k ].m_name, g_golden_fe_registered[ k ].m_name ) != 0 ||
+             fe.m_events[ k ].m_address != g_golden_fe_registered[ k ].m_handler )
+            bad( "an event registration", -1 );
+    if ( fe.m_fsm.m_states.size( ) != g_golden_fe_states_count || fe.m_fsm.m_conditions.size( ) != g_golden_fe_conditions_count )
+        bad( "the FSM's state / condition count", -1 );
+    for ( std::size_t k = 0; k < g_golden_fe_states_count && k < fe.m_fsm.m_states.size( ); ++k )
+    {
+        const golden_fe_state_t& want = g_golden_fe_states[ k ];
+        const fsm_state_t& have = *fe.m_fsm.m_states[ k ];
+        bool same = have.m_name == want.m_name && static_cast< int >( have.m_flag ) == want.m_flag && have.m_hash == want.m_hash &&
+                    have.m_transitions.size( ) == static_cast< std::size_t >( want.m_transitions );
+        const bool bound[ 4 ] = { static_cast< bool >( have.m_enter ), static_cast< bool >( have.m_exit ), static_cast< bool >( have.m_tick ),
+                                  static_cast< bool >( have.m_draw ) };
+        for ( int m = 0; m < 4; ++m )
+            same = same && have.m_address[ m ] == want.m_methods[ m ] && bound[ m ] == ( want.m_methods[ m ] != 0 );
+        for ( int t = 0; same && t < want.m_transitions; ++t )
+            same = have.m_transitions[ t ].first == g_golden_fe_transitions[ want.m_first_transition + t ].m_condition &&
+                   have.m_transitions[ t ].second == g_golden_fe_transitions[ want.m_first_transition + t ].m_target;
+        if ( !same )
+            bad( "an FSM state", static_cast< int >( k ) );
+    }
+    for ( std::size_t k = 0; k < g_golden_fe_conditions_count && k < fe.m_fsm.m_conditions.size( ); ++k )
+    {
+        const fsm_condition_t& c = fe.m_fsm.m_conditions[ k ];
+        if ( c.m_name != g_golden_fe_conditions[ k ].m_name || c.m_hash != g_golden_fe_conditions[ k ].m_hash ||
+             ( c.m_value | ( c.m_pulse << 8 ) ) != g_golden_fe_conditions[ k ].m_word )
+            bad( "an FSM condition", static_cast< int >( k ) );
+    }
+    for ( std::size_t s = 0; s < g_golden_fe_steps_count; ++s )
+    {
+        const golden_fe_step_t& st = g_golden_fe_steps[ s ];
+        const int step = static_cast< int >( s );
+        float value = 0.0f;
+        std::memcpy( &value, &st.m_bits, 4 );
+        log.clear( );
+        std::string ret;
+        const std::string op = st.m_op;
+        if ( op == "fade" )
+            engine.m_fade.m_rate = value;
+        else if ( op == "fadelen" )
+            engine.m_fade.m_duration = value;
+        else if ( op == "start" )
+            fe.start( );
+        else if ( op == "tick" )
+            ret = fe.tick( value );
+        else
+        {
+            ui_params_t params;
+            for ( int k = 0; k < st.m_strings; ++k )
+                params.add_string( g_golden_fe_strings[ st.m_first_string + k ] );
+            fe.handle( st.m_op, params );
+        }
+        if ( st.m_ret && ret != st.m_ret )
+            bad( "the tick's return", step );
+        bool same = log.size( ) == static_cast< std::size_t >( st.m_logs );
+        for ( int k = 0; same && k < st.m_logs; ++k )
+            same = log[ k ].first == g_golden_fe_logs[ st.m_first_log + k ].m_kind && log[ k ].second == g_golden_fe_logs[ st.m_first_log + k ].m_text;
+        if ( !same )
+            bad( "the hooks reached", step );
+        if ( fe.m_mode != st.m_mode || fe.m_next != st.m_next || fe.m_current != st.m_current )
+            bad( "mode / next / current", step );
+        same = fe.m_stack.size( ) == static_cast< std::size_t >( st.m_stack );
+        for ( int k = 0; same && k < st.m_stack; ++k )
+            same = fe.m_stack[ k ] == g_golden_fe_strings[ st.m_first_stack + k ];
+        if ( !same )
+            bad( "the screen stack", step );
+        if ( static_cast< unsigned >( fe.m_depth ) != st.m_depth || engine.m_operation != st.m_operation || engine.m_screen != st.m_screen )
+            bad( "depth / operation / screen", step );
+        if ( !fe.m_fsm.current( ) || fe.m_fsm.current( )->m_name != st.m_state )
+            bad( "the FSM's state", step );
+        std::uint32_t time = 0;
+        std::memcpy( &time, &fe.m_fsm.m_time, 4 );
+        if ( time != st.m_time )
+            bad( "the FSM's time", step );
+        same = fe.m_fsm.m_conditions.size( ) == static_cast< std::size_t >( st.m_condition_count );
+        for ( int k = 0; same && k < st.m_condition_count; ++k )
+            same = static_cast< unsigned >( fe.m_fsm.m_conditions[ k ].m_value | ( fe.m_fsm.m_conditions[ k ].m_pulse << 8 ) ) == st.m_conditions[ k ];
+        if ( !same )
+            bad( "the conditions", step );
+        const float fade[ 3 ] = { engine.m_fade.m_duration, engine.m_fade.m_value, engine.m_fade.m_rate };
+        std::uint32_t fade_bits[ 3 ];
+        std::memcpy( fade_bits, fade, sizeof( fade ) );
+        if ( fade_bits[ 0 ] != st.m_fade[ 0 ] || fade_bits[ 1 ] != st.m_fade[ 1 ] || fade_bits[ 2 ] != st.m_fade[ 2 ] )
+            bad( "the fade manager", step );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the front end's screen flow matches retail's VuFrontEndGameMode (ctor 0x4BEEA0, VuFSM 0x555850 / 0x555920 / "
+                     "0x555AD0, tick 0x4BFC10, the eight handlers, the states' methods): %d registrations, %d states, %d conditions, "
+                     "%d scripted steps - stack, screens, depth, FSM state / time, conditions, fade, hooks",
+            static_cast< int >( g_golden_fe_registered_count ), static_cast< int >( g_golden_fe_states_count ),
+            static_cast< int >( g_golden_fe_conditions_count ), static_cast< int >( g_golden_fe_steps_count ) );
+    else
+        LOG_ERROR( "the front end's screen flow FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_front_end( ) && ok;
     ok = verify_ui_projects( ) && ok;
     ok = verify_ui_properties( ) && ok;
     ok = verify_ui_components( ) && ok;
