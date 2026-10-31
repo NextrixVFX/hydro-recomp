@@ -15,6 +15,90 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <xmmintrin.h>
+
+// THE PFX TICK NODES' PER-FRAME SLOT 1, transliterated one particle at a time
+// (each retail function walks the owning pattern instance's list, node +0xC
+// -> +0x20, next at particle +0, and applies this body to every particle).
+// The particle's words are addressed by retail's byte offsets: +0x18 .. +0x20
+// velocity, +0x34 alpha, +0x38 scale, +0x3C age, +0x4C world scale z; the
+// node's params by theirs, from +0x30.
+//
+// NOT YET WIRED INTO c_pfx::simulate below, whose own versions predate these
+// and DIFFER: its dampen keeps 1 - Amount * dt with no clamp, where retail
+// clamps Amount * dt to 1.0 with minss first. Switching simulate over moves
+// what the bench draws and needs its own measured still change.
+struct pfx_tick_particle_t
+{
+    float velocity[ 3 ];   // +0x18
+    float alpha;           // +0x34
+    float scale;           // +0x38
+    float age;             // +0x3C
+    float world_scale_z;   // +0x4C
+};
+
+// VuPfxTickDampenVelocityInstance @0x58e4b0: k = minss( Amount * dt, 1 ) once
+// per call, then past the start delay every velocity component times 1 - k.
+inline void pfx_tick_dampen( pfx_tick_particle_t& p, const float* params, float dt )
+{
+    const float k = _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( params[ 0 ] * dt ), _mm_set_ss( 1.0f ) ) );
+    if ( !_mm_comigt_ss( _mm_set_ss( p.age ), _mm_set_ss( params[ 1 ] ) ) )
+        return;
+    const float keep = 1.0f - k;
+    p.velocity[ 0 ] = p.velocity[ 0 ] * keep;
+    p.velocity[ 1 ] = keep * p.velocity[ 1 ];
+    p.velocity[ 2 ] = keep * p.velocity[ 2 ];
+}
+
+// VuPfxTickLinearAccelerationInstance @0x58e810: past the delay (+0x40), the
+// velocity gains the acceleration (+0x30 .. +0x38) times dt.
+inline void pfx_tick_accelerate( pfx_tick_particle_t& p, const float* params, float dt )
+{
+    if ( !_mm_comigt_ss( _mm_set_ss( p.age ), _mm_set_ss( params[ 4 ] ) ) )
+        return;
+    p.velocity[ 0 ] = p.velocity[ 0 ] + params[ 0 ] * dt;
+    p.velocity[ 1 ] = p.velocity[ 1 ] + params[ 1 ] * dt;
+    p.velocity[ 2 ] = p.velocity[ 2 ] + params[ 2 ] * dt;
+}
+
+// The delay test VuPfxTickScale / TickAlpha / TickWorldScaleZ share: the rate
+// (+0x34) times dt once the age has passed the delay (+0x30) - comiss
+// ( delay - age ), 0; jb - else exactly 0, which is still ADDED (so a -0.0
+// member becomes +0.0).
+inline float pfx_tick_rate( const pfx_tick_particle_t& p, const float* params, float dt )
+{
+    return _mm_comilt_ss( _mm_set_ss( params[ 0 ] - p.age ), _mm_setzero_ps( ) ) || std::isnan( params[ 0 ] - p.age )
+        ? params[ 1 ] * dt
+        : 0.0f;
+}
+
+inline void pfx_tick_scale( pfx_tick_particle_t& p, const float* params, float dt )        // @0x590da0
+{
+    p.scale = p.scale + pfx_tick_rate( p, params, dt );
+}
+
+inline void pfx_tick_alpha( pfx_tick_particle_t& p, const float* params, float dt )        // @0x591360
+{
+    p.alpha = p.alpha + pfx_tick_rate( p, params, dt );
+}
+
+inline void pfx_tick_world_scale_z( pfx_tick_particle_t& p, const float* params, float dt ) // @0x590b40
+{
+    p.world_scale_z = pfx_tick_rate( p, params, dt ) + p.world_scale_z;
+}
+
+// VuPfxTickAlphaInOutInstance @0x5910e0: the fade-in rate (+0x34) applies
+// WHILE the age has not passed +0x30 (the opposite sense to the others), the
+// fade-out rate (+0x3C) once it has passed +0x38; both added in that order.
+inline void pfx_tick_alpha_in_out( pfx_tick_particle_t& p, const float* params, float dt )
+{
+    const float in_gap = params[ 0 ] - p.age;
+    const bool before = !( _mm_comilt_ss( _mm_set_ss( in_gap ), _mm_setzero_ps( ) ) || std::isnan( in_gap ) );
+    const float alpha = p.alpha + ( before ? params[ 1 ] * dt : 0.0f );
+    const float out_gap = params[ 2 ] - p.age;
+    const bool after = _mm_comilt_ss( _mm_set_ss( out_gap ), _mm_setzero_ps( ) ) || std::isnan( out_gap );
+    p.alpha = alpha + ( after ? params[ 3 ] * dt : 0.0f );
+}
 
 // VuStaticPfxEntity. The effect document is a VuPfxAsset. A quad pattern
 // integrates, then runs its child processes in file order (fountain spawn,

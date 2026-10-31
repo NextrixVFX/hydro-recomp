@@ -389,6 +389,61 @@ inline bool verify_wave_ticks( )
     return failed == 0;
 }
 
+// The pfx tick nodes' per-particle bodies against retail's slot 1s on 12 linked particles per sample: every
+// particle's 32 words after the tick (the five members the bodies write, the rest untouched).
+inline bool verify_pfx_ticks( )
+{
+    int failed = 0;
+    int particles = 0;
+    for ( std::size_t index = 0; index < g_golden_pfx_ticks_count; ++index )
+    {
+        const golden_pfx_tick_t& g = g_golden_pfx_ticks[ index ];
+        int bad = 0;
+        for ( int i = 0; i < 12; ++i )
+        {
+            std::uint32_t words[ 32 ];
+            std::memcpy( words, g_golden_pfx_tick_words + g.m_words + 32 * i, sizeof( words ) );
+            auto get = [ & ]( int offset ) { return wave_bits( words[ offset / 4 ] ); };
+            auto put = [ & ]( int offset, float value ) { std::memcpy( &words[ offset / 4 ], &value, 4 ); };
+            pfx_tick_particle_t p{ { get( 0x18 ), get( 0x1C ), get( 0x20 ) }, get( 0x34 ), get( 0x38 ), get( 0x3C ), get( 0x4C ) };
+            switch ( g.m_kind )
+            {
+            case 0: pfx_tick_dampen( p, g.m_params, g.m_dt ); break;
+            case 1: pfx_tick_accelerate( p, g.m_params, g.m_dt ); break;
+            case 2: pfx_tick_scale( p, g.m_params, g.m_dt ); break;
+            case 3: pfx_tick_alpha( p, g.m_params, g.m_dt ); break;
+            case 4: pfx_tick_alpha_in_out( p, g.m_params, g.m_dt ); break;
+            default: pfx_tick_world_scale_z( p, g.m_params, g.m_dt ); break;
+            }
+            put( 0x18, p.velocity[ 0 ] );
+            put( 0x1C, p.velocity[ 1 ] );
+            put( 0x20, p.velocity[ 2 ] );
+            put( 0x34, p.alpha );
+            put( 0x38, p.scale );
+            put( 0x3C, p.age );
+            put( 0x4C, p.world_scale_z );
+            ++particles;
+            if ( std::memcmp( words, g_golden_pfx_tick_words + g.m_words + 32 * 12 + 32 * i, sizeof( words ) ) != 0 )
+                ++bad;
+        }
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "pfx tick kind %d dt %.6g: %d of 12 particles differ from retail", g.m_kind, g.m_dt, bad );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the pfx tick nodes (dampen @0x58e4b0, acceleration @0x58e810, scale @0x590da0, alpha @0x591360, alpha in/out @0x5910e0, world scale z @0x590b40) match retail on %d samples, %d particles",
+            static_cast< int >( g_golden_pfx_ticks_count ), particles );
+    }
+    else
+    {
+        LOG_ERROR( "the pfx tick nodes FAILED %d of %d samples", failed, static_cast< int >( g_golden_pfx_ticks_count ) );
+    }
+    return failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
@@ -397,5 +452,6 @@ inline bool verify_water_all( )
     ok = verify_wave_bridges( ) && ok;
     ok = verify_water_tick( ) && ok;
     ok = verify_wave_ticks( ) && ok;
+    ok = verify_pfx_ticks( ) && ok;
     return ok;
 }
