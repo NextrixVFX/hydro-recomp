@@ -389,6 +389,52 @@ inline bool verify_trigger_plane( )
     return failed == 0;
 }
 
+// static_model_select (engine entity/draw.hxx) against
+// Vu3dDrawStaticModelComponent's draw 0x5B0730 on seeded inputs (oracle case
+// static_model_draw): which model instance is drawn (or none) and the three
+// words written into it, one failure per vector.
+inline bool verify_static_model_draw( )
+{
+    const auto f = []( unsigned w )
+    {
+        float v;
+        std::memcpy( &v, &w, sizeof( v ) );
+        return v;
+    };
+    int failed = 0;
+    int drawn = 0;
+    for ( std::size_t k = 0; k < g_golden_static_draws_count; ++k )
+    {
+        const golden_static_draw_t& g = g_golden_static_draws[ k ];
+        model_draw_t c;
+        model_draw_construct( c, false );
+        c.color = g.m_color;
+        c.draw_distance = f( g.m_draw );
+        c.lod0_draw_distance = f( g.m_lod0 );
+        c.lod1_draw_distance = f( g.m_lod1 );
+        c.rejection_scale_modifier = f( g.m_reject );
+        c.dynamic_lighting = static_cast< std::uint8_t >( g.m_dynamic );
+        const float lo[ 3 ] = { f( g.m_min[ 0 ] ), f( g.m_min[ 1 ] ), f( g.m_min[ 2 ] ) };
+        const float hi[ 3 ] = { f( g.m_max[ 0 ] ), f( g.m_max[ 1 ] ), f( g.m_max[ 2 ] ) };
+        const float eye[ 3 ] = { f( g.m_eye[ 0 ] ), f( g.m_eye[ 1 ] ), f( g.m_eye[ 2 ] ) };
+        const static_draw_t ours = static_model_select( c, lo, hi, eye, g.m_reflection != 0, g.m_skip != 0, f( g.m_fade ) );
+        std::uint32_t rejection;
+        std::memcpy( &rejection, &ours.rejection, 4 );
+        const bool same = ours.instance == g.m_instance &&
+                          ( ours.instance < 0 || ( rejection == g.m_w14 && ours.color == g.m_w18 && ours.dynamic_lighting == g.m_b1c ) );
+        drawn += g.m_instance >= 0;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "static model draw: vector %d draws %d (0x%08X 0x%08X %d), retail %d (0x%08X 0x%08X %d)", static_cast< int >( k ), ours.instance,
+                rejection, ours.color, ours.dynamic_lighting, g.m_instance, g.m_w14, g.m_w18, g.m_b1c );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "static_model_select matches Vu3dDrawStaticModelComponent's draw 0x5B0730 on %d vectors (%d drawn): instance, rejection, "
+                     "colour and lighting bit for bit", static_cast< int >( g_golden_static_draws_count ), drawn );
+    else
+        LOG_ERROR( "static_model_select FAILED %d vectors", failed );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
@@ -399,5 +445,6 @@ inline bool verify_world_all( )
     ok = verify_static_pfx( ) && ok;
     ok = verify_actions( ) && ok;
     ok = verify_trigger_plane( ) && ok;
+    ok = verify_static_model_draw( ) && ok;
     return ok;
 }
