@@ -497,3 +497,156 @@ inline void boat_engine_audio( std::uint8_t* engine, const boat_strings_t& names
         hooks.parameter( hooks.user, h, "height", height );
     }
 }
+
+// 0x41E2E0 (__usercall: ecx the boat, xmm1, xmm2): when the driver (boat
+// +0x220) IS-A VuHumanDriver (its vt+4 type chain reaches 0x73623C) the
+// driver's +0xC8 / +0xCC rise to xmm1 / xmm2 (maxss: a NaN driver value takes
+// the argument).
+inline void boat_driver_raise( std::uint8_t* driver, bool human, float a, float b )
+{
+    if ( !human )
+        return;
+    state_put_f( driver, 0xC8, _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( state_f( driver, 0xC8 ) ), _mm_set_ss( a ) ) ) );
+    state_put_f( driver, 0xCC, _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( state_f( driver, 0xCC ) ), _mm_set_ss( b ) ) ) );
+}
+
+// What 0x416630 hands outside the boat: the FMOD calls (as the engine's), the
+// splash effect - 0x52BCD0 on g 0x75905C (the VuPfx system) by the name at
+// hull +0x17C, its handle check, VuMatrix_lookAtBasis 0x50CA70 of the body
+// velocity and the effect's vt+8 / +0xC / +0x2C: NOT recreated, a hook told the
+// name -, g 0x759048 vt+0x28(hull +0x194) (the lens-water manager
+// VuLensWaterEmitterEntity reaches: NOT recreated, a hook) and the wake update
+// 0x417D80 (VuWater's wake creation 0x528850 / 0x5287D0 / 0x52C720: a hook).
+struct boat_hull_tick_hooks_t
+{
+    boat_engine_audio_hooks_t fmod;
+    void* user = nullptr;
+    void ( *splash )( void* user, const std::string& name ) = nullptr;
+    void ( *lens )( void* user, float amount ) = nullptr;
+    void ( *wake )( void* user ) = nullptr;
+};
+
+// 0x416630 (__usercall: ecx the hull - boat +0x228; xmm1 dt), the hull's
+// part of the Decision tick. +0x164 counts the time spent inverted (the
+// transform component's world +0x78 < 0) in the water (the solver +0x54 > 0);
+// a bounce (the solver's submersion crossing BounceThreshold +0x158 upward)
+// rates -0.1 x (n.v) along the solver's normal +0xE0 into [0, 1], raises
+// +0x16C to it (0.95 at most) and the driver's +0xCC (0x41E2E0); a pending
+// splash (+0x178 nonzero) raises +0x16C to 1, starts the splash effect and,
+// with boat +0x467, rumbles (0x41E2E0 1, 0), may restart the camera's shake
+// (+0x2E4 .. +0x2FC from +0x198 .. +0x1A4) and feeds the lens water, then
+// sets the spring velocity +0x1B8 = (1 - t) x +0x1BC + +0x1C0 x t. The
+// spring (+0x1B0 position, +0x1B8 velocity, stiffness +0x1C4, damping
+// +0x1C8) steps by dt and +0x1A8 .. +0x1B7 go to boat +0x49C. +0x16C > 0
+// fires the bounce event (slot +0x13C, name +0xEC, parameter intensity)
+// when +0x170 has run out; the four handles +0x138 .. +0x150 get the 3D
+// attributes and speed / slip / height; +0x170 runs down; then 0x417D80.
+inline void boat_hull_tick( std::uint8_t* hull, const boat_strings_t& names, std::uint8_t* boat, solver_rigid_t& body,
+    const std::uint8_t* transform, const std::uint8_t* solver, const std::uint8_t* engine, std::uint8_t* driver, bool human,
+    std::uint8_t* camera, float dt, const boat_hull_tick_hooks_t& hooks )
+{
+    auto gt = []( float a, float b ) { return _mm_comigt_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) != 0; };   // ordered a > b
+    auto ge = []( float a, float b ) { return _mm_comige_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) != 0; };   // ordered a >= b
+    auto minss = []( float a, float b ) { return _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); };
+    auto maxss = []( float a, float b ) { return _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); };
+    auto word = [ & ]( int at ) { std::uint32_t v; std::memcpy( &v, hull + at, 4 ); return v; };
+    auto name = [ & ]( int at ) { const auto it = names.find( at ); return it == names.end( ) ? std::string( ) : it->second; };
+    const float s54 = state_f( solver, 0x54 );
+    if ( gt( 0.0f, state_f( transform, 0x78 ) ) && gt( s54, 0.0f ) )
+        state_put_f( hull, 0x164, dt + state_f( hull, 0x164 ) );
+    else
+        image_put32( hull, 0x164, 0 );
+    // 0x416695: the bounce.
+    const float threshold = state_f( hull, 0x158 );
+    if ( gt( threshold, state_f( hull, 0x168 ) ) && ge( s54, threshold ) )
+    {
+        const float vx = body.linear_velocity[ 0 ], vy = body.linear_velocity[ 1 ], vz = body.linear_velocity[ 2 ];
+        const float along = state_f( solver, 0xE4 ) * vy + vx * state_f( solver, 0xE0 );
+        const float x = ( state_f( solver, 0xE8 ) * vz ) * -0.1f - along * 0.1f;
+        const float a = maxss( 0.0f, minss( 1.0f, x ) );
+        state_put_f( hull, 0x16C, maxss( state_f( hull, 0x16C ), minss( a, 0.95f ) ) );
+        boat_driver_raise( driver, human, 0.0f, a );
+    }
+    state_put_f( hull, 0x168, s54 );
+    // 0x41679B: the splash (+0x178 not ordered-equal to 0).
+    const float t = state_f( hull, 0x178 );
+    if ( t != 0.0f || t != t )
+    {
+        state_put_f( hull, 0x16C, maxss( state_f( hull, 0x16C ), 1.0f ) );
+        if ( hooks.splash )
+            hooks.splash( hooks.user, name( 0x17C ) );
+        if ( boat[ 0x467 ] )
+        {
+            boat_driver_raise( driver, human, 1.0f, 0.0f );
+            const float h198 = state_f( hull, 0x198 ), h19C = state_f( hull, 0x19C ), h1A0 = state_f( hull, 0x1A0 ), h1A4 = state_f( hull, 0x1A4 );
+            if ( ge( 0.0f, state_f( camera, 0x2E8 ) ) || gt( h198, state_f( camera, 0x2E4 ) ) )
+            {
+                state_put_f( camera, 0x2E4, h198 );
+                state_put_f( camera, 0x2EC, h1A0 );
+                state_put_f( camera, 0x2F0, h1A4 );
+                image_put32( camera, 0x2F4, 0 );
+                state_put_f( camera, 0x2E8, h19C + h1A0 );
+                image_put32( camera, 0x2F8, 0 );
+                state_put_f( camera, 0x2FC, 1.0f );
+            }
+            if ( hooks.lens )
+                hooks.lens( hooks.user, state_f( hull, 0x194 ) );
+        }
+        const float u = state_f( hull, 0x178 );
+        image_put32( hull, 0x178, 0 );
+        state_put_f( hull, 0x1B8, ( 1.0f - u ) * state_f( hull, 0x1BC ) + state_f( hull, 0x1C0 ) * u );
+    }
+    // 0x416A1F: the spring.
+    {
+        const float x = state_f( hull, 0x1B0 ), v = state_f( hull, 0x1B8 );
+        const float a = -( state_f( hull, 0x1C4 ) * x ) - state_f( hull, 0x1C8 ) * v;
+        state_put_f( hull, 0x1B8, a * dt + v );
+        state_put_f( hull, 0x1B0, ( ( a * 0.5f ) * dt + v ) * dt + x );
+        std::memcpy( boat + 0x49C, hull + 0x1A8, 16 );
+    }
+    // 0x416AAD: the bounce event.
+    if ( gt( state_f( hull, 0x16C ), 0.0f ) )
+    {
+        if ( ge( 0.0f, state_f( hull, 0x170 ) ) )
+        {
+            if ( ge( state_f( hull, 0x16C ), 1.0f ) )
+                state_put_f( hull, 0x170, 1.0f );
+            if ( boat_audio_event_create( hull, 0x13C, name( 0xEC ), hooks.fmod ) )
+            {
+                if ( hooks.fmod.start )
+                    hooks.fmod.start( hooks.fmod.user, word( 0x140 ) );
+                if ( hooks.fmod.parameter )
+                    hooks.fmod.parameter( hooks.fmod.user, word( 0x140 ), "intensity", state_f( hull, 0x16C ) );
+            }
+        }
+        image_put32( hull, 0x16C, 0 );
+    }
+    // 0x416B4C: the four handles' attributes and parameters.
+    const float vx = body.linear_velocity[ 0 ], vy = body.linear_velocity[ 1 ];
+    const float speed = hull_sqrt( vx * vx + vy * vy );
+    const float ratio = speed / ( ( state_f( boat, 0x470 ) * ( state_f( engine, 0xC ) * state_f( engine, 4 ) ) ) * water_bits( 0x3EE4E26Du ) );
+    const float slip = minss( s54 / state_f( hull, 0x154 ), 1.0f );
+    const float height = state_f( solver, 0x5C );
+    float position[ 3 ], velocity[ 3 ];
+    for ( int k = 0; k < 3; ++k )
+    {
+        position[ k ] = state_f( transform, 0x80 + 4 * k );
+        velocity[ k ] = body.linear_velocity[ k ];
+    }
+    for ( int k = 0; k < 4; ++k )
+    {
+        const std::uint32_t h = word( 0x138 + 8 * k );
+        if ( !h )
+            continue;
+        if ( hooks.fmod.attributes )
+            hooks.fmod.attributes( hooks.fmod.user, h, position, velocity );
+        if ( !hooks.fmod.parameter )
+            continue;
+        hooks.fmod.parameter( hooks.fmod.user, h, "speed", ratio );
+        hooks.fmod.parameter( hooks.fmod.user, h, "slip", slip );
+        hooks.fmod.parameter( hooks.fmod.user, h, "height", height );
+    }
+    state_put_f( hull, 0x170, maxss( 0.0f, state_f( hull, 0x170 ) - dt ) );
+    if ( hooks.wake )
+        hooks.wake( hooks.user );   // HOOK: 0x417D80
+}
