@@ -1,13 +1,13 @@
 #pragma once
 
-#include <workspace/core/game/types.hxx>
+#include <workspace/core/ui/entity.hxx>
 
 // The ui area's oracle-backed checks (one file per parallel agent; included by check.hxx after every
 // shared check, so anything above is usable here). verify_ui_all runs them all.
 
-// The front end's projects as entity_load_project builds them (the
-// captured ctor facts and components, the VuTemplateAssets served by name), one
-// tree per golden project, pre-order.
+// The front end's projects as entity_load_project builds them (ui_world: the
+// captured ctor facts and components, the VuTemplateAssets served by name, the
+// UI property loads), one tree per golden project, pre-order.
 struct ui_loaded_t
 {
     std::map< std::string, value_t > templates;
@@ -32,17 +32,11 @@ inline const ui_loaded_t& ui_loaded( )
     std::vector< std::string > names( g_golden_entity_templates, g_golden_entity_templates + g_golden_entity_templates_count );
     static const entity_registry_t registry = build_entity_registry( names );
     std::map< std::string, value_t >* templates = &loaded.templates;
-    entity_world_t world;
-    world.m_registry = &registry;
-    world.m_ctor_for = entity_ctor_for;
-    world.m_template = [ templates ]( const std::string& name ) -> const value_t*
+    const entity_world_t world = ui_world( registry, [ templates ]( const std::string& name ) -> const value_t*
     {
         const auto found = templates->find( "VuTemplateAsset/" + name );
         return found == templates->end( ) ? nullptr : &found->second;
-    };
-    world.m_components_for = entity_components_constructed;
-    world.m_component_load = entity_load_component;
-    world.m_component_mark = entity_mark_component;
+    } );
     loaded.documents.reserve( g_golden_ui_projects_count );
     for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
     {
@@ -107,9 +101,77 @@ inline bool verify_ui_projects( )
     return failed == 0;
 }
 
+// The UI property loads (ui_entity_load_properties over schema.hxx's rows)
+// against every property node retail's load left, entity by entity, in the
+// same projects: each node of a class whose rows are recreated compared - its
+// name and class, then its target bit for bit (text exactly). Nodes of types
+// without rows are counted as skipped (said, not compared).
+inline bool verify_ui_properties( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0;
+    int compared = 0;
+    int skipped = 0;
+    for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+    {
+        const golden_ui_project_t& project = g_golden_ui_projects[ p ];
+        const auto& tree = loaded.trees[ p ];
+        if ( tree.size( ) != static_cast< std::size_t >( project.m_count ) )
+            continue;  // verify_ui_projects reports it
+        for ( int k = 0; k < project.m_count; ++k )
+        {
+            const golden_ui_entity_t& want = g_golden_ui_entities[ project.m_first + k ];
+            const entity_t& have = *tree[ k ].second;
+            int count = 0;
+            if ( !ui_rows_for( have.m_type, count ) || !have.m_state )
+            {
+                skipped += want.m_nodes;
+                continue;
+            }
+            const ui_state_t* s = static_cast< const ui_state_t* >( have.m_state.get( ) );
+            if ( s->m_count != want.m_nodes )
+            {
+                if ( ++failed <= 8 )
+                    LOG_ERROR( "ui properties: %s '%s' has %d nodes, retail %d", project.m_asset, want.m_name, s->m_count, want.m_nodes );
+                continue;
+            }
+            for ( int n = 0; n < s->m_count; ++n )
+            {
+                const golden_ui_node_t& node = g_golden_ui_nodes[ want.m_first_node + n ];
+                const ui_property_row_t& row = s->m_rows[ n ];
+                const ui_slot_t& slot = s->m_value[ n ];
+                ++compared;
+                bool same = std::strcmp( row.m_name, node.m_name ) == 0 && row.m_vtable == node.m_vtable;
+                if ( same && node.m_kind == 1 )
+                    same = slot.m_text == node.m_text;
+                else if ( same && node.m_kind == 2 )
+                {
+                    const int width = ui_width( row.m_kind );
+                    for ( int w = 0; w < width; ++w )
+                        same = same && slot.m_bits[ w ] == node.m_bits[ w ];
+                }
+                else if ( same )
+                    same = false;  // retail's target was not read: a class the case does not know
+                if ( !same && ++failed <= 8 )
+                    LOG_ERROR( "ui properties: %s '%s'.%s = 0x%X '%s', retail 0x%X '%s'", project.m_asset, want.m_name, node.m_name,
+                        slot.m_bits[ 0 ], slot.m_text.c_str( ), node.m_bits[ 0 ], node.m_text ? node.m_text : "" );
+            }
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the UI property loads match retail's (bool / float / angle / int / int enum / colour / vector2 / rect / vector3 / "
+                     "rotation / the string family) on %d front-end / HUD projects (the last hand-built): %d property targets bit "
+                     "for bit (%d nodes on types without rows: not compared)",
+            static_cast< int >( g_golden_ui_projects_count ), compared, skipped );
+    else
+        LOG_ERROR( "the UI property loads FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
     ok = verify_ui_projects( ) && ok;
+    ok = verify_ui_properties( ) && ok;
     return ok;
 }
