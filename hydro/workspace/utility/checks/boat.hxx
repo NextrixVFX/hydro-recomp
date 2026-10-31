@@ -1,5 +1,6 @@
 #pragma once
 
+#include <workspace/core/boat/driver.hxx>
 #include <workspace/core/boat/sections.hxx>
 
 // The boat area's oracle-backed checks (one file per parallel agent; included by check.hxx after every
@@ -191,10 +192,74 @@ inline bool verify_boat_engine( )
     return failed == 0;
 }
 
+// ai_driver_construct (boat/driver.hxx) against retail's AI-driver build in
+// postLoad (oracle case boat_ai_driver): every object's size, every written
+// byte (retail's 0xCD / 0x5A runs agree), every pointer by what it points at.
+inline bool verify_boat_ai_driver( )
+{
+    const std::vector< image_object_t > g = ai_driver_construct( );
+    const unsigned* s = g_golden_boat_ai_driver_words;
+    const unsigned count = *s++;
+    int failed = 0, bytes = 0;
+    auto fail = [ &failed ]( const char* what, int object, int at )
+    {
+        if ( ++failed <= 4 )
+            LOG_ERROR( "AI driver graph: %s at object %d, byte %d", what, object, at );
+    };
+    if ( count != g.size( ) )
+    {
+        LOG_ERROR( "AI driver graph: retail built %u objects, ours %d", count, static_cast< int >( g.size( ) ) );
+        return false;
+    }
+    for ( unsigned k = 0; k < count; ++k )
+    {
+        const unsigned size = *s++;
+        const unsigned char* want = reinterpret_cast< const unsigned char* >( s );
+        s += ( size + 3 ) / 4;
+        const unsigned char* mask = reinterpret_cast< const unsigned char* >( s );
+        s += ( size + 3 ) / 4;
+        std::vector< image_ref_t > refs( *s++ );
+        for ( auto& r : refs )
+        {
+            r = { static_cast< int >( s[ 0 ] ), s[ 1 ] == 1 ? AI_DRIVER_REF_BOAT : static_cast< int >( s[ 2 ] ), static_cast< int >( s[ 3 ] ) };
+            s += 4;
+        }
+        if ( size != g[ k ].image.size( ) )
+        {
+            fail( "size", static_cast< int >( k ), static_cast< int >( g[ k ].image.size( ) ) );
+            continue;
+        }
+        for ( unsigned at = 0; at < size; ++at )
+        {
+            if ( !mask[ at ] )
+                continue;
+            ++bytes;
+            if ( g[ k ].image[ at ] != want[ at ] )
+            {
+                fail( "byte", static_cast< int >( k ), static_cast< int >( at ) );
+                break;
+            }
+        }
+        std::vector< image_ref_t > ours = g[ k ].refs;
+        auto by_slot = []( const image_ref_t& x, const image_ref_t& y ) { return x.slot < y.slot; };
+        std::sort( ours.begin( ), ours.end( ), by_slot );
+        std::sort( refs.begin( ), refs.end( ), by_slot );
+        if ( ours != refs )
+            fail( "pointer slots", static_cast< int >( k ), 0 );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "postLoad's AI driver (0x41D2E0 + VuAiDriver ctor 0x40B690) matches retail: %u objects, %d bytes, every pointer",
+                     count, bytes );
+    else
+        LOG_ERROR( "AI driver graph FAILED %d checks", failed );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
     ok = verify_boat_sections( ) && ok;
     ok = verify_boat_engine( ) && ok;
+    ok = verify_boat_ai_driver( ) && ok;
     return ok;
 }
