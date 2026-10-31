@@ -1,6 +1,8 @@
 #pragma once
 
 #include <workspace/core/boat/hull.hxx>
+#include <workspace/core/boat/sections.hxx>
+#include <workspace/core/boat/tick.hxx>
 
 #include <cmath>
 #include <cstdint>
@@ -320,4 +322,178 @@ inline void boat_boost( std::uint8_t* boat, const std::uint8_t* animation, bool 
         image_put32( boat, 0x478, 0 );
     if ( ge( old_energy, 3.0f ) && gt( 3.0f, state_f( boat, 0x310 ) ) && gt( state_f( boat, 0x47C ), 6.0f ) && hooks.stats )
         hooks.stats( hooks.user, "BoostLow" );
+}
+
+// The FMOD side of the engine's audio tick - a platform HOOK, not copied:
+// the FMOD event API through the imports 0x64C334 (setCallback), 0x64C340
+// (release), 0x64C348 (EventSystem getEvent on g 0x759010 +8, mode 1),
+// 0x64C354 (start), 0x64C358 (set3DAttributes), 0x64C350 / 0x64C34C
+// (getParameter / setValue). `release` = setCallback(h, 0, 0) then
+// release(h, 0); `get_event` = getEvent into *handle, and on FMOD_OK
+// setCallback(h, 0x50FBB0, the slot), true on FMOD_OK; `parameter` =
+// getParameter(h, name) and, when that answers FMOD_OK, setValue(value).
+struct boat_engine_audio_hooks_t
+{
+    void* user = nullptr;
+    void ( *release )( void* user, std::uint32_t handle ) = nullptr;
+    bool ( *get_event )( void* user, int slot, const std::string& name, std::uint32_t* handle ) = nullptr;
+    void ( *start )( void* user, std::uint32_t handle ) = nullptr;
+    void ( *attributes )( void* user, std::uint32_t handle, const float* position, const float* velocity ) = nullptr;
+    void ( *parameter )( void* user, std::uint32_t handle, const char* name, float value ) = nullptr;
+};
+
+// 0x50FBF0 (thiscall, an event slot of the engine at `slot`, its handle at
+// slot +4; name, a second argument it never reads; retn 8): a held handle
+// is released and zeroed; an empty name answers false; else getEvent into
+// the handle, true on FMOD_OK.
+inline bool boat_audio_event_create( std::uint8_t* engine, int slot, const std::string& name, const boat_engine_audio_hooks_t& hooks )
+{
+    std::uint32_t handle;
+    std::memcpy( &handle, engine + slot + 4, 4 );
+    if ( handle )
+    {
+        if ( hooks.release )
+            hooks.release( hooks.user, handle );
+        image_put32( engine, slot + 4, 0 );
+    }
+    if ( name.empty( ) )
+        return false;
+    std::uint32_t got = 0;
+    const bool ok = hooks.get_event && hooks.get_event( hooks.user, slot, name, &got );
+    image_put32( engine, slot + 4, got );
+    return ok;
+}
+
+// 0x413830 (__usercall: ecx the engine - boat +0x22C, its +0 the boat; xmm1
+// dt), the engine's audio tick of the Decision tick. Nothing below
+// 1.1920929e-07 (0x6F7584, ordered). +0xF0 = maxss(0, minss(1, |v.xy| /
+// (boat +0x470 x (+0xC x +4) x 0.44704))); +0xF4 = the mean of the +0xF8
+// records' floats (0 with none; the count's unsigned double conversion);
+// 0x41D570's answer r (negative: -(r x +0x20)) less mean x 0.5 (x 0.2 more
+// while boosting, boat +0x32C) picks the rate: above +0xEC 0.5, else -0.5;
+// +0xEC = maxss(0, minss(1, ((1 - mean) + 1) x rate x dt + +0xEC)). Then the
+// FMOD events (slots +0xCC StartEvent +0x64, +0xD4 RevEvent +0x7C, +0xDC
+// BoostInitiate +0x94, +0xE4 BoostLoop +0xAC; flags +0x48 / +0x49) and, for
+// each of the five handles +0xC8 .. +0xE8, the 3D attributes (transform
+// component +0x80, body velocity) and the parameters rpm (+0xEC), speed
+// (+0xF0), load (+0xF4), height (the hull solver's +0x5C).
+inline void boat_engine_audio( std::uint8_t* engine, const boat_strings_t& names, const std::uint8_t* boat, solver_rigid_t& body,
+    const std::uint8_t* transform, const std::uint8_t* solver, const std::uint8_t* records, float dt, const boat_engine_audio_hooks_t& hooks )
+{
+    auto gt = []( float a, float b ) { return _mm_comigt_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) != 0; };   // ordered a > b
+    auto ge = []( float a, float b ) { return _mm_comige_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) != 0; };   // ordered a >= b
+    auto minss = []( float a, float b ) { return _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); };
+    auto maxss = []( float a, float b ) { return _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); };
+    auto word = [ & ]( int at ) { std::uint32_t v; std::memcpy( &v, engine + at, 4 ); return v; };
+    auto name = [ & ]( int at ) { const auto it = names.find( at ); return it == names.end( ) ? std::string( ) : it->second; };
+    if ( gt( water_bits( 0x34000000u ), dt ) )   // 0x6F7584
+        return;
+    const float vx = body.linear_velocity[ 0 ], vy = body.linear_velocity[ 1 ];
+    const float speed = hull_sqrt( vy * vy + vx * vx );
+    const float limit = ( state_f( boat, 0x470 ) * ( state_f( engine, 0xC ) * state_f( engine, 4 ) ) ) * water_bits( 0x3EE4E26Du );
+    state_put_f( engine, 0xF4, 0.0f );
+    state_put_f( engine, 0xF0, maxss( 0.0f, minss( 1.0f, speed / limit ) ) );
+    const std::int32_t n = static_cast< std::int32_t >( word( 0xFC ) - word( 0xF8 ) ) >> 3;
+    if ( n != 0 )
+    {
+        float sum = 0.0f;
+        for ( std::int32_t k = 0; k < n; ++k )
+        {
+            sum = sum + state_f( records, 8 * k + 4 );
+            state_put_f( engine, 0xF4, sum );
+        }
+        const float count = static_cast< float >( static_cast< double >( static_cast< std::uint32_t >( n ) ) );
+        state_put_f( engine, 0xF4, state_f( engine, 0xF4 ) / count );
+    }
+    std::uint32_t i308;
+    std::memcpy( &i308, boat + 0x308, 4 );
+    boat_view_t view{ state_f( boat, 0x2FC ), i308, boat[ 0x32C ], boat[ 0x32F ], { }, state_f( engine, 4 ), state_f( engine, 0xC ),
+                      state_f( boat, 0x470 ), body };
+    for ( int k = 0; k < 3; ++k )
+        view.o50_60[ k ] = state_f( transform, 0x60 + 4 * k );
+    float r = boat_41D570( view );
+    if ( gt( 0.0f, r ) )
+        r = -( r * state_f( engine, 0x20 ) );
+    const float mean = state_f( engine, 0xF4 );
+    float drop = mean * 0.5f;
+    if ( boat[ 0x32C ] )
+        drop = drop * 0.2f;
+    const float rate = gt( r - drop, state_f( engine, 0xEC ) ) ? 0.5f : -0.5f;
+    const float rpm = maxss( 0.0f, minss( 1.0f, ( ( ( 1.0f - mean ) + 1.0f ) * rate ) * dt + state_f( engine, 0xEC ) ) );
+    state_put_f( engine, 0xEC, rpm );
+    auto release = [ & ]( int at )
+    {
+        const std::uint32_t h = word( at );
+        if ( h )
+        {
+            if ( hooks.release )
+                hooks.release( hooks.user, h );
+            image_put32( engine, at, 0 );
+        }
+    };
+    auto start = [ & ]( int at ) { if ( hooks.start ) hooks.start( hooks.user, word( at ) ); };
+    // 0x413A4D: the start event, released once the mean is ordered <= 0,
+    // created and started below rpm 0.1 (0x6F7610) with a mean above it.
+    if ( word( 0xD0 ) )
+    {
+        if ( ge( 0.0f, mean ) )
+            release( 0xD0 );
+    }
+    else if ( gt( 0.1f, rpm ) && gt( mean, 0.1f ) )
+    {
+        if ( boat_audio_event_create( engine, 0xCC, name( 0x64 ), hooks ) )
+            start( 0xD0 );
+    }
+    // 0x413ACB: the rev event, on +0x308 with boat +0x2FC >= 1 (ordered).
+    if ( engine[ 0x48 ] == 0 )
+    {
+        if ( i308 != 0 && ge( state_f( boat, 0x2FC ), 1.0f ) )
+        {
+            if ( boat_audio_event_create( engine, 0xD4, name( 0x7C ), hooks ) )
+                start( 0xD8 );
+            engine[ 0x48 ] = 1;
+        }
+    }
+    else if ( i308 == 0 || ge( 0.0f, state_f( boat, 0x2FC ) ) )
+        engine[ 0x48 ] = 0;
+    // 0x413B33: the boost pair while boosting (+0x32C).
+    if ( engine[ 0x49 ] == 0 )
+    {
+        if ( boat[ 0x32C ] )
+        {
+            if ( boat_audio_event_create( engine, 0xDC, name( 0x94 ), hooks ) )
+                start( 0xE0 );
+            if ( boat_audio_event_create( engine, 0xE4, name( 0xAC ), hooks ) )
+                start( 0xE8 );
+            engine[ 0x49 ] = 1;
+        }
+    }
+    else if ( boat[ 0x32C ] == 0 )
+    {
+        release( 0xE0 );
+        release( 0xE8 );
+        engine[ 0x49 ] = 0;
+    }
+    // 0x413C1B: the five handles' attributes and parameters.
+    float position[ 3 ], velocity[ 3 ];
+    for ( int k = 0; k < 3; ++k )
+    {
+        position[ k ] = state_f( transform, 0x80 + 4 * k );
+        velocity[ k ] = body.linear_velocity[ k ];
+    }
+    const float height = state_f( solver, 0x5C );
+    for ( int k = 0; k < 5; ++k )
+    {
+        const std::uint32_t h = word( 0xC8 + 8 * k );
+        if ( !h )
+            continue;
+        if ( hooks.attributes )
+            hooks.attributes( hooks.user, h, position, velocity );
+        if ( !hooks.parameter )
+            continue;
+        hooks.parameter( hooks.user, h, "rpm", state_f( engine, 0xEC ) );
+        hooks.parameter( hooks.user, h, "speed", state_f( engine, 0xF0 ) );
+        hooks.parameter( hooks.user, h, "load", state_f( engine, 0xF4 ) );
+        hooks.parameter( hooks.user, h, "height", height );
+    }
 }
