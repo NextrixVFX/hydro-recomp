@@ -149,10 +149,68 @@ inline bool verify_wake_kernels( )
     return failed == 0 && ticks_failed == 0;
 }
 
+// The wave entities' wave creation against retail's slot 6 on every rectangular ocean, circular ocean,
+// banked turn and whirlpool entity of Hydroelectric (loaded by retail's VuEntity::load): every word the
+// recreated descriptor + constructor defines must equal the word retail's wave object holds. The
+// directional and bump entities are captured but NOT recreated (their constructors build a matrix through
+// 0x40b5f0 / 0x410ab0 / 0x4157c0, unread) - they are counted, not checked.
+inline bool verify_wave_bridges( )
+{
+    int checked = 0;
+    int words = 0;
+    int failed = 0;
+    int skipped = 0;
+    for ( std::size_t index = 0; index < g_golden_wave_bridges_count; ++index )
+    {
+        const golden_wave_bridge_t& g = g_golden_wave_bridges[ index ];
+        wave_source_t s{};
+        s.entity = g.m_entity;
+        s.transform = g.m_transform;
+        wave_image_t w{};
+        switch ( g.m_kind )
+        {
+        case 0: w = rectangular_ocean_create( s ); break;
+        case 1: w = circular_ocean_create( s ); break;
+        case 2: w = banked_turn_create( s ); break;
+        case 3: w = whirlpool_create( s ); break;
+        default: ++skipped; continue;
+        }
+        ++checked;
+        int bad = 0;
+        for ( int k = 0; k < 64; ++k )
+        {
+            if ( !w.known[ k ] )
+                continue;
+            ++words;
+            if ( k >= g.m_words || w.word[ k ] != g.m_wave[ k ] )
+            {
+                if ( ++bad <= 3 )
+                {
+                    LOG_ERROR( "wave creation %s (kind %d) +%d: ours 0x%08X retail 0x%08X", g.m_name, g.m_kind, 4 * k,
+                        w.word[ k ], k < g.m_words ? g.m_wave[ k ] : 0u );
+                }
+            }
+        }
+        if ( bad )
+            ++failed;
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the wave entities' creation (0x5d8ce0 / 0x5d9340 / 0x5d35f0 / 0x5d7d90 -> the wave ctors) matches retail on %d Hydroelectric entities, %d words (%d directional / bump captured, not recreated)",
+            checked, words, skipped );
+    }
+    else
+    {
+        LOG_ERROR( "wave creation FAILED on %d of %d entities", failed, checked );
+    }
+    return failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
     ok = verify_ocean_kernels( ) && ok;
     ok = verify_wake_kernels( ) && ok;
+    ok = verify_wave_bridges( ) && ok;
     return ok;
 }

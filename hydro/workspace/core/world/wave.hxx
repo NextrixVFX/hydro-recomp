@@ -789,6 +789,248 @@ inline bool wake_tick( wake_wave_t& wave, int mode, float dt )
     return !( ocean_gt( wave.a.age, wave.a.life ) && ocean_gt( wave.b.age, wave.b.life ) );
 }
 
+// ---------------------------------------------------------------------------
+// THE WAVE ENTITIES' WAVE CREATION: each entity's slot 6 packs a descriptor
+// from its loaded properties and its transform component (entity +0x50), and
+// its allocator on g_vuwater runs operator new, the wave's constructor, a pool
+// node and the tree insert 0x529a90. Recreated here is the descriptor and the
+// constructor - the members a wave object holds once built - as an IMAGE of
+// the object's words, so it can be compared with retail's word for word. The
+// pool and the tree are VuWater's, not this.
+//
+// Two words of every wave's bounds, +24 and +40, are written from STACK
+// TEMPORARIES the constructors never initialise (the high halves of the movq
+// pairs that store +20 and +36): their value is UNKNOWN and nothing here
+// reproduces it.
+//
+// The ocean constructor's spectrum, field and patch arrays (BuildSpectrum
+// @0x59d220 onward) are not part of the image: c_ocean in water.hxx carries
+// its own, and that path is not yet a transliteration.
+struct wave_image_t
+{
+    std::uint32_t word[ 64 ]{};
+    bool known[ 64 ]{};
+
+    void set( int offset, std::uint32_t value )
+    {
+        word[ offset / 4 ] = value;
+        known[ offset / 4 ] = true;
+    }
+    void setf( int offset, float value )
+    {
+        std::uint32_t bits;
+        std::memcpy( &bits, &value, 4 );
+        set( offset, bits );
+    }
+    float f( int offset ) const
+    {
+        float value;
+        std::memcpy( &value, &word[ offset / 4 ], 4 );
+        return value;
+    }
+};
+
+// What a constructor reads: the entity's words and its transform component's,
+// by byte offset.
+struct wave_source_t
+{
+    const std::uint32_t* entity = nullptr;      // entity words from +0x60
+    const std::uint32_t* transform = nullptr;   // component words from +0x80
+    std::uint32_t e( int offset ) const { return entity[ ( offset - 0x60 ) / 4 ]; }
+    std::uint32_t t( int offset ) const { return transform[ ( offset - 0x80 ) / 4 ]; }
+};
+
+inline float wave_bits( std::uint32_t u )
+{
+    float value;
+    std::memcpy( &value, &u, 4 );
+    return value;
+}
+
+// VuWaterWave's constructor @0x5a6390 (called with 0): +56 / +60 / +64 / +68
+// zero, +72 = 1.0. Its +12 .. +52 defaults are overwritten by every subclass.
+inline void wave_base( wave_image_t& w )
+{
+    w.set( 56, 0 );
+    w.set( 60, 0 );
+    w.set( 64, 0 );
+    w.set( 68, 0 );
+    w.set( 72, 0x3F800000u );
+}
+
+// The x87 fsin / fcos / fsincos the constructors run on a float: measured
+// under Unicorn, whose x87 trig is a host double function - see wake_vertex.
+inline float wave_x87_sin( float a ) { return static_cast< float >( std::sin( static_cast< double >( a ) ) ); }
+inline float wave_x87_cos( float a ) { return static_cast< float >( std::cos( static_cast< double >( a ) ) ); }
+
+// The ocean waves' shared constructor @0x59cb10 and the scalar half of
+// VuWaterOceanWave_Update @0x59ccb0 on descriptor words d[ 0 .. 7 ] (the
+// entity's +0x68 .. +0x87: Complexity, Bin Siz, Wave Direction, Gravity, Wind
+// Speed, Directional Power, Suppression Wave Length, Height Multiplier).
+inline void ocean_construct( wave_image_t& w, const std::uint32_t* d )
+{
+    wave_base( w );
+    int shift = 0;
+    int size = 1;
+    int mask = 0;
+    if ( d[ 0 ] != 0 )   // the complexity differs from the ctor's zero
+    {
+        shift = static_cast< int >( d[ 0 ] );
+        size = 1 << shift;
+        mask = size - 1;
+    }
+    for ( int k = 0; k < 8; ++k )
+        w.set( 76 + 4 * k, d[ k ] );
+    w.set( 108, static_cast< std::uint32_t >( shift ) );
+    w.set( 112, static_cast< std::uint32_t >( size ) );
+    w.set( 116, static_cast< std::uint32_t >( mask ) );
+    w.setf( 120, static_cast< float >( size ) / wave_bits( d[ 1 ] ) );
+    const float angle = wave_bits( d[ 2 ] ) - 3.1415927f;
+    w.setf( 124, angle );
+    w.setf( 128, wave_x87_sin( angle ) );
+    w.setf( 132, wave_x87_cos( angle ) );
+    // +136 the time (ctor 0.0); buffer 0's time = it; buffer 1's = its own
+    // zero minus 1.0; current 0, previous 1.
+    w.set( 136, 0 );
+    w.set( 140, 0 );
+    w.set( 164, 0 );
+    w.set( 168, 1 );
+    w.set( 176, 0 );
+    w.set( 180, 0 );
+    w.set( 192, 0 );
+    w.set( 196, 0xBFF00000u );
+}
+
+// VuRectangularOceanWaveEntity_onEnable @0x5d8ce0: buildRegionDesc @0x5d8e20,
+// then VuWater_createWave @0x528b40 -> VuWaterRectangularOceanWave_ctor
+// @0x59d940, whose bounds are @0x59dbf0.
+inline wave_image_t rectangular_ocean_create( const wave_source_t& s )
+{
+    std::uint32_t d[ 16 ];
+    for ( int k = 0; k < 8; ++k )
+        d[ k ] = s.e( 0x68 + 4 * k );
+    for ( int k = 0; k < 4; ++k )
+        d[ 8 + k ] = s.t( 0x80 + 4 * k );
+    d[ 12 ] = s.t( 0xB0 );
+    d[ 13 ] = s.t( 0xB4 );
+    d[ 14 ] = s.e( 0x8C );   // Decay Ratio X %
+    d[ 15 ] = s.e( 0x90 );   // Decay Ratio Y %
+    wave_image_t w{};
+    ocean_construct( w, d );
+    for ( int k = 0; k < 8; ++k )
+        w.set( 208 + 4 * k, d[ 8 + k ] );
+    const float half_y = w.f( 228 ) * 0.5f;
+    const float half_x = w.f( 224 ) * 0.5f;
+    const float y = w.f( 212 );
+    const float x = w.f( 208 );
+    w.setf( 12, x - half_x );
+    w.setf( 16, y - half_y );
+    w.set( 20, w.word[ 216 / 4 ] );
+    w.setf( 28, half_x + x );
+    w.setf( 32, half_y + y );
+    w.set( 36, w.word[ 216 / 4 ] );
+    w.setf( 44, x );
+    w.setf( 48, y );
+    w.setf( 52, _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( half_y * half_y ) + ( half_x * half_x ) ) ) ) );
+    return w;
+}
+
+// The circular one's slot 6 @0x5d9340: its descriptor @0x5d9440 (Radius and
+// Decay Ratio % in place of the scale and the two decays), then @0x528c20 ->
+// the ctor @0x59dcd0 with its bounds inline.
+inline wave_image_t circular_ocean_create( const wave_source_t& s )
+{
+    std::uint32_t d[ 14 ];
+    for ( int k = 0; k < 8; ++k )
+        d[ k ] = s.e( 0x68 + 4 * k );
+    for ( int k = 0; k < 4; ++k )
+        d[ 8 + k ] = s.t( 0x80 + 4 * k );
+    d[ 12 ] = s.e( 0x8C );   // Radius
+    d[ 13 ] = s.e( 0x90 );   // Decay Ratio %
+    wave_image_t w{};
+    ocean_construct( w, d );
+    for ( int k = 0; k < 6; ++k )
+        w.set( 208 + 4 * k, d[ 8 + k ] );
+    const float x = w.f( 208 );
+    const float y = w.f( 212 );
+    const float r = w.f( 224 );
+    w.setf( 12, x - r );
+    w.setf( 16, y - r );
+    w.set( 20, w.word[ 216 / 4 ] );
+    w.setf( 28, r + x );
+    w.setf( 32, r + y );
+    w.set( 36, w.word[ 216 / 4 ] );
+    w.setf( 44, x );
+    w.setf( 48, y );
+    w.setf( 52, r );
+    return w;
+}
+
+// VuBankedTurnWaveEntity's slot 6 @0x5d35f0: the 40-byte descriptor is the
+// position (16 bytes from the component's +0x80), the component's +0xA8, then
+// the entity's +0x60 .. +0x73 (Outer Radius, Inner Radius, Height, Angular
+// Size, Angular Decay Ratio); @0x528f40 -> the ctor @0x5a4d80, which copies it
+// flat to +76 and derives the kernel's direction (-fsin, fcos of +92) and its
+// extent (+108 * 0.5).
+inline wave_image_t banked_turn_create( const wave_source_t& s )
+{
+    std::uint32_t d[ 10 ];
+    for ( int k = 0; k < 4; ++k )
+        d[ k ] = s.t( 0x80 + 4 * k );
+    d[ 4 ] = s.t( 0xA8 );
+    for ( int k = 0; k < 5; ++k )
+        d[ 5 + k ] = s.e( 0x60 + 4 * k );
+    wave_image_t w{};
+    wave_base( w );
+    for ( int k = 0; k < 10; ++k )
+        w.set( 76 + 4 * k, d[ k ] );
+    const float angle = w.f( 92 );
+    w.setf( 116, -wave_x87_sin( angle ) );
+    w.setf( 120, wave_x87_cos( angle ) );
+    w.setf( 124, w.f( 108 ) * 0.5f );
+    const float x = w.f( 76 );
+    const float y = w.f( 80 );
+    const float outer = w.f( 96 );
+    w.setf( 12, x - outer );
+    w.setf( 16, y - outer );
+    w.set( 20, w.word[ 84 / 4 ] );
+    w.setf( 28, x + outer );
+    w.setf( 32, y + outer );
+    w.setf( 36, w.f( 84 ) + w.f( 104 ) );
+    w.setf( 44, x );
+    w.setf( 48, y );
+    w.setf( 52, outer );
+    return w;
+}
+
+// VuWhirlpoolWaveEntity's slot 6 @0x5d7d90: the position, then the entity's
+// +0x60 .. +0x77 (whirlpool_t's note above names each); @0x528d00 -> the ctor
+// @0x5a1470, flat to +76; +116 stays the ctor's zero. Its bounds reach DOWN by
+// the depth and not up.
+inline wave_image_t whirlpool_create( const wave_source_t& s )
+{
+    wave_image_t w{};
+    wave_base( w );
+    for ( int k = 0; k < 4; ++k )
+        w.set( 76 + 4 * k, s.t( 0x80 + 4 * k ) );
+    for ( int k = 0; k < 6; ++k )
+        w.set( 92 + 4 * k, s.e( 0x60 + 4 * k ) );
+    w.set( 116, 0 );
+    const float x = w.f( 76 );
+    const float y = w.f( 80 );
+    const float outer = w.f( 92 );
+    w.setf( 12, x - outer );
+    w.setf( 16, y - outer );
+    w.setf( 20, w.f( 84 ) - w.f( 100 ) );
+    w.setf( 28, x + outer );
+    w.setf( 32, y + outer );
+    w.set( 36, w.word[ 84 / 4 ] );
+    w.setf( 44, x );
+    w.setf( 48, y );
+    w.setf( 52, outer );
+    return w;
+}
+
 // The walk retail performs around that body: count vertices from the context's
 // base pointer, advancing by a stride given in BYTES.
 inline void whirlpool_apply( const whirlpool_t& wave, unsigned char* vertices,
