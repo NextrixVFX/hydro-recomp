@@ -6,7 +6,7 @@
 // shared check, so anything above is usable here). verify_boat_all runs them all.
 
 // The BoatDB section readers (boat/sections.hxx) against retail's own runs
-// (oracle case boat_sections): 0x409AF0 / 0x417480 / 0x4205A0 on blocks filled
+// (oracle case boat_sections): 0x409AF0 / 0x417480 / 0x4205A0 / 0x410360 on blocks filled
 // 0xCD (an empty std::string at each string field), with BoatDB's Default then
 // each boat's section, and a hand-built document's sections (every key and
 // tag; then the tags the readers reject) under each driver class. Every byte
@@ -63,8 +63,10 @@ inline bool verify_boat_sections( )
                 boat_read_camera( image.data( ), *section );
             else if ( reader == 1 )
                 boat_read_hull( image.data( ), strings, *section, driver );
-            else
+            else if ( reader == 2 )
                 boat_read_default( image.data( ), strings, *section, driver );
+            else
+                boat_read_animation( image.data( ), strings, *section, driver );
         }
         int bad = -1;
         for ( unsigned at = 0; at < size && bad < 0; ++at )
@@ -87,7 +89,7 @@ inline bool verify_boat_sections( )
                        reader, static_cast< int >( index ), bad );
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "BoatDB section readers 0x409AF0 / 0x417480 / 0x4205A0 match retail: %d vectors, %d bytes, %d strings",
+        LOG_SUCCESS( "BoatDB section readers 0x409AF0 / 0x417480 / 0x4205A0 / 0x410360 match retail: %d vectors, %d bytes, %d strings",
                      static_cast< int >( g_golden_boat_sections_count ), bytes, strings_compared );
     else
         LOG_ERROR( "BoatDB section readers FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_sections_count ) );

@@ -177,6 +177,30 @@ inline void boat_read_default( std::uint8_t* boat, boat_strings_t& strings, cons
     section_string( strings, 0x204, member( events, "Drafting" ) );
 }
 
+// btConvexTriangleMeshShape_load_AI 0x410360 - IDA's name; it is the
+// Animation section reader (thiscall, the 0x40FE00 object at boat +0x230 -
+// its +0 the boat, whose +0x220 is the driver; retn 4). postLoad calls
+// 0x4108C0 first (releases the refcounted assets at +4..+0x10) and, when the
+// owner's flags have bit 2 (set by VuEntity::gameInitialize 0x500B10 - clear
+// on a fresh boat's load), 0x410610 after (the animation asset loads) - both
+// asset-side, not recreated here.
+inline void boat_read_animation( std::uint8_t* animation, boat_strings_t& strings, const value_t& section, const boat_driver_t& driver )
+{
+    section_string( strings, 0x14, member( section, "ThrustAsset" ) );
+    section_string( strings, 0x2C, member( section, "TurnAsset" ) );
+    section_string( strings, 0x44, member( section, "TransformAsset" ) );
+    section_float( animation, 0x5C, member( section, "ThrustRevRate" ) );
+    section_float( animation, 0x60, member( section, "ThrustIdleRate" ) );
+    section_float( animation, 0x64, member( section, "ThrustFwdRate" ) );
+    section_float( animation, 0x68, member( section, "ThrustAccel" ) );
+    section_float( animation, 0x6C, member( section, "TransformOpenTime" ) );
+    section_float( animation, 0x70, member( section, "TransformCloseTime" ) );
+    // 0x410548: the audio set - slots 12 and 14 "Player", else "AI".
+    const value_t& events = member( member( section, "Audio" ), driver.slot[ 0 ] && driver.slot[ 2 ] ? "Player" : "AI" );
+    section_string( strings, 0x7C, member( events, "BoostHardwareOpen" ) );
+    section_string( strings, 0x94, member( events, "BoostHardwareClose" ) );
+    section_string( strings, 0xAC, member( events, "BoostShutdown" ) );
+}
 // 0x4FBEA0, the container's hasMember: a map (tag 6) holding the key.
 inline bool section_has( const value_t& value, const char* key )
 {
@@ -296,7 +320,8 @@ inline void boat_read_engine( boat_engine_t& e, const value_t& section, const bo
 // then Default's; retn 8): the five strings emptied, the curve's size and
 // the drives cleared, readEngineSection on DEFAULT'S section first, then the
 // boat's, then the +0xF8 records resized to the drive count. When the
-// owner's flags (+0x14) have bit 2 - after gameInitialize, never in postLoad -
+// owner's flags (+0x14) have bit 2 (set by VuEntity::gameInitialize 0x500B10;
+// clear on a fresh boat's load - the police loader 0x42FDC0 loads first) -
 // the five FMOD events are released and the run event restarted: an audio
 // HOOK (FMOD::Event release / start through the imports 0x64C334 / 0x64C340 /
 // 0x64C354 and 0x50FBF0), not recreated.
