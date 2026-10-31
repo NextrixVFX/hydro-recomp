@@ -7,6 +7,7 @@
 #include <workspace/core/boat/parts.hxx>
 #include <workspace/core/boat/construct.hxx>
 #include <workspace/core/game/types.hxx>
+#include <workspace/core/entity/dynamic.hxx>
 #include <workspace/utility/golden.hxx>
 #include <workspace/utility/logger.hxx>
 
@@ -1183,10 +1184,73 @@ inline bool verify_load_project( )
     return failed == 0;
 }
 
+// dynamic_light_load (engine entity/dynamic.hxx) against VuDynamicLightEntity's
+// ten property loads as retail's VuEntity::load runs them (oracle case
+// load_dynamic_lights): the real DynLights lights and hand-built ones for the
+// branches the level never authors, each target compared bit for bit.
+inline bool verify_dynamic_lights( )
+{
+    std::vector< value_t > documents;
+    for ( const golden_named_document_t& doc : g_golden_dynamic_lights_documents )
+    {
+        const unsigned char* raw = reinterpret_cast< const unsigned char* >( doc.m_words );
+        documents.push_back( c_reader( std::vector< std::uint8_t >( raw, raw + doc.m_bytes ) ).parse( ) );
+    }
+    int failed = 0;
+    int compared = 0;
+    for ( std::size_t k = 0; k < g_golden_dynamic_lights_count; ++k )
+    {
+        const golden_dynamic_light_t& want = g_golden_dynamic_lights[ k ];
+        const value_t* node = &member( member( documents[ want.m_document ], "VuProject" ), "RootEntity" );
+        for ( int depth = 0; depth <= want.m_depth && node; ++depth )
+        {
+            const char* step = depth < want.m_depth ? want.m_path[ depth ] : want.m_name;
+            const value_t* next = nullptr;
+            for ( const value_t& child : member( member( *node, "data" ), "ChildEntities" ).list )
+                if ( member( child, "name" ).text == step )
+                    next = &child;
+            node = next;
+        }
+        if ( !node )
+        {
+            LOG_ERROR( "dynamic lights: '%s' not found in its document", want.m_name );
+            ++failed;
+            continue;
+        }
+        dynamic_light_t light;
+        dynamic_light_construct( light );
+        dynamic_light_load( light, member( member( *node, "data" ), "Properties" ) );
+        const auto word = []( float f )
+        {
+            std::uint32_t b;
+            std::memcpy( &b, &f, sizeof( b ) );
+            return b;
+        };
+        const std::uint32_t ours[ 10 ] = { light.initially_on, light.diffuse, light.specular, word( light.factor ),
+            word( light.falloff_min ), word( light.falloff_max ), word( light.cone ), word( light.penumbra ),
+            word( light.draw_distance ), light.reflecting };
+        static const char* const names[ 10 ] = { "Initially On", "Diffuse Color", "Specular Color", "Factor", "Falloff Range Min",
+            "Falloff Range Max", "Cone Angle", "Penumbra Angle", "Draw Distance", "Reflecting" };
+        for ( int p = 0; p < 10; ++p )
+        {
+            ++compared;
+            if ( ours[ p ] != want.m_values[ p ] && ++failed <= 8 )
+                LOG_ERROR( "dynamic lights: '%s' %s is 0x%08X, retail 0x%08X", want.m_name, names[ p ], ours[ p ], want.m_values[ p ] );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "dynamic_light_load matches VuDynamicLightEntity's property loads (ctor 0x5EDF60) on %d lights: %d values, "
+                     "bit for bit", static_cast< int >( g_golden_dynamic_lights_count ), compared );
+    else
+        LOG_ERROR( "dynamic_light_load FAILED %d checks against 0x5EDF60's properties", failed );
+    return failed == 0;
+}
+
 // Every oracle-backed check on game code.
 inline bool verify_game( )
 {
     bool ok = true;
+    ok = verify_dynamic_lights( ) && ok;
     ok = verify_entity_registry( ) && ok;
     ok = verify_load_project( ) && ok;
     ok = verify_load_children( ) && ok;

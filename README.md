@@ -27,8 +27,8 @@ Measured, not estimated: see **[docs/INVENTORY.md](docs/INVENTORY.md)** (summary
 
 | retail functions | 8,638 |
 |---|---:|
-| **verified** - retail executed in an oracle case and recreated here | **369** |
-| callee - executed inside a checked case, not recreated on its own (CRT / STL / engine helpers) | 205 |
+| **verified** - retail executed in an oracle case and recreated here | **383** |
+| callee - executed inside a checked case, not recreated on its own (CRT / STL / engine helpers) | 191 |
 | cited - recreated or referenced here, but no oracle case runs it yet | 187 |
 | absent | 7,877 |
 
@@ -37,7 +37,8 @@ functions), the boat's tick path and fluid / buoyancy forces, the water wave ker
 reader, VuTransformComponent, the VuEntity constructor's object graph, the whole VuBoatEntity construction (0x41B850: 43 objects, every byte and pointer, and its event registrations), and the
 entity type registry (all 294 types - the engine's, the game's and one per template - in retail's order), and
 VuProject::load, VuEntity::load's child loading and template instances (the entity tree retail builds from real
-project and level data: names, parents, child order, which template made what).
+project and level data: names, parents, child order, which template made what), and the dynamic light's ten
+property loads (the bool / float / angle / colour property classes).
 
 **What runs today:** the Hydroelectric track loads and renders - terrain, lights, fog, props, skinned props,
 coronas, particle effects, triggers, the event graph, and the ocean with point waves.
