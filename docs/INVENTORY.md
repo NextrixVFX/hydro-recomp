@@ -20,8 +20,8 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 |---|---:|---:|
 | verified | 392 | 222746 |
 | callee | 196 | 30065 |
-| cited | 181 | 106983 |
-| absent | 7869 | 1866466 |
+| cited | 183 | 107325 |
+| absent | 7867 | 1866124 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -30,7 +30,7 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 
 | subsystem | functions | verified | callee | cited | absent | verified bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| unattributed | 1845 | 125 | 67 | 23 | 1630 | 107682 of 695394 |
+| unattributed | 1845 | 125 | 67 | 24 | 1629 | 107682 of 695394 |
 | physics (Bullet) | 646 | 158 | 14 | 33 | 441 | 68220 of 256657 |
 | entity / component / script framework | 1094 | 38 | 58 | 59 | 939 | 12333 of 207438 |
 | HUD / UI / fonts | 648 | 2 | 0 | 3 | 643 | 2305 of 184315 |
@@ -44,11 +44,23 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 | particles | 215 | 1 | 2 | 13 | 199 | 279 of 45495 |
 | audio | 163 | 4 | 1 | 0 | 158 | 783 of 30823 |
 | input | 156 | 0 | 0 | 0 | 156 | 0 of 30388 |
-| C++ runtime / STL | 227 | 1 | 20 | 0 | 206 | 70 of 30128 |
+| C++ runtime / STL | 227 | 1 | 20 | 1 | 205 | 70 of 30128 |
 | save / settings / profile | 199 | 0 | 0 | 0 | 199 | 0 of 25714 |
 | AI | 42 | 2 | 0 | 0 | 40 | 62 of 11304 |
 | network / online | 77 | 0 | 0 | 0 | 77 | 0 of 10476 |
 | camera | 11 | 0 | 0 | 2 | 9 | 0 of 2431 |
+
+## Reachability
+
+A static reference graph built from the binary alone (`hydro-tools/census/callgraph.py`): direct calls and jumps, every function address taken in code, and every vtable or function table a code reference points at (all of its slots). **race** = reached from what a race creates and runs on: every entity type HydroelectricRace and the three race HUD projects instantiate (templates expanded), VuRaceGame / VuGame / VuGameMode, VuBoatEntity and its drivers, every asset and particle class, and the engine services a race runs (draw, gfx, sort, dynamics, collision, water, lens water, tire tracks, foliage, pfx, lights, triggers, track, AI, boats, input, control methods, audio, voice-over, subtitles, fade, events, ticks, viewports) with their tick methods. That service list is a judgement: front end, online, save, achievements, sign-in, cloud, leaderboards, unlocks and message boxes are left out. **entry** = reached from the PE entry but not from the race. **dead** = referenced by nothing reachable.
+
+Over-approximate (a referenced vtable brings every slot) and under-approximate (a function pointer stored in data that no code reference reaches the start of is missed) - a bound, not a trace.
+
+| tier | functions | verified | callee | cited | absent | runtime / STL / thunk | platform layer | game + engine logic not verified |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| race | 4905 | 377 | 171 | 175 | 4182 | 68 | 610 | 3874 |
+| entry | 2883 | 13 | 24 | 8 | 2838 | 122 | 411 | 2337 |
+| dead | 850 | 2 | 1 | 0 | 847 | 61 | 126 | 661 |
 
 ## Where to look
 
