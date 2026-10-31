@@ -4,8 +4,12 @@
 #include <workspace/core/collision/cylinder.hxx>
 #include <workspace/core/collision/sphere.hxx>
 #include <workspace/core/boat/driver.hxx>
+#include <workspace/core/boat/load.hxx>
 #include <workspace/core/boat/sections.hxx>
 #include <workspace/core/boat/state.hxx>
+
+#include <array>
+#include <cstdio>
 
 // The boat area's oracle-backed checks (one file per parallel agent; included by check.hxx after every
 // shared check, so anything above is usable here). verify_boat_all runs them all.
@@ -655,6 +659,398 @@ inline bool verify_boat_nose_probe( )
     return failed == 0;
 }
 
+// boat_load_sections (boat/load.hxx) against retail's 0x420A70 RUN WHOLE on a
+// boat from its own ctor (oracle case boat_load_sections; every BoatDB boat
+// under the AI driver, six under other classes): the boat, body, camera,
+// hull, solver, engine, animation, damage and instigator blocks after (bytes
+// retail's two fills agree on, outside string fields and the engine's
+// container words), every string field's text, the engine's curve / drives /
+// records, the hull shape's image, the compound (count, local aabb, revision,
+// margin, the child record, the root leaf), the solver's record arrays, and
+// the sequences of hook calls and asset-factory requests.
+inline bool verify_boat_load_sections( )
+{
+    const unsigned* d = g_golden_boat_sections_boatdb;
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( d + 1 );
+    const value_t boatdb = c_reader( std::vector< std::uint8_t >( raw, raw + d[ 0 ] ) ).parse( );
+    auto text = []( const unsigned*& s )
+    {
+        const unsigned length = *s++;
+        std::string out( reinterpret_cast< const char* >( s ), length );
+        s += ( length + 3 ) / 4;
+        return out;
+    };
+    struct block_t { std::vector< std::uint8_t > before, after, mask; };
+    auto bytes = []( const unsigned*& s, unsigned n )
+    {
+        std::vector< std::uint8_t > out( n );
+        std::memcpy( out.data( ), s, n );
+        s += ( n + 3 ) / 4;
+        return out;
+    };
+    struct ctx_t
+    {
+        std::vector< std::string > hooks, requests;
+        std::uint32_t asset = 0, fluid = 0;
+        int fluid_vertices = 0, fluid_edges = 0;
+        striding_mesh_t mesh{};
+        std::vector< std::array< float, 4 > > vertices;
+        std::vector< std::uint16_t > indices;
+    };
+    int failed = 0, compared = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_load_sections_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_load_sections_words + g_golden_boat_load_sections_offsets[ index ];
+        const std::string name = text( s );
+        const std::uint32_t vtable = *s++, boat_address = *s++, shape_address = *s++, compound_address = *s++;
+        const std::uint32_t root_address = *s++, array0 = *s++, array1 = *s++;
+        ctx_t ctx;
+        ctx.asset = *s++;
+        ctx.fluid = *s++;
+        ctx.fluid_vertices = static_cast< int >( *s++ );
+        ctx.fluid_edges = static_cast< int >( *s++ );
+        const std::uint32_t pfx_flags = *s++;
+        ctx.vertices.resize( *s++ );
+        std::memcpy( ctx.vertices.data( ), s, 16 * ctx.vertices.size( ) );
+        s += 4 * ctx.vertices.size( );
+        ctx.indices.resize( *s++ );
+        std::memcpy( ctx.indices.data( ), s, 2 * ctx.indices.size( ) );
+        s += ( 2 * ctx.indices.size( ) + 3 ) / 4;
+        std::vector< std::string > want_hooks( *s++ );
+        for ( auto& h : want_hooks )
+        {
+            const unsigned address = *s++;
+            const std::string self = text( s );
+            const std::string arg = text( s );
+            char buf[ 32 ];
+            std::snprintf( buf, sizeof( buf ), "0x%X ", address );
+            h = ( address ? std::string( buf ) + self + " " : std::string( "surface " ) ) + arg;
+        }
+        std::vector< std::string > want_requests( *s++ );
+        for ( auto& r : want_requests )
+            r = text( s );
+        block_t blocks[ 9 ];
+        for ( auto& bl : blocks )
+        {
+            const unsigned n = *s++;
+            bl.before = bytes( s, n );
+            bl.after = bytes( s, n );
+            bl.mask = bytes( s, n );
+        }
+        std::vector< std::pair< int, std::string > > want_texts[ 4 ];
+        for ( auto& t : want_texts )
+        {
+            t.resize( *s++ );
+            for ( auto& w : t )
+            {
+                w.first = static_cast< int >( *s++ );
+                w.second = text( s );
+            }
+        }
+        std::vector< std::uint32_t > curve( *s++ );
+        for ( auto& w : curve )
+            w = *s++;
+        std::vector< std::array< std::uint32_t, 8 > > drives( *s++ );
+        for ( auto& r : drives )
+            for ( auto& w : r )
+                w = *s++;
+        const unsigned records = *s++;
+        block_t extra[ 4 ];   // compound, children, root, shape
+        for ( auto& bl : extra )
+        {
+            const unsigned n = *s++;
+            bl.after = bytes( s, n );
+            bl.mask = bytes( s, n );
+        }
+        std::uint32_t arrays[ 6 ];
+        for ( auto& w : arrays )
+            w = *s++;
+        const unsigned array_bytes[ 2 ] = { s[ 0 ], s[ 2 ] }, array_sums[ 2 ] = { s[ 1 ], s[ 3 ] };
+        s += 4;
+
+        ctx.mesh.vertices = reinterpret_cast< const float ( * )[ 4 ] >( ctx.vertices.data( ) );
+        ctx.mesh.num_vertices = static_cast< int >( ctx.vertices.size( ) );
+        ctx.mesh.indices = ctx.indices.data( );
+        ctx.mesh.index_count = static_cast< int >( ctx.indices.size( ) );
+        std::vector< std::uint8_t > img[ 9 ];
+        for ( int k = 0; k < 9; ++k )
+            img[ k ] = blocks[ k ].before;
+        vu_rigid_body_t body;
+        std::memcpy( &body, img[ 1 ].data( ), sizeof( body ) );
+        boat_engine_t engine;
+        std::memcpy( engine.object.image, img[ 5 ].data( ), 0x104 );
+        boat_load_t io{};
+        io.boat = img[ 0 ].data( );
+        io.boat_address = boat_address;
+        io.body = &body;
+        io.camera = img[ 2 ].data( );
+        io.hull = img[ 3 ].data( );
+        io.solver = img[ 4 ].data( );
+        io.engine = &engine;
+        io.animation = img[ 6 ].data( );
+        io.pfx_owner_flags = pfx_flags;
+        io.damage = img[ 7 ].data( );
+        io.instigator = img[ 8 ].data( );
+        for ( int at : { 0xC4, 0xDC, 0xF4, 0x11C, 0x148, 0x160, 0x178, 0x1A4, 0x1BC, 0x1D4, 0x1EC, 0x204 } )
+            io.boat_strings[ at ] = "";
+        for ( int at : { 0x4, 0xD4, 0xEC, 0x104, 0x11C } )
+            io.hull_strings[ at ] = "";
+        for ( int at : { 0x14, 0x2C, 0x44, 0x7C, 0x94, 0xAC } )
+            io.animation_strings[ at ] = "";
+        io.boatdb = &boatdb;
+        io.driver = boat_driver_of( vtable );
+        io.dynamics = true;
+        io.gravity[ 0 ] = 0.0f;
+        io.gravity[ 1 ] = 0.0f;
+        io.gravity[ 2 ] = -14.715f;
+        io.gravity[ 3 ] = 0.0f;
+        io.shape_address = shape_address;
+        io.compound_address = compound_address;
+        io.root_address = root_address;
+        io.array_address[ 0 ] = array0;
+        io.array_address[ 1 ] = array1;
+        io.hooks.user = &ctx;
+        io.hooks.exists = []( void* u, const char* type, const std::string& n )
+        {
+            ctx_t& c = *static_cast< ctx_t* >( u );
+            // The oracle's factory answers from Base.apf's directory: the case's asset served is the answer.
+            const bool collision = std::strcmp( type, "VuCollisionMeshAsset" ) == 0;
+            const bool yes = collision ? c.asset != 0 : c.fluid != 0;
+            c.requests.push_back( std::string( "exists " ) + type + "/" + n + " = " + ( yes ? "1" : "0" ) );
+            return yes;
+        };
+        io.hooks.create = []( void* u, const char* type, const std::string& n )
+        {
+            ctx_t& c = *static_cast< ctx_t* >( u );
+            c.requests.push_back( std::string( type ) + "/" + n );
+            return std::strcmp( type, "VuCollisionMeshAsset" ) == 0 ? c.asset : c.fluid;
+        };
+        io.hooks.release = []( void* u, std::uint32_t a )
+        {
+            char buf[ 32 ];
+            std::snprintf( buf, sizeof( buf ), "release 0x%X", a );
+            static_cast< ctx_t* >( u )->requests.push_back( buf );
+            return true;
+        };
+        io.hooks.call = []( void* u, std::uint32_t address, const char* self, const std::string& arg )
+        {
+            char buf[ 32 ];
+            std::snprintf( buf, sizeof( buf ), "0x%X ", address );
+            static_cast< ctx_t* >( u )->hooks.push_back( std::string( buf ) + self + " " + arg );
+        };
+        io.hooks.surface = []( void* u, const std::string& n ) -> std::uint8_t
+        {
+            static_cast< ctx_t* >( u )->hooks.push_back( "surface " + n );
+            // The case's answers (the surface-type table is a hook): Metal 3, Wood 5, Duck 9, else 1.
+            return n == "Metal" ? 3 : n == "Wood" ? 5 : n == "Duck" ? 9 : 1;
+        };
+        io.hooks.mesh = []( void* u, std::uint32_t a, striding_mesh_t& out )
+        {
+            ctx_t& c = *static_cast< ctx_t* >( u );
+            if ( a != c.asset )
+                return false;
+            out = c.mesh;
+            return true;
+        };
+        io.hooks.fluid_counts = []( void* u, std::uint32_t a, int& v, int& e )
+        {
+            ctx_t& c = *static_cast< ctx_t* >( u );
+            if ( a != c.fluid )
+                return false;
+            v = c.fluid_vertices;
+            e = c.fluid_edges;
+            return true;
+        };
+        int bad = boat_load_sections( io ) ? -1 : 0x9000;
+        std::memcpy( img[ 1 ].data( ), &body, sizeof( body ) );
+        std::memcpy( img[ 5 ].data( ), engine.object.image, 0x104 );
+        // Masked: string fields (24 bytes), the engine's container words.
+        const std::vector< int > strings[ 9 ] = {
+            { 0x74, 0x8C, 0xA4, 0xC4, 0xDC, 0xF4, 0x11C, 0x148, 0x160, 0x178, 0x1A4, 0x1BC, 0x1D4, 0x1EC, 0x204 }, {}, {},
+            { 0x4, 0xD4, 0xEC, 0x104, 0x11C, 0x17C }, {}, { 0x4C, 0x64, 0x7C, 0x94, 0xAC }, { 0x14, 0x2C, 0x44, 0x7C, 0x94, 0xAC },
+            { 0x78 }, {} };
+        for ( int k = 0; k < 9 && bad < 0; ++k )
+            for ( int at = 0; at < static_cast< int >( img[ k ].size( ) ) && bad < 0; ++at )
+            {
+                bool skip = !blocks[ k ].mask[ at ];
+                for ( int o : strings[ k ] )
+                    skip = skip || ( at >= o && at < o + 24 );
+                if ( k == 5 )
+                    skip = skip || ( at >= 0x30 && at < 0x34 ) || ( at >= 0x3C && at < 0x48 ) || ( at >= 0xF8 && at < 0x104 );
+                if ( !skip && img[ k ][ at ] != blocks[ k ].after[ at ] )
+                    bad = 0x1000 * k + at;
+            }
+        const boat_strings_t* got[ 4 ] = { &io.boat_strings, &io.hull_strings, &io.animation_strings, &engine.strings };
+        for ( int k = 0; k < 4 && bad < 0; ++k )
+            for ( const auto& w : want_texts[ k ] )
+            {
+                const auto it = got[ k ]->find( w.first );
+                if ( bad < 0 && ( it == got[ k ]->end( ) ? std::string( ) : it->second ) != w.second )
+                    bad = 0xA000 + 0x1000 * k + w.first;
+            }
+        if ( bad < 0 && ( engine.curve != curve || engine.records != records || engine.drives.size( ) != drives.size( ) ) )
+            bad = 0xE000;
+        for ( std::size_t k = 0; bad < 0 && k < drives.size( ); ++k )
+            for ( int lane : { 0, 1, 2, 4, 5, 6 } )
+                if ( engine.drives[ k ][ lane ] != drives[ k ][ lane ] )
+                    bad = 0xE001;
+        if ( bad < 0 && ( ctx.hooks != want_hooks || ctx.requests != want_requests ) )
+            bad = 0xF000;
+        // The shape image, the compound and its child / root leaf (retail's words on retail's mask).
+        auto masked_equal = [ & ]( const block_t& bl, int at, const void* p, int n )
+        {
+            const std::uint8_t* q = static_cast< const std::uint8_t* >( p );
+            for ( int k = 0; k < n; ++k )
+                if ( bl.mask[ at + k ] && bl.after[ at + k ] != q[ k ] )
+                    return false;
+            return true;
+        };
+        if ( bad < 0 && io.has_shape != !extra[ 3 ].after.empty( ) )
+            bad = 0xF100;
+        for ( int at = 0; bad < 0 && io.has_shape && at < 0x90; ++at )
+            if ( extra[ 3 ].mask[ at ] && extra[ 3 ].after[ at ] != io.shape_image[ at ] )
+                bad = 0x10000 + at;   // 0x1xxxx: the shape image's byte
+        if ( bad < 0 )
+        {
+            const compound_shape_t& c = io.compound;
+            const std::uint32_t count = static_cast< std::uint32_t >( c.children.size( ) );
+            const std::int32_t revision = c.revision;
+            if ( !masked_equal( extra[ 0 ], 0x10, &count, 4 ) || !masked_equal( extra[ 0 ], 0x20, c.local_aabb_min, 16 ) ||
+                 !masked_equal( extra[ 0 ], 0x30, c.local_aabb_max, 16 ) || !masked_equal( extra[ 0 ], 0x44, &revision, 4 ) ||
+                 !masked_equal( extra[ 0 ], 0x48, &c.margin, 4 ) || extra[ 1 ].after.size( ) != 80 * count )
+                bad = 0xF200;
+            if ( bad < 0 && count == 1 )
+            {
+                const compound_child_t& r = c.children[ 0 ];
+                const std::uint32_t words[ 3 ] = { shape_address, static_cast< std::uint32_t >( r.type ), root_address };
+                if ( !masked_equal( extra[ 1 ], 0, r.transform, 64 ) || !masked_equal( extra[ 1 ], 64, &words[ 0 ], 8 ) ||
+                     !masked_equal( extra[ 1 ], 72, &r.margin, 4 ) || !masked_equal( extra[ 1 ], 76, &words[ 2 ], 4 ) )
+                    bad = 0xF201;
+                const std::int32_t data = c.root_data;
+                if ( bad < 0 && ( !masked_equal( extra[ 2 ], 0, c.root_min, 16 ) || !masked_equal( extra[ 2 ], 16, c.root_max, 16 ) ||
+                                  !masked_equal( extra[ 2 ], 0x24, &data, 4 ) ) )
+                    bad = 0xF202;
+            }
+        }
+        // The record arrays: retail's six words are the solver image's +0x38..+0x4C (compared above); their
+        // contents are 40 x size zero bytes.
+        for ( int k = 0; k < 2 && bad < 0; ++k )
+            if ( array_bytes[ k ] != 40 * arrays[ 3 * k + 1 ] || array_sums[ k ] != 0 )
+                bad = 0xF300 + k;
+        ++compared;
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "boat load sections vector %d (%s) differs from retail at 0x%X (block x 0x1000 + byte; 0xAxxx strings, "
+                       "0xE engine containers, 0xF000 hooks / requests, 0xF1 shape, 0xF2 compound, 0xF3 arrays, 0x9000 refused)",
+                       static_cast< int >( index ), name.c_str( ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuBoatDB_loadAllSections 0x420A70 (run whole; model / pfx / debris / skin loads hooked) matches retail: %d vectors",
+                     compared );
+    else
+        LOG_ERROR( "boat load sections FAILED %d of %d vectors", failed, compared );
+    return failed == 0;
+}
+
+// boat_transform_changed (boat/load.hxx) against retail's 0x421670 (oracle
+// case boat_transform; the instigator manager's 0x536350 intercepted and
+// counted): the five blocks after (the boat's +0x3F4, a stack word retail
+// never writes, skipped) and the hook's count. The CRT atan2 / asinf
+// substitution is measured here.
+inline bool verify_boat_transform( )
+{
+    const int sizes[ 5 ] = { 0x520, 0xC8, 0x2D4, 0x308, 0x2C };
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_transform_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_transform_words + g_golden_boat_transform_offsets[ index ];
+        const unsigned manager = *s++;
+        std::vector< std::uint8_t > b[ 5 ];
+        for ( int k = 0; k < 5; ++k )
+        {
+            b[ k ].assign( reinterpret_cast< const std::uint8_t* >( s ), reinterpret_cast< const std::uint8_t* >( s ) + sizes[ k ] );
+            s += sizes[ k ] / 4;
+        }
+        vu_rigid_body_t body;
+        std::memcpy( &body, b[ 2 ].data( ), sizeof( body ) );
+        unsigned calls = 0;
+        boat_transform_hooks_t hooks;
+        hooks.user = &calls;
+        hooks.instigator_update = []( void* u ) { ++*static_cast< unsigned* >( u ); };
+        float world[ 16 ];
+        std::memcpy( world, b[ 1 ].data( ) + 0x50, 64 );
+        boat_transform_changed( b[ 0 ].data( ), world, body, b[ 3 ].data( ), b[ 4 ].data( ), hooks );
+        std::memcpy( b[ 2 ].data( ), &body, sizeof( body ) );
+        int bad = calls != manager ? 0x7000 : -1;
+        for ( int k = 0; k < 5 && bad < 0; ++k )
+        {
+            for ( int at = 0; at < sizes[ k ] && bad < 0; ++at )
+                if ( !( k == 0 && at >= 0x3F4 && at < 0x3F8 ) && b[ k ][ at ] != reinterpret_cast< const std::uint8_t* >( s )[ at ] )
+                    bad = 0x1000 * k + at;
+            s += sizes[ k ] / 4;
+        }
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "boat transform vector %d differs from retail at 0x%X (block x 0x1000 + byte; 0x7000 the hook count)",
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the transform-changed delegate 0x421670 matches retail (CRT atan2 / asinf as std::): %d vectors",
+                     static_cast< int >( g_golden_boat_transform_count ) );
+    else
+        LOG_ERROR( "boat transform FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_transform_count ) );
+    return failed == 0;
+}
+
+// boat_boost (boat/state.hxx) against retail's 0x41F9D0 (oracle case
+// boat_boost; the FMOD imports and the stats event intercepted): the boat and
+// animation blocks after, and the platform calls by kind and name.
+inline bool verify_boat_boost( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_boost_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_boost_words + g_golden_boat_boost_offsets[ index ];
+        float dt;
+        std::memcpy( &dt, s++, 4 );
+        const boat_driver_t driver = boat_driver_of( *s++ );
+        const unsigned players = *s++;
+        std::vector< std::string > want( *s++ );
+        for ( auto& w : want )
+        {
+            const unsigned kind = *s++;
+            const unsigned length = *s++;
+            w = ( kind ? "stats " : "sound " ) + std::string( reinterpret_cast< const char* >( s ), length );
+            s += ( length + 3 ) / 4;
+        }
+        std::vector< std::uint8_t > boat( reinterpret_cast< const std::uint8_t* >( s ), reinterpret_cast< const std::uint8_t* >( s ) + 0x520 );
+        s += 0x520 / 4;
+        std::vector< std::uint8_t > anim( reinterpret_cast< const std::uint8_t* >( s ), reinterpret_cast< const std::uint8_t* >( s ) + 0xDC );
+        s += 0xDC / 4;
+        std::vector< std::string > got;
+        boat_boost_hooks_t hooks;
+        hooks.user = &got;
+        hooks.sound = []( void* u, const std::string& e ) { static_cast< std::vector< std::string >* >( u )->push_back( "sound " + e ); };
+        hooks.stats = []( void* u, const char* n ) { static_cast< std::vector< std::string >* >( u )->push_back( std::string( "stats " ) + n ); };
+        boat_boost( boat.data( ), anim.data( ), driver.slot[ 0 ], driver.slot[ 2 ], players, dt, hooks );
+        int bad = got != want ? 0x7000 : -1;
+        for ( int at = 0; at < 0x520 && bad < 0; ++at )
+            if ( boat[ at ] != reinterpret_cast< const std::uint8_t* >( s )[ at ] )
+                bad = at;
+        s += 0x520 / 4;
+        for ( int at = 0; at < 0xDC && bad < 0; ++at )
+            if ( anim[ at ] != reinterpret_cast< const std::uint8_t* >( s )[ at ] )
+                bad = 0x1000 + at;
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "boat boost vector %d differs from retail at 0x%X (0x1xxx the animation; 0x7000 the platform calls)",
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the Decision sub-tick 0x41F9D0 (boost; FMOD / stats hooked) matches retail: %d vectors",
+                     static_cast< int >( g_golden_boat_boost_count ) );
+    else
+        LOG_ERROR( "boat boost FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_boost_count ) );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
@@ -669,5 +1065,8 @@ inline bool verify_boat_all( )
     ok = verify_sphere_shape( ) && ok;
     ok = verify_compound_inertia( ) && ok;
     ok = verify_boat_nose_probe( ) && ok;
+    ok = verify_boat_load_sections( ) && ok;
+    ok = verify_boat_transform( ) && ok;
+    ok = verify_boat_boost( ) && ok;
     return ok;
 }
