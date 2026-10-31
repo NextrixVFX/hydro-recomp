@@ -370,9 +370,9 @@ private:
             math_multiply( placed_node, world, part.node );
             const int handle = c_engine::place( geometry_override >= 0 ? geometry_override : part.geometry,
                 texture, part.index_start, part.index_count, placed_node, color, alpha, nullptr, part.detail );
-            // While a VuRotateMotionEntity's subtree is being visited, every
-            // placement made inside it is collected so the rotation can drive
-            // them each frame.
+            // While the entity tree's props are placed, every placement is
+            // collected with its owner so a rotator can drive the ones it owns
+            // each frame (adopt_rotators).
             if ( m_collect != nullptr && handle >= 0 )
             {
                 collected_t taken{};
@@ -557,17 +557,8 @@ private:
         int rotator = -1;
         // A motion entity sits as a CHILD of the thing it drives, and it can
         // arrive through a template expansion, so whether one exists is not
-        // knowable until the subtree has been walked. Collect unconditionally
-        // and adopt afterwards if a rotator turned up: an empty std::vector
-        // allocates nothing, so the entities that never see one cost nothing.
+        // knowable until the subtree has been walked.
         bool mine = false;
-        std::vector< collected_t > collected;
-        std::vector< collected_t >* saved_collect = m_collect;
-        m_collect = &collected;
-        // Which entity any placement made from here belongs to. Restored on
-        // EVERY exit path beside m_collect, for the same reason.
-        const std::string saved_owner = m_place_owner;
-        m_place_owner = here;
         // A TEMPLATE INSTANCE OVERRIDES ITS CHILDREN BY NAME. The instance
         // node's "ChildEntities" is an OBJECT keyed by child name - not the
         // LIST an ordinary entity carries - and each entry holds "Components"
@@ -671,8 +662,7 @@ private:
                     // The instance's per-child overrides ride down with it.
                     // They key the template root's OWN children by name, one
                     // level only, so a nested template instance replaces the
-                    // map rather than inheriting it - saved and restored like
-                    // the collector above.
+                    // map rather than inheriting it - saved and restored here.
                     const value_t* saved_overrides = m_child_overrides;
                     const value_t* instance_children = data != nullptr
                         ? find( *data, "ChildEntities" ) : nullptr;
@@ -684,18 +674,7 @@ private:
                 }
                 m_stack.erase( name );
                 if ( root != nullptr )
-                {
-                    // This return bypasses the tail below, so the collector
-                    // has to be restored here or m_collect is left pointing
-                    // at this frame's destroyed local - which crashed the
-                    // next place_model with an access violation.
-                    m_collect = saved_collect;
-                    m_place_owner = saved_owner;
-                    if ( saved_collect != nullptr )
-                        saved_collect->insert( saved_collect->end( ),
-                            collected.begin( ), collected.end( ) );
                     return;
-                }
             }
         }
 
@@ -1213,51 +1192,8 @@ private:
             }
         }
 
-        if ( components != nullptr )
-        {
-            const value_t* model = find( *components, "Vu3dDrawStaticModelComponent" );
-            const value_t* properties = model != nullptr ? find( *model, "Properties" ) : nullptr;
-            const value_t* asset = properties != nullptr ? find( *properties, "Model Asset" ) : nullptr;
-            if ( asset != nullptr && asset->kind == value_t::kind_t::text && !asset->text.empty( ) )
-            {
-                float tint[ 3 ] = { 1.0f, 1.0f, 1.0f };
-                const value_t* color = find( *properties, "Color" );
-                if ( color != nullptr )
-                {
-                    tint[ 0 ] = number( find( *color, "R" ), 255.0f ) / 255.0f;
-                    tint[ 1 ] = number( find( *color, "G" ), 255.0f ) / 255.0f;
-                    tint[ 2 ] = number( find( *color, "B" ), 255.0f ) / 255.0f;
-                }
-                place_model( asset->text, world, 0, -1, tint );
-            }
-
-            // Vu3dDrawAnimatedModelComponent was not handled at all, so all
-            // 19 instances in Hydroelectric were simply invisible. The
-            // component itself names only the model - the clip arrives from a
-            // separate VuPlayAnimationEntity, resolved after the walk - so
-            // record the instance here and let bind_animations() join them.
-            const value_t* animated = find( *components, "Vu3dDrawAnimatedModelComponent" );
-            const value_t* animated_props = animated != nullptr ? find( *animated, "Properties" ) : nullptr;
-            const value_t* animated_asset = animated_props != nullptr ? find( *animated_props, "Model Asset" ) : nullptr;
-            if ( animated_asset != nullptr && animated_asset->kind == value_t::kind_t::text
-                && !animated_asset->text.empty( ) )
-            {
-                animated_t item{};
-                item.asset = animated_asset->text;
-                item.path = here;
-                std::memcpy( item.world, world, sizeof( item.world ) );
-                item.tint[ 0 ] = item.tint[ 1 ] = item.tint[ 2 ] = 1.0f;
-                const value_t* color = find( *animated_props, "Color" );
-                if ( color != nullptr )
-                {
-                    item.tint[ 0 ] = number( find( *color, "R" ), 255.0f ) / 255.0f;
-                    item.tint[ 1 ] = number( find( *color, "G" ), 255.0f ) / 255.0f;
-                    item.tint[ 2 ] = number( find( *color, "B" ), 255.0f ) / 255.0f;
-                }
-                item.distance = number( find( *animated_props, "Draw Distance" ), 0.0f );
-                m_animated.push_back( std::move( item ) );
-            }
-        }
+        // The model-draw components (Vu3dDrawStaticModelComponent, Vu3dDrawAnimatedModelComponent) are placed
+        // from the retail entity tree (load_entity_tree).
 
         const value_t* children = data != nullptr ? find( *data, "ChildEntities" ) : nullptr;
         if ( children != nullptr && children->kind == value_t::kind_t::list )
@@ -1292,18 +1228,12 @@ private:
         // after the subtree has been walked. Only the DIRECT parent adopts:
         // letting every ancestor adopt made one rotator swallow 1918
         // placements instead of its siren's 2.
-        m_collect = saved_collect;
-        m_place_owner = saved_owner;
+        //
+        // The placements themselves are made from the retail tree after this
+        // walk, so the adopter is recorded here (post-order: an inner adopter
+        // before an outer one) and adopts there (adopt_rotators).
         if ( rotator >= 0 && !mine )
-        {
-            adopt_rotator( rotator, collected );
-        }
-        else if ( saved_collect != nullptr )
-        {
-            // Nothing here drives rotation, so hand the placements up to the
-            // enclosing collector - a driven prop may sit several levels deep.
-            saved_collect->insert( saved_collect->end( ), collected.begin( ), collected.end( ) );
-        }
+            m_adopters.emplace_back( rotator, here );
         // Report upward: this entity's own rotator if it IS the motion entity,
         // otherwise nothing (a child's has already been consumed above).
         m_pending_rotator = mine ? rotator : -1;
@@ -1344,6 +1274,23 @@ private:
             LOG_WARNING( "rotator %s drives NOTHING: its ref target %s owns none of the %u placements collected",
                 motion.path.c_str( ), target.c_str( ),
                 static_cast< unsigned >( collected.size( ) ) );
+    }
+
+    // Every adopter visit() recorded, in its post-order, takes the placements
+    // made beneath it - and only those not already taken by an adopter inside
+    // it, as the subtree collector used to hand them up - then adopt_rotator
+    // keeps the ones its "Entity" ref owns.
+    void adopt_rotators( std::vector< collected_t > pool )
+    {
+        for ( const auto& adopter : m_adopters )
+        {
+            std::vector< collected_t > mine;
+            std::vector< collected_t > rest;
+            for ( collected_t& item : pool )
+                ( owned_by( item.owner, adopter.second ) ? mine : rest ).push_back( std::move( item ) );
+            pool = std::move( rest );
+            adopt_rotator( adopter.first, mine );
+        }
     }
 
     // Is this placement's owner the ref target, or something beneath it?
@@ -2717,6 +2664,7 @@ private:
         m_overrides_placed = 0;
         m_override_components.clear( );
         m_collect = nullptr;
+        m_adopters.clear( );
         m_pending_rotator = -1;
         m_rig.clear( );
         m_type_census.clear( );
@@ -3075,10 +3023,15 @@ private:
     // The project as retail loads it (the race game 0x4B4360 -> VuProject::load
     // 0x556390): the registry as start-up leaves it, the asset's AssetData
     // "File" path (0x55FBE0), and the entity tree through every recreated load.
-    // The coronas are fed from it: each VuCoronaEntity's transform world and its
-    // property targets. A corona below an UNKNOWN entity is never created, and
-    // one whose world is unknown is not placed - both counted, neither stood in
-    // for.
+    // The coronas are fed from it (each VuCoronaEntity's transform world and its
+    // property targets), and so are the props: every model-draw component's
+    // Model Asset and Color at its owner's draw matrix. Its Draw Distance is
+    // carried on the animated props; no draw distance or LOD switch (the
+    // static draw 0x5B0730's +0xA8 / +0xAC / +0xB0 tests) is applied by the
+    // renderer yet - a gap, not a choice. Anything below an UNKNOWN entity is
+    // never created, and anything whose world is unknown is not placed - both
+    // counted, neither stood in for. The rotators still come from visit() (the
+    // old walk) and adopt the tree's placements here.
     void load_entity_tree( const char* asset, const value_t& project )
     {
         std::vector< std::uint8_t > bytes;
@@ -3118,10 +3071,54 @@ private:
         int unplaced = 0;
         int placed = 0;
         std::map< std::string, int > unknown_types;
+        int models = 0;
+        int models_unplaced = 0;
+        // Every static placement, by owner, for the rotators (adopt_rotators).
+        std::vector< collected_t > collected;
         // The event graph addresses an entity by its names below the project
         // root, '/'-joined.
         const auto walk = [ & ]( const auto& self, entity_t& e, const std::string& trail ) -> void
         {
+            // The model-draw components, drawn at the matrix their owner leaves
+            // in them (transform_draw_matrix: fromScale x world). An empty
+            // Model Asset draws nothing.
+            for ( const entity_component_t& c : e.m_components )
+            {
+                if ( ( c.m_vtable != k_static_model_component_vtable && c.m_vtable != k_animated_model_component_vtable ) || !c.m_state )
+                    continue;
+                const model_draw_t& m = static_cast< const model_draw_state_t* >( c.m_state.get( ) )->value;
+                if ( m.model_asset.empty( ) )
+                    continue;
+                const transform_component_t* t = entity_transform( e );
+                if ( !t || e.m_world_unknown )
+                {
+                    ++models_unplaced;
+                    continue;
+                }
+                ++models;
+                float matrix[ 16 ];
+                transform_draw_matrix( *t, matrix );
+                // The VuColor's R, G, B bytes.
+                const float tint[ 3 ] = { static_cast< float >( m.color & 0xFF ) / 255.0f,
+                    static_cast< float >( ( m.color >> 8 ) & 0xFF ) / 255.0f, static_cast< float >( ( m.color >> 16 ) & 0xFF ) / 255.0f };
+                if ( !m.animated )
+                {
+                    m_collect = &collected;
+                    m_place_owner = trail;
+                    place_model( m.model_asset, matrix, 0, -1, tint );
+                    m_collect = nullptr;
+                    continue;
+                }
+                // The clip arrives from a VuPlayAnimationEntity; bind_animations
+                // joins them.
+                animated_t item{};
+                item.asset = m.model_asset;
+                item.path = trail;
+                std::memcpy( item.world, matrix, sizeof( item.world ) );
+                std::memcpy( item.tint, tint, sizeof( item.tint ) );
+                item.distance = m.draw_distance;
+                m_animated.push_back( std::move( item ) );
+            }
             ++entities;
             unknown += e.m_ctor ? 0 : 1;
             if ( !e.m_ctor )
@@ -3141,8 +3138,10 @@ private:
                 self( self, *child, trail.empty( ) ? child->m_name : trail + "/" + child->m_name );
         };
         walk( walk, *m_tree, std::string( ) );
+        adopt_rotators( std::move( collected ) );
         LOG_INFO( "entity tree: %s (%s) - %d entities, %d UNKNOWN (nothing below one is loaded); %d coronas placed, %d with an "
-                  "unknown world", asset, path.c_str( ), entities, unknown, placed, unplaced );
+                  "unknown world; %d models placed, %d with an unknown world", asset, path.c_str( ), entities, unknown, placed,
+            unplaced, models, models_unplaced );
         // Which types' construction is not captured - what to recreate next.
         for ( const auto& pair : unknown_types )
             LOG_VERBOSE( "entity tree: UNKNOWN %-40s x%d", pair.first.c_str( ), pair.second );
@@ -3399,6 +3398,9 @@ private:
     std::map< std::string, std::array< float, 16 > > m_entity_world;
     std::vector< collected_t >* m_collect = nullptr;
     std::string m_place_owner;
+    // (rotator, the entity that adopts it - the motion entity's direct
+    // parent), in visit()'s post-order; consumed by adopt_rotators.
+    std::vector< std::pair< int, std::string > > m_adopters;
     // The template instance override map in scope for the current child loop,
     // and the single override handed to the next visit().
     const value_t* m_child_overrides = nullptr;
