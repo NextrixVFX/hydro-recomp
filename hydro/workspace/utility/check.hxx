@@ -981,10 +981,14 @@ inline bool verify_load_children( )
             ++failed;
             continue;
         }
-        entity_t root;
-        root.m_type = subtree.m_type;
-        root.m_create = registry.create_for( root.m_type );
-        root.m_ctor = entity_ctor_for( root.m_type );
+        const std::unique_ptr< entity_t > created = entity_create( subtree.m_type, world );
+        if ( !created )
+        {
+            LOG_ERROR( "load children: %s did not create", subtree.m_type );
+            ++failed;
+            continue;
+        }
+        entity_t& root = *created;
         entity_load( root, &member( *node, "data" ), world );
         std::vector< std::pair< int, const entity_t* > > ours;
         const auto walk = [ &ours ]( const auto& self, const entity_t& e, int parent ) -> void
@@ -1009,7 +1013,7 @@ inline bool verify_load_children( )
             ++compared;
             const bool known = have.m_ctor != nullptr;
             if ( !known || ours[ k ].first != want.m_parent || have.m_name != want.m_name || have.m_ctor->m_vtable != want.m_vtable ||
-                 have.m_ctor->m_flags != want.m_flags || want.m_template != 0 )
+                 have.m_flags != want.m_flags || want.m_template != 0 || !have.m_template.empty( ) )
             {
                 if ( ++failed <= 8 )
                     LOG_ERROR( "load children: %s entity %d is '%s' (%s), retail '%s'", subtree.m_path[ subtree.m_depth - 1 ], k,
@@ -1026,12 +1030,102 @@ inline bool verify_load_children( )
     return failed == 0;
 }
 
+// The template path (create 0x556E70, mark 0x5016A0, override load 0x5015D0)
+// against oracle case load_templates: each document parsed by c_reader, the
+// VuTemplateAssets served to entity_create by name, each subtree's root created
+// through the registry and loaded, and every entity compared pre-order with
+// retail's - parent, name, vtable, the +0x14 flags (bit 2 on a template's
+// descendants) and +0x4C (which template made it).
+inline bool verify_load_templates( )
+{
+    std::map< std::string, value_t > documents;
+    for ( std::size_t d = 0; d < g_golden_load_templates_documents_count; ++d )
+    {
+        const golden_named_document_t& doc = g_golden_load_templates_documents[ d ];
+        const unsigned char* raw = reinterpret_cast< const unsigned char* >( doc.m_words );
+        documents[ doc.m_name ] = c_reader( std::vector< std::uint8_t >( raw, raw + doc.m_bytes ) ).parse( );
+    }
+    std::vector< std::string > names( g_golden_entity_templates, g_golden_entity_templates + g_golden_entity_templates_count );
+    const entity_registry_t registry = build_entity_registry( names );
+    entity_world_t world;
+    world.m_registry = &registry;
+    world.m_ctor_for = entity_ctor_for;
+    world.m_template = [ &documents ]( const std::string& name ) -> const value_t*
+    {
+        const auto found = documents.find( "VuTemplateAsset/" + name );
+        return found == documents.end( ) ? nullptr : &found->second;
+    };
+    int failed = 0;
+    int compared = 0;
+    for ( std::size_t s = 0; s < g_golden_load_templates_subtrees_count; ++s )
+    {
+        const golden_load_subtree_t& subtree = g_golden_load_templates_subtrees[ s ];
+        const value_t& document = documents[ g_golden_load_templates_documents[ subtree.m_document ].m_name ];
+        const value_t* node = &member( member( document, "VuProject" ), "RootEntity" );
+        for ( int depth = 0; depth < subtree.m_depth && node; ++depth )
+        {
+            const value_t* next = nullptr;
+            for ( const value_t& child : member( member( *node, "data" ), "ChildEntities" ).list )
+                if ( member( child, "name" ).text == subtree.m_path[ depth ] )
+                    next = &child;
+            node = next;
+        }
+        const std::unique_ptr< entity_t > root = node ? entity_create( subtree.m_type, world ) : nullptr;
+        if ( !root )
+        {
+            LOG_ERROR( "load templates: subtree %d (%s) not found or not created", static_cast< int >( s ), subtree.m_type );
+            ++failed;
+            continue;
+        }
+        entity_load( *root, &member( *node, "data" ), world );
+        std::vector< std::pair< int, const entity_t* > > ours;
+        const auto walk = [ &ours ]( const auto& self, const entity_t& e, int parent ) -> void
+        {
+            const int index = static_cast< int >( ours.size( ) );
+            ours.push_back( { parent, &e } );
+            for ( const auto& child : e.m_children )
+                self( self, *child, index );
+        };
+        walk( walk, *root, -1 );
+        if ( ours.size( ) != static_cast< std::size_t >( subtree.m_count ) )
+        {
+            LOG_ERROR( "load templates: %s built %d entities, retail %d", subtree.m_path[ subtree.m_depth - 1 ],
+                static_cast< int >( ours.size( ) ), subtree.m_count );
+            ++failed;
+            continue;
+        }
+        for ( int k = 0; k < subtree.m_count; ++k )
+        {
+            const golden_template_entity_t& want = g_golden_load_templates_entities[ subtree.m_first + k ];
+            const entity_t& have = *ours[ k ].second;
+            ++compared;
+            const std::string want_template = want.m_template ? want.m_template : "";
+            // The root keeps its ctor's empty name in the case (no parent named it).
+            if ( !have.m_ctor || ours[ k ].first != want.m_parent || have.m_name != want.m_name ||
+                 have.m_ctor->m_vtable != want.m_vtable || have.m_flags != want.m_flags || have.m_template != want_template )
+            {
+                if ( ++failed <= 8 )
+                    LOG_ERROR( "load templates: entity %d is '%s' flags %u template '%s', retail '%s' flags %u template '%s'", k,
+                        have.m_name.c_str( ), have.m_flags, have.m_template.c_str( ), want.m_name, want.m_flags, want_template.c_str( ) );
+            }
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the template path matches retail's 0x556E70 / 0x5016A0 / 0x5015D0 on %d real instance(s): %d entities - "
+                     "names, parents, order, vtables, flags (bit 2 on template descendants), template owner",
+            static_cast< int >( g_golden_load_templates_subtrees_count ), compared );
+    else
+        LOG_ERROR( "the template path FAILED %d checks against 0x556E70", failed );
+    return failed == 0;
+}
+
 // Every oracle-backed check on game code.
 inline bool verify_game( )
 {
     bool ok = true;
     ok = verify_entity_registry( ) && ok;
     ok = verify_load_children( ) && ok;
+    ok = verify_load_templates( ) && ok;
     ok = verify_boat_ctor( ) && ok;
     ok = verify_boat_parts( ) && ok;
     ok = verify_transform_load( ) && ok;

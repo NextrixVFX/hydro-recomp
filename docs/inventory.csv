@@ -182,7 +182,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x406B10,9,sub_406B10,VuAngleProperty; VuBasicProperty<...>; VuPercentageProperty; VuStaticIntEnumProperty,VuBasicProperty<...>+8; VuBasicProperty<...>+8; VuBasicProperty<...>+8; VuAngleProperty+8; VuPercentageProperty+8; VuStaticIntEnumProperty+8,entity / component / script framework,absent,,False,False
 0x406B20,12,sub_406B20,VuBasicProperty<...>,VuBasicProperty<...>+9; VuBasicProperty<...>+10,entity / component / script framework,callee,,False,False
 0x406B30,6,sub_406B30,VuBasicProperty<...>; VuD3d11Gfx; VuDynamicsWorldImpl; btDiscreteDynamicsWorld; btTriangleShape,VuBasicProperty<...>+1; VuDynamicsWorldImpl+27; VuD3d11Gfx+53; btTriangleShape+19; btDiscreteDynamicsWorld+27,physics (Bullet),absent,,False,False
-0x406B40,9,sub_406B40,VuBasicProperty<...>,VuBasicProperty<...>+7,entity / component / script framework,absent,,False,False
+0x406B40,9,sub_406B40,VuBasicProperty<...>,VuBasicProperty<...>+7,entity / component / script framework,callee,,False,False
 0x406B50,9,sub_406B50,VuBasicProperty<...>,VuBasicProperty<...>+8,entity / component / script framework,absent,,False,False
 0x406B60,12,sub_406B60,VuBasicProperty<...>,VuBasicProperty<...>+9; VuBasicProperty<...>+10,entity / component / script framework,callee,,False,False
 0x406B70,172,sub_406B70,,,entity / component / script framework (by address),verified,hydro/workspace/core/boat/parts.hxx; hydro/workspace/utility/check.hxx,False,False
@@ -245,7 +245,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x408F90,370,sub_408F90,,,camera (by address),cited,hydro/workspace/core/world/world.hxx,False,False
 0x409110,243,sub_409110,,,camera (by address),absent,,False,False
 0x409210,6,sub_409210,VuBasicProperty<...>; VuRotation3dProperty; btBoxShape,VuBasicProperty<...>+1; VuRotation3dProperty+1; btBoxShape+22,physics (Bullet),absent,,False,False
-0x409220,23,sub_409220,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+7; VuRotation3dProperty+7; VuBasicProperty<...>+7,entity / component / script framework,absent,,False,False
+0x409220,23,sub_409220,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+7; VuRotation3dProperty+7; VuBasicProperty<...>+7,entity / component / script framework,callee,,False,False
 0x409240,23,sub_409240,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+8; VuRotation3dProperty+8; VuBasicProperty<...>+8,entity / component / script framework,absent,,False,False
 0x409260,31,sub_409260,VuBasicProperty<...>,VuBasicProperty<...>+9; VuBasicProperty<...>+10; VuBasicProperty<...>+9; VuBasicProperty<...>+10,entity / component / script framework,callee,,False,False
 0x409280,81,sub_409280,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+2; VuRotation3dProperty+2; VuBasicProperty<...>+2,entity / component / script framework,verified,hydro/workspace/core/world/transform.hxx,False,False
@@ -890,8 +890,8 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x43A4D0,138,sub_43A4D0,,,particles (by address),absent,,False,False
 0x43A560,113,sub_43A560,,,particles (by address),absent,,False,False
 0x43A5E0,6,sub_43A5E0,VuGridPositionEntity,VuGridPositionEntity+1,entity / component / script framework,absent,,False,False
-0x43A5F0,114,sub_43A5F0,,,entity / component / script framework (by address),absent,,False,False
-0x43A670,194,sub_43A670,,,entity / component / script framework (by address),absent,,False,False
+0x43A5F0,114,sub_43A5F0,,,entity / component / script framework (by address),callee,,False,False
+0x43A670,194,sub_43A670,,,entity / component / script framework (by address),callee,,False,False
 0x43A740,86,sub_43A740,VuGridPositionEntity,VuGridPositionEntity+6,entity / component / script framework,absent,,False,False
 0x43A7A0,51,sub_43A7A0,VuGridPositionEntity,VuGridPositionEntity+7,entity / component / script framework,absent,,False,False
 0x43A7E0,6,sub_43A7E0,VuPosterEntity,VuPosterEntity+1,entity / component / script framework,absent,,False,False
@@ -4644,8 +4644,8 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x501260,117,sub_501260,,,unattributed,absent,,False,False
 0x5012E0,26,sub_5012E0,,,unattributed,absent,,False,False
 0x501300,713,loader_00501300_load_name,,,unattributed,verified,engine/workspace/core/entity/node.hxx; engine/workspace/core/entity/registry.hxx; hydro/workspace/utility/check.hxx,False,False
-0x5015D0,208,loader_005015D0_load_ChildEntities,,,unattributed,cited,engine/workspace/core/entity/node.hxx,False,False
-0x5016A0,92,sub_5016A0,,,unattributed,absent,,False,False
+0x5015D0,208,loader_005015D0_load_ChildEntities,,,unattributed,verified,engine/workspace/core/entity/node.hxx; hydro/workspace/utility/check.hxx,False,False
+0x5016A0,92,sub_5016A0,,,unattributed,verified,engine/workspace/core/entity/node.hxx; hydro/workspace/utility/check.hxx,False,False
 0x501700,267,sub_501700,,,unattributed,verified,engine/workspace/core/entity/node.hxx; engine/workspace/core/entity/registry.hxx,False,False
 0x501810,239,sub_501810,,,unattributed,verified,engine/workspace/core/entity/node.hxx,False,False
 0x501900,483,sub_501900,,,unattributed,absent,,False,False
@@ -4655,8 +4655,8 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x501E00,167,sub_501E00,,,unattributed,callee,,False,False
 0x501EB0,155,sub_501EB0,,,unattributed,absent,,False,False
 0x501F70,97,loader_00501F70_load_Properties,,,unattributed,verified,engine/workspace/core/entity/node.hxx,False,False
-0x501FE0,47,sub_501FE0,,,unattributed,absent,,False,False
-0x502010,97,loader_00502010_load_Properties,,,unattributed,absent,,False,False
+0x501FE0,47,sub_501FE0,,,unattributed,verified,engine/workspace/core/entity/node.hxx,False,False
+0x502010,97,loader_00502010_load_Properties,,,unattributed,verified,engine/workspace/core/entity/node.hxx,False,False
 0x502080,242,VuScriptOutputPlug_init,,,unattributed,verified,hydro/workspace/core/world/world.hxx,False,False
 0x502180,219,sub_502180,,,unattributed,absent,,False,False
 0x502260,224,sub_502260,,,unattributed,absent,,False,False
@@ -5794,7 +5794,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5552D0,375,loader_005552D0_load_ChildEntities,,,assets (by address),absent,,False,False
 0x555450,554,VuProject_load_RootEntity,,,assets (by address),absent,,False,False
 0x555680,8,sub_555680,VuAssetListAsset; VuDBAsset; VuGenericDataAsset; VuProjectAsset; VuShaderAsset; VuStringAsset; VuTemplateAsset,VuProjectAsset+6; VuGenericDataAsset+6; VuDBAsset+6; VuAssetListAsset+6; VuStringAsset+6; VuTemplateAsset+6,rendering / gfx,absent,,False,False
-0x555690,161,sub_555690,,,rendering / gfx (by address),absent,,False,False
+0x555690,161,sub_555690,,,rendering / gfx (by address),verified,engine/workspace/core/entity/node.hxx,False,False
 0x555740,265,sub_555740,,,rendering / gfx (by address),absent,,False,False
 0x555850,194,sub_555850,,,rendering / gfx (by address),absent,,False,False
 0x555920,424,sub_555920,,,rendering / gfx (by address),absent,,False,False
@@ -5813,7 +5813,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x556260,292,sub_556260,,,unattributed,absent,,False,False
 0x556390,381,VuProject_load_data,,,unattributed,absent,,False,False
 0x556510,11,sub_556510,VuEntityFactory,VuEntityFactory+4,entity / component / script framework,absent,,False,False
-0x556520,117,sub_556520,,,entity / component / script framework (by address),absent,,False,False
+0x556520,117,sub_556520,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/node.hxx,False,False
 0x5565A0,121,sub_5565A0,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/registry.hxx,False,False
 0x556620,189,sub_556620,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/registry.hxx,False,False
 0x5566E0,61,sub_5566E0,VuEntityFactory,VuEntityFactory+0,entity / component / script framework,absent,,False,False
@@ -5824,7 +5824,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x556A40,107,sub_556A40,,,entity / component / script framework (by address),callee,,False,False
 0x556AB0,11,sub_556AB0,VuEntityFactory,VuEntityFactory+0,entity / component / script framework,absent,,False,False
 0x556AC0,934,sub_556AC0,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/registry.hxx; hydro/workspace/core/game/types.hxx; hydro/workspace/utility/check.hxx,False,False
-0x556E70,372,VuProject_load_RootEntity_0,,,entity / component / script framework (by address),cited,engine/workspace/core/entity/node.hxx,False,False
+0x556E70,372,VuProject_load_RootEntity_0,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/node.hxx; hydro/workspace/utility/check.hxx,False,False
 0x556FF0,61,sub_556FF0,,,entity / component / script framework (by address),absent,,False,False
 0x557030,159,sub_557030,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/registry.hxx,False,False
 0x5570D0,146,sub_5570D0,,,entity / component / script framework (by address),callee,,False,False

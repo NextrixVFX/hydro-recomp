@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -19,8 +20,8 @@
 // no ctor-made children, slot 11 = VuEntity::load); its node then loads its
 // children exactly as retail does. Any other type is an UNKNOWN node: created
 // (retail would create it) and named, but its own load is a hook and nothing
-// below it is read. Properties, Components and postLoad (vt+8) are hooks for
-// every type until the classes behind them are recreated.
+// below it is read. Properties, Components and the post-load calls (vt+8 /
+// vt+0xC) are hooks for every type until the classes behind them are recreated.
 
 struct entity_ctor_t
 {
@@ -32,17 +33,22 @@ struct entity_ctor_t
 struct entity_t
 {
     std::string m_type;                                 // the data's "type" it was created from
-    std::uint32_t m_create = 0;                         // the registry's create fn (a hook)
+    std::uint32_t m_create = 0;                         // the registry's create fn (a hook unless recreated)
     const entity_ctor_t* m_ctor = nullptr;              // null: UNKNOWN
+    std::uint32_t m_flags = 0;                          // +0x14
     std::string m_name;                                 // +0x18
     entity_t* m_parent = nullptr;                       // +0x34
     std::vector< std::unique_ptr< entity_t > > m_children;  // +0x38
+    std::string m_template;                             // +0x4C: the VuTemplateAsset an instance came from
 };
 
 struct entity_world_t
 {
     const entity_registry_t* m_registry = nullptr;
     const entity_ctor_t* ( *m_ctor_for )( const std::string& cls ) = nullptr;
+    // A VuTemplateAsset's document by name (what factory slot 7 0x555690 would load), or null when the
+    // asset does not exist.
+    std::function< const value_t*( const std::string& name ) > m_template;
 };
 
 // 0x500690, the child order (std::sort's comparator in 0x501810): a child with
@@ -50,8 +56,8 @@ struct entity_world_t
 // operator< (0x404AC0 memcmp of the shorter length, then the lengths).
 inline bool entity_child_before( const entity_t* a, const entity_t* b )
 {
-    const bool fa = ( a->m_ctor->m_flags & 1 ) != 0;
-    const bool fb = ( b->m_ctor->m_flags & 1 ) != 0;
+    const bool fa = ( a->m_flags & 1 ) != 0;
+    const bool fb = ( b->m_flags & 1 ) != 0;
     if ( fa && !fb )
         return true;
     if ( !fa && fb )
@@ -84,13 +90,60 @@ inline bool entity_sort_children( entity_t& entity )
 
 inline void entity_load( entity_t& entity, const value_t* data, const entity_world_t& world );
 
+// 0x5016A0, run on a fresh template instance: every entity in the subtree whose
+// +0x4C is empty - all of the instance's descendants, not the instance - gets
+// +0x14 |= 2; each property's vt+0x1C and the components' 0x501FE0 are hooks.
+inline void entity_mark_template( entity_t& entity )
+{
+    if ( entity.m_template.empty( ) )
+        entity.m_flags |= 2;
+    for ( auto& child : entity.m_children )
+        entity_mark_template( *child );
+}
+
+// The registry's create fn for `type`, as far as it is recreated: a captured
+// type (its facts), the template instantiator 0x556E70, or an UNKNOWN node.
+// Null where retail's create returns null (a template whose asset or root type
+// is missing) and where the type is not registered.
+inline std::unique_ptr< entity_t > entity_create( const std::string& type, const entity_world_t& world )
+{
+    const std::uint32_t create = world.m_registry->create_for( type );
+    if ( !create )
+        return nullptr;
+    if ( create != k_template_create )
+    {
+        auto entity = std::make_unique< entity_t >( );
+        entity->m_type = type;
+        entity->m_create = create;
+        entity->m_ctor = world.m_ctor_for( type );
+        entity->m_flags = entity->m_ctor ? entity->m_ctor->m_flags : 0;
+        return entity;
+    }
+    // 0x556E70: the asset is the name after the '#' (0x555690); its root type is
+    // VuProject.RootEntity.type when that is a string, else "" (0x556520).
+    const std::string name = type.substr( 1 );
+    const value_t* asset = world.m_template ? world.m_template( name ) : nullptr;
+    if ( !asset )
+        return nullptr;
+    const value_t& root = member( member( *asset, "VuProject" ), "RootEntity" );
+    const value_t& root_type = member( root, "type" );
+    auto entity = entity_create( root_type.tag == 4 ? root_type.text : std::string( ), world );
+    if ( !entity )
+        return nullptr;
+    // The root type's own vt+0x2C load on the template's data, while +0x4C is still empty.
+    entity_load( *entity, &member( root, "data" ), world );
+    entity->m_template = name;
+    entity_mark_template( *entity );
+    return entity;
+}
+
 // loadChildEntities 0x501300: create every element of `array` that has a
 // string "type" and a string "name" (the name -> "data" map keeps the LAST
 // element of a name, std::map operator[] 0x501700), unless a child of that
-// name already exists (0x500E60) or the type is not registered (the create
-// is skipped); new children get their name, the parent link and a place in
-// the sorted list. Then every child - including any that existed before - is
-// loaded from its entry in the map (vt+0x2C).
+// name already exists (0x500E60) or the create returns null; new children get
+// their name, the parent link and a place in the sorted list. Then every
+// child - including any that existed before - is loaded from its entry in the
+// map (vt+0x2C).
 inline void entity_load_children( entity_t& entity, const value_t& array, const entity_world_t& world )
 {
     std::map< std::string, const value_t* > data_by_name;
@@ -107,13 +160,9 @@ inline void entity_load_children( entity_t& entity, const value_t& array, const 
         data_by_name[ name.text ] = &member( element, "data" );
         if ( entity_find_child( entity, name.text ) )
             continue;
-        const std::uint32_t create = world.m_registry->create_for( type.text );
-        if ( !create )
+        auto child = entity_create( type.text, world );
+        if ( !child )
             continue;
-        auto child = std::make_unique< entity_t >( );
-        child->m_type = type.text;
-        child->m_create = create;
-        child->m_ctor = world.m_ctor_for( type.text );
         child->m_name = name.text;
         child->m_parent = &entity;
         entity.m_children.push_back( std::move( child ) );
@@ -130,14 +179,36 @@ inline void entity_load_children( entity_t& entity, const value_t& array, const 
     entity_sort_children( entity );
 }
 
-// VuEntity::load 0x5009D0, every known type's slot 11. The template path
-// (+0x4C != 0 -> 0x5015D0) is only taken by an entity 0x556E70 instantiated,
-// which is UNKNOWN here; ChildEntities is the step recreated. An UNKNOWN entity's
-// own load is a hook: nothing below it is read.
+// 0x5015D0, a template instance's load (and, recursively, its descendants'):
+// nothing is created. Each existing child takes its override from
+// data.ChildEntities when that is an OBJECT keyed by child name (else the null
+// container) - recursing into 0x5015D0 itself, whatever the child's type.
+inline void entity_load_override( entity_t& entity, const value_t& data, const entity_world_t& world )
+{
+    static const value_t null{};
+    const value_t& overrides = member( data, "ChildEntities" );
+    for ( auto& child : entity.m_children )
+    {
+        const value_t* found = overrides.tag == 6 ? find( overrides, child->m_name ) : nullptr;
+        entity_load_override( *child, found ? *found : null, world );
+    }
+    // "Properties" (each property's vt+8), "Components" (0x502010) and the
+    // entity's vt+0xC follow - hooks until those classes are recreated.
+}
+
+// VuEntity::load 0x5009D0, every known type's slot 11: an entity a template
+// made (+0x4C set) takes the override path 0x5015D0; otherwise ChildEntities
+// is the step recreated. An UNKNOWN entity's own load is a hook: nothing below
+// it is read.
 inline void entity_load( entity_t& entity, const value_t* data, const entity_world_t& world )
 {
     if ( !entity.m_ctor || !data )
         return;
+    if ( !entity.m_template.empty( ) )
+    {
+        entity_load_override( entity, *data, world );
+        return;
+    }
     entity_load_children( entity, member( *data, "ChildEntities" ), world );
     // "Properties" (each property's vt+8), "Components" (0x501F70) and the
     // entity's vt+8 postLoad follow - hooks until those classes are recreated.
