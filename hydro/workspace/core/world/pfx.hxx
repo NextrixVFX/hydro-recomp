@@ -251,6 +251,137 @@ inline void pfx_pattern_tick( pfx_quad_pattern_t& p, pfx_pool_t& pool, float clo
     p.aabb[ 5 ] = hi[ 2 ];
 }
 
+// The global VuRand the fountains draw from (0x736810 the Park-Miller state,
+// 0x736814 the previous output, 0x736818 the 32-entry Bays-Durham table),
+// inline in 0x55d030 at every draw: state = 16807*s - 0x7FFFFFFF*(s / 127773)
+// in wrapping 32-bit arithmetic, + 0x7FFFFFFF when negative; the table slot is
+// previous / 2^26 (a truncating signed divide), the previous takes the slot's
+// old value and the slot takes the new state; the float is
+// minss( (float)previous * 4.656613e-10, 0.99999988 ).
+struct pfx_rand_t
+{
+    std::int32_t seed = 0;
+    std::int32_t previous = 0;
+    std::int32_t table[ 32 ]{};
+
+    float next( )
+    {
+        const std::int32_t s = seed;
+        std::int32_t v = static_cast< std::int32_t >( 16807u * static_cast< std::uint32_t >( s ) -
+                                                     0x7FFFFFFFu * static_cast< std::uint32_t >( s / 127773 ) );
+        if ( v < 0 )
+            v += 0x7FFFFFFF;
+        seed = v;
+        const int slot = previous / 0x4000000;
+        previous = table[ slot ];
+        table[ slot ] = v;
+        return _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( static_cast< float >( previous ) * 4.6566129e-10f ),
+            _mm_set_ss( 0.99999988f ) ) );
+    }
+};
+
+// VuPfxEmitFountain_emit @0x55d030, the shared slot 1 of the quad /
+// directional / geom fountains. node: +0x14 alive count, +0x18 accumulator,
+// +0x1C count scale, +0x20 rate scale, +0x24 alpha scale; params by retail
+// offset (`param( off )`): +0x30 Rate, +0x34 Max Particle Count, +0x38 / +0x3C
+// life, +0x40 / +0x44 the two RGBA bytes, +0x48 / +0x4C scale, +0x50 .. /
+// +0x60 .. velocity, +0x70 .. / +0x80 .. position (each a min / max pair the
+// draw blends as (1 - r) * min + max * r), +0x90 the water snap flag, +0x94
+// Draw Distance. Allocation (the pattern's slot 4), the matrix (its slot 5),
+// the node's own slot 2 and the water snap 0x529140 are hooks; the snap is
+// NOT modelled (callers pass its flag clear).
+struct pfx_fountain_node_t
+{
+    int alive = 0;
+    float accumulator = 0.0f;
+    float count_scale = 1.0f;
+    float rate_scale = 1.0f;
+    float alpha_scale = 1.0f;
+};
+
+struct pfx_fountain_hooks_t
+{
+    void* user = nullptr;
+    pfx_quad_particle_t* ( *allocate )( void* user ) = nullptr;
+    const float* ( *matrix )( void* user ) = nullptr;
+    void ( *init )( void* user, pfx_quad_particle_t& p ) = nullptr;
+};
+
+inline void pfx_fountain_emit( pfx_fountain_node_t& node, const std::uint8_t* params, pfx_rand_t& rand,
+    const float* cameras, int camera_count, const float* system_position, const float* system_velocity, float dt,
+    const pfx_fountain_hooks_t& hooks )
+{
+    auto param = [ & ]( int off ) { float v; std::memcpy( &v, params + off, 4 ); return v; };
+    std::int32_t max_count;
+    std::memcpy( &max_count, params + 0x34, 4 );
+    // fld; fistp: round to nearest even
+    const int limit = _mm_cvtsd_si32( _mm_set_sd( static_cast< double >( static_cast< float >( max_count ) * node.count_scale ) ) );
+    const float rate = node.rate_scale * param( 0x30 );
+    if ( max_count > 0 && node.alive >= limit )
+        return;
+    node.accumulator = ( rate * dt ) + node.accumulator;
+    if ( !_mm_comigt_ss( _mm_set_ss( node.accumulator ), _mm_setzero_ps( ) ) )
+        return;
+    const float draw = param( 0x94 ) * param( 0x94 );
+    do
+    {
+        bool seen = false;
+        for ( int k = 0; k < camera_count; ++k )
+        {
+            const float* c = cameras + 3 * k;
+            const float dx = c[ 0 ] - system_position[ 0 ];
+            const float dy = c[ 1 ] - system_position[ 1 ];
+            const float dz = c[ 2 ] - system_position[ 2 ];
+            if ( _mm_comigt_ss( _mm_set_ss( draw ), _mm_set_ss( ( ( dx * dx ) + ( dy * dy ) ) + ( dz * dz ) ) ) )
+                seen = true;
+        }
+        pfx_quad_particle_t* p = seen ? hooks.allocate( hooks.user ) : nullptr;
+        if ( p != nullptr )
+        {
+            auto blend = [ & ]( int lo, int hi ) {
+                const float r = rand.next( );
+                return ( ( 1.0f - r ) * param( lo ) ) + ( param( hi ) * r );
+            };
+            p->set( 0x3C, node.accumulator / rate );
+            p->set( 0x40, blend( 0x38, 0x3C ) );
+            const float r = rand.next( );
+            const float k = 0.0039215689f;
+            float rgba[ 4 ];
+            for ( int c = 0; c < 4; ++c )
+                rgba[ c ] = ( ( static_cast< float >( params[ 0x40 + c ] ) * k ) * ( 1.0f - r ) ) +
+                            ( ( static_cast< float >( params[ 0x44 + c ] ) * k ) * r );
+            for ( int c = 0; c < 4; ++c )
+                p->set( 0x28 + 4 * c, rgba[ c ] );
+            p->set( 0x34, node.alpha_scale * p->f( 0x34 ) );
+            p->set( 0x38, blend( 0x48, 0x4C ) );
+            p->set( 0x08, blend( 0x70, 0x80 ) );
+            p->set( 0x0C, blend( 0x74, 0x84 ) );
+            p->set( 0x10, blend( 0x78, 0x88 ) );
+            p->set( 0x18, blend( 0x50, 0x60 ) );
+            p->set( 0x1C, blend( 0x54, 0x64 ) );
+            p->set( 0x20, blend( 0x58, 0x68 ) );
+            const float* m = hooks.matrix( hooks.user );
+            const float px = p->f( 0x08 );
+            const float py = p->f( 0x0C );
+            const float pz = p->f( 0x10 );
+            p->set( 0x08, ( ( ( m[ 0 ] * px ) + ( py * m[ 4 ] ) ) + ( pz * m[ 8 ] ) ) + m[ 12 ] );
+            p->set( 0x0C, ( ( ( px * m[ 1 ] ) + ( py * m[ 5 ] ) ) + ( pz * m[ 9 ] ) ) + m[ 13 ] );
+            p->set( 0x10, ( ( ( m[ 2 ] * px ) + ( m[ 6 ] * py ) ) + ( pz * m[ 10 ] ) ) + m[ 14 ] );
+            const float vx = p->f( 0x18 );
+            const float vy = p->f( 0x1C );
+            const float vz = p->f( 0x20 );
+            p->set( 0x18, system_velocity[ 0 ] + ( ( ( m[ 0 ] * vx ) + ( vy * m[ 4 ] ) ) + ( vz * m[ 8 ] ) ) );
+            p->set( 0x1C, system_velocity[ 1 ] + ( ( ( vx * m[ 1 ] ) + ( vy * m[ 5 ] ) ) + ( vz * m[ 9 ] ) ) );
+            p->set( 0x20, system_velocity[ 2 ] + ( ( ( m[ 2 ] * vx ) + ( m[ 6 ] * vy ) ) + ( vz * m[ 10 ] ) ) );
+            hooks.init( hooks.user, *p );
+            ++node.alive;
+            if ( limit > 0 && node.alive >= limit )
+                return;
+        }
+        node.accumulator = node.accumulator - 1.0f;
+    } while ( _mm_comigt_ss( _mm_set_ss( node.accumulator ), _mm_setzero_ps( ) ) );
+}
+
 inline void pfx_quad_pattern_tick( pfx_quad_pattern_t& p, pfx_pool_t& pool, float clock, float instance_scale,
     const float* system_matrix, int space, float start_delay, float dt, void ( *children )( void*, float ), void* user )
 {

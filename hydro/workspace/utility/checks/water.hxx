@@ -737,6 +737,82 @@ inline bool verify_geom_pattern_tick( )
     return failed == 0;
 }
 
+// pfx_fountain_emit against VuPfxEmitFountain_emit @0x55d030 on 10 scenarios: every particle it filled (32
+// words), the node's count and accumulator after, the global VuRand's 34 words after, and the number of
+// allocations and slot-2 calls.
+struct fountain_record_t
+{
+    std::vector< pfx_quad_particle_t > parts;
+    int allow = 0;
+    int next = 0;
+    int allocs = 0;
+    int inits = 0;
+    const float* matrix = nullptr;
+};
+
+inline bool verify_fountain_emit( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_fountains_count; ++index )
+    {
+        const golden_fountain_t& g = g_golden_fountains[ index ];
+        std::uint8_t params[ 0x98 ]{};
+        std::memcpy( params, g.m_params, sizeof( g.m_params ) );
+        std::memcpy( params + 0x34, &g.m_max, 4 );
+        std::memcpy( params + 0x40, g.m_colours, 8 );
+        params[ 0x90 ] = 0;
+        pfx_rand_t rand{};
+        rand.seed = g.m_seed;
+        rand.previous = g.m_prev;
+        std::memcpy( rand.table, g.m_table, sizeof( rand.table ) );
+        pfx_fountain_node_t node{};
+        node.alive = g.m_alive;
+        node.accumulator = g.m_node[ 0 ];
+        node.count_scale = g.m_node[ 1 ];
+        node.rate_scale = g.m_node[ 2 ];
+        node.alpha_scale = g.m_node[ 3 ];
+        fountain_record_t rec{};
+        rec.parts.resize( g.m_allow );
+        rec.allow = g.m_allow;
+        rec.matrix = g.m_matrix;
+        pfx_fountain_hooks_t hooks{};
+        hooks.user = &rec;
+        hooks.allocate = []( void* u ) -> pfx_quad_particle_t* {
+            auto& r = *static_cast< fountain_record_t* >( u );
+            ++r.allocs;
+            return r.next < r.allow ? &r.parts[ r.next++ ] : nullptr;
+        };
+        hooks.matrix = []( void* u ) { return static_cast< fountain_record_t* >( u )->matrix; };
+        hooks.init = []( void* u, pfx_quad_particle_t& ) { ++static_cast< fountain_record_t* >( u )->inits; };
+        pfx_fountain_emit( node, params, rand, g.m_camera, g.m_cameras, g.m_system, g.m_system + 3, g.m_dt, hooks );
+        bool ok = rec.next == g.m_count && rec.allocs == g.m_allocs && rec.inits == g.m_inits && node.alive == g.m_alive_after &&
+                  std::memcmp( &node.accumulator, &g.m_accumulator_after, 4 ) == 0;
+        for ( int i = 0; i < rec.next && ok; ++i )
+            ok = std::memcmp( rec.parts[ i ].w, g_golden_fountain_words + g.m_words + 32 * i, 120 ) == 0;
+        std::uint32_t after[ 34 ];
+        std::memcpy( after, &rand.seed, 4 );
+        std::memcpy( after + 1, &rand.previous, 4 );
+        std::memcpy( after + 2, rand.table, 128 );
+        ok = ok && std::memcmp( after, g.m_rand_after, sizeof( after ) ) == 0;
+        if ( !ok )
+        {
+            ++failed;
+            LOG_ERROR( "pfx_fountain_emit scenario %d differs from @0x55d030 (particles %d / %d, allocs %d / %d)",
+                static_cast< int >( index ), rec.next, g.m_count, rec.allocs, g.m_allocs );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "pfx_fountain_emit matches VuPfxEmitFountain_emit @0x55d030 on %d scenarios (particles, node, VuRand, calls)",
+            static_cast< int >( g_golden_fountains_count ) );
+    }
+    else
+    {
+        LOG_ERROR( "pfx_fountain_emit FAILED %d of %d", failed, static_cast< int >( g_golden_fountains_count ) );
+    }
+    return failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
@@ -751,5 +827,6 @@ inline bool verify_water_all( )
     ok = verify_water_waves( ) && ok;
     ok = verify_quad_pattern_tick( ) && ok;
     ok = verify_geom_pattern_tick( ) && ok;
+    ok = verify_fountain_emit( ) && ok;
     return ok;
 }
