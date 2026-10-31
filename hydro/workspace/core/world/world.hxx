@@ -3117,12 +3117,15 @@ private:
         int unknown = 0;
         int unplaced = 0;
         int placed = 0;
+        std::map< std::string, int > unknown_types;
         // The event graph addresses an entity by its names below the project
         // root, '/'-joined.
         const auto walk = [ & ]( const auto& self, entity_t& e, const std::string& trail ) -> void
         {
             ++entities;
             unknown += e.m_ctor ? 0 : 1;
+            if ( !e.m_ctor )
+                ++unknown_types[ e.m_type ];
             if ( e.m_type == "VuCoronaEntity" && e.m_state )
             {
                 const transform_component_t* t = entity_transform( e );
@@ -3140,6 +3143,9 @@ private:
         walk( walk, *m_tree, std::string( ) );
         LOG_INFO( "entity tree: %s (%s) - %d entities, %d UNKNOWN (nothing below one is loaded); %d coronas placed, %d with an "
                   "unknown world", asset, path.c_str( ), entities, unknown, placed, unplaced );
+        // Which types' construction is not captured - what to recreate next.
+        for ( const auto& pair : unknown_types )
+            LOG_VERBOSE( "entity tree: UNKNOWN %-40s x%d", pair.first.c_str( ), pair.second );
     }
 
     // VuCoronaEntity's members as c_corona_entity reads them. The colour is
