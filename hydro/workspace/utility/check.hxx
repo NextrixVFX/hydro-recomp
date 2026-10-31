@@ -1440,6 +1440,79 @@ inline bool verify_coronas( )
     return failed == 0;
 }
 
+// model_draw_load (engine entity/draw.hxx) against the model-draw components'
+// property loads as retail's VuEntity::load runs them (oracle case
+// load_prop_models): every VuPropEntity / VuAnimatedPropEntity placed in the
+// Hydroelectric level, each node's value compared bit for bit, plus each
+// type's values straight after create (model_draw_construct).
+inline bool verify_prop_models( )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_coronas_document );
+    const value_t document = c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_coronas_document_bytes ) ).parse( );
+    const auto word = []( float f )
+    {
+        std::uint32_t b;
+        std::memcpy( &b, &f, sizeof( b ) );
+        return b;
+    };
+    int failed = 0;
+    int compared = 0;
+    for ( std::size_t k = 0; k < g_golden_props_count; ++k )
+    {
+        const golden_prop_t& want = g_golden_props[ k ];
+        const bool animated = want.m_animated != 0;
+        model_draw_t c;
+        model_draw_construct( c, animated );
+        if ( want.m_depth >= 0 )
+        {
+            const value_t* node = &member( member( document, "VuProject" ), "RootEntity" );
+            for ( int d = 0; d < want.m_depth && node; ++d )
+            {
+                const value_t& children = member( member( *node, "data" ), "ChildEntities" );
+                node = want.m_index[ d ] < static_cast< int >( children.list.size( ) ) ? &children.list[ want.m_index[ d ] ] : nullptr;
+            }
+            if ( !node )
+            {
+                LOG_ERROR( "prop models: '%s' not found", want.m_name );
+                ++failed;
+                continue;
+            }
+            model_draw_t defaults;
+            model_draw_construct( defaults, animated );
+            const char* key = animated ? "Vu3dDrawAnimatedModelComponent" : "Vu3dDrawStaticModelComponent";
+            model_draw_load( c, member( member( member( member( *node, "data" ), "Components" ), key ), "Properties" ), defaults );
+        }
+        std::vector< std::string > assets = { c.model_asset };
+        std::vector< std::uint32_t > values = { c.reflect, c.shadow, c.color, word( c.draw_distance ) };
+        if ( !animated )
+        {
+            assets.insert( assets.end( ), { c.lod1_model_asset, c.lod2_model_asset, c.reflection_model_asset } );
+            values.insert( values.end( ), { word( c.lod0_draw_distance ), word( c.lod1_draw_distance ), word( c.rejection_scale_modifier ) } );
+        }
+        values.push_back( c.dynamic_lighting );
+        for ( std::size_t a = 0; a < assets.size( ); ++a )
+        {
+            ++compared;
+            if ( assets[ a ] != want.m_assets[ a ] && ++failed <= 8 )
+                LOG_ERROR( "prop models: '%s' asset %d is '%s', retail '%s'", want.m_name, static_cast< int >( a ), assets[ a ].c_str( ),
+                    want.m_assets[ a ] );
+        }
+        for ( std::size_t v = 0; v < values.size( ); ++v )
+        {
+            ++compared;
+            if ( values[ v ] != want.m_values[ v ] && ++failed <= 8 )
+                LOG_ERROR( "prop models: '%s' value %d is 0x%08X, retail 0x%08X", want.m_name, static_cast< int >( v ), values[ v ],
+                    want.m_values[ v ] );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "model_draw_load matches the model-draw components' property loads (vt 0x7519AC / 0x758240) on %d props "
+                     "and both types' create defaults: %d values, bit for bit", static_cast< int >( g_golden_props_count ) - 2, compared );
+    else
+        LOG_ERROR( "model_draw_load FAILED %d checks against the model-draw components", failed );
+    return failed == 0;
+}
+
 // An entity's own properties through a template (oracle case
 // load_template_properties): the hand-built template instantiated
 // (entity_instantiate_template = 0x556E70), its mark making the loaded values
@@ -1522,6 +1595,7 @@ inline bool verify_game( )
     bool ok = true;
     ok = verify_template_properties( ) && ok;
     ok = verify_coronas( ) && ok;
+    ok = verify_prop_models( ) && ok;
     ok = verify_load_components( ) && ok;
     ok = verify_dynamic_lights( ) && ok;
     ok = verify_entity_registry( ) && ok;

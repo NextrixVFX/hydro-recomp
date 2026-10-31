@@ -4,6 +4,7 @@
 #include <workspace/core/entity/registry.hxx>
 #include <workspace/core/world/transform.hxx>
 #include <workspace/core/entity/corona.hxx>
+#include <workspace/core/entity/draw.hxx>
 
 #include <cstring>
 
@@ -835,8 +836,25 @@ inline void transform_walk_children( entity_t& owner, const float* world )
 // 0x534340, vt+0x10 0x5343F0 - the same body): the recalc against the owner's
 // parent's transform world as it stands now, then 0x534C00's child walk.
 // Every other component is a hook.
+constexpr std::uint32_t k_static_model_component_vtable = 0x7519ACu;
+constexpr std::uint32_t k_animated_model_component_vtable = 0x758240u;
+
+// A model-draw component's targets and each node's default.
+struct model_draw_state_t
+{
+    model_draw_t value;
+    model_draw_t defaults;
+};
+
 inline void entity_load_component( entity_t& owner, entity_component_t& component, const value_t& properties, bool )
 {
+    if ( component.m_vtable == k_static_model_component_vtable || component.m_vtable == k_animated_model_component_vtable )
+    {
+        model_draw_state_t* s = static_cast< model_draw_state_t* >( component.m_state.get( ) );
+        model_draw_load( s->value, properties, s->defaults );
+        // The post-load (vt+0xC / vt+0x10) is a hook.
+        return;
+    }
     if ( component.m_vtable != k_transform_component_vtable )
         return;
     transform_state_t* s = static_cast< transform_state_t* >( component.m_state.get( ) );
@@ -853,6 +871,12 @@ inline void entity_load_component( entity_t& owner, entity_component_t& componen
 // a hook.
 inline void entity_mark_component( entity_t&, entity_component_t& component )
 {
+    if ( component.m_vtable == k_static_model_component_vtable || component.m_vtable == k_animated_model_component_vtable )
+    {
+        model_draw_state_t* s = static_cast< model_draw_state_t* >( component.m_state.get( ) );
+        s->defaults = s->value;
+        return;
+    }
     if ( component.m_vtable != k_transform_component_vtable )
         return;
     transform_state_t* s = static_cast< transform_state_t* >( component.m_state.get( ) );
@@ -917,6 +941,13 @@ inline std::vector< entity_component_t > entity_components_constructed( const st
             std::memcpy( state->position, state->c.local + 12, sizeof( state->position ) );
             std::memcpy( state->rotation, state->c.rotation, sizeof( state->rotation ) );
             std::memcpy( state->scale, state->c.scale, sizeof( state->scale ) );
+            c.m_state = state;
+        }
+        else if ( c.m_vtable == k_static_model_component_vtable || c.m_vtable == k_animated_model_component_vtable )
+        {
+            auto state = std::make_shared< model_draw_state_t >( );
+            model_draw_construct( state->value, c.m_vtable == k_animated_model_component_vtable );
+            state->defaults = state->value;
             c.m_state = state;
         }
     return out;
