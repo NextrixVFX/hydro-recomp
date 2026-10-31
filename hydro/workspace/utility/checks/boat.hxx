@@ -2,6 +2,7 @@
 
 #include <workspace/core/collision/box.hxx>
 #include <workspace/core/collision/cylinder.hxx>
+#include <workspace/core/collision/sphere.hxx>
 #include <workspace/core/boat/driver.hxx>
 #include <workspace/core/boat/sections.hxx>
 #include <workspace/core/boat/state.hxx>
@@ -517,6 +518,52 @@ inline bool verify_cylinder_shape( )
     return failed == 0;
 }
 
+// btSphereShape's virtuals (engine collision/sphere.hxx) against
+// retail's (oracle case sphere_shape): the shape after and every output word.
+inline bool verify_sphere_shape( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_sphere_shape_count; ++index )
+    {
+        const unsigned* s = g_golden_sphere_shape_words + g_golden_sphere_shape_offsets[ index ];
+        const unsigned function = *s++;
+        std::uint8_t shape[ 0x40 ];
+        std::memcpy( shape, s, 0x40 );
+        s += 0x10;
+        const unsigned in_bytes = *s++;
+        std::vector< float > in( in_bytes / 4 + 1 );
+        std::memcpy( in.data( ), s, in_bytes );
+        s += in_bytes / 4;
+        const unsigned char* want_shape = reinterpret_cast< const unsigned char* >( s );
+        s += 0x10;
+        const unsigned out_bytes = *s++;
+        const unsigned char* want_out = reinterpret_cast< const unsigned char* >( s );
+        std::vector< float > out( out_bytes / 4 + 4, 0.0f );
+        std::memset( out.data( ), 0xCD, out.size( ) * 4 );
+        switch ( function )
+        {
+        case 0x5535A0u: sphere_local_inertia( shape, in[ 0 ], out.data( ) ); break;
+        case 0x553360u: sphere_support( shape, in.data( ), out.data( ) ); break;
+        case 0x5532F0u: sphere_support_without_margin( out.data( ) ); break;
+        default: sphere_support_batched( out.data( ), static_cast< int >( in_bytes / 16 ) ); break;
+        }
+        int bad = -1;
+        for ( int at = 0; at < 0x40 && bad < 0; ++at )
+            if ( shape[ at ] != want_shape[ at ] )
+                bad = at;
+        if ( bad < 0 && std::memcmp( out.data( ), want_out, out_bytes ) != 0 )
+            bad = 0x100;
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "sphere 0x%X vector %d differs from retail at 0x%X (0x100: the output)", function, static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "btSphereShape's virtuals 0x5535A0 / 0x553360 / 0x5532F0 / 0x553320 match retail: %d vectors",
+                     static_cast< int >( g_golden_sphere_shape_count ) );
+    else
+        LOG_ERROR( "sphere virtuals FAILED %d of %d vectors", failed, static_cast< int >( g_golden_sphere_shape_count ) );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
@@ -528,5 +575,6 @@ inline bool verify_boat_all( )
     ok = verify_boat_jump( ) && ok;
     ok = verify_box_shape( ) && ok;
     ok = verify_cylinder_shape( ) && ok;
+    ok = verify_sphere_shape( ) && ok;
     return ok;
 }

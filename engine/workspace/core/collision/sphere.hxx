@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstring>
 
+#include <workspace/core/collision/box.hxx>
 #include <workspace/core/collision/concave.hxx>
 
 // btSphereSphereCollisionAlgorithm (Bullet 2.79, vt 0x75784C), recreated from
@@ -89,4 +90,69 @@ inline int sphere_sphere_process( sphere_sphere_t& a, const concave_body_t& b0, 
     manifold_result_add_contact_point( r, normal, point, dist, cb );
     sphere_refresh( r, cb );
     return 1;
+}
+
+// btSphereShape's own virtuals (Bullet 2.79, vtable 0x73ADD4), recreated
+// from retail's disassembly over the shape's bytes (box.hxx's layout; the
+// radius is implicit dimension x, +0x20). Its getMargin is slot 10
+// 0x43D650: radius x scaling.x (+0x20 x +0x10), returned through fld - the
+// product is never a signaling NaN, so the x87 round trip is exact.
+//   7  calculateLocalInertia 0x5535A0
+//   14 localGetSupportingVertex 0x553360
+//   15 localGetSupportingVertexWithoutMargin 0x5532F0
+//   17 the batched form 0x553320
+
+inline float sphere_margin( const std::uint8_t* s )
+{
+    return box_lane( s, 0x20 ) * box_lane( s, 0x10 );
+}
+
+// 0x5535A0 calculateLocalInertia(mass, inertia&): (m (m (mass x 0.4))) on
+// all three lanes (0x6F7650 = 0x3ECCCCCD), m the margin, w = 0.
+inline void sphere_local_inertia( const std::uint8_t* s, float mass, float* inertia )
+{
+    std::uint32_t bits = 0x3ECCCCCDu;
+    float two_fifths;
+    std::memcpy( &two_fifths, &bits, 4 );
+    const float first = sphere_margin( s ) * ( mass * two_fifths );
+    const float elem = sphere_margin( s ) * first;
+    inertia[ 3 ] = 0.0f;
+    inertia[ 0 ] = elem;
+    inertia[ 1 ] = elem;
+    inertia[ 2 ] = elem;
+}
+
+// 0x5532F0 localGetSupportingVertexWithoutMargin: (0, 0, 0, 0).
+inline void sphere_support_without_margin( float* out )
+{
+    out[ 0 ] = out[ 1 ] = out[ 2 ] = out[ 3 ] = 0.0f;
+}
+
+// 0x553320 the batched form: zeros, four lanes per vector; n <= 0 nothing.
+inline void sphere_support_batched( float* outs, int n )
+{
+    for ( int k = 0; k < n; ++k )
+        sphere_support_without_margin( outs + 4 * k );
+}
+
+// 0x553360 localGetSupportingVertex(dir): slot 15's zeros, then - with no
+// margin test, unlike 0x5AE950 - + the margin along dir / |dir| ((x^2 + y^2)
+// + z^2 below 1.42e-14 (0x6F7578): dir = (-1, -1, -1) first); w stays 0.
+inline void sphere_support( const std::uint8_t* s, const float* dir, float* out )
+{
+    sphere_support_without_margin( out );
+    float x = dir[ 0 ], y = dir[ 1 ], z = dir[ 2 ];
+    const std::uint32_t eps_bits = 0x28800000u;
+    float eps;
+    std::memcpy( &eps, &eps_bits, 4 );
+    if ( eps > ( x * x + y * y ) + z * z )
+        x = y = z = -1.0f;
+    const float inverse = 1.0f / std::sqrt( ( x * x + y * y ) + z * z );
+    x = x * inverse;
+    y = y * inverse;
+    z = z * inverse;
+    const float m = sphere_margin( s );
+    out[ 0 ] = out[ 0 ] + x * m;
+    out[ 1 ] = out[ 1 ] + y * m;
+    out[ 2 ] = out[ 2 ] + z * m;
 }
