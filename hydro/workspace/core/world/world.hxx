@@ -398,36 +398,8 @@ private:
             // transliterated. The partial reader that used to sit here, and
             // the rectangle-overlap height lookup it fed, are banked in
             // reference/water.hxx.
-            if ( type->text == "VuWaterTextureSettingsEntity" && properties != nullptr )
-            {
-                // VuWaterTextureSettingsEntity_ctor @0x5d2bd0, emulated. Its
-                // Gravity default is 0x411CD0E5 = 9.801, a THIRD distinct
-                // gravity constant - different from the ocean wave's 9.806 and
-                // from the textbook value. "TimeFactor" (default 1.0) is also
-                // authored here and is not consumed anywhere yet.
-                const c_entity_binder bind( type->text, overlay, properties );
-                m_wave_height = bind.real( "HeightFactor" );
-                m_wave_scale = bind.real( "NormalTextureScale" );
-                m_wave_wind = bind.real( "WindSpeed" );
-                m_wave_size = bind.real( "WorldSize" );
-                m_ocean.add(
-                    // Complexity is not one of this entity's properties; the
-                    // detail field is built at a fixed size.
-                    6.0f,
-                    m_wave_size,
-                    0.0f,
-                    m_wave_wind,
-                    bind.real( "DirectionalPower" ),
-                    bind.real( "SuppressionWaveLength" ),
-                    m_wave_height,
-                    bind.real( "Gravity" ),
-                    nullptr,
-                    nullptr,
-                    1.0f,
-                    1.0f,
-                    true
-                );
-            }
+            // VuWaterTextureSettingsEntity feeds the ocean from the retail entity
+            // tree (load_entity_tree).
             if ( ( type->text == "VuInfiniteOceanWaveEntity" || type->text == "VuRectangularOceanWaveEntity" ) && properties != nullptr )
             {
                 const bool rectangular = type->text == "VuRectangularOceanWaveEntity";
