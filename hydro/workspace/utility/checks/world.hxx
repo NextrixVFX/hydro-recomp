@@ -180,8 +180,8 @@ inline bool verify_triggers( )
         const trigger_properties_t& t = static_cast< const trigger_state_t* >( found->second->m_state.get( ) )->value;
         world_check_words( "triggers", want, { t.initially_active }, failed, compared );
         ++compared;
-        if ( t.trigger_type != want.m_text && ++failed <= 8 )
-            LOG_ERROR( "triggers: '%s' Trigger Type is '%s', retail '%s'", want.m_source, t.trigger_type.c_str( ), want.m_text );
+        if ( t.trigger_type != want.m_texts[ 0 ] && ++failed <= 8 )
+            LOG_ERROR( "triggers: '%s' Trigger Type is '%s', retail '%s'", want.m_source, t.trigger_type.c_str( ), want.m_texts[ 0 ] );
     }
     if ( failed == 0 )
         LOG_SUCCESS( "trigger_load matches VuTriggerEntity's loads (ctor 0x61C6A0) on %d trigger planes / boxes: %d values, bit for bit",
@@ -224,8 +224,8 @@ inline bool verify_static_pfx( )
         const static_pfx_t& p = static_cast< const static_pfx_state_t* >( found->second->m_state.get( ) )->value;
         world_check_words( "static pfx", want, { p.initially_active, word( p.pfx_scale ), p.pfx_color }, failed, compared );
         ++compared;
-        if ( p.effect_name != want.m_text && ++failed <= 8 )
-            LOG_ERROR( "static pfx: '%s' Effect Name is '%s', retail '%s'", want.m_source, p.effect_name.c_str( ), want.m_text );
+        if ( p.effect_name != want.m_texts[ 0 ] && ++failed <= 8 )
+            LOG_ERROR( "static pfx: '%s' Effect Name is '%s', retail '%s'", want.m_source, p.effect_name.c_str( ), want.m_texts[ 0 ] );
         float color[ 4 ];
         static_pfx_color( p, color );
         std::vector< std::uint32_t > ours = { static_cast< std::uint32_t >( p.initially_active != 0 ), word( p.pfx_scale ) };
@@ -255,6 +255,101 @@ inline bool verify_static_pfx( )
     return failed == 0;
 }
 
+// An action entity's loaded targets as the oracle dumps them (load_actions):
+// non-text targets as words in node order (a VuVector3 as three), texts apart.
+inline bool world_action_words( const entity_t& e, std::vector< std::uint32_t >& w, std::vector< std::string >& texts )
+{
+    const auto f = []( float v )
+    {
+        std::uint32_t b;
+        std::memcpy( &b, &v, sizeof( b ) );
+        return b;
+    };
+    const auto vec = [ & ]( const float* v )
+    {
+        for ( int k = 0; k < 3; ++k )
+            w.push_back( f( v[ k ] ) );
+    };
+    if ( const auto* p = entity_action< delay_properties_t >( e ); p && e.m_type == "VuDelayEntity" )
+        w = { f( p->delay ), f( p->random_window ) };
+    else if ( const auto* p = entity_action< boolean_properties_t >( e ); p && e.m_type == "VuBooleanEntity" )
+        w = { p->value };
+    else if ( const auto* p = entity_action< generic_event_properties_t >( e ); p && e.m_type == "VuGenericEventEntity" )
+        texts = { p->event_name };
+    else if ( const auto* p = entity_action< rotate_motion_properties_t >( e ); p && e.m_type == "VuRotateMotionEntity" )
+    {
+        w = { p->initially_active, p->one_shot };
+        vec( p->axis );
+        w.push_back( f( p->speed ) );
+        w.push_back( p->local );
+    }
+    else if ( const auto* p = entity_action< attach_properties_t >( e ); p && e.m_type == "VuAttachEntity" )
+    {
+        w = { p->attach_at_start };
+        vec( p->relative_position );
+        vec( p->relative_rotation );
+        texts = { p->node_name };
+    }
+    else if ( const auto* p = entity_action< play_animation_properties_t >( e ); p && e.m_type == "VuPlayAnimationEntity" )
+    {
+        texts = { p->animation_asset, p->timed_event_asset };
+        w = { f( p->start_time ), f( p->blend_time ), f( p->time_factor ), p->looping, p->one_shot };
+    }
+    else if ( const auto* p = entity_action< sky_box_properties_t >( e ); p && e.m_type == "VuSkyBoxEntity" )
+        texts = { p->model_asset };
+    else if ( const auto* p = entity_action< water_texture_properties_t >( e ); p && e.m_type == "VuWaterTextureSettingsEntity" )
+        w = { f( p->gravity ), f( p->world_size ), f( p->wind_speed ), f( p->directional_power ), f( p->suppression_wave_length ),
+            f( p->height_factor ), f( p->time_factor ), f( p->normal_texture_scale ) };
+    else if ( const auto* p = entity_action< front_end_camera_properties_t >( e ); p && e.m_type == "VuSetFrontEndCameraEntity" )
+    {
+        w = { f( p->interpolation_time ), p->modify_eye, p->modify_target, p->modify_far };
+        vec( p->eye );
+        vec( p->target );
+        w.push_back( f( p->far_plane ) );
+    }
+    else
+        return false;
+    return true;
+}
+
+// The action / logic / motion / settings entities' property loads (engine
+// entity/actions.hxx, through types.hxx's action table and the tree's
+// entity_load_properties) against retail's VuEntity::load (oracle case
+// load_actions: nine types from the templates and projects plus hand-built).
+inline bool verify_actions( )
+{
+    std::map< std::string, entity_t* > by_name;
+    const std::unique_ptr< entity_t > tree = world_check_tree( g_golden_actions_document, g_golden_actions_document_bytes, by_name );
+    int failed = 0;
+    int compared = 0;
+    for ( std::size_t k = 0; k < g_golden_actions_count; ++k )
+    {
+        const golden_entity_targets_t& want = g_golden_actions[ k ];
+        const auto found = by_name.find( want.m_child );
+        std::vector< std::uint32_t > ours;
+        std::vector< std::string > texts;
+        if ( found == by_name.end( ) || found->second->m_type != want.m_type || !world_action_words( *found->second, ours, texts ) )
+        {
+            LOG_ERROR( "actions: '%s' (%s) missing or without state", want.m_source, want.m_child );
+            ++failed;
+            continue;
+        }
+        world_check_words( "actions", want, ours, failed, compared );
+        for ( std::size_t t = 0; t < texts.size( ); ++t )
+        {
+            ++compared;
+            if ( texts[ t ] != want.m_texts[ t ] && ++failed <= 8 )
+                LOG_ERROR( "actions: '%s' text %d is '%s', retail '%s'", want.m_source, static_cast< int >( t ), texts[ t ].c_str( ), want.m_texts[ t ] );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the action / logic / settings loads match retail's VuEntity::load on %d entities of 9 types: %d values, bit for bit",
+            static_cast< int >( g_golden_actions_count ), compared );
+    else
+        LOG_ERROR( "the action / logic / settings loads FAILED %d checks", failed );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
@@ -263,5 +358,6 @@ inline bool verify_world_all( )
     ok = verify_gfx_settings( ) && ok;
     ok = verify_triggers( ) && ok;
     ok = verify_static_pfx( ) && ok;
+    ok = verify_actions( ) && ok;
     return ok;
 }
