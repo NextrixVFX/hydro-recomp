@@ -5,6 +5,7 @@
 #include <workspace/core/world/transform.hxx>
 #include <workspace/core/entity/corona.hxx>
 #include <workspace/core/entity/draw.hxx>
+#include <workspace/core/entity/rig.hxx>
 
 #include <cstring>
 
@@ -894,6 +895,19 @@ struct corona_state_t
     corona_properties_t defaults;
 };
 
+// VuAmbientLightEntity / VuDirectionalLightEntity (engine entity/rig.hxx).
+struct ambient_light_state_t
+{
+    ambient_light_t value;
+    ambient_light_t defaults;
+};
+
+struct directional_light_state_t
+{
+    directional_light_t value;
+    directional_light_t defaults;
+};
+
 inline std::shared_ptr< void > entity_state_for( const std::string& cls )
 {
     if ( cls == "VuCoronaEntity" )
@@ -901,6 +915,20 @@ inline std::shared_ptr< void > entity_state_for( const std::string& cls )
         auto s = std::make_shared< corona_state_t >( );
         corona_construct( s->value );
         corona_construct( s->defaults );
+        return s;
+    }
+    if ( cls == "VuAmbientLightEntity" )
+    {
+        auto s = std::make_shared< ambient_light_state_t >( );
+        ambient_light_construct( s->value );
+        ambient_light_construct( s->defaults );
+        return s;
+    }
+    if ( cls == "VuDirectionalLightEntity" )
+    {
+        auto s = std::make_shared< directional_light_state_t >( );
+        directional_light_construct( s->value );
+        directional_light_construct( s->defaults );
         return s;
     }
     return nullptr;
@@ -915,6 +943,16 @@ inline void entity_load_properties( entity_t& entity, const value_t& properties 
         corona_state_t* s = static_cast< corona_state_t* >( entity.m_state.get( ) );
         corona_load( s->value, properties, s->defaults );
     }
+    else if ( entity.m_type == "VuAmbientLightEntity" && entity.m_state )
+    {
+        ambient_light_state_t* s = static_cast< ambient_light_state_t* >( entity.m_state.get( ) );
+        ambient_light_load( s->value, properties, s->defaults );
+    }
+    else if ( entity.m_type == "VuDirectionalLightEntity" && entity.m_state )
+    {
+        directional_light_state_t* s = static_cast< directional_light_state_t* >( entity.m_state.get( ) );
+        directional_light_load( s->value, properties, s->defaults );
+    }
 }
 
 // The template mark's property step (each node's vt+0x1C): default = value.
@@ -923,6 +961,16 @@ inline void entity_mark_properties( entity_t& entity )
     if ( entity.m_type == "VuCoronaEntity" && entity.m_state )
     {
         corona_state_t* s = static_cast< corona_state_t* >( entity.m_state.get( ) );
+        s->defaults = s->value;
+    }
+    else if ( entity.m_type == "VuAmbientLightEntity" && entity.m_state )
+    {
+        ambient_light_state_t* s = static_cast< ambient_light_state_t* >( entity.m_state.get( ) );
+        s->defaults = s->value;
+    }
+    else if ( entity.m_type == "VuDirectionalLightEntity" && entity.m_state )
+    {
+        directional_light_state_t* s = static_cast< directional_light_state_t* >( entity.m_state.get( ) );
         s->defaults = s->value;
     }
 }

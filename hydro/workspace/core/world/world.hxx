@@ -837,23 +837,6 @@ private:
                 }
                 c_engine::fog( start, end, red, green, blue );
             }
-            if ( type->text == "VuDirectionalLightEntity" && properties != nullptr )
-            {
-                const value_t* transform = components != nullptr ? find( *components, "VuTransformComponent" ) : nullptr;
-                const value_t* pose = transform != nullptr ? find( *transform, "Properties" ) : nullptr;
-                const value_t* rotation = pose != nullptr ? find( *pose, "Rotation" ) : nullptr;
-                float degrees[ 3 ] = {
-                    number( find( rotation != nullptr ? *rotation : *properties, "X" ), 0.0f ),
-                    number( find( rotation != nullptr ? *rotation : *properties, "Y" ), 0.0f ),
-                    number( find( rotation != nullptr ? *rotation : *properties, "Z" ), 0.0f )
-                };
-                float basis[ 16 ]{};
-                const float origin[ 3 ] = {};
-                const float scale[ 3 ] = { 1.0f, 1.0f, 1.0f };
-                math_transform( basis, origin, degrees, scale );
-                const float direction[ 3 ] = { -basis[ 8 ], -basis[ 9 ], -basis[ 10 ] };
-                c_engine::sun( direction );
-            }
             // VuFoliageEntity drew a hand-built billboard quad from an invented
             // vertex layout. Deleted; build it from the entity's own draw path.
             if ( type->text == "VuStaticPfxEntity" )
@@ -886,30 +869,8 @@ private:
                 if ( !asset.empty( ) )
                     m_sky = asset;
             }
-            // The hull shader's gAmbLightColor. Colours are authored as 0..255
-            // bytes throughout the level data.
-            if ( type->text == "VuAmbientLightEntity" && properties != nullptr )
-            {
-                const c_entity_binder bind( type->text, overlay, properties );
-                bind.color( "Color", m_rig.ambient( ) );
-                m_rig.mark_lit( );
-            }
-            // gDirLightFrontColor and gDirLightBackColor - the shader's light
-            // is TWO-SIDED, and Hydroelectric authors a warm front with a cool
-            // back, which a one-sided lambert cannot reproduce.
-            //
-            // The entity carries NO direction property, so gDirLightWorld has
-            // to come from this transform. Which axis it is has not been
-            // reversed, so the matrix is kept whole and the choice is made
-            // (and flagged) where it is used.
-            if ( type->text == "VuDirectionalLightEntity" && properties != nullptr )
-            {
-                const c_entity_binder bind( type->text, overlay, properties );
-                bind.color( "Front Color", m_rig.front( ) );
-                bind.color( "Back Color", m_rig.back( ) );
-                std::memcpy( m_rig.sun_world( ), world, 16 * sizeof( float ) );
-                m_rig.mark_sun( );
-            }
+            // VuAmbientLightEntity / VuDirectionalLightEntity feed the rig from the
+            // retail entity tree (load_entity_tree).
             // Every Proxy_* name in a material is a placeholder, and this is
             // what replaces it: Proxy_cube -> Hydro/Outside on Hydroelectric.
             // So the per-track environment map is authored, not chosen here.
@@ -3079,6 +3040,41 @@ private:
         // root, '/'-joined.
         const auto walk = [ & ]( const auto& self, entity_t& e, const std::string& trail ) -> void
         {
+            // The rig: the hull shader's gAmbLightColor from VuAmbientLightEntity's
+            // Color, gDirLightFrontColor / gDirLightBackColor from
+            // VuDirectionalLightEntity's (the shader's light is TWO-SIDED), each
+            // VuColor's R, G, B bytes / 255. The light carries no direction
+            // property: gDirLightWorld is its transform world, and the sun
+            // direction handed to the renderer is that world's -Z row - WHICH
+            // axis retail uses is not reversed (the light object at +0x5C and
+            // its draw are unread), so that choice is ours and flagged. Its
+            // Specular Color is loaded and not consumed. With several lights
+            // of a kind the last in tree order wins - retail's light manager,
+            // which picks, is unread.
+            if ( e.m_type == "VuAmbientLightEntity" && e.m_state )
+            {
+                const std::uint32_t c = static_cast< const ambient_light_state_t* >( e.m_state.get( ) )->value.color;
+                for ( int k = 0; k < 3; ++k )
+                    m_rig.ambient( )[ k ] = static_cast< float >( ( c >> ( 8 * k ) ) & 0xFF ) / 255.0f;
+                m_rig.mark_lit( );
+            }
+            if ( e.m_type == "VuDirectionalLightEntity" && e.m_state )
+            {
+                const directional_light_t& l = static_cast< const directional_light_state_t* >( e.m_state.get( ) )->value;
+                for ( int k = 0; k < 3; ++k )
+                {
+                    m_rig.front( )[ k ] = static_cast< float >( ( l.front_color >> ( 8 * k ) ) & 0xFF ) / 255.0f;
+                    m_rig.back( )[ k ] = static_cast< float >( ( l.back_color >> ( 8 * k ) ) & 0xFF ) / 255.0f;
+                }
+                const transform_component_t* t = entity_transform( e );
+                if ( t && !e.m_world_unknown )
+                {
+                    std::memcpy( m_rig.sun_world( ), t->world, sizeof( t->world ) );
+                    const float direction[ 3 ] = { -t->world[ 8 ], -t->world[ 9 ], -t->world[ 10 ] };
+                    c_engine::sun( direction );
+                    m_rig.mark_sun( );
+                }
+            }
             // The model-draw components, drawn at the matrix their owner leaves
             // in them (transform_draw_matrix: fromScale x world). An empty
             // Model Asset draws nothing.
