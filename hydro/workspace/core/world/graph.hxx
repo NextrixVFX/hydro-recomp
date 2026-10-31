@@ -821,7 +821,7 @@ inline void c_world::audit_graph( ) const
     // say how many parents were found, how many children landed somewhere
     // this engine can draw, and - the residual that matters - how many
     // parents are themselves driven by a rotate motion, because
-    // m_entity_world holds the AUTHORED transform and a spinning parent
+    // m_seat_world holds the AUTHORED transform and a spinning parent
     // would carry its child round with it in retail.
     int joined = 0;
     int no_parent = 0;
@@ -833,7 +833,7 @@ inline void c_world::audit_graph( ) const
             continue;
         const std::string parent = ref_target( join.path, "Parent" );
         const std::string child = ref_target( join.path, "Child" );
-        if ( m_entity_world.count( parent ) == 0 )
+        if ( m_seat_world.count( parent ) == 0 )
         {
             ++no_parent;
             LOG_WARNING( "attach %s: Parent \"%s\" has no placed transform",
@@ -855,7 +855,7 @@ inline void c_world::audit_graph( ) const
             // rotate motion, attach or corona - has a
             // VuTransformComponent. Those sirens have no authored position
             // at all, so something outside the scene file places them.
-            const std::array< float, 16 >& seat = m_entity_world.at( parent );
+            const std::array< float, 16 >& seat = m_seat_world.at( parent );
             LOG_INFO( "attach %s: parent \"%s\" at %.0f %.0f %.0f, offset %.1f %.1f %.1f",
                 join.path.c_str( ), parent.c_str( ),
                 seat[ 12 ], seat[ 13 ], seat[ 14 ],

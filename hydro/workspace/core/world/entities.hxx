@@ -89,6 +89,7 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     // The event graph addresses an entity by its names below the project
     // root, '/'-joined.
     std::map< std::string, std::string > fresh_types;
+    std::map< std::string, std::array< float, 16 > > fresh_worlds;
     std::map< std::string, int > fresh_census;
     const auto walk = [ & ]( const auto& self, entity_t& e, const std::string& trail ) -> void
     {
@@ -98,6 +99,13 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
         {
             fresh_types[ trail ] = e.m_type;
             ++fresh_census[ e.m_type ];
+            const transform_component_t* t = entity_transform( e );
+            if ( t && !e.m_world_unknown )
+            {
+                std::array< float, 16 > w{};
+                std::memcpy( w.data( ), t->world, sizeof( t->world ) );
+                fresh_worlds[ trail ] = w;
+            }
         }
         // VuRotateMotionEntity: Axis / Speed (radians) / Local, its base the
         // transform world; its DIRECT parent adopts it (recorded after the
@@ -387,6 +395,7 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
         }
     };
     walk( walk, *m_tree, std::string( ) );
+    m_seat_world = std::move( fresh_worlds );
     m_entity_type = std::move( fresh_types );
     m_type_census = std::move( fresh_census );
     m_rotators = std::move( fresh_rotators );

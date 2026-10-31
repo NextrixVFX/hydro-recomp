@@ -677,6 +677,7 @@ private:
         m_rotators.clear( );
         m_coronas.clear( );
         m_entity_world.clear( );
+        m_seat_world.clear( );
         m_overrides_seen = 0;
         m_overrides_placed = 0;
         m_override_components.clear( );
@@ -887,6 +888,11 @@ private:
     // Every entity's placed world matrix, by path - what an attach's "Parent"
     // ref resolves onto.
     std::map< std::string, std::array< float, 16 > > m_entity_world;
+    // Every tree entity's transform world (scale kept out), by path - what an
+    // attach's "Parent" ref seats its child on (VuOffsetAttachComponent_update
+    // 0x5af900 composes onto the parent's transform world). m_entity_world above
+    // (the old walk's, scale baked) now only feeds the dev vantage scaffold.
+    std::map< std::string, std::array< float, 16 > > m_seat_world;
     std::vector< collected_t >* m_collect = nullptr;
     std::string m_place_owner;
     // (rotator, the entity that adopts it - the motion entity's direct

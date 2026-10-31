@@ -165,8 +165,8 @@ inline void c_world::update_attaches( )
             continue;
         const std::string parent = ref_target( join.path, "Parent" );
         const std::string child = ref_target( join.path, "Child" );
-        const auto seat = m_entity_world.find( parent );
-        if ( seat == m_entity_world.end( ) )
+        const auto seat = m_seat_world.find( parent );
+        if ( seat == m_seat_world.end( ) )
             continue;
 
         // The relative matrix, exactly as VuAttachEntity_doAttach
