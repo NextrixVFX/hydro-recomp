@@ -61,65 +61,9 @@ inline void property_float( const value_t& properties, const char* name, float& 
         target = parsed;
 }
 
-// VuPercentageProperty (vtable 0x73B2DC): VuBasicProperty<float,1>'s load
-// 0x406FE0 and value read 0x407060, with the filter (vt+0x24) 0x43E580 -
-// mulss by 0x3C23D70A (0.01) - so the target holds a FRACTION and the node's
-// default (+0x14) is already one.
-inline void property_percent( const value_t& properties, const char* name, float& target, float fallback )
-{
-    target = fallback;
-    const value_t& value = member( properties, name );
-    float parsed;
-    if ( value.tag == 1 )
-        parsed = static_cast< float >( value.integer );
-    else if ( value.tag == 2 )
-        parsed = value.real;
-    else if ( value.tag == 7 )
-        parsed = static_cast< float >( value.int64 );
-    else
-        return;
-    float to_fraction;
-    const std::uint32_t bits = 0x3C23D70Au;
-    std::memcpy( &to_fraction, &bits, sizeof( to_fraction ) );
-    parsed *= to_fraction;
-    if ( target != parsed )
-        target = parsed;
-}
-
-// One VuStaticIntEnumProperty choice: the table its +0x20 points at is
-// {const char* name, int value} pairs ended by a null name (count vt+0x30
-// 0x5039C0, name vt+0x34 0x5035D0).
-struct property_choice_t
-{
-    const char* name;
-    std::int32_t value;
-};
-
-// VuStaticIntEnumProperty (vtable 0x74C354): load 0x406FE0 (target = default),
-// value read 0x503600 through the conversion 0x5037C0 - a STRING naming a
-// choice becomes that choice's int (a string naming none becomes 0); an INT
-// becomes a string, and a string is not a tag 0x503600 takes, so an authored
-// int stores NOTHING; any other tag stores nothing. The int is then filtered
-// by 0x435180 (copies) and stored if it differs.
-inline void property_int_enum( const value_t& properties, const char* name, std::int32_t& target, std::int32_t fallback,
-    const property_choice_t* choices )
-{
-    target = fallback;
-    const value_t& value = member( properties, name );
-    if ( value.tag != 4 )
-        return;
-    std::int32_t parsed = 0;
-    for ( const property_choice_t* c = choices; c->name; ++c )
-    {
-        if ( value.text == c->name )
-        {
-            parsed = c->value;
-            break;
-        }
-    }
-    if ( target != parsed )
-        target = parsed;
-}
+// VuPercentageProperty and VuStaticIntEnumProperty live in entity/values.hxx
+// (property_percentage, property_choice_t, property_enum) - recreated twice,
+// independently, by two readings of 0x43E580 / 0x503600 / 0x5037C0 that agreed.
 
 // VuBasicProperty<VuVector3,8>: load 0x409280, value read 0x409330 through the
 // vec3 parse 0x4FDC60 (false: nothing stored, the lanes it wrote before failing

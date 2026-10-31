@@ -2,6 +2,7 @@
 
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/entity/property.hxx>
+#include <workspace/core/entity/values.hxx>
 #include <workspace/core/world/transform.hxx>
 #include <workspace/core/world/tree.hxx>
 
@@ -223,7 +224,10 @@ inline void water_entity_load( water_entity_state_t& s, const value_t& propertie
             if ( r->kind == water_prop_t::int_enum )
             {
                 std::int32_t v;
-                property_int_enum( properties, r->name, v, static_cast< std::int32_t >( fallback ), r->choices );
+                int count = 0;
+                while ( r->choices[ count ].m_name )
+                    ++count;
+                property_enum( properties, r->name, v, static_cast< std::int32_t >( fallback ), r->choices, count );
                 word = static_cast< std::uint32_t >( v );
                 continue;
             }
@@ -231,7 +235,7 @@ inline void water_entity_load( water_entity_state_t& s, const value_t& propertie
             std::memcpy( &fb, &fallback, 4 );
             float v;
             if ( r->kind == water_prop_t::percent )
-                property_percent( properties, r->name, v, fb );
+                property_percentage( properties, r->name, v, fb );
             else
                 property_float( properties, r->name, v, fb, r->kind == water_prop_t::angle );
             std::memcpy( &word, &v, 4 );
