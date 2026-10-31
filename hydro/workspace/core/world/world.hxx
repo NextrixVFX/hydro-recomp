@@ -876,6 +876,9 @@ private:
     std::map< std::string, value_t > m_templates;
     // The project's entity tree as retail's VuProject::load builds it.
     std::unique_ptr< entity_t > m_tree;
+    // VuWater as the level builds it from the tree (water agent's surface.hxx
+    // water_build_world); hold is what water_best_wake takes. Not rendered yet.
+    water_built_t m_water;
     // Loaded VuTimedEventAssets, keyed by asset name. A control points into
     // this, so entries are only ever added.
     std::map< std::string, std::vector< timed_event_t > > m_timed;

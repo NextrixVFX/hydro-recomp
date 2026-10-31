@@ -459,6 +459,15 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
               "unknown world; %d models placed, %d with an unknown world; %d triggers, %d with an unknown world; %d static pfx placed, %d "
               "with an unknown world", asset, path.c_str( ), entities, unknown, placed, unplaced, models, models_unplaced,
         static_cast< int >( m_triggers.size( ) ), triggers_unplaced, pfx_placed, pfx_unplaced );
+    // VuWater, built from the tree: each water entity's slot 6 in VuEntity::
+    // gameInitialize 0x500B10's order (children first), from the project root.
+    // ASSUMED, not read: that the race calls 0x500B10 on the project root -
+    // which caller does is unread. Point waves are made later by their tick.
+    // An entity it cannot build is counted, never stood in for.
+    m_water = water_built_t{ };
+    water_build_world( *m_tree, m_water, []( entity_t& e ) { return entity_transform( e ); } );
+    LOG_INFO( "water: %u surfaces, %u waves built from the tree; %d water entities not built", static_cast< unsigned >( m_water.surfaces.size( ) ),
+        static_cast< unsigned >( m_water.waves.size( ) ), m_water.skipped );
     // Which types' construction is not captured - what to recreate next.
     for ( const auto& pair : unknown_types )
         LOG_VERBOSE( "entity tree: UNKNOWN %-40s x%d", pair.first.c_str( ), pair.second );
