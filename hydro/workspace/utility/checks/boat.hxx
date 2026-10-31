@@ -395,7 +395,8 @@ inline bool verify_boat_jump( )
 }
 
 // btBoxShape's virtuals (engine collision/box.hxx) against retail's 0x5480C0 /
-// 0x548A00 / 0x548900 / 0x548840 / 0x5487D0 / 0x548740 (oracle case
+// 0x548A00 / 0x548900 / 0x548840 / 0x5487D0 / 0x548740 / 0x548650 / 0x548580 /
+// 0x548460 / 0x548370 / 0x5481A0 / 0x548250 (oracle case
 // box_shape, one case for the class): the shape's 0x40 bytes after and every
 // output word.
 inline bool verify_box_shape( )
@@ -416,9 +417,22 @@ inline bool verify_box_shape( )
         s += 0x10;
         const unsigned out_bytes = *s++;
         const unsigned char* want_out = reinterpret_cast< const unsigned char* >( s );
-        std::vector< float > out( out_bytes / 4 + 4, 0.0f );
+        std::vector< float > out( out_bytes / 4 + 8, 0.0f );
+        std::memset( out.data( ), 0xCD, out.size( ) * 4 );   // the oracle's fill: what a function leaves alone
+        const int arg = in_bytes == 4 ? *reinterpret_cast< const int* >( in.data( ) ) : 0;
         switch ( function )
         {
+        case 0x548650u: box_preferred_direction( arg, out.data( ) ); break;
+        case 0x548250u: box_plane_equation( shape, out.data( ), arg ); break;
+        case 0x548370u: box_plane( shape, out.data( ), out.data( ) + 4, arg ); break;
+        case 0x548460u: box_vertex( shape, arg, out.data( ) ); break;
+        case 0x548580u: box_edge( shape, arg, out.data( ), out.data( ) + 4 ); break;
+        case 0x5481A0u:
+        {
+            const bool inside = box_is_inside( shape, in.data( ), in[ 3 ] );
+            reinterpret_cast< std::uint8_t* >( out.data( ) )[ 0 ] = inside ? 1 : 0;
+            break;
+        }
         case 0x5480C0u: box_local_inertia( shape, in[ 0 ], out.data( ) ); break;
         case 0x548A00u: box_set_local_scaling( shape, in.data( ) ); break;
         case 0x548900u: box_set_margin( shape, in[ 0 ] ); break;
@@ -437,7 +451,7 @@ inline bool verify_box_shape( )
                        static_cast< int >( index ), bad );
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "btBoxShape's virtuals 0x5480C0 / 0x548A00 / 0x548900 / 0x548840 / 0x5487D0 / 0x548740 match retail: %d vectors",
+        LOG_SUCCESS( "btBoxShape's 12 virtuals (0x5480C0 .. 0x548250) match retail: %d vectors",
                      static_cast< int >( g_golden_box_shape_count ) );
     else
         LOG_ERROR( "btBoxShape virtuals FAILED %d of %d vectors", failed, static_cast< int >( g_golden_box_shape_count ) );
