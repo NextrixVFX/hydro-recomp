@@ -1,5 +1,7 @@
 #pragma once
 
+#include <workspace/core/boat/hull.hxx>
+
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -1029,6 +1031,167 @@ inline wave_image_t whirlpool_create( const wave_source_t& s )
     w.setf( 44, x );
     w.setf( 48, y );
     w.setf( 52, outer );
+    return w;
+}
+
+// ---------------------------------------------------------------------------
+// THE DIRECTIONAL AND BUMP WAVES' CREATION. Their constructors build the
+// wave's local frame as a matrix and store its inverse - the transform their
+// kernels read (+192 on the directional, +176 on the bump). The matrix
+// helpers, by address:
+//
+//   VuMatrix_identity   @0x410a40   (ecx out)
+//   VuMatrix_fromScale  @0x407db0   (ecx out, edx vec3*): diag(x, y, z, 1)
+//   0x40b5f0            (ecx out, xmm1 angle): a rotation about z from x87
+//                        fsincos - m[0] = m[5] = cos, m[1] = sin, m[4] = -sin
+//   0x410ab0            (ecx out, edx vec3*): hull_translation
+//   VuMatrix_multiply   @0x4078c0   hull_multiply (out = A . B)
+//   0x4157c0            hull_invert, in place
+//
+// the last three already verified on the boat side (boat/hull.hxx).
+inline void wave_matrix_identity( float* m )   // @0x410a40
+{
+    const float i[ 16 ] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+    std::memcpy( m, i, 64 );
+}
+
+inline void wave_matrix_scale( float* m, const float* v )   // @0x407db0
+{
+    const float s[ 16 ] = { v[ 0 ], 0, 0, 0, 0, v[ 1 ], 0, 0, 0, 0, v[ 2 ], 0, 0, 0, 0, 1 };
+    std::memcpy( m, s, 64 );
+}
+
+inline void wave_matrix_rotation_z( float* m, float angle )   // @0x40b5f0
+{
+    const float s = wave_x87_sin( angle );
+    const float c = wave_x87_cos( angle );
+    const float r[ 16 ] = { c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+    std::memcpy( m, r, 64 );
+}
+
+// The frame both constructors build (@0x59acd0 and @0x5a4020, the same
+// sequence): identity, times the scale (+96 * 0.5, +100 * 0.5, z), times the
+// rotation by +92, times the translation by +76; copied to `inverse` and
+// inverted in place.
+inline void wave_frame( wave_image_t& w, int matrix, int inverse, float z_scale )
+{
+    float m[ 16 ];
+    float t[ 16 ];
+    float o[ 16 ];
+    wave_matrix_identity( m );
+    const float scale[ 3 ] = { w.f( 96 ) * 0.5f, w.f( 100 ) * 0.5f, z_scale };
+    wave_matrix_scale( t, scale );
+    hull_multiply( m, o, t );
+    std::memcpy( m, o, 64 );
+    wave_matrix_rotation_z( t, w.f( 92 ) );
+    hull_multiply( m, o, t );
+    std::memcpy( m, o, 64 );
+    const float at[ 3 ] = { w.f( 76 ), w.f( 80 ), w.f( 84 ) };
+    hull_translation( t, at );
+    hull_multiply( m, o, t );
+    std::memcpy( m, o, 64 );
+    for ( int k = 0; k < 16; ++k )
+        w.setf( matrix + 4 * k, m[ k ] );
+    hull_invert( m );
+    for ( int k = 0; k < 16; ++k )
+        w.setf( inverse + 4 * k, m[ k ] );
+}
+
+// 0x59ae00, the bounds both share: the four corners of the rotated
+// half-extent rectangle, folded through minss / maxss in retail's order
+// (seeded with +-FLT_MAX), z from +84 -+ +104, and the radius
+// sqrt( hy*hy + hx*hx ). The fold's +24 / +40 come from a stack slot this
+// function never writes for them: UNKNOWN, not reproduced.
+inline void wave_rect_bounds( wave_image_t& w )
+{
+    const float c = wave_x87_cos( w.f( 92 ) );
+    const float s = wave_x87_sin( w.f( 92 ) );
+    const float hx = w.f( 96 ) * 0.5f;
+    const float hy = w.f( 100 ) * 0.5f;
+    const float x = w.f( 76 );
+    const float y = w.f( 80 );
+    const float a = ( -s ) * hx;
+    const float b = s * hy;
+    const float cc = c * hy;
+    const float d = c * hx;
+    const float y1 = y - a;
+    const float x1 = x - d;
+    const float y2 = a + y;
+    const float x2 = d + x;
+    auto mn = []( float p, float q ) { return _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( p ), _mm_set_ss( q ) ) ); };
+    auto mx = []( float p, float q ) { return _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( p ), _mm_set_ss( q ) ) ); };
+    const float big = 3.4028235e38f;
+    float min_y = mn( y1 - cc, big );
+    float min_x = mn( x1 - b, big );
+    float max_y = mx( y1 - cc, -big );
+    float max_x = mx( x1 - b, -big );
+    min_y = mn( y2 - cc, min_y );
+    min_x = mn( x2 - b, min_x );
+    max_y = mx( y2 - cc, max_y );
+    max_x = mx( x2 - b, max_x );
+    min_y = mn( y2 + cc, min_y );
+    min_x = mn( x2 + b, min_x );
+    max_y = mx( y2 + cc, max_y );
+    max_x = mx( x2 + b, max_x );
+    min_y = mn( y1 + cc, min_y );
+    min_x = mn( x1 + b, min_x );
+    max_y = mx( y1 + cc, max_y );
+    max_x = mx( x1 + b, max_x );
+    w.setf( 12, min_x );
+    w.setf( 16, min_y );
+    w.setf( 20, w.f( 84 ) - w.f( 104 ) );
+    w.setf( 28, max_x );
+    w.setf( 32, max_y );
+    w.setf( 36, w.f( 104 ) + w.f( 84 ) );
+    w.setf( 44, x );
+    w.setf( 48, y );
+    w.setf( 52, _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( hy * hy ) + ( hx * hx ) ) ) ) );
+}
+
+// VuDirectionalWaveEntity's slot 6 @0x5d9d40: the 48-byte descriptor
+// @0x5d9eb0 - the position, the component's +0xA8 angle and +0xB0 / +0xB4
+// scale, Max Height, Speed / Period, (scale y * 0.5) / Period and the two
+// decay ratios - then the allocator @0x528910 (zeroes +76 .. +124), the ctor
+// @0x59acd0 (flat copy to +76, the frame at +128, its inverse at +192) and
+// the bounds 0x59ae00.
+inline wave_image_t directional_create( const wave_source_t& s )
+{
+    wave_image_t w{};
+    wave_base( w );
+    for ( int k = 0; k < 4; ++k )
+        w.set( 76 + 4 * k, s.t( 0x80 + 4 * k ) );
+    w.set( 92, s.t( 0xA8 ) );
+    w.set( 96, s.t( 0xB0 ) );
+    w.set( 100, s.t( 0xB4 ) );
+    w.set( 104, s.e( 0x6C ) );
+    w.setf( 108, wave_bits( s.e( 0x70 ) ) / wave_bits( s.e( 0x74 ) ) );
+    w.setf( 112, ( w.f( 100 ) * 0.5f ) / wave_bits( s.e( 0x74 ) ) );
+    w.set( 116, s.e( 0x78 ) );
+    w.set( 120, s.e( 0x7C ) );
+    w.set( 124, 0 );
+    wave_frame( w, 128, 192, 1.0f );
+    wave_rect_bounds( w );
+    return w;
+}
+
+// VuBumpWaveEntity's slot 6 @0x5d3e70: the 36-byte descriptor - the
+// position, the angle and scale as above, Max Height and Lateral Decay Ratio
+// % - then @0x528e90 and the ctor @0x5a4020 (flat copy to +76 .. +111, the
+// frame at +112 with the height as its z scale, the inverse at +176) and the
+// same bounds.
+inline wave_image_t bump_create( const wave_source_t& s )
+{
+    wave_image_t w{};
+    wave_base( w );
+    for ( int k = 0; k < 4; ++k )
+        w.set( 76 + 4 * k, s.t( 0x80 + 4 * k ) );
+    w.set( 92, s.t( 0xA8 ) );
+    w.set( 96, s.t( 0xB0 ) );
+    w.set( 100, s.t( 0xB4 ) );
+    w.set( 104, s.e( 0x60 ) );
+    w.set( 108, s.e( 0x64 ) );
+    wave_frame( w, 112, 176, w.f( 104 ) );
+    wave_rect_bounds( w );
     return w;
 }
 

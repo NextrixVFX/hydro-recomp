@@ -1,5 +1,7 @@
 #pragma once
 
+#include <workspace/core/world/tree.hxx>
+
 // The water area's oracle-backed checks (one file per parallel agent; included by check.hxx after every
 // shared check, so anything above is usable here). verify_water_all runs them all.
 
@@ -150,10 +152,9 @@ inline bool verify_wake_kernels( )
 }
 
 // The wave entities' wave creation against retail's slot 6 on every rectangular ocean, circular ocean,
-// banked turn and whirlpool entity of Hydroelectric (loaded by retail's VuEntity::load): every word the
-// recreated descriptor + constructor defines must equal the word retail's wave object holds. The
-// directional and bump entities are captured but NOT recreated (their constructors build a matrix through
-// 0x40b5f0 / 0x410ab0 / 0x4157c0, unread) - they are counted, not checked.
+// banked turn, whirlpool, directional and bump entity of Hydroelectric (loaded by retail's VuEntity::load):
+// every word the recreated descriptor + constructor defines must equal the word retail's wave object holds -
+// for the directional and bump that includes both 16-word frames (the matrix and its inverse).
 inline bool verify_wave_bridges( )
 {
     int checked = 0;
@@ -173,6 +174,8 @@ inline bool verify_wave_bridges( )
         case 1: w = circular_ocean_create( s ); break;
         case 2: w = banked_turn_create( s ); break;
         case 3: w = whirlpool_create( s ); break;
+        case 4: w = directional_create( s ); break;
+        case 5: w = bump_create( s ); break;
         default: ++skipped; continue;
         }
         ++checked;
@@ -196,7 +199,7 @@ inline bool verify_wave_bridges( )
     }
     if ( failed == 0 )
     {
-        LOG_SUCCESS( "the wave entities' creation (0x5d8ce0 / 0x5d9340 / 0x5d35f0 / 0x5d7d90 -> the wave ctors) matches retail on %d Hydroelectric entities, %d words (%d directional / bump captured, not recreated)",
+        LOG_SUCCESS( "the wave entities' creation (0x5d8ce0 / 0x5d9340 / 0x5d35f0 / 0x5d7d90 / 0x5d9d40 / 0x5d3e70 -> the wave ctors) matches retail on %d Hydroelectric entities, %d words (%d of an unknown kind)",
             checked, words, skipped );
     }
     else
@@ -444,6 +447,443 @@ inline bool verify_pfx_ticks( )
     return failed == 0;
 }
 
+// The wave frame's matrix helpers against retail: 0x40b5f0 (rotation about z, x87 fsincos under Unicorn),
+// VuMatrix_fromScale @0x407db0 and VuMatrix_identity @0x410a40 - all 16 words of each output.
+inline bool verify_matrix_helpers( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_matrix_helpers_count; ++index )
+    {
+        const golden_matrix_helper_t& g = g_golden_matrix_helpers[ index ];
+        float m[ 16 ];
+        if ( g.m_fn == 0 )
+            wave_matrix_rotation_z( m, g.m_in[ 0 ] );
+        else if ( g.m_fn == 1 )
+            wave_matrix_scale( m, g.m_in );
+        else
+            wave_matrix_identity( m );
+        if ( std::memcmp( m, g.m_words, 64 ) != 0 )
+        {
+            ++failed;
+            LOG_ERROR( "matrix helper %d on %.9g differs from retail", g.m_fn, g.m_in[ 0 ] );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the wave frame's matrix helpers (0x40b5f0 / 0x407db0 / 0x410a40) match retail on %d outputs, all 16 words",
+            static_cast< int >( g_golden_matrix_helpers_count ) );
+    }
+    else
+    {
+        LOG_ERROR( "the matrix helpers FAILED %d of %d", failed, static_cast< int >( g_golden_matrix_helpers_count ) );
+    }
+    return failed == 0;
+}
+
+// water_tree_* against VuWater's 2D tree (ctor @0x598c70, chunk growth @0x598e50, leaf insert @0x598de0 ->
+// @0x599010 / @0x598f00, removal @0x599220) on 170 operations crossing two chunk growths: every operation's
+// return and, at the end, every node (rect words, parent, children, tag - stale words of freed nodes
+// included) and the header.
+inline bool verify_water_tree( )
+{
+    water_tree_t t{};
+    water_tree_init( t );
+    int failed = 0;
+    for ( std::size_t i = 0; i < g_golden_tree_ops_count; ++i )
+    {
+        const golden_tree_op_t& op = g_golden_tree_ops[ i ];
+        const int r = op.m_op == 0 ? water_tree_add( t, op.m_arg, op.m_rect ) : water_tree_remove( t, op.m_arg );
+        if ( r != op.m_result )
+        {
+            if ( ++failed <= 3 )
+                LOG_ERROR( "water tree op %d (%d): ours %d retail %d", static_cast< int >( i ), op.m_op, r, op.m_result );
+        }
+    }
+    int bad_nodes = 0;
+    if ( t.nodes.size( ) != g_golden_tree_nodes_count )
+    {
+        ++failed;
+        LOG_ERROR( "water tree: %d nodes, retail %d", static_cast< int >( t.nodes.size( ) ), static_cast< int >( g_golden_tree_nodes_count ) );
+    }
+    else
+    {
+        for ( std::size_t k = 0; k < g_golden_tree_nodes_count; ++k )
+        {
+            const golden_tree_node_t& g = g_golden_tree_nodes[ k ];
+            const water_tree_node_t& n = t.nodes[ k ];
+            if ( std::memcmp( n.rect, g.m_rect, 16 ) != 0 || n.parent != g.m_parent || n.first != g.m_first ||
+                 n.second != g.m_second || n.tag != g.m_tag )
+            {
+                if ( ++bad_nodes <= 3 )
+                    LOG_ERROR( "water tree node %d differs (parent %d / %d, first %d / %d, second %d / %d)",
+                        static_cast< int >( k ), n.parent, g.m_parent, n.first, g.m_first, n.second, g.m_second );
+            }
+        }
+    }
+    const int header[ 6 ] = { t.root, t.free, t.chunk, t.leaves, t.used, t.free_count };
+    const bool header_ok = std::memcmp( header, g_golden_tree_header, sizeof( header ) ) == 0;
+    if ( failed == 0 && bad_nodes == 0 && header_ok )
+    {
+        LOG_SUCCESS( "water_tree matches VuWater's 2D tree (@0x598c70 / @0x598e50 / @0x598de0 / @0x599010 / @0x598f00 / @0x599220) on %d operations, %d final nodes and the header",
+            static_cast< int >( g_golden_tree_ops_count ), static_cast< int >( g_golden_tree_nodes_count ) );
+        return true;
+    }
+    LOG_ERROR( "water_tree FAILED: %d op returns, %d nodes, header %s", failed, bad_nodes, header_ok ? "ok" : "differs" );
+    return false;
+}
+
+// water_hold_add / water_hold_remove against VuWater's add @0x529a90 (walks @0x52b4d0 / @0x52b3e0, the
+// per-surface test @0x529c60) and removal @0x529b90 on 4 hand-built surfaces and 30 waves: after every op
+// each wave tree's node count and the pool count; at the end every tree's nodes and header, every wave's
+// entry list and the pool.
+inline bool verify_water_waves( )
+{
+    water_hold_t w{};
+    water_tree_init( w.surface_tree );
+    w.surfaces.resize( 4 );
+    for ( int i = 0; i < 4; ++i )
+    {
+        const golden_ww_surface_t& g = g_golden_ww_surfaces[ i ];
+        water_held_surface_t& s = w.surfaces[ i ];
+        std::memcpy( s.rows, g.m_rows, 64 );
+        s.z_low = g.m_z[ 0 ];
+        s.z_high = g.m_z[ 1 ];
+        s.half[ 0 ] = g.m_half[ 0 ];
+        s.half[ 1 ] = g.m_half[ 1 ];
+        water_tree_init( s.waves );
+        water_tree_add( w.surface_tree, i, g.m_rect );
+    }
+    w.pool.resize( 200 );
+    for ( int i = 0; i < 200; ++i )
+        w.pool[ i ].next = i + 1 < 200 ? i + 1 : -1;
+    w.pool_free = 0;
+    w.pool_count = 200;
+    for ( std::size_t k = 0; k < g_golden_ww_waves_count; ++k )
+    {
+        water_held_wave_t v{};
+        const float* b = g_golden_ww_waves[ k ].m_bounds;
+        std::memcpy( v.box, b, 32 );
+        v.centre[ 0 ] = b[ 8 ];
+        v.centre[ 1 ] = b[ 9 ];
+        v.radius = b[ 10 ];
+        v.point = g_golden_ww_waves[ k ].m_flag & 1;
+        w.waves.push_back( v );
+    }
+    int failed = 0;
+    for ( std::size_t i = 0; i < g_golden_ww_ops_count; ++i )
+    {
+        const golden_ww_op_t& op = g_golden_ww_ops[ i ];
+        if ( op.m_op == 0 )
+            water_hold_add( w, op.m_wave );
+        else
+            water_hold_remove( w, op.m_wave );
+        const int after[ 5 ] = { w.surfaces[ 0 ].waves.used, w.surfaces[ 1 ].waves.used, w.surfaces[ 2 ].waves.used,
+            w.surfaces[ 3 ].waves.used, w.pool_count };
+        if ( std::memcmp( after, op.m_after, sizeof( after ) ) != 0 && ++failed <= 3 )
+            LOG_ERROR( "water waves op %d (%d wave %d): the counts differ from retail", static_cast< int >( i ), op.m_op, op.m_wave );
+    }
+    int bad = 0;
+    for ( int k = 0; k < 5; ++k )
+    {
+        const water_tree_t& t = k == 0 ? w.surface_tree : w.surfaces[ k - 1 ].waves;
+        const golden_ww_tree_t& g = g_golden_ww_trees[ k ];
+        const int header[ 6 ] = { t.root, t.free, t.chunk, t.leaves, t.used, t.free_count };
+        if ( std::memcmp( header, &g, sizeof( header ) ) != 0 || static_cast< int >( t.nodes.size( ) ) != g.m_count )
+        {
+            ++bad;
+            continue;
+        }
+        for ( int n = 0; n < g.m_count; ++n )
+        {
+            const golden_tree_node_t& gn = g_golden_ww_nodes[ g.m_nodes + n ];
+            const water_tree_node_t& m = t.nodes[ n ];
+            // a leaf's object and a wave-tree leaf's tag were retail pointers, mapped in the golden to
+            // 0x20000 + surface / 0x10000 + wave
+            const int base = k == 0 ? 0x20000 : 0x10000;
+            const int want_first = gn.m_first >= 0x10000 ? gn.m_first - base : gn.m_first;
+            const std::uint32_t want_tag = gn.m_tag >= 0x20000u ? gn.m_tag - 0x20000u : gn.m_tag;
+            const int first = m.first;
+            const std::uint32_t tag = m.tag;
+            if ( std::memcmp( m.rect, gn.m_rect, 16 ) != 0 || m.parent != gn.m_parent || first != want_first ||
+                 m.second != gn.m_second || tag != want_tag )
+                ++bad;
+        }
+    }
+    for ( std::size_t k = 0; k < g_golden_ww_waves_count; ++k )
+    {
+        const int start = g_golden_ww_list_heads[ 2 * k ];
+        const int count = g_golden_ww_list_heads[ 2 * k + 1 ];
+        int e = w.waves[ k ].entries;
+        for ( int j = 0; j < count; ++j, e = e >= 0 ? w.pool[ e ].next : -1 )
+        {
+            const int* g = g_golden_ww_list_entries + 3 * ( start + j );
+            if ( e < 0 || w.pool[ e ].surface != g[ 0 ] || w.pool[ e ].leaf != g[ 1 ] || e != g[ 2 ] )
+                ++bad;
+        }
+        if ( e >= 0 )
+            ++bad;
+    }
+    if ( w.pool_count != g_golden_ww_pool[ 0 ] || w.pool_free != g_golden_ww_pool[ 1 ] )
+        ++bad;
+    if ( failed == 0 && bad == 0 )
+    {
+        LOG_SUCCESS( "water_hold matches VuWater's wave add / removal (@0x529a90 / @0x52b4d0 / @0x52b3e0 / @0x529c60 / @0x529b90) on %d ops: every count after each, every final tree node, entry list and the pool",
+            static_cast< int >( g_golden_ww_ops_count ) );
+        return true;
+    }
+    LOG_ERROR( "water_hold FAILED: %d ops' counts, %d final items", failed, bad );
+    return false;
+}
+
+// pfx_quad_pattern_tick against VuPfxQuadPatternInstance's tick @0x591c30 on 8 hand-built patterns: every
+// particle's 30 words after, the pattern's list and AABB (pads excluded), the pool and the child calls.
+struct quad_pattern_record_t
+{
+    std::vector< std::uint32_t > calls;
+};
+
+// The model box the geom golden carries (min x y z, max x y z); the quad golden has none.
+inline const float* pattern_box( const golden_geom_pattern_t& g ) { return g.m_box; }
+inline const float* pattern_box( const golden_quad_pattern_t& ) { return nullptr; }
+
+template < typename G >
+inline int pattern_tick_failures( const G* table, std::size_t count, const unsigned* words, const unsigned* calls, bool geom )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < count; ++index )
+    {
+        const G& g = table[ index ];
+        const float* box = geom ? pattern_box( g ) : nullptr;
+        std::vector< pfx_quad_particle_t > parts( g.m_count );
+        for ( int i = 0; i < g.m_count; ++i )
+        {
+            std::memcpy( parts[ i ].w, words + g.m_words + 30 * i, 120 );
+            parts[ i ].w[ 0 ] = static_cast< std::uint32_t >( i + 1 < g.m_count ? i + 1 : -1 );
+            parts[ i ].w[ 1 ] = static_cast< std::uint32_t >( i > 0 ? i - 1 : -1 );
+        }
+        pfx_quad_pattern_t p{};
+        p.particles = &parts;
+        p.head = g.m_count ? 0 : -1;
+        p.tail = g.m_count ? g.m_count - 1 : -1;
+        p.count = g.m_count;
+        pfx_pool_t pool{};
+        pool.head = pool.tail = g.m_pool_pre ? 20 : -1;
+        pool.count = g.m_pool_pre;
+        quad_pattern_record_t rec{};
+        auto children = []( void* u, float dt ) {
+            std::uint32_t bits;
+            std::memcpy( &bits, &dt, 4 );
+            auto& r = *static_cast< quad_pattern_record_t* >( u );
+            r.calls.insert( r.calls.end( ), { 0u, bits, 1u, bits } );
+        };
+        pfx_pattern_tick( p, pool, g.m_clock, g.m_inst_scale, g.m_matrix, g.m_space, g.m_delay, g.m_dt, children, &rec, box );
+        bool ok = true;
+        for ( int i = 0; i < g.m_count && ok; ++i )
+            ok = std::memcmp( parts[ i ].w, words + g.m_words + 30 * ( g.m_count + i ), 120 ) == 0;
+        ok = ok && static_cast< std::uint32_t >( p.head ) == g.m_pattern[ 0 ] && static_cast< std::uint32_t >( p.tail ) == g.m_pattern[ 1 ] &&
+             static_cast< std::uint32_t >( p.count ) == g.m_pattern[ 2 ];
+        const int slots[ 6 ] = { 3, 4, 5, 7, 8, 9 };
+        for ( int k = 0; k < 6 && ok; ++k )
+        {
+            std::uint32_t bits;
+            std::memcpy( &bits, &p.aabb[ k ], 4 );
+            ok = bits == g.m_pattern[ slots[ k ] ];
+        }
+        // the golden marks "still the pre-existing node" -9; with no pre-existing node that is null
+        auto pool_id = [ & ]( int n ) { return ( g.m_pool_pre ? n == 20 : n == -1 ) ? -9 : n; };
+        ok = ok && pool_id( pool.tail ) == g.m_pool[ 0 ] && pool_id( pool.head ) == g.m_pool[ 1 ] && pool.count == g.m_pool[ 2 ];
+        ok = ok && rec.calls.size( ) == static_cast< std::size_t >( 2 * g.m_calls ) &&
+             ( rec.calls.empty( ) || std::memcmp( rec.calls.data( ), calls + g.m_call,
+                                         rec.calls.size( ) * 4 ) == 0 );
+        if ( !ok )
+        {
+            ++failed;
+            LOG_ERROR( "pfx pattern tick (%s) sample %d differs from retail", geom ? "geom" : "quad", static_cast< int >( index ) );
+        }
+    }
+    return failed;
+}
+
+inline bool verify_quad_pattern_tick( )
+{
+    const int failed = pattern_tick_failures( g_golden_quad_patterns, g_golden_quad_patterns_count, g_golden_quad_pattern_words,
+        g_golden_quad_pattern_calls, false );
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "pfx_quad_pattern_tick matches VuPfxQuadPatternInstance's tick @0x591c30 on %d patterns (particles, list, AABB, pool, child ticks)",
+            static_cast< int >( g_golden_quad_patterns_count ) );
+    }
+    else
+    {
+        LOG_ERROR( "pfx_quad_pattern_tick FAILED %d of %d", failed, static_cast< int >( g_golden_quad_patterns_count ) );
+    }
+    return failed == 0;
+}
+
+// pfx_pattern_tick in its geom form against VuPfxGeomPatternInstance's tick @0x58fea0, the same comparison.
+inline bool verify_geom_pattern_tick( )
+{
+    const int failed = pattern_tick_failures( g_golden_geom_patterns, g_golden_geom_patterns_count, g_golden_geom_pattern_words,
+        g_golden_geom_pattern_calls, true );
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "pfx_pattern_tick (geom) matches VuPfxGeomPatternInstance's tick @0x58fea0 on %d patterns (particles, list, AABB, pool, child ticks)",
+            static_cast< int >( g_golden_geom_patterns_count ) );
+    }
+    else
+    {
+        LOG_ERROR( "pfx_pattern_tick (geom) FAILED %d of %d", failed, static_cast< int >( g_golden_geom_patterns_count ) );
+    }
+    return failed == 0;
+}
+
+// pfx_fountain_emit against VuPfxEmitFountain_emit @0x55d030 on 10 scenarios: every particle it filled (32
+// words), the node's count and accumulator after, the global VuRand's 34 words after, and the number of
+// allocations and slot-2 calls.
+struct fountain_record_t
+{
+    std::vector< pfx_quad_particle_t > parts;
+    int allow = 0;
+    int next = 0;
+    int allocs = 0;
+    int inits = 0;
+    const float* matrix = nullptr;
+};
+
+inline bool verify_fountain_emit( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_fountains_count; ++index )
+    {
+        const golden_fountain_t& g = g_golden_fountains[ index ];
+        std::uint8_t params[ 0x98 ]{};
+        std::memcpy( params, g.m_params, sizeof( g.m_params ) );
+        std::memcpy( params + 0x34, &g.m_max, 4 );
+        std::memcpy( params + 0x40, g.m_colours, 8 );
+        params[ 0x90 ] = 0;
+        pfx_rand_t rand{};
+        rand.seed = g.m_seed;
+        rand.previous = g.m_prev;
+        std::memcpy( rand.table, g.m_table, sizeof( rand.table ) );
+        pfx_fountain_node_t node{};
+        node.alive = g.m_alive;
+        node.accumulator = g.m_node[ 0 ];
+        node.count_scale = g.m_node[ 1 ];
+        node.rate_scale = g.m_node[ 2 ];
+        node.alpha_scale = g.m_node[ 3 ];
+        fountain_record_t rec{};
+        rec.parts.resize( g.m_allow );
+        rec.allow = g.m_allow;
+        rec.matrix = g.m_matrix;
+        pfx_fountain_hooks_t hooks{};
+        hooks.user = &rec;
+        hooks.allocate = []( void* u ) -> pfx_quad_particle_t* {
+            auto& r = *static_cast< fountain_record_t* >( u );
+            ++r.allocs;
+            return r.next < r.allow ? &r.parts[ r.next++ ] : nullptr;
+        };
+        hooks.matrix = []( void* u ) { return static_cast< fountain_record_t* >( u )->matrix; };
+        hooks.init = []( void* u, pfx_quad_particle_t& ) { ++static_cast< fountain_record_t* >( u )->inits; };
+        pfx_fountain_emit( node, params, rand, g.m_camera, g.m_cameras, g.m_system, g.m_system + 3, g.m_dt, hooks );
+        bool ok = rec.next == g.m_count && rec.allocs == g.m_allocs && rec.inits == g.m_inits && node.alive == g.m_alive_after &&
+                  std::memcmp( &node.accumulator, &g.m_accumulator_after, 4 ) == 0;
+        for ( int i = 0; i < rec.next && ok; ++i )
+            ok = std::memcmp( rec.parts[ i ].w, g_golden_fountain_words + g.m_words + 32 * i, 120 ) == 0;
+        std::uint32_t after[ 34 ];
+        std::memcpy( after, &rand.seed, 4 );
+        std::memcpy( after + 1, &rand.previous, 4 );
+        std::memcpy( after + 2, rand.table, 128 );
+        ok = ok && std::memcmp( after, g.m_rand_after, sizeof( after ) ) == 0;
+        if ( !ok )
+        {
+            ++failed;
+            LOG_ERROR( "pfx_fountain_emit scenario %d differs from @0x55d030 (particles %d / %d, allocs %d / %d)",
+                static_cast< int >( index ), rec.next, g.m_count, rec.allocs, g.m_allocs );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "pfx_fountain_emit matches VuPfxEmitFountain_emit @0x55d030 on %d scenarios (particles, node, VuRand, calls)",
+            static_cast< int >( g_golden_fountains_count ) );
+    }
+    else
+    {
+        LOG_ERROR( "pfx_fountain_emit FAILED %d of %d", failed, static_cast< int >( g_golden_fountains_count ) );
+    }
+    return failed == 0;
+}
+
+// water_best_wake against VuWater's wake lookup @0x5296c0 (surface lookup @0x52aec0, wave walk @0x52b270,
+// VuBestWakeFinder @0x421e50, the record blend @0x52bf10): the hold built through water_hold_add as retail's
+// 0x529a90 built it (verified by verify_water_waves), then 48 queries; the finder's +0x14 after each.
+inline bool verify_wake_lookup( )
+{
+    water_hold_t w{};
+    water_tree_init( w.surface_tree );
+    w.surfaces.resize( g_golden_wl_surfaces_count );
+    for ( std::size_t i = 0; i < g_golden_wl_surfaces_count; ++i )
+    {
+        const golden_wl_surface_t& g = g_golden_wl_surfaces[ i ];
+        water_held_surface_t& s = w.surfaces[ i ];
+        std::memcpy( s.rows, g.m_rows, 64 );
+        s.below = g.m_below;
+        s.above = g.m_above;
+        s.z_low = g.m_z[ 0 ];
+        s.z_high = g.m_z[ 1 ];
+        s.half[ 0 ] = g.m_half[ 0 ];
+        s.half[ 1 ] = g.m_half[ 1 ];
+        water_tree_init( s.waves );
+        water_tree_add( w.surface_tree, static_cast< int >( i ), g.m_rect );
+    }
+    w.pool.resize( 200 );
+    for ( int i = 0; i < 200; ++i )
+        w.pool[ i ].next = i + 1 < 200 ? i + 1 : -1;
+    w.pool_free = 0;
+    w.pool_count = 200;
+    for ( std::size_t k = 0; k < g_golden_wl_waves_count; ++k )
+    {
+        const golden_wl_wave_t& g = g_golden_wl_waves[ k ];
+        water_held_wave_t v{};
+        std::memcpy( v.box, g.m_bounds, 32 );
+        v.centre[ 0 ] = g.m_bounds[ 8 ];
+        v.centre[ 1 ] = g.m_bounds[ 9 ];
+        v.radius = g.m_bounds[ 10 ];
+        v.wake = g.m_kind == 0;
+        v.wake_data.inner_ratio = g.m_head[ 0 ];
+        v.wake_data.outer_ratio = g.m_head[ 1 ];
+        v.wake_data.scale = g.m_head[ 2 ];
+        v.wake_data.a = wake_record( g.m_a );
+        v.wake_data.b = wake_record( g.m_b );
+        w.waves.push_back( v );
+        water_hold_add( w, static_cast< int >( k ) );
+    }
+    int failed = 0;
+    int live = 0;
+    for ( std::size_t i = 0; i < g_golden_wl_queries_count; ++i )
+    {
+        const golden_wl_query_t& q = g_golden_wl_queries[ i ];
+        water_wake_finder_t f{};
+        f.point[ 0 ] = q.m_finder[ 0 ];
+        f.point[ 1 ] = q.m_finder[ 1 ];
+        f.direction[ 0 ] = q.m_finder[ 2 ];
+        f.direction[ 1 ] = q.m_finder[ 3 ];
+        f.best = q.m_finder[ 4 ];
+        water_best_wake( w, q.m_skip != 0, q.m_point, f );
+        if ( q.m_best != q.m_finder[ 4 ] )
+            ++live;
+        if ( std::memcmp( &f.best, &q.m_best, 4 ) != 0 && ++failed <= 3 )
+            LOG_ERROR( "water_best_wake query %d: ours %.9g retail %.9g", static_cast< int >( i ), f.best, q.m_best );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "water_best_wake matches VuWater's wake lookup @0x5296c0 (0x52aec0 / 0x52b270 / 0x421e50 / 0x52bf10) on %d queries (%d changing the answer)",
+            static_cast< int >( g_golden_wl_queries_count ), live );
+        return true;
+    }
+    LOG_ERROR( "water_best_wake FAILED %d of %d queries", failed, static_cast< int >( g_golden_wl_queries_count ) );
+    return false;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
@@ -453,5 +893,12 @@ inline bool verify_water_all( )
     ok = verify_water_tick( ) && ok;
     ok = verify_wave_ticks( ) && ok;
     ok = verify_pfx_ticks( ) && ok;
+    ok = verify_matrix_helpers( ) && ok;
+    ok = verify_water_tree( ) && ok;
+    ok = verify_water_waves( ) && ok;
+    ok = verify_wake_lookup( ) && ok;
+    ok = verify_quad_pattern_tick( ) && ok;
+    ok = verify_geom_pattern_tick( ) && ok;
+    ok = verify_fountain_emit( ) && ok;
     return ok;
 }
