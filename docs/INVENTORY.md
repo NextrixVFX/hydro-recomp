@@ -18,8 +18,8 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 389 | 222214 |
-| callee | 195 | 30138 |
+| verified | 392 | 222746 |
+| callee | 192 | 29606 |
 | cited | 181 | 106983 |
 | absent | 7873 | 1866925 |
 | **all** | **8638** | **2226260** |
@@ -42,7 +42,7 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 | other classes | 731 | 9 | 2 | 1 | 719 | 5251 of 67698 |
 | assets | 286 | 2 | 4 | 3 | 277 | 259 of 61239 |
 | particles | 215 | 1 | 2 | 13 | 199 | 279 of 45495 |
-| audio | 163 | 1 | 3 | 0 | 159 | 251 of 30823 |
+| audio | 163 | 4 | 0 | 0 | 159 | 783 of 30823 |
 | input | 156 | 0 | 0 | 0 | 156 | 0 of 30388 |
 | C++ runtime / STL | 227 | 1 | 20 | 0 | 206 | 70 of 30128 |
 | save / settings / profile | 199 | 0 | 0 | 0 | 199 | 0 of 25714 |

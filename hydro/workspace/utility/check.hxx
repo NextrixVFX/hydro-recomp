@@ -1397,6 +1397,9 @@ inline bool verify_coronas( )
             if ( ours[ p ] != want.m_values[ p ] && ++failed <= 8 )
                 LOG_ERROR( "coronas: '%s' value %d is 0x%08X, retail 0x%08X", want.m_name, p, ours[ p ], want.m_values[ p ] );
         }
+        ++compared;
+        if ( c.texture_name != want.m_texture_name && ++failed <= 8 )
+            LOG_ERROR( "coronas: '%s' Texture Name is '%s', retail '%s'", want.m_name, c.texture_name.c_str( ), want.m_texture_name );
     }
     if ( failed == 0 )
         LOG_SUCCESS( "corona_load matches VuCoronaEntity's property loads (ctor 0x5E8D80) on %d level coronas: %d values, bit "

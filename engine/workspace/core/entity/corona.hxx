@@ -11,12 +11,14 @@
 // schema.hxx's g_schema_VuCoronaEntity - captured by running the ctor under
 // emulation; the defaults are VuCoronaParams_ctor 0x61CE60's.
 //
-// "Texture Name" (+0x74, VuAssetNameProperty) is NOT here: its load is unread,
-// and its change reaches VuCoronaParams' texture load 0x61CF00, which builds a
-// material through the graphics device - the rendering platform layer.
+// "Texture Name" (+0x74, VuAssetNameProperty) loads as a string property; its
+// change notifies VuCoronaParams' texture load 0x61CF00, which builds a
+// material through the graphics device - the rendering platform layer, a hook
+// (the renderer loads the named texture itself).
 struct corona_properties_t
 {
     std::uint8_t initially_visible;      // +0x70
+    std::string texture_name;            // +0x74
     float rotation_speed;                // +0x8C  radians
     float rotation_axis[ 3 ];            // +0x90
     float draw_distance;                 // +0xA0
@@ -43,6 +45,7 @@ inline float corona_bits( std::uint32_t b )
 inline void corona_construct( corona_properties_t& c )
 {
     c.initially_visible = 1;
+    c.texture_name.clear( );
     c.rotation_speed = 0.0f;
     c.rotation_axis[ 0 ] = 0.0f;
     c.rotation_axis[ 1 ] = 0.0f;
@@ -67,6 +70,7 @@ inline void corona_load( corona_properties_t& c, const value_t& properties )
     corona_properties_t d;
     corona_construct( d );
     property_bool( properties, "Initially Visible", c.initially_visible, d.initially_visible );
+    property_string( properties, "Texture Name", c.texture_name, d.texture_name );
     property_float( properties, "Rotation Speed", c.rotation_speed, d.rotation_speed, true );
     property_vector3( properties, "Rotation Axis", c.rotation_axis, d.rotation_axis );
     property_float( properties, "Draw Distance", c.draw_distance, d.draw_distance, false );

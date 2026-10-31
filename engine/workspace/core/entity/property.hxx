@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 // The VuBasicProperty loads a property node runs when its entity loads its
 // "Properties" (each node's vt+8). Every class follows one contract:
@@ -75,6 +76,23 @@ inline void property_vector3( const value_t& properties, const char* name, float
     if ( target[ 0 ] != parsed[ 0 ] || target[ 1 ] != parsed[ 1 ] || target[ 2 ] != parsed[ 2 ] )
         for ( int lane = 0; lane < 3; ++lane )
             target[ lane ] = parsed[ lane ];
+}
+
+// The string properties (VuAssetNameProperty, vtable 0x74D690, among them): load
+// 0x406C20 resets the target (+0x44) to the default (+0x14); the value read
+// 0x406CD0 takes only a string node (tag 4), copies it through the filter
+// 0x406AB0, and stores only if it differs (memcmp of the shorter length, then
+// the lengths); then vt+0x2C (0x401560, a nop) and, with the notify byte set
+// and a watcher attached, the watcher's vt+8 - a hook (a corona's texture
+// load 0x61CF00 is one).
+inline void property_string( const value_t& properties, const char* name, std::string& target, const std::string& fallback )
+{
+    target = fallback;
+    const value_t& value = member( properties, name );
+    if ( value.tag != 4 )
+        return;
+    if ( target != value.text )
+        target = value.text;
 }
 
 // One channel of the colour parse 0x4FDEC0: an int, a float truncated
