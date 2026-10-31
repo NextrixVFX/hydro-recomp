@@ -1119,11 +1119,76 @@ inline bool verify_load_templates( )
     return failed == 0;
 }
 
+// entity_load_project (engine entity/node.hxx) against VuProject::load 0x556390
+// (oracle case load_project): each project's document and AssetData "File"
+// path, the root created, named and loaded, and every entity compared
+// pre-order with retail's - parent, name (the root's from the path), vtable,
+// flags, template owner.
+inline bool verify_load_project( )
+{
+    std::vector< std::string > names( g_golden_entity_templates, g_golden_entity_templates + g_golden_entity_templates_count );
+    const entity_registry_t registry = build_entity_registry( names );
+    entity_world_t world;
+    world.m_registry = &registry;
+    world.m_ctor_for = entity_ctor_for;
+    int failed = 0;
+    int compared = 0;
+    for ( std::size_t p = 0; p < g_golden_load_projects_count; ++p )
+    {
+        const golden_project_t& project = g_golden_load_projects[ p ];
+        const unsigned char* raw = reinterpret_cast< const unsigned char* >( project.m_words );
+        const value_t document = c_reader( std::vector< std::uint8_t >( raw, raw + project.m_bytes ) ).parse( );
+        const std::unique_ptr< entity_t > root = entity_load_project( member( document, "VuProject" ), project.m_path, world );
+        if ( ( root != nullptr ) != ( project.m_ok != 0 ) )
+        {
+            LOG_ERROR( "load project: %s - retail's load returned %d, ours %d", project.m_path, project.m_ok, root ? 1 : 0 );
+            ++failed;
+            continue;
+        }
+        std::vector< std::pair< int, const entity_t* > > ours;
+        const auto walk = [ &ours ]( const auto& self, const entity_t& e, int parent ) -> void
+        {
+            const int index = static_cast< int >( ours.size( ) );
+            ours.push_back( { parent, &e } );
+            for ( const auto& child : e.m_children )
+                self( self, *child, index );
+        };
+        if ( root )
+            walk( walk, *root, -1 );
+        if ( ours.size( ) != static_cast< std::size_t >( project.m_count ) )
+        {
+            LOG_ERROR( "load project: %s built %d entities, retail %d", project.m_path, static_cast< int >( ours.size( ) ), project.m_count );
+            ++failed;
+            continue;
+        }
+        for ( int k = 0; k < project.m_count; ++k )
+        {
+            const golden_template_entity_t& want = g_golden_load_project_entities[ project.m_first + k ];
+            const entity_t& have = *ours[ k ].second;
+            ++compared;
+            const std::string want_template = want.m_template ? want.m_template : "";
+            if ( !have.m_ctor || ours[ k ].first != want.m_parent || have.m_name != want.m_name ||
+                 have.m_ctor->m_vtable != want.m_vtable || have.m_flags != want.m_flags || have.m_template != want_template )
+            {
+                if ( ++failed <= 8 )
+                    LOG_ERROR( "load project: %s entity %d is '%s', retail '%s'", project.m_path, k, have.m_name.c_str( ), want.m_name );
+            }
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "entity_load_project matches retail's VuProject::load 0x556390 on %d projects: %d entities - the root's "
+                     "type and name from the path, the tree below it", static_cast< int >( g_golden_load_projects_count ), compared );
+    else
+        LOG_ERROR( "entity_load_project FAILED %d checks against 0x556390", failed );
+    return failed == 0;
+}
+
 // Every oracle-backed check on game code.
 inline bool verify_game( )
 {
     bool ok = true;
     ok = verify_entity_registry( ) && ok;
+    ok = verify_load_project( ) && ok;
     ok = verify_load_children( ) && ok;
     ok = verify_load_templates( ) && ok;
     ok = verify_boat_ctor( ) && ok;

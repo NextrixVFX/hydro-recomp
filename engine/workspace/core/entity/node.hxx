@@ -196,6 +196,48 @@ inline void entity_load_override( entity_t& entity, const value_t& data, const e
     // entity's vt+0xC follow - hooks until those classes are recreated.
 }
 
+// 0x55AFE0: a project root's name from its file path - the path normalised by
+// 0x55ADB0 ('\' -> '/', then one '/' of every "//" removed until none is
+// left), cut after its LAST '/', then before its LAST '.'.
+inline std::string entity_project_name( const std::string& path )
+{
+    std::string name = path;
+    for ( char& c : name )
+        if ( c == '\\' )
+            c = '/';
+    // The "//" collapse cannot change a base name (the last '/' survives it):
+    // verify_load_project does not - cannot - observe this loop.
+    for ( std::size_t at = name.find( "//" ); at != std::string::npos; at = name.find( "//" ) )
+        name.erase( at, 1 );
+    const std::size_t slash = name.rfind( '/' );
+    if ( slash != std::string::npos )
+        name = name.substr( slash + 1 );
+    const std::size_t dot = name.rfind( '.' );
+    if ( dot != std::string::npos )
+        name = name.substr( 0, dot );
+    return name;
+}
+
+// VuProject::load 0x556390(data = the document's "VuProject", path = the asset's
+// AssetData "File"): the root's type is RootEntity.type when that is a string
+// and not empty, else "VuSceneEntity"; 0x5561C0 creates it through the registry
+// (null -> the load fails: null here) and names it after the path; it is then
+// loaded from RootEntity.data (vt+0x2C). 0x500A60 follows - a hook.
+inline std::unique_ptr< entity_t > entity_load_project( const value_t& data, const std::string& path, const entity_world_t& world )
+{
+    const value_t& root = member( data, "RootEntity" );
+    const value_t& type = member( root, "type" );
+    std::string cls = type.tag == 4 ? type.text : std::string( );
+    if ( cls.empty( ) )
+        cls = "VuSceneEntity";
+    std::unique_ptr< entity_t > entity = entity_create( cls, world );
+    if ( !entity )
+        return nullptr;
+    entity->m_name = entity_project_name( path );
+    entity_load( *entity, &member( root, "data" ), world );
+    return entity;
+}
+
 // VuEntity::load 0x5009D0, every known type's slot 11: an entity a template
 // made (+0x4C set) takes the override path 0x5015D0; otherwise ChildEntities
 // is the step recreated. An UNKNOWN entity's own load is a hook: nothing below
