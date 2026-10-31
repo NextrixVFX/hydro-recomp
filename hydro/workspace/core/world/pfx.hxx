@@ -100,6 +100,131 @@ inline void pfx_tick_alpha_in_out( pfx_tick_particle_t& p, const float* params, 
     p.alpha = alpha + ( after ? params[ 3 ] * dt : 0.0f );
 }
 
+// VuPfxQuadPatternInstance's tick @0x591c30 over an index model of retail's
+// particle lists. A particle is retail's 30 words from +0 (+0 next, +4 prev as
+// indices, -1 null; +0x08 pos, +0x18 velocity, +0x34 alpha, +0x38 scale,
+// +0x3C age, +0x40 life, +0x44 rotation, +0x48 spin, +0x4C world z). The
+// pattern: +0x20 / +0x24 head / tail, +0x28 count, the AABB at +0x2C .. +0x44
+// (min x y z at +0x2C, max x y z at +0x3C; the pad words +0x38 / +0x48 come
+// from stack words retail never writes: UNKNOWN, not reproduced). The global free pool
+// (g_vupfximpl 0x75904c, +8: head +0x38, tail +0x34, count +0x3C) takes the
+// retired, pushed at its head.
+struct pfx_quad_particle_t
+{
+    std::uint32_t w[ 30 ]{};
+    float f( int offset ) const { float v; std::memcpy( &v, &w[ offset / 4 ], 4 ); return v; }
+    void set( int offset, float v ) { std::memcpy( &w[ offset / 4 ], &v, 4 ); }
+};
+
+struct pfx_quad_pattern_t
+{
+    std::vector< pfx_quad_particle_t >* particles = nullptr;
+    int head = -1;
+    int tail = -1;
+    int count = 0;
+    float aabb[ 6 ]{};   // min x, y, z, max x, y, z
+};
+
+struct pfx_pool_t
+{
+    int head = -1;   // +0x38
+    int tail = -1;   // +0x34
+    int count = 0;   // +0x3C
+};
+
+// system: clock +0xA4, instance scale +0xA8, matrix +0x1C (16 floats);
+// params: Space +0x34, Start Delay +0x38. `children` ticks the child nodes
+// (each node's slot 1 with dt - Vu virtuals, a hook).
+inline void pfx_quad_pattern_tick( pfx_quad_pattern_t& p, pfx_pool_t& pool, float clock, float instance_scale,
+    const float* system_matrix, int space, float start_delay, float dt, void ( *children )( void*, float ), void* user )
+{
+    std::vector< pfx_quad_particle_t >& v = *p.particles;
+    auto link = [ & ]( int n, int slot ) { return static_cast< int >( v[ n ].w[ slot ] ); };
+    if ( _mm_comigt_ss( _mm_set_ss( clock ), _mm_set_ss( start_delay ) ) )
+    {
+        for ( int n = p.head; n >= 0; n = link( n, 0 ) )
+        {
+            pfx_quad_particle_t& q = v[ n ];
+            const float vy = q.f( 0x1C ) * dt;
+            const float vz = q.f( 0x20 ) * dt;
+            q.set( 0x08, ( dt * q.f( 0x18 ) ) + q.f( 0x08 ) );
+            q.set( 0x0C, q.f( 0x0C ) + vy );
+            q.set( 0x10, q.f( 0x10 ) + vz );
+            q.set( 0x3C, dt + q.f( 0x3C ) );
+            q.set( 0x44, ( q.f( 0x48 ) * dt ) + q.f( 0x44 ) );
+        }
+        children( user, dt );
+        for ( int n = p.head; n >= 0; )
+        {
+            const int next = link( n, 0 );
+            pfx_quad_particle_t& q = v[ n ];
+            auto below = []( float x ) { return !_mm_comige_ss( _mm_set_ss( x ), _mm_setzero_ps( ) ); };   // jb: < 0 or NaN
+            const bool dead = below( q.f( 0x40 ) - q.f( 0x3C ) ) || below( q.f( 0x34 ) ) || below( q.f( 0x38 ) ) ||
+                              below( q.f( 0x4C ) );
+            if ( dead )
+            {
+                const int prev = link( n, 1 );
+                if ( n == p.head )
+                    p.head = next;
+                if ( n == p.tail )
+                    p.tail = prev;
+                if ( next >= 0 )
+                    v[ next ].w[ 1 ] = static_cast< std::uint32_t >( prev );
+                if ( prev >= 0 )
+                    v[ prev ].w[ 0 ] = static_cast< std::uint32_t >( next );
+                q.w[ 0 ] = 0xFFFFFFFFu;
+                --p.count;
+                // push on the pool's head; retail also writes the old head's next (+0) to this one - a
+                // node outside this model when it is not one of these particles
+                q.w[ 1 ] = static_cast< std::uint32_t >( pool.head );
+                if ( pool.head >= 0 && pool.head < static_cast< int >( v.size( ) ) )
+                    v[ pool.head ].w[ 0 ] = static_cast< std::uint32_t >( n );
+                if ( pool.head == -1 )
+                    pool.tail = n;
+                ++pool.count;
+                pool.head = n;
+            }
+            n = next;
+        }
+    }
+    if ( p.count == 0 )
+    {
+        for ( float& a : p.aabb )
+            a = 0.0f;
+        return;
+    }
+    static const float identity[ 16 ] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };   // 0x7593b0
+    const float* m = space == 1 ? system_matrix : identity;
+    const float big = 3.4028235e38f;
+    float lo[ 3 ] = { big, big, big };
+    float hi[ 3 ] = { -big, -big, -big };
+    auto mn = []( float a, float b ) { return _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); };
+    auto mx = []( float a, float b ) { return _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); };
+    for ( int n = p.head; n >= 0; n = link( n, 0 ) )
+    {
+        const pfx_quad_particle_t& q = v[ n ];
+        const float px = q.f( 0x08 );
+        const float py = q.f( 0x0C );
+        const float pz = q.f( 0x10 );
+        const float x = ( ( ( m[ 0 ] * px ) + ( m[ 4 ] * py ) ) + ( m[ 8 ] * pz ) ) + m[ 12 ];
+        const float y = ( ( ( m[ 1 ] * px ) + ( m[ 5 ] * py ) ) + ( m[ 9 ] * pz ) ) + m[ 13 ];
+        const float z = ( ( ( m[ 2 ] * px ) + ( m[ 6 ] * py ) ) + ( pz * m[ 10 ] ) ) + m[ 14 ];
+        const float r = ( instance_scale * 0.5f ) * q.f( 0x38 );
+        lo[ 0 ] = mn( lo[ 0 ], x - r );
+        lo[ 1 ] = mn( lo[ 1 ], y - r );
+        lo[ 2 ] = mn( lo[ 2 ], z - r );
+        hi[ 0 ] = mx( hi[ 0 ], x + r );
+        hi[ 1 ] = mx( hi[ 1 ], y + r );
+        hi[ 2 ] = mx( hi[ 2 ], z + r );
+    }
+    p.aabb[ 0 ] = lo[ 0 ];
+    p.aabb[ 1 ] = lo[ 1 ];
+    p.aabb[ 2 ] = lo[ 2 ];
+    p.aabb[ 3 ] = hi[ 0 ];
+    p.aabb[ 4 ] = hi[ 1 ];
+    p.aabb[ 5 ] = hi[ 2 ];
+}
+
 // VuStaticPfxEntity. The effect document is a VuPfxAsset. A quad pattern
 // integrates, then runs its child processes in file order (fountain spawn,
 // then the ticks), then drops a particle whose life, alpha, scale, or
