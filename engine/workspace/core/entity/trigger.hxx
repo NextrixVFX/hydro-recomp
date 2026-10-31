@@ -28,6 +28,22 @@ struct trigger_properties_t
     std::string trigger_type;
 };
 
+// 0x536180(name): 1 << the name's index in the Trigger Type enum (the vector
+// 0x75913C, in 0x4D9260's registration order; std::string compare), 0 when it
+// is not registered. The trigger's postLoad (vt+8, 0x5D13E0) stores it at
+// +0x80; its template-override postLoad (vt+0xC) is a nop (0x4021A0), so an
+// instance override of Trigger Type does not recompute it. Boats register as
+// instigators with mask("Boat") | mask("Human Boat") or | mask("AI Boat")
+// (VuBoatDB 0x421371..0x4213B3).
+inline std::uint32_t trigger_type_mask( const std::string& name )
+{
+    static const char* const types[] = { "Human Boat", "AI Boat", "Boat", "Camera" };
+    for ( int k = 0; k < 4; ++k )
+        if ( name == types[ k ] )
+            return 1u << k;
+    return 0u;
+}
+
 inline void trigger_construct( trigger_properties_t& t )
 {
     t.initially_active = 1;

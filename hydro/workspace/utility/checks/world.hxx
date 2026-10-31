@@ -178,7 +178,7 @@ inline bool verify_triggers( )
             continue;
         }
         const trigger_properties_t& t = static_cast< const trigger_state_t* >( found->second->m_state.get( ) )->value;
-        world_check_words( "triggers", want, { t.initially_active }, failed, compared );
+        world_check_words( "triggers", want, { t.initially_active, trigger_type_mask( t.trigger_type ) }, failed, compared );
         ++compared;
         if ( t.trigger_type != want.m_texts[ 0 ] && ++failed <= 8 )
             LOG_ERROR( "triggers: '%s' Trigger Type is '%s', retail '%s'", want.m_source, t.trigger_type.c_str( ), want.m_texts[ 0 ] );
@@ -350,6 +350,45 @@ inline bool verify_actions( )
     return failed == 0;
 }
 
+// trigger_plane_crossing (hydro trigger/volume.hxx) against
+// VuTriggerPlaneEntity_testCrossings 0x5D1570 run on seeded planes and
+// instigators (oracle case trigger_plane_test): per (plane, instigator) whether
+// it fires and which plug, one failure per pair.
+inline bool verify_trigger_plane( )
+{
+    int failed = 0;
+    int pairs = 0;
+    int fires = 0;
+    for ( std::size_t p = 0; p < g_golden_trigger_planes_count; ++p )
+    {
+        const golden_trigger_plane_t& plane = g_golden_trigger_planes[ p ];
+        float world[ 16 ], scale[ 3 ];
+        std::memcpy( world, plane.m_world, sizeof( world ) );
+        std::memcpy( scale, plane.m_scale, sizeof( scale ) );
+        for ( int k = 0; k < plane.m_count; ++k )
+        {
+            const golden_trigger_instigator_t& g = g_golden_trigger_instigators[ plane.m_first + k ];
+            trigger_instigator_t who{};
+            who.mask = g.m_mask;
+            std::memcpy( who.prev, g.m_prev, sizeof( who.prev ) );
+            std::memcpy( &who.radius, &g.m_radius, 4 );
+            std::memcpy( who.cur, g.m_cur, sizeof( who.cur ) );
+            std::memcpy( &who.rate, &g.m_rate, 4 );
+            const int ours = trigger_plane_crossing( world, scale, plane.m_mask, who );
+            ++pairs;
+            fires += g.m_fired >= 0;
+            if ( ours != g.m_fired && ++failed <= 8 )
+                LOG_ERROR( "trigger plane: plane %d instigator %d gives %d, retail %d", static_cast< int >( p ), k, ours, g.m_fired );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "trigger_plane_crossing matches VuTriggerPlaneEntity_testCrossings 0x5D1570 on %d planes: %d plane / instigator pairs, %d "
+                     "crossings fired", static_cast< int >( g_golden_trigger_planes_count ), pairs, fires );
+    else
+        LOG_ERROR( "trigger_plane_crossing FAILED %d of %d pairs", failed, pairs );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
@@ -359,5 +398,6 @@ inline bool verify_world_all( )
     ok = verify_triggers( ) && ok;
     ok = verify_static_pfx( ) && ok;
     ok = verify_actions( ) && ok;
+    ok = verify_trigger_plane( ) && ok;
     return ok;
 }

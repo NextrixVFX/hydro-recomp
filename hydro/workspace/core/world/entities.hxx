@@ -220,6 +220,10 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
                     gate.inverse[ 0 ] = 0.0f;
                 gate.kind = p.trigger_type;
                 gate.active = p.initially_active != 0;
+                std::memcpy( gate.frame, t->world, sizeof( gate.frame ) );
+                for ( int axis = 0; axis < 3; ++axis )
+                    gate.half[ axis ] = t->scale[ axis ];
+                gate.mask = trigger_type_mask( p.trigger_type );
                 fresh_triggers.push_back( std::move( gate ) );
             }
         }

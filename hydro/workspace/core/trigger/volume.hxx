@@ -1,7 +1,58 @@
 #pragma once
 
 #include <cmath>
+#include <cstdint>
 #include <string>
+
+// One entry of the trigger manager's instigator list (0x759064: +4 the array,
+// +8 the count, 0x34 bytes each): +8 its mask, +0xC the previous position,
+// +0x1C a radius, +0x20 the current position, +0x30 the radius's rate.
+struct trigger_instigator_t
+{
+    std::uint32_t mask;
+    float prev[ 3 ];
+    float radius;
+    float cur[ 3 ];
+    float rate;
+};
+
+// VuTriggerPlaneEntity_testCrossings 0x5D1570 for one instigator, operation
+// for operation. `world` is the trigger transform's world (+0x50: X row 0..2,
+// the plane NORMAL row 4..6, Z row 8..10, centre 12..14; scale NOT in it) and
+// `scale` its Scale (+0xB0); `mask` the entity's +0x80. Returns -1 (no
+// crossing), else the flag handed to VuTriggerEntity_fireCrossing 0x61CB70:
+// 1 = "OnEnter" (the previous signed distance was > 0), 0 = "OnExit".
+inline int trigger_plane_crossing( const float* world, const float* scale, std::uint32_t mask, const trigger_instigator_t& who )
+{
+    if ( ( who.mask & mask ) == 0 )
+        return -1;
+    const float n0 = world[ 4 ], n1 = world[ 5 ], n2 = world[ 6 ];
+    const float c0 = world[ 12 ], c1 = world[ 13 ], c2 = world[ 14 ];
+    const float d = -( ( n0 * c0 + n1 * c1 ) + n2 * c2 );
+    const float a = ( ( who.prev[ 0 ] * n0 + who.prev[ 1 ] * n1 ) + who.prev[ 2 ] * n2 ) + d;
+    const float b = ( ( who.cur[ 0 ] * n0 + who.cur[ 1 ] * n1 ) + who.cur[ 2 ] * n2 ) + d;
+    // comiss 0, b * a; jb: a positive product (or a NaN) is no crossing.
+    if ( !( 0.0f >= b * a ) )
+        return -1;
+    const bool enter = a > 0.0f;
+    if ( enter == ( b > 0.0f ) )
+        return -1;
+    const float dq0 = who.cur[ 0 ] - who.prev[ 0 ], dq1 = who.cur[ 1 ] - who.prev[ 1 ], dq2 = who.cur[ 2 ] - who.prev[ 2 ];
+    const float num = ( n0 * ( c0 - who.prev[ 0 ] ) + n1 * ( c1 - who.prev[ 1 ] ) ) + n2 * ( c2 - who.prev[ 2 ] );
+    const float den = ( n0 * dq0 + n1 * dq1 ) + n2 * dq2;
+    const float t = num / den;
+    const float r1 = ( dq1 * t + who.prev[ 1 ] ) - c1;
+    const float r0 = ( dq0 * t + who.prev[ 0 ] ) - c0;
+    const float r2 = ( dq2 * t + who.prev[ 2 ] ) - c2;
+    // VuVector_abs 0x4089C0 on each in-plane projection, less its half extent.
+    const float e0 = std::fabs( ( world[ 1 ] * r1 + world[ 0 ] * r0 ) + world[ 2 ] * r2 ) - scale[ 0 ];
+    const float e2 = std::fabs( ( world[ 9 ] * r1 + world[ 8 ] * r0 ) + world[ 10 ] * r2 ) - scale[ 2 ];
+    const float outside = e0 > e2 ? e0 : e2; // maxss e0, e2
+    const float radius = who.rate * t + who.radius;
+    if ( !( radius > outside ) )
+        return -1;
+    return enter ? 1 : 0;
+}
 
 // A VuTriggerPlaneEntity or VuTriggerBoxEntity. Its volume IS its transform:
 // a unit plane one unit thick in local Y, or a unit box, scaled and rotated
@@ -10,6 +61,12 @@ struct trigger_t
 {
     std::string path;
     std::string kind;
+    // The transform's world (scale kept out) and Scale, and the Trigger Type
+    // mask its postLoad 0x5D13E0 sets (+0x80 = 0x536180(type): 1 << the
+    // type's index in the 0x75913C enum, 0 when it is not registered).
+    float frame[ 16 ]{};
+    float half[ 3 ]{ 1.0f, 1.0f, 1.0f };
+    std::uint32_t mask = 0;
     float world[ 16 ]{};
     float inverse[ 16 ]{};
     // The authored Scale per axis, which is the volume's half extent.
