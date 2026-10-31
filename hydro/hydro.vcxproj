@@ -134,6 +134,7 @@
     <ClInclude Include="workspace\core\world\pfx.hxx" />
     <ClInclude Include="workspace\core\world\query.hxx" />
     <ClInclude Include="workspace\core\world\transform.hxx" />
+    <ClInclude Include="workspace\core\world\tree.hxx" />
     <ClInclude Include="workspace\core\world\water.hxx" />
     <ClInclude Include="workspace\core\world\wave.hxx" />
     <ClInclude Include="workspace\core\world\world.hxx" />
