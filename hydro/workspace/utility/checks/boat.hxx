@@ -353,6 +353,46 @@ inline bool verify_boat_tick_state( )
     return failed == 0;
 }
 
+// boat_jump (boat/state.hxx) against retail's 0x41FDA0 (oracle case
+// boat_jump): every byte of the boat, body, hull and solver blocks after,
+// and whether the jump sound ran.
+inline bool verify_boat_jump( )
+{
+    const int sizes[ 4 ] = { 0x520, 0x300, 0x1F0, 0x104 };
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_jump_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_jump_words + g_golden_boat_jump_offsets[ index ];
+        float dt;
+        std::memcpy( &dt, s++, 4 );
+        const unsigned sounds = *s++;
+        std::vector< std::uint8_t > blocks[ 4 ];
+        for ( int k = 0; k < 4; ++k )
+        {
+            blocks[ k ].assign( reinterpret_cast< const std::uint8_t* >( s ), reinterpret_cast< const std::uint8_t* >( s ) + sizes[ k ] );
+            s += sizes[ k ] / 4;
+        }
+        const bool sound = boat_jump( blocks[ 0 ].data( ), blocks[ 1 ].data( ), blocks[ 3 ].data( ), dt );
+        int bad = sound == ( sounds != 0 ) && sounds <= 1 ? -1 : 0x7FFF;
+        for ( int k = 0; k < 4 && bad < 0; ++k )
+        {
+            const unsigned char* want = reinterpret_cast< const unsigned char* >( s );
+            for ( int at = 0; at < sizes[ k ] && bad < 0; ++at )
+                if ( blocks[ k ][ at ] != want[ at ] )
+                    bad = 0x1000 * k + at;
+            s += sizes[ k ] / 4;
+        }
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "boat jump vector %d differs from retail at 0x%X (block x 0x1000 + byte; 0x7FFF the sound)",
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the boat's jump 0x41FDA0 matches retail: %d vectors", static_cast< int >( g_golden_boat_jump_count ) );
+    else
+        LOG_ERROR( "boat jump FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_jump_count ) );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
@@ -361,5 +401,6 @@ inline bool verify_boat_all( )
     ok = verify_boat_ai_driver( ) && ok;
     ok = verify_boat_driver_load( ) && ok;
     ok = verify_boat_tick_state( ) && ok;
+    ok = verify_boat_jump( ) && ok;
     return ok;
 }
