@@ -327,10 +327,8 @@ private:
             m_entity_world[ here ] = placed;
         }
 
-        // Resolve this entity's script connections once, the way retail
-        // resolves them once at load. See collect_graph and fire().
-        if ( !here.empty( ) )
-            collect_graph( here, components );
+        // The script connections and refs come from the retail tree
+        // (load_entity_tree; engine entity/script.hxx).
 
         const value_t* type = find( entity, "type" );
         if ( type != nullptr && type->kind == value_t::kind_t::text && type->text.size( ) > 1 && type->text[ 0 ] == '#' )
@@ -475,58 +473,12 @@ private:
                     m_rig.add_substitution( kind->text + "/" + from->text, to->text );
                 }
             }
-            // A prop never names its own clip. The binding lives on an action
-            // entity's VuScriptComponent, whose plugs name both ends:
-            //
-            //   Plugs.PlayAnimation.Connections[].EntityName -> target prop
-            //   Plugs.Trigger.Connections[].EntityName       -> what fires it
-            //   Properties["Animation Asset"]                -> the clip
-            //   Properties["Start Time"]                     -> phase offset
-            //
-            // Measured on Hydroelectric: 19 of 19 connections resolve to a
-            // real entity, 19 of 19 of those carry a
-            // Vu3dDrawAnimatedModelComponent, and 19 of 19 clips are in the
-            // pack. Start Time is why four identical pump pistons do not pump
-            // in step; values of 1 and 15 appear.
-            // VuTriggerPlaneEntity / VuTriggerBoxEntity are built from the retail
-            // entity tree (load_entity_tree).
-            // VuOneShotFilterEntity, VuDelayEntity, VuGenericEventEntity,
-            // VuOnProjectInitializedEntity, VuIfEntity, VuAttachEntity and
-            // VuBooleanEntity are built from the retail entity tree
-            // (load_entity_tree; engine entity/actions.hxx).
-            // VuCoronaEntity is loaded from the retail entity tree (load_entity_tree).
-            // The per-class census and the class behind each path come from the
-            // retail entity tree (load_entity_tree).
-            // VuRotateMotionEntity is built from the retail entity tree, and its
-            // adopter recorded there (load_entity_tree).
-            // VuPlayAnimationEntity's properties come from the retail entity tree
-            // (load_entity_tree). What stays here is its VuScriptComponent's
-            // plugs - the event-graph data, which the tree does not model yet:
-            //   Plugs.PlayAnimation.Connections[].EntityName -> the props it drives
-            //   Plugs.Trigger.Connections[0].EntityName      -> what fires it
-            if ( type->text == "VuPlayAnimationEntity" && !here.empty( ) )
-            {
-                const value_t* script = components != nullptr ? find( *components, "VuScriptComponent" ) : nullptr;
-                const value_t* plugs = script != nullptr ? find( *script, "Plugs" ) : nullptr;
-                const value_t* trigger = plugs != nullptr ? find( *plugs, "Trigger" ) : nullptr;
-                const value_t* triggers = trigger != nullptr ? find( *trigger, "Connections" ) : nullptr;
-                auto& link = m_play_links[ here ];
-                if ( triggers != nullptr && triggers->kind == value_t::kind_t::list && !triggers->list.empty( ) )
-                {
-                    const value_t* named = find( triggers->list.front( ), "EntityName" );
-                    if ( named != nullptr && named->kind == value_t::kind_t::text )
-                        link.first = named->text;
-                }
-                const value_t* plug = plugs != nullptr ? find( *plugs, "PlayAnimation" ) : nullptr;
-                const value_t* targets = plug != nullptr ? find( *plug, "Connections" ) : nullptr;
-                if ( targets != nullptr && targets->kind == value_t::kind_t::list )
-                    for ( const value_t& target : targets->list )
-                    {
-                        const value_t* named = find( target, "EntityName" );
-                        if ( named != nullptr && named->kind == value_t::kind_t::text && !named->text.empty( ) )
-                            link.second.push_back( named->text );
-                    }
-            }
+            // VuTriggerPlaneEntity / VuTriggerBoxEntity, VuOneShotFilterEntity, VuDelayEntity,
+            // VuGenericEventEntity, VuOnProjectInitializedEntity, VuIfEntity, VuAttachEntity,
+            // VuBooleanEntity, VuCoronaEntity, VuRotateMotionEntity and VuPlayAnimationEntity
+            // (its properties AND its plugs' links), the per-class census and the class
+            // behind each path come from the retail entity tree (load_entity_tree; engine
+            // entity/actions.hxx, entity/script.hxx).
         }
 
         // The model-draw components (Vu3dDrawStaticModelComponent, Vu3dDrawAnimatedModelComponent) are placed
@@ -576,11 +528,11 @@ private:
     static void rigid_inverse( float* out, const float* m );
 
 
-    // One end of an event-graph edge. Edges are recorded on BOTH ends, so the
-    // direction comes from the plug's own meaning (In and Reset are inputs,
-    // Out and OnExit are outputs) rather than from where it was stored.
-    // Declared up here because collect_plug takes it by reference, and a
-    // nested type must be declared before it appears in a parameter list.
+    // One end of an event-graph link: the other plug's owner (its path) and name.
+    // Every plug's links are held, inputs' as well as outputs' - as retail's +0x50
+    // lists are - and only outputs are fired; the ctor-declared direction is in
+    // the tree (engine entity/script.hxx).
+    // Declared up here because fire() and the graph maps use it.
     struct edge_t
     {
         std::string entity;
@@ -599,9 +551,6 @@ private:
         bool value = false;
     };
 
-
-    // collect_graph: graph.hxx
-    void collect_graph( const std::string& owner, const value_t* components );
 
     // plug_returns_value: graph.hxx
     static bool plug_returns_value( const std::string& type, const std::string& plug );
@@ -683,7 +632,6 @@ private:
         m_override_components.clear( );
         m_collect = nullptr;
         m_adopters.clear( );
-        m_play_links.clear( );
         m_rig.clear( );
         m_type_census.clear( );
         m_authored_keys.clear( );
@@ -898,9 +846,6 @@ private:
     // (rotator, the entity that adopts it - the motion entity's direct
     // parent), in visit()'s post-order; consumed by adopt_rotators.
     std::vector< std::pair< int, std::string > > m_adopters;
-    // Each VuPlayAnimationEntity's script plugs, by its path: the Trigger plug's first connection and the PlayAnimation
-    // plug's targets (the event-graph walk reads them; the properties come from the tree).
-    std::map< std::string, std::pair< std::string, std::vector< std::string > > > m_play_links;
     // The template instance override map in scope for the current child loop,
     // and the single override handed to the next visit().
     const value_t* m_child_overrides = nullptr;
@@ -931,6 +876,9 @@ private:
     std::map< std::string, value_t > m_templates;
     // The project's entity tree as retail's VuProject::load builds it.
     std::unique_ptr< entity_t > m_tree;
+    // VuWater as the level builds it from the tree (water agent's surface.hxx
+    // water_build_world); hold is what water_best_wake takes. Not rendered yet.
+    water_built_t m_water;
     // Loaded VuTimedEventAssets, keyed by asset name. A control points into
     // this, so entries are only ever added.
     std::map< std::string, std::vector< timed_event_t > > m_timed;
@@ -1088,9 +1036,8 @@ private:
     // VuInstigatorComponent+36 via _register @0x531e10 and is written by boat
     // code at 0x41da90 / 0x421670 that has not been read; see gate_distance.
     float m_probe_radius = 0.0f;
-    // Every entity's resolved script connections: (entity, plug) -> the
-    // (entity, plug) pairs it is wired to. Built once during the entity walk,
-    // walked by fire(). This is retail's resolved connection array.
+    // Every plug's resolved links: (entity, plug) -> its +0x50 list in link order,
+    // each end by path - from the retail tree (load_entity_tree), walked by fire().
     std::map< std::pair< std::string, std::string >, std::vector< edge_t > > m_graph;
     std::map< std::string, c_ocean::ripple_t > m_ripple_sources;
     // Events delivered to node kinds that are not built yet. Counted rather

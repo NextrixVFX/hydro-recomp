@@ -55,8 +55,9 @@ inline std::unique_ptr< entity_t > world_check_tree( const unsigned* words, std:
     world.m_registry = &registry;
     world.m_ctor_for = entity_ctor_for;
     world.m_template = []( const std::string& ) -> const value_t* { return nullptr; };
-    world.m_components_for = entity_components_constructed;
+    world.m_components_for = entity_components_scripted;
     world.m_component_load = entity_load_component;
+    world.m_component_post = entity_post_load_component;
     world.m_component_mark = entity_mark_component;
     world.m_state_for = entity_state_for;
     world.m_properties_load = entity_load_properties;
@@ -435,9 +436,166 @@ inline bool verify_static_model_draw( )
     return failed == 0;
 }
 
+// The event graph as VuScriptComponent's loads resolve it (engine
+// entity/script.hxx: 0x503D70 / 0x504320, 0x502430, 0x542830, 0x5049E0)
+// against retail's VuProject::load on Games/HydroelectricRace (its level's
+// templates served) and a hand-built project (oracle case script_graph): the
+// tree pre-order (parent, name) and, per script component, every plug's links
+// in +0x50 order, every ref's target and the +0x28 referrers. One failure per
+// entity that differs in any of it.
+inline bool verify_script_graph( )
+{
+    static std::map< std::string, value_t > templates;
+    if ( templates.empty( ) )
+        for ( std::size_t k = 0; k < g_golden_script_templates_count; ++k )
+        {
+            const golden_script_document_t& d = g_golden_script_templates[ k ];
+            const unsigned char* raw = reinterpret_cast< const unsigned char* >( d.m_words );
+            templates[ d.m_name ] = c_reader( std::vector< std::uint8_t >( raw, raw + d.m_bytes ) ).parse( );
+        }
+    std::vector< std::string > names;
+    for ( const auto& pair : templates )
+        names.push_back( pair.first );
+    const entity_registry_t registry = build_entity_registry( names );
+    entity_world_t world;
+    world.m_registry = &registry;
+    world.m_ctor_for = entity_ctor_for;
+    world.m_template = []( const std::string& name ) -> const value_t*
+    {
+        const auto found = templates.find( name );
+        return found != templates.end( ) ? &found->second : nullptr;
+    };
+    world.m_components_for = entity_components_scripted;
+    world.m_component_load = entity_load_component;
+    world.m_component_post = entity_post_load_component;
+    world.m_component_mark = entity_mark_component;
+    world.m_state_for = entity_state_for;
+    world.m_properties_load = entity_load_properties;
+    world.m_properties_mark = entity_mark_properties;
+    int failed = 0;
+    int entities = 0;
+    int links = 0;
+    int bound = 0;
+    for ( std::size_t p = 0; p < g_golden_script_projects_count; ++p )
+    {
+        const golden_script_project_t& want = g_golden_script_projects[ p ];
+        const unsigned char* raw = reinterpret_cast< const unsigned char* >( want.m_words );
+        const value_t document = c_reader( std::vector< std::uint8_t >( raw, raw + want.m_bytes ) ).parse( );
+        const std::unique_ptr< entity_t > tree = entity_load_project( member( document, "VuProject" ), want.m_path, world );
+        std::vector< entity_t* > order;
+        std::vector< int > parent_of;
+        std::map< const entity_t*, int > index_of;
+        const auto walk = [ & ]( const auto& self, entity_t& e, int parent ) -> void
+        {
+            index_of[ &e ] = static_cast< int >( order.size( ) );
+            order.push_back( &e );
+            parent_of.push_back( parent );
+            const int here = index_of[ &e ];
+            for ( auto& child : e.m_children )
+                self( self, *child, here );
+        };
+        if ( tree )
+            walk( walk, *tree, -1 );
+        if ( static_cast< int >( order.size( ) ) != want.m_count )
+        {
+            LOG_ERROR( "script graph: %s has %d entities, retail %d", want.m_asset, static_cast< int >( order.size( ) ), want.m_count );
+            ++failed;
+            continue;
+        }
+        const auto index = [ & ]( const entity_t* e ) { const auto it = index_of.find( e ); return it != index_of.end( ) ? it->second : -1; };
+        for ( int k = 0; k < want.m_count; ++k )
+        {
+            const golden_script_entity_t& g = g_golden_script_entities[ want.m_first + k ];
+            entity_t& e = *order[ k ];
+            ++entities;
+            const script_component_t* sc = script_of( e );
+            bool same = e.m_name == g.m_name && parent_of[ k ] == g.m_parent && ( sc != nullptr ) == ( g.m_script != 0 );
+            if ( same && sc )
+            {
+                same = static_cast< int >( sc->m_plugs.size( ) ) == g.m_plugs && static_cast< int >( sc->m_refs.size( ) ) == g.m_refs &&
+                       static_cast< int >( sc->m_referrers.size( ) ) == g.m_referrers;
+                for ( int i = 0; same && i < g.m_plugs; ++i )
+                {
+                    const golden_script_plug_t& gp = g_golden_script_plugs[ g.m_first_plug + i ];
+                    const script_plug_t& ours = sc->m_plugs[ i ];
+                    same = ours.m_row->m_name == std::string( gp.m_name ) && static_cast< int >( ours.m_links.size( ) ) == gp.m_count;
+                    for ( int l = 0; same && l < gp.m_count; ++l )
+                    {
+                        const golden_script_end_t& gl = g_golden_script_links[ gp.m_first + l ];
+                        const script_link_t& link = ours.m_links[ l ];
+                        same = index( link.m_entity ) == gl.m_entity && script_of( *link.m_entity )->m_plugs[ link.m_plug ].m_row->m_name == std::string( gl.m_name );
+                        ++links;
+                    }
+                }
+                for ( int i = 0; same && i < g.m_refs; ++i )
+                {
+                    const golden_script_ref_t& gr = g_golden_script_refs[ g.m_first_ref + i ];
+                    same = sc->m_refs[ i ].m_row->m_name == std::string( gr.m_name ) && index( sc->m_refs[ i ].m_target ) == gr.m_target;
+                    bound += gr.m_target >= 0;
+                }
+                for ( int i = 0; same && i < g.m_referrers; ++i )
+                {
+                    const golden_script_end_t& gr = g_golden_script_referrers[ g.m_first_referrer + i ];
+                    const script_referrer_t& r = sc->m_referrers[ i ];
+                    same = index( r.m_entity ) == gr.m_entity && script_of( *r.m_entity )->m_refs[ r.m_ref ].m_row->m_name == std::string( gr.m_name );
+                }
+            }
+            if ( !same && ++failed <= 8 )
+                LOG_ERROR( "script graph: %s entity %d '%s' differs from retail ('%s', parent %d, script %d)", want.m_asset, k, e.m_name.c_str( ),
+                    g.m_name, g.m_parent, g.m_script );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuScriptComponent's loads (0x503D70 / 0x504320: connections 0x502430, refs 0x542830, ref connections 0x5049E0) match "
+                     "retail on %d entities of %d projects: %d link entries (each connection on both ends) and %d bound refs, in order", entities,
+            static_cast< int >( g_golden_script_projects_count ), links, bound );
+    else
+        LOG_ERROR( "script graph FAILED on %d entities", failed );
+    return failed == 0;
+}
+
+// animated_model_select against Vu3dDrawAnimatedModelComponent's draw 0x61DB60
+// (oracle case animated_model_draw): whether the instance is drawn and the
+// colour / lighting written first, one failure per vector.
+inline bool verify_animated_model_draw( )
+{
+    int failed = 0;
+    int drawn = 0;
+    for ( std::size_t k = 0; k < g_golden_animated_draws_count; ++k )
+    {
+        const golden_animated_draw_t& g = g_golden_animated_draws[ k ];
+        model_draw_t c;
+        model_draw_construct( c, true );
+        c.color = g.m_color;
+        c.draw_distance = draw_bits( g.m_draw );
+        c.dynamic_lighting = static_cast< std::uint8_t >( g.m_dynamic );
+        float lo[ 3 ], hi[ 3 ], eye[ 3 ];
+        for ( int a = 0; a < 3; ++a )
+        {
+            lo[ a ] = draw_bits( g.m_min[ a ] );
+            hi[ a ] = draw_bits( g.m_max[ a ] );
+            eye[ a ] = draw_bits( g.m_eye[ a ] );
+        }
+        const animated_draw_t ours = animated_model_select( c, lo, hi, eye, g.m_skip != 0 );
+        const bool same = ours.drawn == ( g.m_drawn != 0 ) && ( !ours.drawn || ( ours.color == g.m_wf8 && ours.dynamic_lighting == g.m_bfc ) );
+        drawn += g.m_drawn;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "animated model draw: vector %d drawn %d (0x%08X %d), retail %d (0x%08X %d)", static_cast< int >( k ), ours.drawn ? 1 : 0,
+                ours.color, ours.dynamic_lighting, g.m_drawn, g.m_wf8, g.m_bfc );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "animated_model_select matches Vu3dDrawAnimatedModelComponent's draw 0x61DB60 on %d vectors (%d drawn): drawn, colour "
+                     "and lighting bit for bit", static_cast< int >( g_golden_animated_draws_count ), drawn );
+    else
+        LOG_ERROR( "animated_model_select FAILED %d vectors", failed );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_animated_model_draw( ) && ok;
+    ok = verify_script_graph( ) && ok;
     ok = verify_prop_draw_matrix( ) && ok;
     ok = verify_light_rig( ) && ok;
     ok = verify_gfx_settings( ) && ok;

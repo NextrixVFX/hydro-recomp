@@ -84,6 +84,9 @@ struct entity_world_t
     // a component it does not know: a hook.
     std::function< void( entity_t& owner, entity_component_t& component, const value_t& properties, bool override ) >
         m_component_load;
+    // The component's own post-load after its property loads (vt+0xC, or vt+0x10 on a template override), on its
+    // whole data (components[its key]) - what VuScriptComponent's loads read. Null or unknown: a hook.
+    std::function< void( entity_t& owner, entity_component_t& component, const value_t& data, bool override ) > m_component_post;
     // The template mark's component step (0x501FE0: each property node's
     // vt+0x1C, then the component's vt+0x20). Null or unknown: a hook.
     std::function< void( entity_t& owner, entity_component_t& component ) > m_component_mark;
@@ -135,14 +138,17 @@ inline void entity_load( entity_t& entity, const value_t* data, const entity_wor
 
 // 0x501F70 (a normal load) / 0x502010 (a template override), over the +0x48
 // list in order: each component's data is components[its getType key], its
-// property nodes load from that data's "Properties", then its post-load.
+// property nodes load from that data's "Properties", then its post-load
+// (vt+0xC / vt+0x10) on that data.
 inline void entity_load_components( entity_t& entity, const value_t& components, const entity_world_t& world, bool override )
 {
     for ( entity_component_t& component : entity.m_components )
     {
-        const value_t& properties = member( member( components, component.m_key ), "Properties" );
+        const value_t& data = member( components, component.m_key );
         if ( world.m_component_load )
-            world.m_component_load( entity, component, properties, override );
+            world.m_component_load( entity, component, member( data, "Properties" ), override );
+        if ( world.m_component_post )
+            world.m_component_post( entity, component, data, override );
     }
 }
 

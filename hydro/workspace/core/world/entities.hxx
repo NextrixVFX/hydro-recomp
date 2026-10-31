@@ -45,8 +45,9 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     world.m_registry = &registry;
     world.m_ctor_for = entity_ctor_for;
     world.m_template = [ this ]( const std::string& name ) { return template_document( name ); };
-    world.m_components_for = entity_components_constructed;
+    world.m_components_for = entity_components_scripted;
     world.m_component_load = entity_load_component;
+    world.m_component_post = entity_post_load_component;
     world.m_component_mark = entity_mark_component;
     world.m_state_for = entity_state_for;
     world.m_properties_load = entity_load_properties;
@@ -91,8 +92,39 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     std::map< std::string, std::string > fresh_types;
     std::map< std::string, std::array< float, 16 > > fresh_worlds;
     std::map< std::string, int > fresh_census;
+    // THE EVENT GRAPH, as the script components' loads resolved it (engine
+    // entity/script.hxx, verify_script_graph): every plug's +0x50 list in link
+    // order - outputs and inputs alike, as retail holds them - and every bound
+    // ref's target, each end named by its path. A connection or ref that did
+    // not resolve is not in the tree, so it is not here either.
+    std::map< const entity_t*, std::string > path_of;
+    const auto name_all = [ & ]( const auto& self, entity_t& e, const std::string& trail ) -> void
+    {
+        path_of[ &e ] = trail;
+        for ( auto& child : e.m_children )
+            self( self, *child, trail.empty( ) ? child->m_name : trail + "/" + child->m_name );
+    };
+    name_all( name_all, *m_tree, std::string( ) );
+    std::map< std::pair< std::string, std::string >, std::vector< edge_t > > fresh_graph;
+    std::map< std::pair< std::string, std::string >, std::string > fresh_refs;
+    int graph_links = 0;
     const auto walk = [ & ]( const auto& self, entity_t& e, const std::string& trail ) -> void
     {
+        if ( const script_component_t* sc = script_of( e ); sc && !trail.empty( ) )
+        {
+            for ( const script_plug_t& plug : sc->m_plugs )
+            {
+                if ( plug.m_links.empty( ) )
+                    continue;
+                std::vector< edge_t >& edges = fresh_graph[ std::make_pair( trail, std::string( plug.m_row->m_name ) ) ];
+                for ( const script_link_t& link : plug.m_links )
+                    edges.push_back( edge_t{ path_of[ link.m_entity ], script_of( *link.m_entity )->m_plugs[ link.m_plug ].m_row->m_name } );
+                graph_links += static_cast< int >( plug.m_links.size( ) );
+            }
+            for ( const script_ref_t& ref : sc->m_refs )
+                if ( ref.m_target )
+                    fresh_refs[ std::make_pair( trail, std::string( ref.m_row->m_name ) ) ] = path_of[ ref.m_target ];
+        }
         // The class behind each path (what the graph audit and ref_target read)
         // and the per-class census, from the tree.
         if ( !trail.empty( ) )
@@ -141,7 +173,8 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
         }
         // VuPlayAnimationEntity: the clip and its params from the loaded
         // targets; which props it drives and what triggers it are its script
-        // component's plugs, collected by the event-graph walk (m_play_links).
+        // component's links - its "PlayAnimation" output's ends, and the first
+        // end of its "Trigger" input.
         if ( const auto* p = entity_action< play_animation_properties_t >( e ); p && e.m_type == "VuPlayAnimationEntity" &&
              !p->animation_asset.empty( ) )
         {
@@ -153,12 +186,15 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
             play.looping = p->looping != 0;
             play.one_shot = p->one_shot != 0;
             play.factor = p->time_factor;
-            const auto links = m_play_links.find( trail );
-            if ( links != m_play_links.end( ) )
+            if ( const script_component_t* sc = script_of( e ) )
             {
-                play.trigger = links->second.first;
-                for ( const std::string& target : links->second.second )
-                    fresh_play.emplace( target, play );
+                const int trigger = script_find_plug( *sc, "Trigger" );
+                const int drives = script_find_plug( *sc, "PlayAnimation" );
+                if ( trigger >= 0 && !sc->m_plugs[ trigger ].m_links.empty( ) )
+                    play.trigger = path_of[ sc->m_plugs[ trigger ].m_links.front( ).m_entity ];
+                if ( drives >= 0 )
+                    for ( const script_link_t& link : sc->m_plugs[ drives ].m_links )
+                        fresh_play.emplace( path_of[ link.m_entity ], play );
             }
             if ( !trail.empty( ) )
             {
@@ -395,6 +431,10 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
         }
     };
     walk( walk, *m_tree, std::string( ) );
+    m_graph = std::move( fresh_graph );
+    m_refs = std::move( fresh_refs );
+    LOG_INFO( "event graph: %u linked plugs, %d link entries (each connection on both ends), %u bound refs - from the tree",
+        static_cast< unsigned >( m_graph.size( ) ), graph_links, static_cast< unsigned >( m_refs.size( ) ) );
     m_seat_world = std::move( fresh_worlds );
     m_entity_type = std::move( fresh_types );
     m_type_census = std::move( fresh_census );
@@ -419,6 +459,15 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
               "unknown world; %d models placed, %d with an unknown world; %d triggers, %d with an unknown world; %d static pfx placed, %d "
               "with an unknown world", asset, path.c_str( ), entities, unknown, placed, unplaced, models, models_unplaced,
         static_cast< int >( m_triggers.size( ) ), triggers_unplaced, pfx_placed, pfx_unplaced );
+    // VuWater, built from the tree: each water entity's slot 6 in VuEntity::
+    // gameInitialize 0x500B10's order (children first), from the project root.
+    // ASSUMED, not read: that the race calls 0x500B10 on the project root -
+    // which caller does is unread. Point waves are made later by their tick.
+    // An entity it cannot build is counted, never stood in for.
+    m_water = water_built_t{ };
+    water_build_world( *m_tree, m_water, []( entity_t& e ) { return entity_transform( e ); } );
+    LOG_INFO( "water: %u surfaces, %u waves built from the tree; %d water entities not built", static_cast< unsigned >( m_water.surfaces.size( ) ),
+        static_cast< unsigned >( m_water.waves.size( ) ), m_water.skipped );
     // Which types' construction is not captured - what to recreate next.
     for ( const auto& pair : unknown_types )
         LOG_VERBOSE( "entity tree: UNKNOWN %-40s x%d", pair.first.c_str( ), pair.second );
