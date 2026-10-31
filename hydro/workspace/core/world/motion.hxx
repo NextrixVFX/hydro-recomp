@@ -66,30 +66,16 @@ inline bool c_world::owned_by( const std::string& owner, const std::string& targ
         && owner[ target.size( ) ] == '/';
 }
 
-// Resolve one of an entity's refs to a full entity path.
-//
-// A ref's authored value comes in TWO forms, both measured off the asset:
-// an ABSOLUTE full path (VuAttachEntity's Parent and Child), and a
-// TEMPLATE-RELATIVE one (every VuRotateMotionEntity authors
-// "WarningSiren/SirenLight01" while living at ".../WarningSiren1/
-// RotateMotion1"). In the second form the first segment is the TEMPLATE's
-// name and the rest hangs off the owner's parent; dropping that segment
-// resolved to a real entity for 13 of 13 instances, which is why the rule
-// is this and not a search.
+// One of an entity's refs, as its load bound it: the target's path, or ""
+// when the ref is unbound. The resolution is retail's (VuScriptRef's load
+// 0x542830 / RefConnections 0x5049E0 through the path lookup 0x500F60, in
+// the tree - engine entity/script.hxx); the template-relative rule that
+// stood here was a measured inference, and matched it on all 219 bound refs
+// of Hydroelectric before it was deleted.
 inline std::string c_world::ref_target( const std::string& owner, const std::string& name ) const
 {
     const auto found = m_refs.find( std::make_pair( owner, name ) );
-    if ( found == m_refs.end( ) )
-        return std::string( );
-    const std::string& authored = found->second;
-    if ( m_entity_type.count( authored ) != 0 )
-        return authored;
-    const std::size_t slash = owner.rfind( '/' );
-    const std::size_t inner = authored.find( '/' );
-    if ( slash == std::string::npos || inner == std::string::npos )
-        return authored;
-    const std::string relative = owner.substr( 0, slash ) + authored.substr( inner );
-    return m_entity_type.count( relative ) != 0 ? relative : authored;
+    return found != m_refs.end( ) ? found->second : std::string( );
 }
 
 // Transliterated from VuRotateMotionEntity_tick @0x5d1090. The angle

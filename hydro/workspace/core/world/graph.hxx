@@ -7,110 +7,35 @@
 // RETAIL MODEL, and it is small. VuScriptOutputPlug_fire @0x5023a0 is the
 // WHOLE dispatcher in 138 bytes, reached as vtable slot 2 through the
 // thunk @0x503270 after VuScriptComponent_findPlug @0x504770 looks the
-// plug up by name. Connections are resolved ONCE at load - sub_503d70 and
-// sub_503ec0 read Plugs / Connections / RefConnections, sub_502720
-// resolves each EntityName + PlugName pair - and firing then just walks
-// the resolved list calling slot 2 on every entry. this[20] / this[21]
-// are the array bounds.
+// plug up by name. Connections are resolved ONCE at load - by
+// VuScriptComponent's loads 0x503D70 / 0x504320, recreated in engine
+// entity/script.hxx and verified (verify_script_graph) - and firing then
+// just walks the resolved list calling slot 2 on every entry. this[20] /
+// this[21] are the array bounds. m_graph is that list per plug, from the
+// tree (load_entity_tree).
 //
 // this[9] == 0 is a BROADCAST: call every connection and discard the
 // results. Non-zero calls ONLY THE FIRST and propagates its return value.
-// this[9] is set from the THIRD ARGUMENT of VuScriptOutputPlug_init
-// @0x502080, so it is the plug's declared value type and only a
-// constructor can tell us which plugs have one - see
-// plug_returns_value() below.
+// this[9] is the plug's return type (+0x24, VuScriptOutputPlug_init
+// @0x502080's second argument) - see plug_returns_value() below.
 //
-// DIRECTION IS NOT IN THE DATA. The authored file records a connection on
-// BOTH ends, so an input plug carries a mirrored entry pointing back at
-// its source. Which end is which comes from the owning entity's
-// CONSTRUCTOR: an INPUT plug is built by VuScriptInputPlug_init @0x5e28f0
-// (which binds a VuMethod1 handler at plug+96), an OUTPUT plug by
-// VuScriptOutputPlug_init. Every classification below cites the ctor that
-// settled it, and because we only ever fire names those ctors prove to be
-// outputs, the mirrored input-side entries are never walked.
-inline void c_world::collect_graph( const std::string& owner, const value_t* components )
-{
-    const value_t* script = components != nullptr
-        ? find( *components, "VuScriptComponent" ) : nullptr;
-    if ( script == nullptr )
-        return;
-    // THE REFS. A VuScriptComponent carries more than plugs: every
-    // VuMotionEntity declares a VuScriptRef named "Entity"
-    // (VuMotionEntity_ctor @0x61a000 stores the literal at ref+12), and
-    // VuMotionEntity_onActivate @0x61a4f0 drives whatever that ref
-    // resolves to. VuAttachEntity's 30 instances need the same thing.
-    // The authored side is read by sub_503d70 / sub_503ec0 as
-    // "Refs" / "RefConnections"; this probe prints the real shape once so
-    // the parser is written against the data rather than against a guess.
-    // THE REFS, measured off the asset rather than guessed: a
-    // VuScriptComponent's "Refs" node is a flat map from the ref's NAME to
-    // the FULL PATH of the entity it points at, as one text value.
-    //
-    //   Refs { "Child":  "Hydroelectric/Audio/AudioEmitter_Helicopter",
-    //          "Parent": "Hydroelectric/Terrain/zone06 .../Helicopter" }
-    //
-    // A ref is declared in a constructor as a VuScriptRef carrying that
-    // name - VuMotionEntity_ctor @0x61a000 builds one called "Entity" and
-    // VuMotionEntity_onActivate @0x61a4f0 drives whatever it resolves to.
-    // This is the block that VuAttachEntity's 30 instances need, and the
-    // reason the windmills have no propellers.
-    const value_t* refs = find( *script, "Refs" );
-    if ( refs != nullptr && refs->kind == value_t::kind_t::object )
-    {
-        for ( const auto& named : refs->object )
-        {
-            if ( named.second.kind != value_t::kind_t::text || named.second.text.empty( ) )
-                continue;
-            m_refs.emplace( std::make_pair( owner, named.first ), named.second.text );
-        }
-    }
-    const value_t* plugs = find( *script, "Plugs" );
-    if ( plugs == nullptr || plugs->kind != value_t::kind_t::object )
-        return;
-    for ( const auto& named : plugs->object )
-    {
-        const value_t* links = find( named.second, "Connections" );
-        if ( links == nullptr || links->kind != value_t::kind_t::list || links->list.empty( ) )
-            continue;
-        std::vector< edge_t > edges;
-        for ( const value_t& link : links->list )
-        {
-            const value_t* entity = find( link, "EntityName" );
-            const value_t* port = find( link, "PlugName" );
-            if ( entity == nullptr || entity->kind != value_t::kind_t::text || entity->text.empty( ) )
-                continue;
-            edge_t edge{};
-            edge.entity = entity->text;
-            if ( port != nullptr && port->kind == value_t::kind_t::text )
-                edge.plug = port->text;
-            edges.push_back( std::move( edge ) );
-        }
-        if ( edges.empty( ) )
-            continue;
-        // An entity reached through a template expansion can be walked
-        // more than once; keeping the first resolution stops one plug
-        // accumulating the same connection twice and firing twice.
-        m_graph.emplace( std::make_pair( owner, named.first ), std::move( edges ) );
-    }
-}
+// DIRECTION IS NOT IN THE DATA, it is the ctor's: an INPUT plug is a
+// VuScriptInputPlug (binds a VuMethod1 handler), an OUTPUT plug a
+// VuScriptOutputPlug - captured per class (hydro game/plugs.hxx). Every
+// handler below fires only names its ctor declares as outputs.
 
-// Which plugs carry a VALUE. this[9] in VuScriptOutputPlug_fire is set
-// from the THIRD ARGUMENT of VuScriptOutputPlug_init @0x502080
-// (`this[9] = a3`), and every ctor read so far passes 0 except two:
-//
-//   VuIfEntity_ctor      @0x5ddbe0   "Operand", 3
-//   VuBooleanEntity_ctor @0x5e5880   "Get",     3
-//
-// and 3 is exactly the tag VuBoolean_onGet returns. So this[9] is the
-// plug's RETURN TYPE, 0 meaning void - which is what selects the
-// dispatcher's two halves: a void plug broadcasts to every connection and
-// discards the results, a typed plug calls ONLY THE FIRST and propagates
-// its return value. Nothing in the authored data says which is which;
-// only the constructor does, so this list grows one ctor at a time.
+// Which plugs carry a VALUE: this[9] in VuScriptOutputPlug_fire is the
+// plug's return type (+0x24), which its ctor passes to
+// VuScriptOutputPlug_init @0x502080 - captured per class (game/plugs.hxx;
+// VuIfEntity's "Operand" and VuBooleanEntity's "Get" are 3, the tag
+// VuBoolean_onGet returns). 0 is void, which selects the broadcast half; a
+// typed plug calls ONLY THE FIRST link and propagates its return value.
 inline bool c_world::plug_returns_value( const std::string& type, const std::string& plug )
 {
-    return ( type == "VuIfEntity" && plug == "Operand" )
-        || ( type == "VuBooleanEntity" && plug == "Get" );
+    for ( const script_plug_row_t& row : g_script_plug_rows )
+        if ( type == row.m_class && plug == row.m_name )
+            return row.m_type != 0;
+    return false;
 }
 
 // VuScriptOutputPlug_fire @0x5023a0, both halves.
