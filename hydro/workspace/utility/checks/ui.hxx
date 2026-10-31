@@ -3,7 +3,9 @@
 #include <workspace/core/ui/entity.hxx>
 #include <workspace/core/ui/button.hxx>
 #include <workspace/core/ui/flow.hxx>
+#include <workspace/core/ui/screen.hxx>
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 
@@ -504,9 +506,78 @@ inline bool verify_ui_button( )
     return failed == 0;
 }
 
+// c_ui_screen / c_ui_event / the button's event map (hydro core/ui/screen.hxx)
+// against retail's VuUIScreenEntity ScreenEnter / ScreenExit / tick input half
+// and VuUIEventEntity 0x62E950 delivering to real children (oracle case
+// ui_screen_events): every hook in order - the input queries, the Trigger /
+// button fires with their params, the sounds.
+inline bool verify_ui_screen_events( )
+{
+    std::vector< std::array< std::string, 3 > > log;
+    std::vector< std::string > down;
+    c_ui_screen screen;
+    screen.m_input = [ &log, &down ]( int pad, const char* name )
+    {
+        log.push_back( { "query", std::to_string( pad ), name } );
+        return std::find( down.begin( ), down.end( ), name ) != down.end( );
+    };
+    std::vector< std::unique_ptr< c_ui_event > > events;
+    std::vector< std::unique_ptr< ui_event_map_t > > maps;
+    for ( std::size_t k = 0; k < g_golden_scr_events_count; ++k )
+    {
+        events.push_back( std::make_unique< c_ui_event >( g_golden_scr_events[ k ][ 1 ] ) );
+        const std::string who = g_golden_scr_events[ k ][ 0 ];
+        events.back( )->m_fire = [ &log, who ]( const ui_params_t& p ) { log.push_back( { "fire", who, ui_hex( p ) } ); };
+        maps.push_back( std::make_unique< ui_event_map_t >( ) );
+        events.back( )->events( *maps.back( ) );
+        screen.m_children.push_back( maps.back( ).get( ) );
+    }
+    ui_button_hooks_t hooks;
+    hooks.m_fire = [ &log ]( const char* plug, const ui_params_t& p ) { log.push_back( { "fire", std::string( "Play." ) + plug, ui_hex( p ) } ); };
+    hooks.m_connections = []( const char* ) { return 1; };
+    hooks.m_sound = [ &log ]( const char* name ) { log.push_back( { "sound", name, "" } ); };
+    c_ui_button button( ui_entity_id( "Main/Play" ), hooks );
+    button.m_focused = true;
+    button.m_want_focus = true;
+    maps.push_back( std::make_unique< ui_event_map_t >( ) );
+    ui_button_events( button, *maps.back( ) );
+    screen.m_children.push_back( maps.back( ).get( ) );
+    int failed = 0;
+    for ( std::size_t s = 0; s < g_golden_scr_steps_count; ++s )
+    {
+        const golden_scr_step_t& st = g_golden_scr_steps[ s ];
+        const std::string op = st.m_op;
+        log.clear( );
+        down.assign( g_golden_scr_down + st.m_first_down, g_golden_scr_down + st.m_first_down + st.m_downs );
+        if ( op == "enter" )
+            screen.screen_enter( );
+        else if ( op == "exit" )
+            screen.screen_exit( );
+        else
+            screen.tick( 0.016666668f, st.m_input != 0 );
+        bool same = log.size( ) == static_cast< std::size_t >( st.m_logs );
+        for ( int k = 0; same && k < st.m_logs; ++k )
+        {
+            const golden_btn_log_t& g = g_golden_scr_logs[ st.m_first_log + k ];
+            same = log[ k ][ 0 ] == g.m_kind && log[ k ][ 1 ] == g.m_a && log[ k ][ 2 ] == g.m_b;
+        }
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui screen events: step %d (%s) reached %d hooks, retail %d (or one differs)", static_cast< int >( s ), st.m_op,
+                static_cast< int >( log.size( ) ), st.m_logs );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "a screen's UI events match retail's (VuUIScreenEntity 0x629A70 / 0x629B00 / 0x629B90 + 0x629F10 / 0x5011A0 / "
+                     "0x5155C0, VuUIEventEntity 0x62E950, the button's event map) on %d steps: input queries, fires with params, sounds",
+            static_cast< int >( g_golden_scr_steps_count ) );
+    else
+        LOG_ERROR( "a screen's UI events FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_screen_events( ) && ok;
     ok = verify_ui_button( ) && ok;
     ok = verify_ui_front_end( ) && ok;
     ok = verify_ui_projects( ) && ok;
