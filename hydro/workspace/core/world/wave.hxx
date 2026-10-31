@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <emmintrin.h>
+#include <vector>
 
 // The VuWater*Wave family: the thirteen wave kinds that displace a water
 // surface. The ocean three live in water.hxx because they carry a whole
@@ -1029,6 +1030,82 @@ inline wave_image_t whirlpool_create( const wave_source_t& s )
     w.setf( 48, y );
     w.setf( 52, outer );
     return w;
+}
+
+// ---------------------------------------------------------------------------
+// VuWater's "Water" tick @0x529e30 (thiscall, float dt), registered with the
+// tick manager by VuWater's init @0x528200. The wave list is a singly linked
+// list of pool nodes {wave, next} at water +0x30; the pool's free list is at
+// +0x10 with its count at +8. Per node, in list order, with the next node
+// taken BEFORE the call:
+//
+//   alive = wave->slot2( wave +0x48 * dt )      the wave's own time scale
+//   if ( !alive )
+//       unlink the FIRST node holding this wave (not necessarily the one
+//       being visited - a wave listed twice loses its earlier node), push
+//       that node on the free list, remove the wave from the trees
+//       (0x529b90), and drop its refcount (+4), destroying it through slot 0
+//       with 1 once it reaches zero
+//
+// then the renderer's kick 0x595610 on +0x1C. Nodes and waves are held by
+// index (retail's pointers; -1 for null). The wave's tick, the tree removal,
+// the destructor and the renderer are Vu virtuals / the render thread: hooks.
+struct water_list_node_t
+{
+    int wave = -1;
+    int next = -1;
+};
+
+struct water_list_t
+{
+    std::vector< water_list_node_t > nodes;
+    int used = -1;        // +0x30
+    int free = -1;        // +0x10
+    int free_count = 0;   // +0x08
+};
+
+struct water_tick_hooks_t
+{
+    void* user = nullptr;
+    bool ( *tick )( void* user, int wave, float dt ) = nullptr;
+    void ( *remove )( void* user, int wave ) = nullptr;
+    void ( *destroy )( void* user, int wave, int flag ) = nullptr;
+    void ( *render )( void* user ) = nullptr;
+};
+
+inline void water_tick( water_list_t& list, const float* time_scale, int* refcount, float dt,
+    const water_tick_hooks_t& hooks )
+{
+    for ( int at = list.used; at >= 0; )
+    {
+        const int next = list.nodes[ at ].next;
+        const int wave = list.nodes[ at ].wave;
+        if ( !hooks.tick( hooks.user, wave, time_scale[ wave ] * dt ) )
+        {
+            int prev = -1;
+            int found = list.used;
+            while ( found >= 0 && list.nodes[ found ].wave != wave )
+            {
+                prev = found;
+                found = list.nodes[ found ].next;
+            }
+            if ( found >= 0 )
+            {
+                if ( prev >= 0 )
+                    list.nodes[ prev ].next = list.nodes[ found ].next;
+                else
+                    list.used = list.nodes[ found ].next;
+                list.nodes[ found ].next = list.free;
+                ++list.free_count;
+                list.free = found;
+                hooks.remove( hooks.user, wave );
+                if ( --refcount[ wave ] == 0 )
+                    hooks.destroy( hooks.user, wave, 1 );
+            }
+        }
+        at = next;
+    }
+    hooks.render( hooks.user );
 }
 
 // The walk retail performs around that body: count vertices from the context's

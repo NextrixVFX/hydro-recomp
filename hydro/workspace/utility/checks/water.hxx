@@ -206,11 +206,103 @@ inline bool verify_wave_bridges( )
     return failed == 0;
 }
 
+// water_tick against VuWater's "Water" tick @0x529e30 on fake wave lists: the exact event sequence (each
+// wave's slot 2 with its scaled dt, the tree removals, the destructor calls, the renderer's kick) and the
+// final list, pool and refcounts. The waves' answers are the scenario's inputs.
+struct water_tick_record_t
+{
+    const float* specs = nullptr;
+    std::vector< int > cursor;
+    std::vector< std::uint32_t > events;
+};
+
+inline bool verify_water_tick( )
+{
+    int failed = 0;
+    int events_total = 0;
+    for ( std::size_t index = 0; index < g_golden_water_tick_count; ++index )
+    {
+        const golden_water_tick_t& g = g_golden_water_tick[ index ];
+        water_tick_record_t rec{};
+        rec.specs = g_golden_water_tick_specs + g.m_spec;
+        rec.cursor.assign( g.m_specs, 0 );
+        std::vector< float > scale( g.m_specs );
+        std::vector< int > refs( g.m_specs );
+        for ( int k = 0; k < g.m_specs; ++k )
+        {
+            scale[ k ] = rec.specs[ 5 * k ];
+            refs[ k ] = static_cast< int >( rec.specs[ 5 * k + 1 ] );
+        }
+        const int* state = g_golden_water_tick_state + g.m_state;
+        water_list_t list{};
+        list.nodes.resize( g.m_nodes + 2 );
+        for ( int i = 0; i < g.m_nodes; ++i )
+            list.nodes[ i ] = { state[ i ], i + 1 < g.m_nodes ? i + 1 : -1 };
+        list.nodes[ g.m_nodes ] = { 0, g.m_nodes + 1 };
+        list.nodes[ g.m_nodes + 1 ] = { 0, -1 };
+        list.used = g.m_nodes ? 0 : -1;
+        list.free = g.m_nodes;
+        list.free_count = 2;
+        water_tick_hooks_t hooks{};
+        hooks.user = &rec;
+        hooks.tick = []( void* u, int wave, float dt ) {
+            auto& r = *static_cast< water_tick_record_t* >( u );
+            std::uint32_t bits;
+            std::memcpy( &bits, &dt, 4 );
+            r.events.insert( r.events.end( ), { 0u, static_cast< std::uint32_t >( wave ), bits } );
+            const int answer = static_cast< int >( r.specs[ 5 * wave + 3 + r.cursor[ wave ]++ ] );
+            return answer != 0;
+        };
+        hooks.remove = []( void* u, int wave ) {
+            static_cast< water_tick_record_t* >( u )->events.insert(
+                static_cast< water_tick_record_t* >( u )->events.end( ), { 1u, static_cast< std::uint32_t >( wave ), 1u } );
+        };
+        hooks.destroy = []( void* u, int wave, int flag ) {
+            static_cast< water_tick_record_t* >( u )->events.insert( static_cast< water_tick_record_t* >( u )->events.end( ),
+                { 2u, static_cast< std::uint32_t >( wave ), static_cast< std::uint32_t >( flag ) } );
+        };
+        hooks.render = []( void* u ) {
+            static_cast< water_tick_record_t* >( u )->events.insert(
+                static_cast< water_tick_record_t* >( u )->events.end( ), { 3u, 0xFFFFFFFFu, 1u } );
+        };
+        water_tick( list, scale.data( ), refs.data( ), g.m_dt, hooks );
+
+        auto node_id = [ & ]( int n ) { return n < 0 ? -1 : ( n >= g.m_nodes ? 100 + ( n - g.m_nodes ) : n ); };
+        bool ok = rec.events.size( ) == static_cast< std::size_t >( 3 * g.m_events ) &&
+                  std::memcmp( rec.events.data( ), g_golden_water_tick_events + g.m_event,
+                      rec.events.size( ) * sizeof( std::uint32_t ) ) == 0;
+        ok = ok && list.free_count == g.m_free_count && node_id( list.free ) == g.m_free_head &&
+             node_id( list.used ) == g.m_used_head;
+        for ( int i = 0; i < g.m_nodes && ok; ++i )
+            ok = node_id( list.nodes[ i ].next ) == state[ g.m_nodes + i ];
+        for ( int k = 0; k < g.m_specs && ok; ++k )
+            ok = refs[ k ] == state[ 2 * g.m_nodes + k ];
+        events_total += g.m_events;
+        if ( !ok )
+        {
+            ++failed;
+            LOG_ERROR( "water_tick scenario %d differs from @0x529e30 (%d events ours, %d retail)",
+                static_cast< int >( index ), static_cast< int >( rec.events.size( ) / 3 ), g.m_events );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "water_tick matches VuWater's Water tick @0x529e30 on %d scenarios (%d events, list / pool / refcounts)",
+            static_cast< int >( g_golden_water_tick_count ), events_total );
+    }
+    else
+    {
+        LOG_ERROR( "water_tick FAILED %d of %d scenarios", failed, static_cast< int >( g_golden_water_tick_count ) );
+    }
+    return failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
     ok = verify_ocean_kernels( ) && ok;
     ok = verify_wake_kernels( ) && ok;
     ok = verify_wave_bridges( ) && ok;
+    ok = verify_water_tick( ) && ok;
     return ok;
 }
