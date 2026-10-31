@@ -2,6 +2,7 @@
 
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/entity/registry.hxx>
+#include <workspace/core/world/transform.hxx>
 
 #include <cstring>
 
@@ -318,4 +319,379 @@ inline const entity_ctor_t* entity_ctor_for( const std::string& cls )
     const entity_ctor_t* found = std::lower_bound( first, last, cls,
         []( const entity_ctor_t& row, const std::string& key ) { return std::strcmp( row.m_class, key.c_str( ) ) < 0; } );
     return found != last && cls == found->m_class ? found : nullptr;
+}
+// The components each captured type's ctor attaches, in its +0x48 order, with
+// each component's getType key (census/createprobe.py; codegen/entityfacts.py
+// components). Grouped by class, classes sorted.
+inline const entity_component_row_t g_entity_component_rows[] = {
+    { "VuAIUIDriverStartEntity", "VuTransformComponent", 0x74D324u },
+    { "VuAIUIDriverStartEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuAIUIDriverStartEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuAddBoostEntity", "VuTransformComponent", 0x74D324u },
+    { "VuAddBoostEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuAddIntegerConstantEntity", "VuTransformComponent", 0x74D324u },
+    { "VuAddIntegerConstantEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuAddIntegersEntity", "VuTransformComponent", 0x74D324u },
+    { "VuAddIntegersEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuAiWaypointEntity", "VuTransformComponent", 0x74D324u },
+    { "VuAiWaypointEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuAiWaypointEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuAmbientLightEntity", "VuTransformComponent", 0x74D324u },
+    { "VuAmbientLightEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuAttachEntity", "VuTransformComponent", 0x74D324u },
+    { "VuAttachEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuAudioAmbientReverbEntity", "VuTransformComponent", 0x74D324u },
+    { "VuAudioAmbientReverbEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuAudioBankEntity", "VuTransformComponent", 0x74D324u },
+    { "VuAudioDuckingEntity", "VuTransformComponent", 0x74D324u },
+    { "VuAudioDuckingEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuAudioEmitterEntity", "VuTransformComponent", 0x74D324u },
+    { "VuAudioEmitterEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuAudioEmitterEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuAudioEmitterEntity", "VuMotionComponent", 0x74E984u },
+    { "VuAudioEventEntity", "VuTransformComponent", 0x74D324u },
+    { "VuAudioEventEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuAudioProjectEntity", "VuTransformComponent", 0x74D324u },
+    { "VuAudioReverbEntity", "VuTransformComponent", 0x74D324u },
+    { "VuAudioReverbEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuAudioReverbEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuBankedTurnWaveEntity", "VuTransformComponent", 0x74D324u },
+    { "VuBankedTurnWaveEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuBoatStatEntity", "VuTransformComponent", 0x74D324u },
+    { "VuBoatStatEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuBoatStatEntity", "Vu2dLayoutComponent", 0x738A78u },
+    { "VuBoatStatEntity", "VuUIDrawComponent", 0x738A44u },
+    { "VuBooleanEntity", "VuTransformComponent", 0x74D324u },
+    { "VuBooleanEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuBuildFilterEntity", "VuTransformComponent", 0x74D324u },
+    { "VuBuildFilterEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuBumpWaveEntity", "VuTransformComponent", 0x74D324u },
+    { "VuBumpWaveEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuCheatEntity", "VuTransformComponent", 0x74D324u },
+    { "VuCheatEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuCircularOceanWaveEntity", "VuTransformComponent", 0x74D324u },
+    { "VuCircularOceanWaveEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuCircularOceanWaveEntity", "VuControlComponent", 0x757EA0u },
+    { "VuCircularOceanWaveEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuClearChampDataUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuClearChampDataUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuClearChampionshipDataUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuClearChampionshipDataUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuClearGameResultsUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuClearGameResultsUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuCompareBooleansEntity", "VuTransformComponent", 0x74D324u },
+    { "VuCompareBooleansEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuCompareIntegersEntity", "VuTransformComponent", 0x74D324u },
+    { "VuCompareIntegersEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuCompareStringsEntity", "VuTransformComponent", 0x74D324u },
+    { "VuCompareStringsEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuControlKeyframeEntity", "VuTransformComponent", 0x74D324u },
+    { "VuControlMethodEntity", "VuTransformComponent", 0x74D324u },
+    { "VuControlMethodEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuCoronaEntity", "VuTransformComponent", 0x74D324u },
+    { "VuCoronaEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuCoronaEntity", "Vu3dDrawComponent", 0x74D244u },
+    { "VuCoronaEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuCoronaEntity", "VuMotionComponent", 0x74E984u },
+    { "VuCounterEntity", "VuTransformComponent", 0x74D324u },
+    { "VuCounterEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuDevJumpPointEntity", "VuTransformComponent", 0x74D324u },
+    { "VuDevJumpPointEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuDifficultyImageEntity", "VuTransformComponent", 0x74D324u },
+    { "VuDifficultyImageEntity", "Vu2dLayoutComponent", 0x738A78u },
+    { "VuDifficultyImageEntity", "VuUIDrawComponent", 0x738A44u },
+    { "VuDirectionalCoronaEntity", "VuTransformComponent", 0x74D324u },
+    { "VuDirectionalCoronaEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuDirectionalCoronaEntity", "Vu3dDrawComponent", 0x74D244u },
+    { "VuDirectionalCoronaEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuDirectionalCoronaEntity", "VuMotionComponent", 0x74E984u },
+    { "VuDirectionalFlowWaveEntity", "VuTransformComponent", 0x74D324u },
+    { "VuDirectionalFlowWaveEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuDirectionalLightEntity", "VuTransformComponent", 0x74D324u },
+    { "VuDirectionalLightEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuDirectionalLightEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuDirectionalLightEntity", "VuMotionComponent", 0x74E984u },
+    { "VuDirectionalWaveEntity", "VuTransformComponent", 0x74D324u },
+    { "VuDirectionalWaveEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuDirectionalWaveEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuDirectionalWaveEntity", "VuControlComponent", 0x757EA0u },
+    { "VuDoesChampDataExistUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuDoesChampDataExistUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuDoesChampionshipDataExistUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuDoesChampionshipDataExistUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuDynamicLightEntity", "VuTransformComponent", 0x74D324u },
+    { "VuDynamicLightEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuDynamicLightEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuDynamicLightEntity", "VuMotionComponent", 0x74E984u },
+    { "VuEllipticalGfxSettingsEntity", "VuTransformComponent", 0x74D324u },
+    { "VuEllipticalGfxSettingsEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuEllipticalGfxSettingsEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuEndActionGameUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuEndActionGameUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuExplosionEntity", "VuTransformComponent", 0x74D324u },
+    { "VuExplosionEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuExplosionEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuFoliageEntity", "VuTransformComponent", 0x74D324u },
+    { "VuFoliageEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuFoliageEntity", "Vu3dDrawComponent", 0x74D244u },
+    { "VuForceAffectorEntity", "VuTransformComponent", 0x74D324u },
+    { "VuForceAffectorEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuForceAffectorEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuFrontEndCameraEntity", "VuTransformComponent", 0x74D324u },
+    { "VuFrontEndCameraEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuGenericEventEntity", "VuTransformComponent", 0x74D324u },
+    { "VuGenericEventEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuGlobalGfxSettingsEntity", "VuTransformComponent", 0x74D324u },
+    { "VuGlobalGfxSettingsEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuGridPositionEntity", "VuTransformComponent", 0x74D324u },
+    { "VuGridPositionEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuGroupEntity", "VuTransformComponent", 0x74D324u },
+    { "VuGroupEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuHUDEntity", "VuTransformComponent", 0x74D324u },
+    { "VuHumanFilterEntity", "VuTransformComponent", 0x74D324u },
+    { "VuHumanFilterEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuIfEntity", "VuTransformComponent", 0x74D324u },
+    { "VuIfEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuInfiniteOceanWaveEntity", "VuTransformComponent", 0x74D324u },
+    { "VuInfiniteOceanWaveEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuInfiniteOceanWaveEntity", "VuControlComponent", 0x757EA0u },
+    { "VuIntegerEntity", "VuTransformComponent", 0x74D324u },
+    { "VuIntegerEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuIsCircuitTrack", "VuTransformComponent", 0x74D324u },
+    { "VuIsCircuitTrack", "VuScriptComponent", 0x74C3F0u },
+    { "VuIsEventTypeEntity", "VuTransformComponent", 0x74D324u },
+    { "VuIsEventTypeEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuIsPauseMenuActive", "VuTransformComponent", 0x74D324u },
+    { "VuIsPauseMenuActive", "VuScriptComponent", 0x74C3F0u },
+    { "VuIsSkuEntity", "VuTransformComponent", 0x74D324u },
+    { "VuIsSkuEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuIsTegraEntity", "VuTransformComponent", 0x74D324u },
+    { "VuIsTegraEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuKeyframeEntity", "VuTransformComponent", 0x74D324u },
+    { "VuKeyframeEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuKeyframeMotionEntity", "VuTransformComponent", 0x74D324u },
+    { "VuKeyframeMotionEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuKeyframeMotionEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuLensWaterEmitterEntity", "VuTransformComponent", 0x74D324u },
+    { "VuLensWaterEmitterEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuLicenseEntity", "VuTransformComponent", 0x74D324u },
+    { "VuLicenseEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuLoadingProgressBarEntity", "VuTransformComponent", 0x74D324u },
+    { "VuLoadingProgressBarEntity", "VuScriptComponent", 0x74C3F0u },
+    // VuLoadingProgressBarEntity: a capture at vtable 0x738A79 is not a component - skipped
+    { "VuLoadingProgressBarEntity", "VuUIDrawComponent", 0x738A44u },
+    { "VuMessageBoxEntity", "VuTransformComponent", 0x74D324u },
+    { "VuMessageBoxEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuMultiDelayEntity", "VuTransformComponent", 0x74D324u },
+    { "VuMultiDelayEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuOnAnyButtonOrKeyEntity", "VuTransformComponent", 0x74D324u },
+    { "VuOnAnyButtonOrKeyEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuOnKeyboardEventEntity", "VuTransformComponent", 0x74D324u },
+    { "VuOnKeyboardEventEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuOncePerLapFilterEntity", "VuTransformComponent", 0x74D324u },
+    { "VuOncePerLapFilterEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuOneShotFilterEntity", "VuTransformComponent", 0x74D324u },
+    { "VuOneShotFilterEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuOneShotPfxEntity", "VuTransformComponent", 0x74D324u },
+    { "VuOneShotPfxEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuOneShotPfxEntity", "VuMotionComponent", 0x74E984u },
+    { "VuPersistentBooleanEntity", "VuTransformComponent", 0x74D324u },
+    { "VuPersistentBooleanEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuPersistentIntegerEntity", "VuTransformComponent", 0x74D324u },
+    { "VuPersistentIntegerEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuPersistentStringEntity", "VuTransformComponent", 0x74D324u },
+    { "VuPersistentStringEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuPfxProjectEntity", "VuTransformComponent", 0x74D324u },
+    { "VuPlatformFilterEntity", "VuTransformComponent", 0x74D324u },
+    { "VuPlatformFilterEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuPlayAnimationEntity", "VuTransformComponent", 0x74D324u },
+    { "VuPlayAnimationEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuPointWaveEntity", "VuTransformComponent", 0x74D324u },
+    { "VuPointWaveEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuPointWaveEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuPointWaveEntity", "VuMotionComponent", 0x74E984u },
+    { "VuPopScreenUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuPopScreenUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuPushScreenUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuPushScreenUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuRectangularGfxSettingsEntity", "VuTransformComponent", 0x74D324u },
+    { "VuRectangularGfxSettingsEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuRectangularGfxSettingsEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuRectangularOceanWaveEntity", "VuTransformComponent", 0x74D324u },
+    { "VuRectangularOceanWaveEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuRectangularOceanWaveEntity", "VuControlComponent", 0x757EA0u },
+    { "VuRectangularOceanWaveEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuReloadScreenUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuReloadScreenUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuRestartActionGameUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuRestartActionGameUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuResumeActionGameUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuResumeActionGameUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuRotateMotionEntity", "VuTransformComponent", 0x74D324u },
+    { "VuRotateMotionEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuSaveSettingsEntity", "VuTransformComponent", 0x74D324u },
+    { "VuSaveSettingsEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuSceneEntity", "VuTransformComponent", 0x74D324u },
+    { "VuScreenFadeBoxEntity", "VuTransformComponent", 0x74D324u },
+    { "VuScreenFadeBoxEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuScreenFadeEllipsoidEntity", "VuTransformComponent", 0x74D324u },
+    { "VuScreenFadeEllipsoidEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuSellScreen", "VuTransformComponent", 0x74D324u },
+    { "VuSentientUpsellPresented", "VuTransformComponent", 0x74D324u },
+    { "VuSentientUpsellPresented", "VuScriptComponent", 0x74C3F0u },
+    { "VuSentientUpsellResponded", "VuTransformComponent", 0x74D324u },
+    { "VuSentientUpsellResponded", "VuScriptComponent", 0x74C3F0u },
+    { "VuSequencerEntity", "VuTransformComponent", 0x74D324u },
+    { "VuSequencerEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuSetBoatConfigPlayerEntity", "VuTransformComponent", 0x74D324u },
+    { "VuSetBoatConfigPlayerEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuSetBooleanEntity", "VuTransformComponent", 0x74D324u },
+    { "VuSetBooleanEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuSetDefaultSettingsEntity", "VuTransformComponent", 0x74D324u },
+    { "VuSetDefaultSettingsEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuSetFrontEndCameraEntity", "VuTransformComponent", 0x74D324u },
+    { "VuSetFrontEndCameraEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuSetGameModeUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuSetGameModeUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuSetInfoStringUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuSetInfoStringUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuSetIntegerEntity", "VuTransformComponent", 0x74D324u },
+    { "VuSetIntegerEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuSetMenuPresenceUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuSetMenuPresenceUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuSetScreenUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuSetScreenUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuSetStringEntity", "VuTransformComponent", 0x74D324u },
+    { "VuSetStringEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuSetTrackBranchProbabilities", "VuTransformComponent", 0x74D324u },
+    { "VuSetTrackBranchProbabilities", "VuScriptComponent", 0x74C3F0u },
+    { "VuShowWebPageUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuShowWebPageUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuShutdownAppUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuShutdownAppUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuSignInEntity", "VuTransformComponent", 0x74D324u },
+    { "VuSignInEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuSkyBoxEntity", "VuTransformComponent", 0x74D324u },
+    { "VuSkyBoxEntity", "Vu3dDrawComponent", 0x74D244u },
+    { "VuSkyBoxEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuSlalomGateEntity", "VuTransformComponent", 0x74D324u },
+    { "VuSlalomGateEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuSlalomGateEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuSlalomGateEntity", "VuMotionComponent", 0x74E984u },
+    { "VuStartActionGameUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuStartActionGameUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuStartLightsOutAction", "VuTransformComponent", 0x74D324u },
+    { "VuStartLightsOutAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuStaticPfxEntity", "VuTransformComponent", 0x74D324u },
+    { "VuStaticPfxEntity", "Vu3dDrawComponent", 0x74D244u },
+    { "VuStaticPfxEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuStaticPfxEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuStaticPfxEntity", "VuMotionComponent", 0x74E984u },
+    { "VuStaticWakeWaveEntity", "VuTransformComponent", 0x74D324u },
+    { "VuStaticWakeWaveEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuStringEntity", "VuTransformComponent", 0x74D324u },
+    { "VuStringEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuSubtractIntegersEntity", "VuTransformComponent", 0x74D324u },
+    { "VuSubtractIntegersEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuSwapSkyboxEntity", "VuTransformComponent", 0x74D324u },
+    { "VuSwapSkyboxEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuSwitchEntity", "VuTransformComponent", 0x74D324u },
+    { "VuSwitchEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuSysNotifyEntity", "VuTransformComponent", 0x74D324u },
+    { "VuSysNotifyEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuTransformEntity", "VuTransformComponent", 0x74D324u },
+    { "VuTransformEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuTransformEntity", "VuMotionComponent", 0x74E984u },
+    { "VuTransformEntity", "VuOffsetAttachComponent", 0x75182Cu },
+    { "VuTriggerArrayEntity", "VuTransformComponent", 0x74D324u },
+    { "VuTriggerArrayEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuTriggerForwarderEntity", "VuTransformComponent", 0x74D324u },
+    { "VuTriggerForwarderEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuUIImageEntity", "VuTransformComponent", 0x74D324u },
+    { "VuUIImageEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuUIImageEntity", "Vu2dLayoutComponent", 0x738A78u },
+    { "VuUIImageEntity", "VuUIDrawComponent", 0x738A44u },
+    { "VuUIImageEntity", "VuControlComponent", 0x757EA0u },
+    { "VuUIPadCheatComboEvent", "VuTransformComponent", 0x74D324u },
+    { "VuUIPadCheatComboEvent", "VuScriptComponent", 0x74C3F0u },
+    { "VuUIScreenEntity", "VuTransformComponent", 0x74D324u },
+    { "VuUserNextUIAction", "VuTransformComponent", 0x74D324u },
+    { "VuUserNextUIAction", "VuScriptComponent", 0x74C3F0u },
+    { "VuWakeWaveEntity", "VuTransformComponent", 0x74D324u },
+    { "VuWakeWaveEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuWakeWaveEntity", "VuMotionComponent", 0x74E984u },
+    { "VuWaterRampEntity", "VuTransformComponent", 0x74D324u },
+    { "VuWaterRampEntity", "Vu3dDrawComponent", 0x74D244u },
+    { "VuWaterRampEntity", "Vu3dLayoutComponent", 0x74C550u },
+    { "VuWaterRampEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuWaterRampEntity", "VuMotionComponent", 0x74E984u },
+    { "VuWaterTextureSettingsEntity", "VuTransformComponent", 0x74D324u },
+    { "VuWaterTextureSettingsEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuWhirlpoolWaveEntity", "VuTransformComponent", 0x74D324u },
+    { "VuWhirlpoolWaveEntity", "Vu3dLayoutComponent", 0x74C550u },
+};
+
+inline std::vector< entity_component_t > entity_components_for( const std::string& cls )
+{
+    std::vector< entity_component_t > out;
+    for ( const entity_component_row_t& row : g_entity_component_rows )
+        if ( cls == row.m_class )
+            out.push_back( { row.m_key, row.m_vtable, nullptr } );
+    return out;
+}
+
+constexpr std::uint32_t k_transform_component_vtable = 0x74D324u;
+
+inline transform_component_t* entity_transform( entity_t& e )
+{
+    for ( entity_component_t& c : e.m_components )
+        if ( c.m_vtable == k_transform_component_vtable && c.m_state )
+            return static_cast< transform_component_t* >( c.m_state.get( ) );
+    return nullptr;
+}
+
+inline void entity_mark_world_unknown( entity_t& e )
+{
+    for ( auto& child : e.m_children )
+    {
+        child->m_world_unknown = true;
+        entity_mark_world_unknown( *child );
+    }
+}
+
+// The world's component load for the components recreated so far - only
+// VuTransformComponent (constructed by its ctor 0x534180 when the owner is,
+// so its state exists from creation): its Position / Rotation / Scale loads,
+// then its post-load (vt+0xC 0x534340, vt+0x10 0x5343F0 - the same body), the
+// recalc against the owner's parent's transform world as it stands NOW. The
+// recalc's last step 0x534C00(1) walks the owner's children to update their
+// worlds and is not recreated: children recalced against this entity's
+// earlier world, so when the recalc changes it, their worlds are marked
+// unknown. Every other component is a hook.
+inline void entity_load_component( entity_t& owner, entity_component_t& component, const value_t& properties, bool )
+{
+    if ( component.m_vtable != k_transform_component_vtable )
+        return;
+    transform_component_t* c = static_cast< transform_component_t* >( component.m_state.get( ) );
+    float before[ 16 ];
+    std::memcpy( before, c->world, sizeof( before ) );
+    transform_load( *c, properties );
+    transform_component_t* parent = owner.m_parent ? entity_transform( *owner.m_parent ) : nullptr;
+    transform_recalc( *c, parent ? parent->world : nullptr );
+    if ( std::memcmp( c->world, before, sizeof( before ) ) != 0 )
+        entity_mark_world_unknown( owner );
+}
+
+// entity_components_for with each recreated component's state constructed.
+inline std::vector< entity_component_t > entity_components_constructed( const std::string& cls )
+{
+    std::vector< entity_component_t > out = entity_components_for( cls );
+    for ( entity_component_t& c : out )
+        if ( c.m_vtable == k_transform_component_vtable )
+        {
+            auto state = std::make_shared< transform_component_t >( );
+            transform_construct( *state );
+            c.m_state = state;
+        }
+    return out;
 }

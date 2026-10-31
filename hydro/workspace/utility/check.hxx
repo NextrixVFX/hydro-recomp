@@ -1246,10 +1246,113 @@ inline bool verify_dynamic_lights( )
     return failed == 0;
 }
 
+// The component step of VuEntity::load (0x501F70) with VuTransformComponent's
+// loads and recalc as the world's component callback (game/types.hxx), against
+// oracle case load_components: every entity of the level's all-clean subtrees,
+// pre-order - its component list (vtables, +0x48 order) and its transform's
+// +0x10 .. +0xBF words (the world euler skipped under a parent, the fourth
+// lanes skipped, as verify_transform_load does). An entity marked
+// m_world_unknown would fail: none of these subtrees' parents move.
+inline bool verify_load_components( )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_load_components_document );
+    const value_t document = c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_load_components_document_bytes ) ).parse( );
+    std::vector< std::string > names( g_golden_entity_templates, g_golden_entity_templates + g_golden_entity_templates_count );
+    const entity_registry_t registry = build_entity_registry( names );
+    entity_world_t world;
+    world.m_registry = &registry;
+    world.m_ctor_for = entity_ctor_for;
+    world.m_components_for = entity_components_constructed;
+    world.m_component_load = entity_load_component;
+    int failed = 0;
+    int compared = 0;
+    for ( std::size_t s = 0; s < g_golden_load_components_subtrees_count; ++s )
+    {
+        const golden_load_subtree_t& subtree = g_golden_load_components_subtrees[ s ];
+        const value_t* node = &member( member( document, "VuProject" ), "RootEntity" );
+        for ( int depth = 0; depth < subtree.m_depth && node; ++depth )
+        {
+            const value_t* next = nullptr;
+            for ( const value_t& child : member( member( *node, "data" ), "ChildEntities" ).list )
+                if ( member( child, "name" ).text == subtree.m_path[ depth ] )
+                    next = &child;
+            node = next;
+        }
+        const std::unique_ptr< entity_t > root = node ? entity_create( subtree.m_type, world ) : nullptr;
+        if ( !root )
+        {
+            LOG_ERROR( "load components: subtree %d (%s) not found or not created", static_cast< int >( s ), subtree.m_type );
+            ++failed;
+            continue;
+        }
+        entity_load( *root, &member( *node, "data" ), world );
+        std::vector< std::pair< int, entity_t* > > ours;
+        const auto walk = [ &ours ]( const auto& self, entity_t& e, int parent ) -> void
+        {
+            const int index = static_cast< int >( ours.size( ) );
+            ours.push_back( { parent, &e } );
+            for ( auto& child : e.m_children )
+                self( self, *child, index );
+        };
+        walk( walk, *root, -1 );
+        if ( ours.size( ) != static_cast< std::size_t >( subtree.m_count ) )
+        {
+            LOG_ERROR( "load components: subtree %d built %d entities, retail %d", static_cast< int >( s ),
+                static_cast< int >( ours.size( ) ), subtree.m_count );
+            ++failed;
+            continue;
+        }
+        for ( int k = 0; k < subtree.m_count; ++k )
+        {
+            const golden_component_entity_t& want = g_golden_load_components_entities[ subtree.m_first + k ];
+            entity_t& have = *ours[ k ].second;
+            ++compared;
+            bool same = ours[ k ].first == want.m_parent && have.m_name == want.m_name &&
+                        have.m_components.size( ) == static_cast< std::size_t >( want.m_count ) && !have.m_world_unknown;
+            for ( int c = 0; same && c < want.m_count; ++c )
+                same = have.m_components[ c ].m_vtable == g_golden_load_components_vtables[ want.m_first + c ];
+            const transform_component_t* t = entity_transform( have );
+            if ( same && ( t != nullptr ) != ( want.m_has_transform != 0 ) )
+                same = false;
+            int bad = -1;
+            if ( same && t )
+            {
+                unsigned words[ 44 ];
+                std::memcpy( words, t->local, 64 );
+                std::memcpy( words + 16, t->world, 64 );
+                std::memcpy( words + 32, t->rotation, 16 );
+                std::memcpy( words + 36, t->world_rotation, 16 );
+                std::memcpy( words + 40, t->scale, 16 );
+                const bool parented = have.m_parent != nullptr;
+                for ( int w = 0; w < 44 && bad < 0; ++w )
+                {
+                    if ( ( w % 4 == 3 && w >= 32 ) || ( w >= 36 && w < 40 && parented ) )
+                        continue;
+                    if ( words[ w ] != want.m_transform[ w ] )
+                        bad = w;
+                }
+            }
+            if ( !same || bad >= 0 )
+            {
+                if ( ++failed <= 8 )
+                    LOG_ERROR( "load components: '%s' differs (%s%s)", want.m_name, same ? "transform word " : "list / parent / name",
+                        same ? std::to_string( bad ).c_str( ) : "" );
+            }
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuEntity::load's components (0x501F70) with VuTransformComponent match retail on %d level subtrees: %d entities - "
+                     "component lists and every transform word", static_cast< int >( g_golden_load_components_subtrees_count ), compared );
+    else
+        LOG_ERROR( "the component step FAILED %d checks against 0x501F70", failed );
+    return failed == 0;
+}
+
 // Every oracle-backed check on game code.
 inline bool verify_game( )
 {
     bool ok = true;
+    ok = verify_load_components( ) && ok;
     ok = verify_dynamic_lights( ) && ok;
     ok = verify_entity_registry( ) && ok;
     ok = verify_load_project( ) && ok;
