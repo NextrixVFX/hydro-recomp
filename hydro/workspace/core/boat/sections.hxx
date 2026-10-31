@@ -6,8 +6,11 @@
 
 #include <cstdint>
 #include <cstring>
+#include <algorithm>
+#include <array>
 #include <map>
 #include <string>
+#include <vector>
 
 // The BoatDB section readers. postLoad's 0x420A70 calls each of them twice -
 // with BoatDB Default's section, then with the boat's own - so a key the boat
@@ -172,4 +175,144 @@ inline void boat_read_default( std::uint8_t* boat, boat_strings_t& strings, cons
     section_string( strings, 0x1D4, member( events, "JumpMisfire" ) );
     section_string( strings, 0x1EC, member( events, "Destruction" ) );
     section_string( strings, 0x204, member( events, "Drafting" ) );
+}
+
+// 0x4FBEA0, the container's hasMember: a map (tag 6) holding the key.
+inline bool section_has( const value_t& value, const char* key )
+{
+    if ( value.tag != 6 )
+        return false;
+    for ( const auto& field : value.object )
+        if ( field.first == key )
+            return true;
+    return false;
+}
+
+// The list reads 0x4140C0 inlines: a list (tag 5) has (end - begin) >> 4
+// elements, anything else none; element k of a list in range, else the
+// static null container.
+inline int section_count( const value_t& value )
+{
+    return value.tag == 5 ? static_cast< int >( value.list.size( ) ) : 0;
+}
+
+inline const value_t& section_at( const value_t& value, int k )
+{
+    static const value_t null{};
+    return value.tag == 5 && k >= 0 && k < static_cast< int >( value.list.size( ) ) ? value.list[ k ] : null;
+}
+
+// The engine object 0x413590 builds (boat +0x22C, the tick path's O), with
+// the three containers its section fills: the Power Curve (a Vu array: data
+// +0x30, size +0x34, capacity +0x38 - the size and capacity stay in the
+// image), the Drives (std::vector of 32-byte records at +0x3C / +0x40 /
+// +0x44: TestLocation then ForceLocation, each a vec3 and a w lane the code
+// never writes - an unset stack word), and the +0xF8 std::vector of 8-byte
+// per-drive records 0x414760 fills each tick (only its length is set here).
+struct boat_engine_t
+{
+    boat_413590_t object;
+    std::vector< std::uint32_t > curve;
+    std::vector< std::array< std::uint32_t, 8 > > drives;
+    std::size_t records = 0;
+    boat_strings_t strings;
+};
+
+// VuBoatDB_readEngineSection 0x4140C0 (thiscall, the engine - its +0 the
+// boat, whose +0x220 is the driver; retn 4).
+inline void boat_read_engine( boat_engine_t& e, const value_t& section, const boat_driver_t& driver )
+{
+    std::uint8_t* b = e.object.image;
+    static const struct { int at; const char* key; } floats[] = {
+        { 0x8, "Max Steering Angle" }, { 0xC, "Max Forward Speed" }, { 0x10, "Max Reverse Speed" },
+        { 0x14, "Max Thrust" }, { 0x18, "Air Boost Long Thrust" }, { 0x1C, "Air Boost Lat Thrust" },
+        { 0x20, "Reverse Ratio" }, { 0x24, "Out of Water Ratio" }, { 0x28, "Boost Speed Modifier" },
+        { 0x2C, "Boost Thrust Modifier" } };
+    for ( const auto& f : floats )
+        section_float( b, f.at, member( section, f.key ) );
+    // 0x41432B: the audio set, as the hull's (slots 15 + 13, 15, 12 + 14).
+    const char* set = driver.slot[ 3 ] && driver.slot[ 1 ] ? "MenuAI"
+                    : driver.slot[ 3 ]                     ? "MenuPlayer"
+                    : driver.slot[ 0 ] && driver.slot[ 2 ] ? "Player"
+                                                           : "AI";
+    const value_t& events = member( member( section, "Audio" ), set );
+    section_string( e.strings, 0x4C, member( events, "RunEvent" ) );
+    section_string( e.strings, 0xAC, member( events, "BoostLoop" ) );
+    section_string( e.strings, 0x64, member( events, "StartEvent" ) );
+    section_string( e.strings, 0x7C, member( events, "RevEvent" ) );
+    section_string( e.strings, 0x94, member( events, "BoostInitiate" ) );
+    // 0x41446E: each number of the Power Curve list APPENDED (any other tag
+    // skipped). The array grows to max(size + 1, capacity + capacity / 2)
+    // (_aligned_malloc(.., 16), memcpy_s, _aligned_free).
+    if ( section_has( section, "Power Curve" ) )
+    {
+        for ( int k = 0; k < section_count( member( section, "Power Curve" ) ); ++k )
+        {
+            const value_t& v = section_at( member( section, "Power Curve" ), k );
+            float lane;
+            if ( v.tag == 1 )
+                lane = static_cast< float >( v.integer );
+            else if ( v.tag == 2 )
+                std::memcpy( &lane, &v.real, 4 );
+            else if ( v.tag == 7 )
+                lane = static_cast< float >( v.int64 );
+            else
+                continue;
+            std::int32_t size, capacity;
+            std::memcpy( &size, b + 0x34, 4 );
+            std::memcpy( &capacity, b + 0x38, 4 );
+            const std::int32_t need = size + 1;
+            if ( need > capacity )
+            {
+                const std::int32_t half = capacity / 2 + capacity;   // cdq / sub / sar: halved toward zero
+                const std::int32_t grown = need > half ? need : half;   // cmovg
+                if ( grown > capacity )
+                    image_put32( b, 0x38, static_cast< std::uint32_t >( grown ) );
+            }
+            std::uint32_t bits;
+            std::memcpy( &bits, &lane, 4 );
+            e.curve.push_back( bits );
+            image_put32( b, 0x34, static_cast< std::uint32_t >( need ) );
+        }
+    }
+    // 0x414593: each Drives element as a record on the stack - lanes 0-2 and
+    // 4-6 zeroed, 3 and 7 never written (kept 0 here; the check masks them) -
+    // TestLocation's vec3 into 0, ForceLocation's into 4, then push_back.
+    if ( section_has( section, "Drives" ) )
+    {
+        for ( int k = 0; k < section_count( member( section, "Drives" ) ); ++k )
+        {
+            float record[ 8 ] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+            vec3( member( section_at( member( section, "Drives" ), k ), "TestLocation" ), record );
+            vec3( member( section_at( member( section, "Drives" ), k ), "ForceLocation" ), record + 4 );
+            std::array< std::uint32_t, 8 > bits;
+            std::memcpy( bits.data( ), record, sizeof( record ) );
+            e.drives.push_back( bits );
+        }
+    }
+}
+
+// VuBoatDB_loadEngine 0x413700 (thiscall, the engine; the boat's section,
+// then Default's; retn 8): the five strings emptied, the curve's size and
+// the drives cleared, readEngineSection on DEFAULT'S section first, then the
+// boat's, then the +0xF8 records resized to the drive count. When the
+// owner's flags (+0x14) have bit 2 - after gameInitialize, never in postLoad -
+// the five FMOD events are released and the run event restarted: an audio
+// HOOK (FMOD::Event release / start through the imports 0x64C334 / 0x64C340 /
+// 0x64C354 and 0x50FBF0), not recreated.
+inline void boat_load_engine( boat_engine_t& e, const value_t& section, const value_t& fallback, const boat_driver_t& driver,
+    std::uint32_t owner_flags )
+{
+    for ( int at : { 0x4C, 0x64, 0x7C, 0x94, 0xAC } )
+        e.strings[ at ] = "";
+    image_put32( e.object.image, 0x34, 0 );
+    e.curve.clear( );
+    e.drives.clear( );
+    boat_read_engine( e, fallback, driver );
+    boat_read_engine( e, section, driver );
+    e.records = e.drives.size( );
+    if ( owner_flags & 4 )
+    {
+        // HOOK: the FMOD event release / restart (platform audio).
+    }
 }

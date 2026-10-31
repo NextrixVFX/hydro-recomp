@@ -94,9 +94,105 @@ inline bool verify_boat_sections( )
     return failed == 0;
 }
 
+// boat_load_engine / boat_read_engine (boat/sections.hxx) against retail's
+// 0x413700 + 0x4140C0 on an engine object from its own ctor 0x413590 (oracle
+// case boat_engine): every BoatDB boat (its Engine, then Default's) and the
+// hand-built sections under each driver class. The object's bytes outside its
+// pointer and string words, the power curve's floats (and its size and
+// capacity, in the image), the drives' records (w lanes 3 / 7 are an unset
+// stack word: skipped), the +0xF8 record count and the five strings. Bytes
+// neither the ctor nor the load writes (they differ between retail's 0xCD and
+// 0x5A fills) are skipped.
+inline bool verify_boat_engine( )
+{
+    const unsigned* d = g_golden_boat_sections_boatdb;
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( d + 1 );
+    const value_t boatdb = c_reader( std::vector< std::uint8_t >( raw, raw + d[ 0 ] ) ).parse( );
+    d = g_golden_boat_engine_synthetic;
+    raw = reinterpret_cast< const unsigned char* >( d + 1 );
+    const value_t synthetic = c_reader( std::vector< std::uint8_t >( raw, raw + d[ 0 ] ) ).parse( );
+    auto text = []( const unsigned*& s )
+    {
+        const unsigned length = *s++;
+        std::string out( reinterpret_cast< const char* >( s ), length );
+        s += ( length + 3 ) / 4;
+        return out;
+    };
+    // Pointer words (+0 the owner is the oracle's fake boat, 0x30003000) and the string fields.
+    auto masked = []( int at )
+    {
+        return ( at >= 0x30 && at < 0x34 ) || ( at >= 0x3C && at < 0x48 ) || ( at >= 0xF8 && at < 0x104 ) ||
+               ( at >= 0x4C && at < 0x4C + 5 * 24 );
+    };
+    int failed = 0, compared = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_engine_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_engine_words + g_golden_boat_engine_offsets[ index ];
+        const value_t& doc = *s++ == 0 ? boatdb : synthetic;
+        const boat_driver_t driver = boat_driver_of( *s++ );
+        const value_t* sections[ 2 ];
+        for ( auto& section : sections )
+        {
+            section = &doc;
+            const unsigned keys = *s++;
+            for ( unsigned k = 0; k < keys; ++k )
+                section = &member( *section, text( s ).c_str( ) );
+        }
+        const unsigned char* want = reinterpret_cast< const unsigned char* >( s );
+        s += 0x104 / 4;
+        const unsigned char* written = reinterpret_cast< const unsigned char* >( s );
+        s += 0x104 / 4;
+        std::vector< std::uint32_t > curve( *s++ );
+        for ( auto& w : curve )
+            w = *s++;
+        std::vector< std::array< std::uint32_t, 8 > > drives( *s++ );
+        for ( auto& r : drives )
+            for ( auto& w : r )
+                w = *s++;
+        const unsigned records = *s++;
+        std::vector< std::pair< int, std::string > > strings( *s++ );
+        for ( auto& w : strings )
+        {
+            w.first = static_cast< int >( *s++ );
+            w.second = text( s );
+        }
+        boat_engine_t e;
+        boat_413590( e.object, 0x30003000u );
+        boat_load_engine( e, *sections[ 0 ], *sections[ 1 ], driver, 0 );
+        int bad = -1;
+        for ( int at = 0; at < 0x104 && bad < 0; ++at )
+            if ( written[ at ] && !masked( at ) && e.object.image[ at ] != want[ at ] )
+                bad = at;
+        if ( bad < 0 && e.curve != curve )
+            bad = 0x1030;
+        if ( bad < 0 && e.drives.size( ) != drives.size( ) )
+            bad = 0x103C;
+        for ( std::size_t k = 0; bad < 0 && k < drives.size( ); ++k )
+            for ( int lane : { 0, 1, 2, 4, 5, 6 } )
+                if ( e.drives[ k ][ lane ] != drives[ k ][ lane ] )
+                    bad = 0x103C;
+        if ( bad < 0 && e.records != records )
+            bad = 0x10F8;
+        for ( const auto& w : strings )
+            if ( bad < 0 && e.strings[ w.first ] != w.second )
+                bad = 0x10000 + w.first;
+        ++compared;
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "boat engine vector %d differs from retail at 0x%X (0x1xxxx: that container / string field)",
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuBoatDB_loadEngine 0x413700 / readEngineSection 0x4140C0 match retail: %d vectors (bytes, power curve, "
+                     "drives, records, strings)", compared );
+    else
+        LOG_ERROR( "boat engine FAILED %d of %d vectors", failed, compared );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
     ok = verify_boat_sections( ) && ok;
+    ok = verify_boat_engine( ) && ok;
     return ok;
 }
