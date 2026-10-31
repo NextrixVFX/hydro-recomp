@@ -370,9 +370,9 @@ private:
             math_multiply( placed_node, world, part.node );
             const int handle = c_engine::place( geometry_override >= 0 ? geometry_override : part.geometry,
                 texture, part.index_start, part.index_count, placed_node, color, alpha, nullptr, part.detail );
-            // While a VuRotateMotionEntity's subtree is being visited, every
-            // placement made inside it is collected so the rotation can drive
-            // them each frame.
+            // While the entity tree's props are placed, every placement is
+            // collected with its owner so a rotator can drive the ones it owns
+            // each frame (adopt_rotators).
             if ( m_collect != nullptr && handle >= 0 )
             {
                 collected_t taken{};
@@ -557,17 +557,8 @@ private:
         int rotator = -1;
         // A motion entity sits as a CHILD of the thing it drives, and it can
         // arrive through a template expansion, so whether one exists is not
-        // knowable until the subtree has been walked. Collect unconditionally
-        // and adopt afterwards if a rotator turned up: an empty std::vector
-        // allocates nothing, so the entities that never see one cost nothing.
+        // knowable until the subtree has been walked.
         bool mine = false;
-        std::vector< collected_t > collected;
-        std::vector< collected_t >* saved_collect = m_collect;
-        m_collect = &collected;
-        // Which entity any placement made from here belongs to. Restored on
-        // EVERY exit path beside m_collect, for the same reason.
-        const std::string saved_owner = m_place_owner;
-        m_place_owner = here;
         // A TEMPLATE INSTANCE OVERRIDES ITS CHILDREN BY NAME. The instance
         // node's "ChildEntities" is an OBJECT keyed by child name - not the
         // LIST an ordinary entity carries - and each entry holds "Components"
@@ -671,8 +662,7 @@ private:
                     // The instance's per-child overrides ride down with it.
                     // They key the template root's OWN children by name, one
                     // level only, so a nested template instance replaces the
-                    // map rather than inheriting it - saved and restored like
-                    // the collector above.
+                    // map rather than inheriting it - saved and restored here.
                     const value_t* saved_overrides = m_child_overrides;
                     const value_t* instance_children = data != nullptr
                         ? find( *data, "ChildEntities" ) : nullptr;
@@ -684,18 +674,7 @@ private:
                 }
                 m_stack.erase( name );
                 if ( root != nullptr )
-                {
-                    // This return bypasses the tail below, so the collector
-                    // has to be restored here or m_collect is left pointing
-                    // at this frame's destroyed local - which crashed the
-                    // next place_model with an access violation.
-                    m_collect = saved_collect;
-                    m_place_owner = saved_owner;
-                    if ( saved_collect != nullptr )
-                        saved_collect->insert( saved_collect->end( ),
-                            collected.begin( ), collected.end( ) );
                     return;
-                }
             }
         }
 
@@ -802,104 +781,11 @@ private:
                 source.foaminess = bind.real( "Foaminess" );
                 m_ripple_sources.emplace( here, source );
             }
-            if ( type->text == "VuGlobalGfxSettingsEntity" && properties != nullptr )
-            {
-                // Every key here maps onto a named constant in the retail
-                // shaders: Contrast/Tint feed PostProcess/Effect, and the
-                // Water * keys feed the water shader's gAmbientColor,
-                // gDiffuseColor, gFoamAmbientColor, gFoamDiffuseColor and
-                // gFoamTextureSize. See memory/water.md.
-                if ( properties->kind == value_t::kind_t::object )
-                    for ( const auto& pair : properties->object )
-                    {
-                        const value_t* red = find( pair.second, "R" );
-                        if ( red != nullptr )
-                            LOG_VERBOSE( "gfx %-28s = %.0f %.0f %.0f", pair.first.c_str( ),
-                                number( red, -1.0f ),
-                                number( find( pair.second, "G" ), -1.0f ),
-                                number( find( pair.second, "B" ), -1.0f ) );
-                        else
-                            LOG_VERBOSE( "gfx %-28s = %.4f", pair.first.c_str( ),
-                                number( &pair.second, -999.0f ) );
-                    }
-                // Every fallback below is VuGlobalGfxSettingsEntity's own
-                // constructor default, read out of the constructor under
-                // emulation (tools/ctor.py) rather than chosen: Fog Start
-                // 0x43FA0000 = 500, Fog End 0x447A0000 = 1000, Fog Color
-                // 0xFF000000 = black at full alpha. The values that stood here
-                // before - 0, 900 and (156,196,215) - were invented.
-                // The far plane is authored HERE, not on any camera - neither
-                // VuBoatCamera_update nor the front-end camera sets one, which
-                // is why a placeholder stood in for it. Constructor default
-                // 0x43FA0000 = 500.
-                const c_entity_binder bind( type->text, overlay, properties );
-                m_authored_far = bind.real( "Camera Far Plane" );
-                float fog_color[ 4 ]{};
-                bind.color( "Fog Color", fog_color );
-                const float red = fog_color[ 0 ];
-                const float green = fog_color[ 1 ];
-                const float blue = fog_color[ 2 ];
-                const float start = bind.real( "Fog Start" );
-                const float end = bind.real( "Fog End" );
-                LOG_VERBOSE( "gfx settings: fog %.0f..%.0f  colour %.3f %.3f %.3f",
-                    start, end, red, green, blue );
-                // Hydroelectric authors Fog End 1800 but does NOT author
-                // Camera Far Plane, so the far plane falls back to the
-                // constructor's 500 - and geometry would be clipped long
-                // before the fog it is meant to fade into reaches full
-                // density. One of the two comes from somewhere not yet found.
-                // Reported rather than reconciled: picking a value here would
-                // be an invention.
-                if ( end > m_authored_far )
-                {
-                    LOG_WARNING( "gfx settings: Fog End %.0f is beyond the far plane %.0f - "
-                        "the far plane's real source has not been found",
-                        end, m_authored_far );
-                }
-                c_engine::fog( start, end, red, green, blue );
-            }
-            if ( type->text == "VuDirectionalLightEntity" && properties != nullptr )
-            {
-                const value_t* transform = components != nullptr ? find( *components, "VuTransformComponent" ) : nullptr;
-                const value_t* pose = transform != nullptr ? find( *transform, "Properties" ) : nullptr;
-                const value_t* rotation = pose != nullptr ? find( *pose, "Rotation" ) : nullptr;
-                float degrees[ 3 ] = {
-                    number( find( rotation != nullptr ? *rotation : *properties, "X" ), 0.0f ),
-                    number( find( rotation != nullptr ? *rotation : *properties, "Y" ), 0.0f ),
-                    number( find( rotation != nullptr ? *rotation : *properties, "Z" ), 0.0f )
-                };
-                float basis[ 16 ]{};
-                const float origin[ 3 ] = {};
-                const float scale[ 3 ] = { 1.0f, 1.0f, 1.0f };
-                math_transform( basis, origin, degrees, scale );
-                const float direction[ 3 ] = { -basis[ 8 ], -basis[ 9 ], -basis[ 10 ] };
-                c_engine::sun( direction );
-            }
+            // VuGlobalGfxSettingsEntity feeds the fog and the far plane from the
+            // retail entity tree (load_entity_tree).
             // VuFoliageEntity drew a hand-built billboard quad from an invented
             // vertex layout. Deleted; build it from the entity's own draw path.
-            if ( type->text == "VuStaticPfxEntity" )
-            {
-                // VuStaticPfxEntity_ctor @0x5EAA40, emulated. Note its
-                // "Initially Active" defaults TRUE, where
-                // VuRigidBodyComponent's defaults FALSE - a default belongs to
-                // its own class and never carries across.
-                const c_entity_binder bind( type->text, overlay, properties );
-                const std::string effect = bind.text( "Effect Name" );
-                if ( !effect.empty( ) )
-                {
-                    // Pfx Color is a VuColor, which the binder has no typed
-                    // accessor for yet, so the four bytes are read here.
-                    const value_t* tint = bind.authored( "Pfx Color" );
-                    const float color[ 4 ] = {
-                        number( tint != nullptr ? find( *tint, "R" ) : nullptr, 255.0f ) / 255.0f,
-                        number( tint != nullptr ? find( *tint, "G" ) : nullptr, 255.0f ) / 255.0f,
-                        number( tint != nullptr ? find( *tint, "B" ) : nullptr, 255.0f ) / 255.0f,
-                        number( tint != nullptr ? find( *tint, "A" ) : nullptr, 255.0f ) / 255.0f
-                    };
-                    m_pfx.add( m_archive, effect, world, bind.real( "Pfx Scale", 1.0f ),
-                        color, bind.boolean( "Initially Active", true ) );
-                }
-            }
+            // VuStaticPfxEntity is built from the retail entity tree (load_entity_tree).
             if ( type->text == "VuSkyBoxEntity" && properties != nullptr )
             {
                 const c_entity_binder bind( type->text, overlay, properties );
@@ -907,30 +793,8 @@ private:
                 if ( !asset.empty( ) )
                     m_sky = asset;
             }
-            // The hull shader's gAmbLightColor. Colours are authored as 0..255
-            // bytes throughout the level data.
-            if ( type->text == "VuAmbientLightEntity" && properties != nullptr )
-            {
-                const c_entity_binder bind( type->text, overlay, properties );
-                bind.color( "Color", m_rig.ambient( ) );
-                m_rig.mark_lit( );
-            }
-            // gDirLightFrontColor and gDirLightBackColor - the shader's light
-            // is TWO-SIDED, and Hydroelectric authors a warm front with a cool
-            // back, which a one-sided lambert cannot reproduce.
-            //
-            // The entity carries NO direction property, so gDirLightWorld has
-            // to come from this transform. Which axis it is has not been
-            // reversed, so the matrix is kept whole and the choice is made
-            // (and flagged) where it is used.
-            if ( type->text == "VuDirectionalLightEntity" && properties != nullptr )
-            {
-                const c_entity_binder bind( type->text, overlay, properties );
-                bind.color( "Front Color", m_rig.front( ) );
-                bind.color( "Back Color", m_rig.back( ) );
-                std::memcpy( m_rig.sun_world( ), world, 16 * sizeof( float ) );
-                m_rig.mark_sun( );
-            }
+            // VuAmbientLightEntity / VuDirectionalLightEntity feed the rig from the
+            // retail entity tree (load_entity_tree).
             // Every Proxy_* name in a material is a placeholder, and this is
             // what replaces it: Proxy_cube -> Hydro/Outside on Hydroelectric.
             // So the per-track environment map is authored, not chosen here.
@@ -959,53 +823,8 @@ private:
             // Vu3dDrawAnimatedModelComponent, and 19 of 19 clips are in the
             // pack. Start Time is why four identical pump pistons do not pump
             // in step; values of 1 and 15 appear.
-            // A trigger plane carries NO volume properties - the volume IS its
-            // transform. Measured: Position is the centre, Rotation is in
-            // degrees, and Scale is the extent, with Y always 1 because the
-            // thing is a PLANE (e.g. 82.14 x 1.00 x 17.05 - a gate 82 wide and
-            // 17 tall, one unit thick). An optional "Trigger Type" names what
-            // may set it off; "AI Boat" appears on the AI nuisance planes.
-            // VuTriggerBoxEntity shares EVERYTHING authored with the plane:
-            // its create @0x5d1a30 allocates 0x8C bytes, calls
-            // VuTriggerEntity_ctor @0x61c6a0 - the base that declares
-            // "Initially Active", "Trigger Type", the Activate/Deactivate
-            // INPUT plugs and the OnEnter/OnExit outputs - and only swaps in
-            // its own vtable. It has NO constructor and NO properties of its
-            // own; the volume is its transform, exactly as for the plane.
-            // What differs is the crossing test, below.
-            if ( type->text == "VuTriggerPlaneEntity" || type->text == "VuTriggerBoxEntity" )
-            {
-                trigger_t gate{};
-                gate.box = type->text == "VuTriggerBoxEntity";
-                gate.path = here;
-                // The three row lengths are the authored Scale, which IS the
-                // half extent the box test compares against - proved for the
-                // plane by VuTriggerPlaneEntity_bounds @0x5d18b0 and again for
-                // the box by VuTriggerBoxEntity_bounds @0x5d1dc0, which builds
-                // its bounding box from 2.0 * the floats at shape+176.
-                for ( int axis = 0; axis < 3; ++axis )
-                {
-                    const float* row = world + axis * 4;
-                    gate.scale[ axis ] = std::sqrt( row[ 0 ] * row[ 0 ]
-                        + row[ 1 ] * row[ 1 ] + row[ 2 ] * row[ 2 ] );
-                }
-                std::memcpy( gate.world, world, sizeof( gate.world ) );
-                if ( !model_invert( gate.inverse, world ) )
-                    gate.inverse[ 0 ] = 0.0f;
-                const value_t* kind = properties != nullptr
-                    ? find( *properties, "Trigger Type" ) : nullptr;
-                if ( kind != nullptr && kind->kind == value_t::kind_t::text )
-                    gate.kind = kind->text;
-                // Reversed from VuTriggerEntity_ctor at 0x61c6a0: the base
-                // class declares an "Initially Active" bool alongside
-                // "Trigger Type", and Activate / Deactivate input plugs that
-                // flip it. A plane that starts inactive must not fire.
-                gate.active = properties == nullptr
-                    || number( find( *properties, "Initially Active" ), 1.0f ) != 0.0f;
-                // Its OnEnter / OnExit connections are in m_graph with every
-                // other entity's, resolved by collect_graph above.
-                m_triggers.add( std::move( gate ) );
-            }
+            // VuTriggerPlaneEntity / VuTriggerBoxEntity are built from the retail
+            // entity tree (load_entity_tree).
             // VuOneShotFilterEntity. Its whole behaviour is three input plug
             // handlers over one byte at this+96, all four plugs named by
             // VuOneShotFilterEntity_ctor @0x5ded70:
@@ -1213,51 +1032,8 @@ private:
             }
         }
 
-        if ( components != nullptr )
-        {
-            const value_t* model = find( *components, "Vu3dDrawStaticModelComponent" );
-            const value_t* properties = model != nullptr ? find( *model, "Properties" ) : nullptr;
-            const value_t* asset = properties != nullptr ? find( *properties, "Model Asset" ) : nullptr;
-            if ( asset != nullptr && asset->kind == value_t::kind_t::text && !asset->text.empty( ) )
-            {
-                float tint[ 3 ] = { 1.0f, 1.0f, 1.0f };
-                const value_t* color = find( *properties, "Color" );
-                if ( color != nullptr )
-                {
-                    tint[ 0 ] = number( find( *color, "R" ), 255.0f ) / 255.0f;
-                    tint[ 1 ] = number( find( *color, "G" ), 255.0f ) / 255.0f;
-                    tint[ 2 ] = number( find( *color, "B" ), 255.0f ) / 255.0f;
-                }
-                place_model( asset->text, world, 0, -1, tint );
-            }
-
-            // Vu3dDrawAnimatedModelComponent was not handled at all, so all
-            // 19 instances in Hydroelectric were simply invisible. The
-            // component itself names only the model - the clip arrives from a
-            // separate VuPlayAnimationEntity, resolved after the walk - so
-            // record the instance here and let bind_animations() join them.
-            const value_t* animated = find( *components, "Vu3dDrawAnimatedModelComponent" );
-            const value_t* animated_props = animated != nullptr ? find( *animated, "Properties" ) : nullptr;
-            const value_t* animated_asset = animated_props != nullptr ? find( *animated_props, "Model Asset" ) : nullptr;
-            if ( animated_asset != nullptr && animated_asset->kind == value_t::kind_t::text
-                && !animated_asset->text.empty( ) )
-            {
-                animated_t item{};
-                item.asset = animated_asset->text;
-                item.path = here;
-                std::memcpy( item.world, world, sizeof( item.world ) );
-                item.tint[ 0 ] = item.tint[ 1 ] = item.tint[ 2 ] = 1.0f;
-                const value_t* color = find( *animated_props, "Color" );
-                if ( color != nullptr )
-                {
-                    item.tint[ 0 ] = number( find( *color, "R" ), 255.0f ) / 255.0f;
-                    item.tint[ 1 ] = number( find( *color, "G" ), 255.0f ) / 255.0f;
-                    item.tint[ 2 ] = number( find( *color, "B" ), 255.0f ) / 255.0f;
-                }
-                item.distance = number( find( *animated_props, "Draw Distance" ), 0.0f );
-                m_animated.push_back( std::move( item ) );
-            }
-        }
+        // The model-draw components (Vu3dDrawStaticModelComponent, Vu3dDrawAnimatedModelComponent) are placed
+        // from the retail entity tree (load_entity_tree).
 
         const value_t* children = data != nullptr ? find( *data, "ChildEntities" ) : nullptr;
         if ( children != nullptr && children->kind == value_t::kind_t::list )
@@ -1292,18 +1068,12 @@ private:
         // after the subtree has been walked. Only the DIRECT parent adopts:
         // letting every ancestor adopt made one rotator swallow 1918
         // placements instead of its siren's 2.
-        m_collect = saved_collect;
-        m_place_owner = saved_owner;
+        //
+        // The placements themselves are made from the retail tree after this
+        // walk, so the adopter is recorded here (post-order: an inner adopter
+        // before an outer one) and adopts there (adopt_rotators).
         if ( rotator >= 0 && !mine )
-        {
-            adopt_rotator( rotator, collected );
-        }
-        else if ( saved_collect != nullptr )
-        {
-            // Nothing here drives rotation, so hand the placements up to the
-            // enclosing collector - a driven prop may sit several levels deep.
-            saved_collect->insert( saved_collect->end( ), collected.begin( ), collected.end( ) );
-        }
+            m_adopters.emplace_back( rotator, here );
         // Report upward: this entity's own rotator if it IS the motion entity,
         // otherwise nothing (a child's has already been consumed above).
         m_pending_rotator = mine ? rotator : -1;
@@ -1344,6 +1114,23 @@ private:
             LOG_WARNING( "rotator %s drives NOTHING: its ref target %s owns none of the %u placements collected",
                 motion.path.c_str( ), target.c_str( ),
                 static_cast< unsigned >( collected.size( ) ) );
+    }
+
+    // Every adopter visit() recorded, in its post-order, takes the placements
+    // made beneath it - and only those not already taken by an adopter inside
+    // it, as the subtree collector used to hand them up - then adopt_rotator
+    // keeps the ones its "Entity" ref owns.
+    void adopt_rotators( std::vector< collected_t > pool )
+    {
+        for ( const auto& adopter : m_adopters )
+        {
+            std::vector< collected_t > mine;
+            std::vector< collected_t > rest;
+            for ( collected_t& item : pool )
+                ( owned_by( item.owner, adopter.second ) ? mine : rest ).push_back( std::move( item ) );
+            pool = std::move( rest );
+            adopt_rotator( adopter.first, mine );
+        }
     }
 
     // Is this placement's owner the ref target, or something beneath it?
@@ -2717,6 +2504,7 @@ private:
         m_overrides_placed = 0;
         m_override_components.clear( );
         m_collect = nullptr;
+        m_adopters.clear( );
         m_pending_rotator = -1;
         m_rig.clear( );
         m_type_census.clear( );
@@ -3075,10 +2863,15 @@ private:
     // The project as retail loads it (the race game 0x4B4360 -> VuProject::load
     // 0x556390): the registry as start-up leaves it, the asset's AssetData
     // "File" path (0x55FBE0), and the entity tree through every recreated load.
-    // The coronas are fed from it: each VuCoronaEntity's transform world and its
-    // property targets. A corona below an UNKNOWN entity is never created, and
-    // one whose world is unknown is not placed - both counted, neither stood in
-    // for.
+    // The coronas are fed from it (each VuCoronaEntity's transform world and its
+    // property targets), and so are the props: every model-draw component's
+    // Model Asset and Color at its owner's draw matrix. Its Draw Distance is
+    // carried on the animated props; no draw distance or LOD switch (the
+    // static draw 0x5B0730's +0xA8 / +0xAC / +0xB0 tests) is applied by the
+    // renderer yet - a gap, not a choice. Anything below an UNKNOWN entity is
+    // never created, and anything whose world is unknown is not placed - both
+    // counted, neither stood in for. The rotators still come from visit() (the
+    // old walk) and adopt the tree's placements here.
     void load_entity_tree( const char* asset, const value_t& project )
     {
         std::vector< std::uint8_t > bytes;
@@ -3118,10 +2911,169 @@ private:
         int unplaced = 0;
         int placed = 0;
         std::map< std::string, int > unknown_types;
+        int models = 0;
+        int models_unplaced = 0;
+        // Every static placement, by owner, for the rotators (adopt_rotators).
+        std::vector< collected_t > collected;
+        std::vector< trigger_t > fresh_triggers;
+        int pfx_placed = 0;
+        int pfx_unplaced = 0;
+        int triggers_unplaced = 0;
         // The event graph addresses an entity by its names below the project
         // root, '/'-joined.
         const auto walk = [ & ]( const auto& self, entity_t& e, const std::string& trail ) -> void
         {
+            // VuTriggerPlaneEntity / VuTriggerBoxEntity (engine entity/trigger.hxx):
+            // the volume is the transform - VuTriggerPlaneEntity_bounds 0x5D18B0
+            // composes VuMatrix_multiply(fromScale(scale +0xB0), out, world
+            // +0x50), the same product as transform_draw_matrix, and the crossing
+            // test 0x5D1570 compares against the Scale (+0xB0) itself as the half
+            // extent. Initially Active and Trigger Type are the loaded targets.
+            if ( entity_is_trigger( e.m_type ) && e.m_state )
+            {
+                const transform_component_t* t = entity_transform( e );
+                if ( !t || e.m_world_unknown )
+                    ++triggers_unplaced;
+                else
+                {
+                    const trigger_properties_t& p = static_cast< const trigger_state_t* >( e.m_state.get( ) )->value;
+                    trigger_t gate{};
+                    gate.box = e.m_type == "VuTriggerBoxEntity";
+                    gate.path = trail;
+                    transform_draw_matrix( *t, gate.world );
+                    for ( int axis = 0; axis < 3; ++axis )
+                        gate.scale[ axis ] = t->scale[ axis ];
+                    if ( !model_invert( gate.inverse, gate.world ) )
+                        gate.inverse[ 0 ] = 0.0f;
+                    gate.kind = p.trigger_type;
+                    gate.active = p.initially_active != 0;
+                    fresh_triggers.push_back( std::move( gate ) );
+                }
+            }
+            // VuStaticPfxEntity (engine entity/pfx.hxx): what its onGameInitialize
+            // 0x5EB060 hands the VuPfxSystem the pfx manager (0x75904C vt+0x28)
+            // creates from its Effect Name - setScale(Pfx Scale), setColor
+            // (static_pfx_color), setMatrix(the transform WORLD: scale kept out,
+            // as its transform watcher 0x5EB4A0 hands it too) and start() iff
+            // Initially Active. The manager's lookup is the platform side: an
+            // empty name is skipped here (what retail's manager returns for it
+            // is unread), and c_pfx stands in for the system.
+            if ( e.m_type == "VuStaticPfxEntity" && e.m_state )
+            {
+                const static_pfx_t& p = static_cast< const static_pfx_state_t* >( e.m_state.get( ) )->value;
+                const transform_component_t* t = entity_transform( e );
+                if ( !t || e.m_world_unknown )
+                    ++pfx_unplaced;
+                else if ( !p.effect_name.empty( ) )
+                {
+                    float color[ 4 ];
+                    static_pfx_color( p, color );
+                    m_pfx.add( m_archive, p.effect_name, t->world, p.pfx_scale, color, p.initially_active != 0 );
+                    ++pfx_placed;
+                }
+            }
+            // VuGlobalGfxSettingsEntity (engine entity/gfx.hxx): the far plane is
+            // its Camera Far Plane - neither VuBoatCamera_update nor the front-end
+            // camera sets one - and the fog its Fog Start / End and Fog Color's R,
+            // G, B bytes / 255. The other 22 values are loaded and not consumed
+            // yet (Contrast / Tint feed PostProcess/Effect and the Water * ones the
+            // water shader's constants - memory water.md - neither wired), and
+            // how retail applies the settings (Always Active, the ramp times, the
+            // Rectangular / Elliptical volumes that blend over it) is unread: the
+            // last one in tree order is applied at load, ours and flagged.
+            if ( e.m_type == "VuGlobalGfxSettingsEntity" && e.m_state )
+            {
+                const gfx_settings_t& g = static_cast< const gfx_settings_state_t* >( e.m_state.get( ) )->value;
+                m_authored_far = g.camera_far_plane;
+                const float red = static_cast< float >( g.fog_color & 0xFF ) / 255.0f;
+                const float green = static_cast< float >( ( g.fog_color >> 8 ) & 0xFF ) / 255.0f;
+                const float blue = static_cast< float >( ( g.fog_color >> 16 ) & 0xFF ) / 255.0f;
+                LOG_VERBOSE( "gfx settings %s: far %.0f  fog %.0f..%.0f  colour %.3f %.3f %.3f", trail.c_str( ), g.camera_far_plane,
+                    g.fog_start, g.fog_end, red, green, blue );
+                // Hydroelectric authors Fog End 1800 and no Camera Far Plane, so
+                // the far plane is the ctor's 500 and geometry clips long before
+                // the fog reaches full density - one of the two comes from
+                // somewhere not yet found. Reported, not reconciled.
+                if ( g.fog_end > m_authored_far )
+                    LOG_WARNING( "gfx settings: Fog End %.0f is beyond the far plane %.0f - the far plane's real source has not been found",
+                        g.fog_end, m_authored_far );
+                c_engine::fog( g.fog_start, g.fog_end, red, green, blue );
+            }
+            // The rig: the hull shader's gAmbLightColor from VuAmbientLightEntity's
+            // Color, gDirLightFrontColor / gDirLightBackColor from
+            // VuDirectionalLightEntity's (the shader's light is TWO-SIDED), each
+            // VuColor's R, G, B bytes / 255. The light carries no direction
+            // property: gDirLightWorld is its transform world, and the sun
+            // direction handed to the renderer is that world's -Z row - WHICH
+            // axis retail uses is not reversed (the light object at +0x5C and
+            // its draw are unread), so that choice is ours and flagged. Its
+            // Specular Color is loaded and not consumed. With several lights
+            // of a kind the last in tree order wins - retail's light manager,
+            // which picks, is unread.
+            if ( e.m_type == "VuAmbientLightEntity" && e.m_state )
+            {
+                const std::uint32_t c = static_cast< const ambient_light_state_t* >( e.m_state.get( ) )->value.color;
+                for ( int k = 0; k < 3; ++k )
+                    m_rig.ambient( )[ k ] = static_cast< float >( ( c >> ( 8 * k ) ) & 0xFF ) / 255.0f;
+                m_rig.mark_lit( );
+            }
+            if ( e.m_type == "VuDirectionalLightEntity" && e.m_state )
+            {
+                const directional_light_t& l = static_cast< const directional_light_state_t* >( e.m_state.get( ) )->value;
+                for ( int k = 0; k < 3; ++k )
+                {
+                    m_rig.front( )[ k ] = static_cast< float >( ( l.front_color >> ( 8 * k ) ) & 0xFF ) / 255.0f;
+                    m_rig.back( )[ k ] = static_cast< float >( ( l.back_color >> ( 8 * k ) ) & 0xFF ) / 255.0f;
+                }
+                const transform_component_t* t = entity_transform( e );
+                if ( t && !e.m_world_unknown )
+                {
+                    std::memcpy( m_rig.sun_world( ), t->world, sizeof( t->world ) );
+                    const float direction[ 3 ] = { -t->world[ 8 ], -t->world[ 9 ], -t->world[ 10 ] };
+                    c_engine::sun( direction );
+                    m_rig.mark_sun( );
+                }
+            }
+            // The model-draw components, drawn at the matrix their owner leaves
+            // in them (transform_draw_matrix: fromScale x world). An empty
+            // Model Asset draws nothing.
+            for ( const entity_component_t& c : e.m_components )
+            {
+                if ( ( c.m_vtable != k_static_model_component_vtable && c.m_vtable != k_animated_model_component_vtable ) || !c.m_state )
+                    continue;
+                const model_draw_t& m = static_cast< const model_draw_state_t* >( c.m_state.get( ) )->value;
+                if ( m.model_asset.empty( ) )
+                    continue;
+                const transform_component_t* t = entity_transform( e );
+                if ( !t || e.m_world_unknown )
+                {
+                    ++models_unplaced;
+                    continue;
+                }
+                ++models;
+                float matrix[ 16 ];
+                transform_draw_matrix( *t, matrix );
+                // The VuColor's R, G, B bytes.
+                const float tint[ 3 ] = { static_cast< float >( m.color & 0xFF ) / 255.0f,
+                    static_cast< float >( ( m.color >> 8 ) & 0xFF ) / 255.0f, static_cast< float >( ( m.color >> 16 ) & 0xFF ) / 255.0f };
+                if ( !m.animated )
+                {
+                    m_collect = &collected;
+                    m_place_owner = trail;
+                    place_model( m.model_asset, matrix, 0, -1, tint );
+                    m_collect = nullptr;
+                    continue;
+                }
+                // The clip arrives from a VuPlayAnimationEntity; bind_animations
+                // joins them.
+                animated_t item{};
+                item.asset = m.model_asset;
+                item.path = trail;
+                std::memcpy( item.world, matrix, sizeof( item.world ) );
+                std::memcpy( item.tint, tint, sizeof( item.tint ) );
+                item.distance = m.draw_distance;
+                m_animated.push_back( std::move( item ) );
+            }
             ++entities;
             unknown += e.m_ctor ? 0 : 1;
             if ( !e.m_ctor )
@@ -3141,8 +3093,13 @@ private:
                 self( self, *child, trail.empty( ) ? child->m_name : trail + "/" + child->m_name );
         };
         walk( walk, *m_tree, std::string( ) );
+        adopt_rotators( std::move( collected ) );
+        for ( trigger_t& gate : fresh_triggers )
+            m_triggers.add( std::move( gate ) );
         LOG_INFO( "entity tree: %s (%s) - %d entities, %d UNKNOWN (nothing below one is loaded); %d coronas placed, %d with an "
-                  "unknown world", asset, path.c_str( ), entities, unknown, placed, unplaced );
+                  "unknown world; %d models placed, %d with an unknown world; %d triggers, %d with an unknown world; %d static pfx placed, %d "
+                  "with an unknown world", asset, path.c_str( ), entities, unknown, placed, unplaced, models, models_unplaced,
+            static_cast< int >( m_triggers.size( ) ), triggers_unplaced, pfx_placed, pfx_unplaced );
         // Which types' construction is not captured - what to recreate next.
         for ( const auto& pair : unknown_types )
             LOG_VERBOSE( "entity tree: UNKNOWN %-40s x%d", pair.first.c_str( ), pair.second );
@@ -3399,6 +3356,9 @@ private:
     std::map< std::string, std::array< float, 16 > > m_entity_world;
     std::vector< collected_t >* m_collect = nullptr;
     std::string m_place_owner;
+    // (rotator, the entity that adopts it - the motion entity's direct
+    // parent), in visit()'s post-order; consumed by adopt_rotators.
+    std::vector< std::pair< int, std::string > > m_adopters;
     // The template instance override map in scope for the current child loop,
     // and the single override handed to the next visit().
     const value_t* m_child_overrides = nullptr;

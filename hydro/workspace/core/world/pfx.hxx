@@ -124,7 +124,9 @@ public:
 
         instance_t instance{};
         std::memcpy( instance.world, world, sizeof( instance.world ) );
-        instance.scale = scale == 0.0f ? 1.0f : scale;
+        // VuStaticPfxEntity's setScale(Pfx Scale) as handed (0x5EB060). The
+        // "0 means 1" that stood here was invented; no level authors a 0.
+        instance.scale = scale;
         std::memcpy( instance.color, color, sizeof( instance.color ) );
         // An entity that starts active is one whose start() has run, which is
         // state 1 with the clock at zero. One that does not is state 0, and a

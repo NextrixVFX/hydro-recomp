@@ -123,3 +123,29 @@ inline void transform_recalc( transform_component_t& c, const float* parent_worl
     c.local[ 14 ] = z;
     transform_world( c, parent_world );
 }
+
+// The model-draw components' draw matrix (Vu3dDrawStaticModelComponent +0x13C,
+// which its draw 0x5B0730 hands to the model instance's draw 0x520130;
+// Vu3dDrawAnimatedModelComponent +0x104, drawn by 0x61DB60 -> 0x532AD0). The
+// OWNER computes it, never the component: VuPropEntity's postLoad (vt+8 / +0xC
+// 0x433C50 -> 0x546AE0), VuDynamicPropEntity's (0x5459F0 -> 0x545FF0, also
+// 0x546130), VuAnimatedPropEntity's (0x5ED420 into 0x61DA50) - and the same
+// method again as the transform's watcher (+0xC0, installed by the ctor's
+// 0x546E80 / 0x546260; 0x534C00 fires it on each descendant a parent's recalc
+// 0x534340 moves - that recalc passes notify 1 and the walk hands it down), so
+// the matrix always follows the final world. Each is
+// VuMatrix_multiply(this = VuMatrix_fromScale(scale +0xB0), out, world +0x50):
+// the Scale the transform keeps out of both matrices is applied HERE, first.
+// VuMatrix_fromScale 0x407DB0 copies the three lanes' bits onto a zero matrix
+// with m[15] = 1.0. VuTriggerPlaneEntity_bounds 0x5D18B0 composes the same
+// product from its transform for the trigger volume.
+inline void transform_draw_matrix( const transform_component_t& c, float* out )
+{
+    float scale[ 16 ] = {};
+    scale[ 0 ] = c.scale[ 0 ];
+    scale[ 5 ] = c.scale[ 1 ];
+    scale[ 10 ] = c.scale[ 2 ];
+    const std::uint32_t one = 0x3F800000u;
+    std::memcpy( &scale[ 15 ], &one, sizeof( one ) );
+    hull_multiply( scale, out, c.world );
+}

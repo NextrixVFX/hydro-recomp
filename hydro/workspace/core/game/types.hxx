@@ -5,6 +5,10 @@
 #include <workspace/core/world/transform.hxx>
 #include <workspace/core/entity/corona.hxx>
 #include <workspace/core/entity/draw.hxx>
+#include <workspace/core/entity/rig.hxx>
+#include <workspace/core/entity/gfx.hxx>
+#include <workspace/core/entity/trigger.hxx>
+#include <workspace/core/entity/pfx.hxx>
 
 #include <cstring>
 
@@ -894,6 +898,45 @@ struct corona_state_t
     corona_properties_t defaults;
 };
 
+// VuAmbientLightEntity / VuDirectionalLightEntity (engine entity/rig.hxx).
+struct ambient_light_state_t
+{
+    ambient_light_t value;
+    ambient_light_t defaults;
+};
+
+struct directional_light_state_t
+{
+    directional_light_t value;
+    directional_light_t defaults;
+};
+
+// VuGlobalGfxSettingsEntity (engine entity/gfx.hxx).
+struct gfx_settings_state_t
+{
+    gfx_settings_t value;
+    gfx_settings_t defaults;
+};
+
+// VuTriggerPlaneEntity / VuTriggerBoxEntity (engine entity/trigger.hxx).
+struct trigger_state_t
+{
+    trigger_properties_t value;
+    trigger_properties_t defaults;
+};
+
+// VuStaticPfxEntity (engine entity/pfx.hxx).
+struct static_pfx_state_t
+{
+    static_pfx_t value;
+    static_pfx_t defaults;
+};
+
+inline bool entity_is_trigger( const std::string& cls )
+{
+    return cls == "VuTriggerPlaneEntity" || cls == "VuTriggerBoxEntity";
+}
+
 inline std::shared_ptr< void > entity_state_for( const std::string& cls )
 {
     if ( cls == "VuCoronaEntity" )
@@ -901,6 +944,41 @@ inline std::shared_ptr< void > entity_state_for( const std::string& cls )
         auto s = std::make_shared< corona_state_t >( );
         corona_construct( s->value );
         corona_construct( s->defaults );
+        return s;
+    }
+    if ( cls == "VuAmbientLightEntity" )
+    {
+        auto s = std::make_shared< ambient_light_state_t >( );
+        ambient_light_construct( s->value );
+        ambient_light_construct( s->defaults );
+        return s;
+    }
+    if ( cls == "VuDirectionalLightEntity" )
+    {
+        auto s = std::make_shared< directional_light_state_t >( );
+        directional_light_construct( s->value );
+        directional_light_construct( s->defaults );
+        return s;
+    }
+    if ( cls == "VuGlobalGfxSettingsEntity" )
+    {
+        auto s = std::make_shared< gfx_settings_state_t >( );
+        gfx_settings_construct( s->value );
+        gfx_settings_construct( s->defaults );
+        return s;
+    }
+    if ( entity_is_trigger( cls ) )
+    {
+        auto s = std::make_shared< trigger_state_t >( );
+        trigger_construct( s->value );
+        trigger_construct( s->defaults );
+        return s;
+    }
+    if ( cls == "VuStaticPfxEntity" )
+    {
+        auto s = std::make_shared< static_pfx_state_t >( );
+        static_pfx_construct( s->value );
+        static_pfx_construct( s->defaults );
         return s;
     }
     return nullptr;
@@ -915,6 +993,31 @@ inline void entity_load_properties( entity_t& entity, const value_t& properties 
         corona_state_t* s = static_cast< corona_state_t* >( entity.m_state.get( ) );
         corona_load( s->value, properties, s->defaults );
     }
+    else if ( entity.m_type == "VuAmbientLightEntity" && entity.m_state )
+    {
+        ambient_light_state_t* s = static_cast< ambient_light_state_t* >( entity.m_state.get( ) );
+        ambient_light_load( s->value, properties, s->defaults );
+    }
+    else if ( entity.m_type == "VuDirectionalLightEntity" && entity.m_state )
+    {
+        directional_light_state_t* s = static_cast< directional_light_state_t* >( entity.m_state.get( ) );
+        directional_light_load( s->value, properties, s->defaults );
+    }
+    else if ( entity.m_type == "VuGlobalGfxSettingsEntity" && entity.m_state )
+    {
+        gfx_settings_state_t* s = static_cast< gfx_settings_state_t* >( entity.m_state.get( ) );
+        gfx_settings_load( s->value, properties, s->defaults );
+    }
+    else if ( entity_is_trigger( entity.m_type ) && entity.m_state )
+    {
+        trigger_state_t* s = static_cast< trigger_state_t* >( entity.m_state.get( ) );
+        trigger_load( s->value, properties, s->defaults );
+    }
+    else if ( entity.m_type == "VuStaticPfxEntity" && entity.m_state )
+    {
+        static_pfx_state_t* s = static_cast< static_pfx_state_t* >( entity.m_state.get( ) );
+        static_pfx_load( s->value, properties, s->defaults );
+    }
 }
 
 // The template mark's property step (each node's vt+0x1C): default = value.
@@ -923,6 +1026,31 @@ inline void entity_mark_properties( entity_t& entity )
     if ( entity.m_type == "VuCoronaEntity" && entity.m_state )
     {
         corona_state_t* s = static_cast< corona_state_t* >( entity.m_state.get( ) );
+        s->defaults = s->value;
+    }
+    else if ( entity.m_type == "VuAmbientLightEntity" && entity.m_state )
+    {
+        ambient_light_state_t* s = static_cast< ambient_light_state_t* >( entity.m_state.get( ) );
+        s->defaults = s->value;
+    }
+    else if ( entity.m_type == "VuDirectionalLightEntity" && entity.m_state )
+    {
+        directional_light_state_t* s = static_cast< directional_light_state_t* >( entity.m_state.get( ) );
+        s->defaults = s->value;
+    }
+    else if ( entity.m_type == "VuGlobalGfxSettingsEntity" && entity.m_state )
+    {
+        gfx_settings_state_t* s = static_cast< gfx_settings_state_t* >( entity.m_state.get( ) );
+        s->defaults = s->value;
+    }
+    else if ( entity_is_trigger( entity.m_type ) && entity.m_state )
+    {
+        trigger_state_t* s = static_cast< trigger_state_t* >( entity.m_state.get( ) );
+        s->defaults = s->value;
+    }
+    else if ( entity.m_type == "VuStaticPfxEntity" && entity.m_state )
+    {
+        static_pfx_state_t* s = static_cast< static_pfx_state_t* >( entity.m_state.get( ) );
         s->defaults = s->value;
     }
 }
