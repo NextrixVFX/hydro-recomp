@@ -940,11 +940,98 @@ inline bool verify_entity_registry( )
     return failed == 0;
 }
 
+// entity_load (engine entity/node.hxx) against retail's VuEntity::load 0x5009D0
+// / loadChildEntities 0x501300 (oracle case load_children): the level document
+// parsed by c_reader, each subtree's root created as retail's registry would and
+// loaded, and every entity it builds compared pre-order with retail's - parent,
+// name, vtable, the +0x14 flags the child sort keys on, and +0x4C (0: the
+// template path not taken). An UNKNOWN entity anywhere fails the subtree.
+inline bool verify_load_children( )
+{
+    const auto parse = []( const unsigned* words, std::size_t bytes )
+    {
+        const unsigned char* raw = reinterpret_cast< const unsigned char* >( words );
+        return c_reader( std::vector< std::uint8_t >( raw, raw + bytes ) ).parse( );
+    };
+    const value_t documents[ 2 ] = { parse( g_golden_load_children_document0, g_golden_load_children_document0_bytes ),
+        parse( g_golden_load_children_document1, g_golden_load_children_document1_bytes ) };
+    std::vector< std::string > names( g_golden_entity_templates, g_golden_entity_templates + g_golden_entity_templates_count );
+    const entity_registry_t registry = build_entity_registry( names );
+    entity_world_t world;
+    world.m_registry = &registry;
+    world.m_ctor_for = entity_ctor_for;
+    int failed = 0;
+    int compared = 0;
+    for ( std::size_t s = 0; s < g_golden_load_subtrees_count; ++s )
+    {
+        const golden_load_subtree_t& subtree = g_golden_load_subtrees[ s ];
+        const value_t* node = &member( member( documents[ subtree.m_document ], "VuProject" ), "RootEntity" );
+        for ( int depth = 0; depth < subtree.m_depth && node; ++depth )
+        {
+            const value_t& children = member( member( *node, "data" ), "ChildEntities" );
+            const value_t* next = nullptr;
+            for ( const value_t& child : children.list )
+                if ( member( child, "name" ).text == subtree.m_path[ depth ] )
+                    next = &child;
+            node = next;
+        }
+        if ( !node || member( *node, "type" ).text != subtree.m_type )
+        {
+            LOG_ERROR( "load children: subtree %d (%s) not found in the document", static_cast< int >( s ), subtree.m_type );
+            ++failed;
+            continue;
+        }
+        entity_t root;
+        root.m_type = subtree.m_type;
+        root.m_create = registry.create_for( root.m_type );
+        root.m_ctor = entity_ctor_for( root.m_type );
+        entity_load( root, &member( *node, "data" ), world );
+        std::vector< std::pair< int, const entity_t* > > ours;
+        const auto walk = [ &ours ]( const auto& self, const entity_t& e, int parent ) -> void
+        {
+            const int index = static_cast< int >( ours.size( ) );
+            ours.push_back( { parent, &e } );
+            for ( const auto& child : e.m_children )
+                self( self, *child, index );
+        };
+        walk( walk, root, -1 );
+        if ( ours.size( ) != static_cast< std::size_t >( subtree.m_count ) )
+        {
+            LOG_ERROR( "load children: %s/%s built %d entities, retail %d", subtree.m_path[ 0 ], subtree.m_path[ subtree.m_depth - 1 ],
+                static_cast< int >( ours.size( ) ), subtree.m_count );
+            ++failed;
+            continue;
+        }
+        for ( int k = 0; k < subtree.m_count; ++k )
+        {
+            const golden_load_entity_t& want = g_golden_load_entities[ subtree.m_first + k ];
+            const entity_t& have = *ours[ k ].second;
+            ++compared;
+            const bool known = have.m_ctor != nullptr;
+            if ( !known || ours[ k ].first != want.m_parent || have.m_name != want.m_name || have.m_ctor->m_vtable != want.m_vtable ||
+                 have.m_ctor->m_flags != want.m_flags || want.m_template != 0 )
+            {
+                if ( ++failed <= 8 )
+                    LOG_ERROR( "load children: %s entity %d is '%s' (%s), retail '%s'", subtree.m_path[ subtree.m_depth - 1 ], k,
+                        have.m_name.c_str( ), known ? "known" : "UNKNOWN", want.m_name );
+            }
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "entity_load matches retail's VuEntity::load 0x5009D0 / 0x501300 on %d subtrees (the level's and one "
+                     "hand-built): %d entities - names, parents, child order, vtables, flags",
+            static_cast< int >( g_golden_load_subtrees_count ), compared );
+    else
+        LOG_ERROR( "entity_load FAILED %d checks against 0x501300", failed );
+    return failed == 0;
+}
+
 // Every oracle-backed check on game code.
 inline bool verify_game( )
 {
     bool ok = true;
     ok = verify_entity_registry( ) && ok;
+    ok = verify_load_children( ) && ok;
     ok = verify_boat_ctor( ) && ok;
     ok = verify_boat_parts( ) && ok;
     ok = verify_transform_load( ) && ok;

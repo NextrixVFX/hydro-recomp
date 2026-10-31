@@ -27,15 +27,16 @@ Measured, not estimated: see **[docs/INVENTORY.md](docs/INVENTORY.md)** (summary
 
 | retail functions | 8,638 |
 |---|---:|
-| **verified** - retail executed in an oracle case and recreated here | **344** |
-| callee - executed inside a checked case, not recreated on its own (CRT / STL / engine helpers) | 114 |
-| cited - recreated or referenced here, but no oracle case runs it yet | 193 |
-| absent | 7,987 |
+| **verified** - retail executed in an oracle case and recreated here | **357** |
+| callee - executed inside a checked case, not recreated on its own (CRT / STL / engine helpers) | 200 |
+| cited - recreated or referenced here, but no oracle case runs it yet | 189 |
+| absent | 7,892 |
 
 Verified so far, by area: Bullet physics (collision, broadphase, the constraint solver, integration - 154
 functions), the boat's tick path and fluid / buoyancy forces, the water wave kernels, the VUJB asset document
 reader, VuTransformComponent, the VuEntity constructor's object graph, the whole VuBoatEntity construction (0x41B850: 43 objects, every byte and pointer, and its event registrations), and the
-entity type registry (all 294 types - the engine's, the game's and one per template - in retail's order).
+entity type registry (all 294 types - the engine's, the game's and one per template - in retail's order), and
+VuEntity::load's child loading (the entity tree it builds from real level data: names, parents, child order).
 
 **What runs today:** the Hydroelectric track loads and renders - terrain, lights, fog, props, skinned props,
 coronas, particle effects, triggers, the event graph, and the ocean with point waves.
