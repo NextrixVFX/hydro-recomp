@@ -845,53 +845,8 @@ private:
             // Vu3dDrawAnimatedModelComponent, and 19 of 19 clips are in the
             // pack. Start Time is why four identical pump pistons do not pump
             // in step; values of 1 and 15 appear.
-            // A trigger plane carries NO volume properties - the volume IS its
-            // transform. Measured: Position is the centre, Rotation is in
-            // degrees, and Scale is the extent, with Y always 1 because the
-            // thing is a PLANE (e.g. 82.14 x 1.00 x 17.05 - a gate 82 wide and
-            // 17 tall, one unit thick). An optional "Trigger Type" names what
-            // may set it off; "AI Boat" appears on the AI nuisance planes.
-            // VuTriggerBoxEntity shares EVERYTHING authored with the plane:
-            // its create @0x5d1a30 allocates 0x8C bytes, calls
-            // VuTriggerEntity_ctor @0x61c6a0 - the base that declares
-            // "Initially Active", "Trigger Type", the Activate/Deactivate
-            // INPUT plugs and the OnEnter/OnExit outputs - and only swaps in
-            // its own vtable. It has NO constructor and NO properties of its
-            // own; the volume is its transform, exactly as for the plane.
-            // What differs is the crossing test, below.
-            if ( type->text == "VuTriggerPlaneEntity" || type->text == "VuTriggerBoxEntity" )
-            {
-                trigger_t gate{};
-                gate.box = type->text == "VuTriggerBoxEntity";
-                gate.path = here;
-                // The three row lengths are the authored Scale, which IS the
-                // half extent the box test compares against - proved for the
-                // plane by VuTriggerPlaneEntity_bounds @0x5d18b0 and again for
-                // the box by VuTriggerBoxEntity_bounds @0x5d1dc0, which builds
-                // its bounding box from 2.0 * the floats at shape+176.
-                for ( int axis = 0; axis < 3; ++axis )
-                {
-                    const float* row = world + axis * 4;
-                    gate.scale[ axis ] = std::sqrt( row[ 0 ] * row[ 0 ]
-                        + row[ 1 ] * row[ 1 ] + row[ 2 ] * row[ 2 ] );
-                }
-                std::memcpy( gate.world, world, sizeof( gate.world ) );
-                if ( !model_invert( gate.inverse, world ) )
-                    gate.inverse[ 0 ] = 0.0f;
-                const value_t* kind = properties != nullptr
-                    ? find( *properties, "Trigger Type" ) : nullptr;
-                if ( kind != nullptr && kind->kind == value_t::kind_t::text )
-                    gate.kind = kind->text;
-                // Reversed from VuTriggerEntity_ctor at 0x61c6a0: the base
-                // class declares an "Initially Active" bool alongside
-                // "Trigger Type", and Activate / Deactivate input plugs that
-                // flip it. A plane that starts inactive must not fire.
-                gate.active = properties == nullptr
-                    || number( find( *properties, "Initially Active" ), 1.0f ) != 0.0f;
-                // Its OnEnter / OnExit connections are in m_graph with every
-                // other entity's, resolved by collect_graph above.
-                m_triggers.add( std::move( gate ) );
-            }
+            // VuTriggerPlaneEntity / VuTriggerBoxEntity are built from the retail
+            // entity tree (load_entity_tree).
             // VuOneShotFilterEntity. Its whole behaviour is three input plug
             // handlers over one byte at this+96, all four plugs named by
             // VuOneShotFilterEntity_ctor @0x5ded70:
@@ -2982,10 +2937,39 @@ private:
         int models_unplaced = 0;
         // Every static placement, by owner, for the rotators (adopt_rotators).
         std::vector< collected_t > collected;
+        std::vector< trigger_t > fresh_triggers;
+        int triggers_unplaced = 0;
         // The event graph addresses an entity by its names below the project
         // root, '/'-joined.
         const auto walk = [ & ]( const auto& self, entity_t& e, const std::string& trail ) -> void
         {
+            // VuTriggerPlaneEntity / VuTriggerBoxEntity (engine entity/trigger.hxx):
+            // the volume is the transform - VuTriggerPlaneEntity_bounds 0x5D18B0
+            // composes VuMatrix_multiply(fromScale(scale +0xB0), out, world
+            // +0x50), the same product as transform_draw_matrix, and the crossing
+            // test 0x5D1570 compares against the Scale (+0xB0) itself as the half
+            // extent. Initially Active and Trigger Type are the loaded targets.
+            if ( entity_is_trigger( e.m_type ) && e.m_state )
+            {
+                const transform_component_t* t = entity_transform( e );
+                if ( !t || e.m_world_unknown )
+                    ++triggers_unplaced;
+                else
+                {
+                    const trigger_properties_t& p = static_cast< const trigger_state_t* >( e.m_state.get( ) )->value;
+                    trigger_t gate{};
+                    gate.box = e.m_type == "VuTriggerBoxEntity";
+                    gate.path = trail;
+                    transform_draw_matrix( *t, gate.world );
+                    for ( int axis = 0; axis < 3; ++axis )
+                        gate.scale[ axis ] = t->scale[ axis ];
+                    if ( !model_invert( gate.inverse, gate.world ) )
+                        gate.inverse[ 0 ] = 0.0f;
+                    gate.kind = p.trigger_type;
+                    gate.active = p.initially_active != 0;
+                    fresh_triggers.push_back( std::move( gate ) );
+                }
+            }
             // VuGlobalGfxSettingsEntity (engine entity/gfx.hxx): the far plane is
             // its Camera Far Plane - neither VuBoatCamera_update nor the front-end
             // camera sets one - and the fog its Fog Start / End and Fog Color's R,
@@ -3108,9 +3092,11 @@ private:
         };
         walk( walk, *m_tree, std::string( ) );
         adopt_rotators( std::move( collected ) );
+        for ( trigger_t& gate : fresh_triggers )
+            m_triggers.add( std::move( gate ) );
         LOG_INFO( "entity tree: %s (%s) - %d entities, %d UNKNOWN (nothing below one is loaded); %d coronas placed, %d with an "
-                  "unknown world; %d models placed, %d with an unknown world", asset, path.c_str( ), entities, unknown, placed,
-            unplaced, models, models_unplaced );
+                  "unknown world; %d models placed, %d with an unknown world; %d triggers, %d with an unknown world", asset, path.c_str( ),
+            entities, unknown, placed, unplaced, models, models_unplaced, static_cast< int >( m_triggers.size( ) ), triggers_unplaced );
         // Which types' construction is not captured - what to recreate next.
         for ( const auto& pair : unknown_types )
             LOG_VERBOSE( "entity tree: UNKNOWN %-40s x%d", pair.first.c_str( ), pair.second );

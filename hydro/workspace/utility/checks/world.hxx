@@ -156,11 +156,47 @@ inline bool verify_gfx_settings( )
     return failed == 0;
 }
 
+// VuTriggerEntity's two property loads (engine entity/trigger.hxx through the
+// tree's entity_load_properties) against retail's VuEntity::load on the
+// VuTriggerPlaneEntity / VuTriggerBoxEntity of the templates plus five
+// hand-built ones (oracle case load_triggers, start-up's 0x4D9260 run first so
+// the Trigger Type default is the enum's first value), bit for bit.
+inline bool verify_triggers( )
+{
+    std::map< std::string, entity_t* > by_name;
+    const std::unique_ptr< entity_t > tree = world_check_tree( g_golden_triggers_document, g_golden_triggers_document_bytes, by_name );
+    int failed = 0;
+    int compared = 0;
+    for ( std::size_t k = 0; k < g_golden_triggers_count; ++k )
+    {
+        const golden_entity_targets_t& want = g_golden_triggers[ k ];
+        const auto found = by_name.find( want.m_child );
+        if ( found == by_name.end( ) || !found->second->m_state || found->second->m_type != want.m_type )
+        {
+            LOG_ERROR( "triggers: '%s' (%s) missing or without state", want.m_source, want.m_child );
+            ++failed;
+            continue;
+        }
+        const trigger_properties_t& t = static_cast< const trigger_state_t* >( found->second->m_state.get( ) )->value;
+        world_check_words( "triggers", want, { t.initially_active }, failed, compared );
+        ++compared;
+        if ( t.trigger_type != want.m_text && ++failed <= 8 )
+            LOG_ERROR( "triggers: '%s' Trigger Type is '%s', retail '%s'", want.m_source, t.trigger_type.c_str( ), want.m_text );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "trigger_load matches VuTriggerEntity's loads (ctor 0x61C6A0) on %d trigger planes / boxes: %d values, bit for bit",
+            static_cast< int >( g_golden_triggers_count ), compared );
+    else
+        LOG_ERROR( "the triggers' property loads FAILED %d checks", failed );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
     ok = verify_prop_draw_matrix( ) && ok;
     ok = verify_light_rig( ) && ok;
     ok = verify_gfx_settings( ) && ok;
+    ok = verify_triggers( ) && ok;
     return ok;
 }

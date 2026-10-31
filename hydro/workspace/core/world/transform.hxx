@@ -137,7 +137,8 @@ inline void transform_recalc( transform_component_t& c, const float* parent_worl
 // VuMatrix_multiply(this = VuMatrix_fromScale(scale +0xB0), out, world +0x50):
 // the Scale the transform keeps out of both matrices is applied HERE, first.
 // VuMatrix_fromScale 0x407DB0 copies the three lanes' bits onto a zero matrix
-// with m[15] = 1.0.
+// with m[15] = 1.0. VuTriggerPlaneEntity_bounds 0x5D18B0 composes the same
+// product from its transform for the trigger volume.
 inline void transform_draw_matrix( const transform_component_t& c, float* out )
 {
     float scale[ 16 ] = {};

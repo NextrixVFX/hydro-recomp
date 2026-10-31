@@ -7,6 +7,7 @@
 #include <workspace/core/entity/draw.hxx>
 #include <workspace/core/entity/rig.hxx>
 #include <workspace/core/entity/gfx.hxx>
+#include <workspace/core/entity/trigger.hxx>
 
 #include <cstring>
 
@@ -916,6 +917,18 @@ struct gfx_settings_state_t
     gfx_settings_t defaults;
 };
 
+// VuTriggerPlaneEntity / VuTriggerBoxEntity (engine entity/trigger.hxx).
+struct trigger_state_t
+{
+    trigger_properties_t value;
+    trigger_properties_t defaults;
+};
+
+inline bool entity_is_trigger( const std::string& cls )
+{
+    return cls == "VuTriggerPlaneEntity" || cls == "VuTriggerBoxEntity";
+}
+
 inline std::shared_ptr< void > entity_state_for( const std::string& cls )
 {
     if ( cls == "VuCoronaEntity" )
@@ -946,6 +959,13 @@ inline std::shared_ptr< void > entity_state_for( const std::string& cls )
         gfx_settings_construct( s->defaults );
         return s;
     }
+    if ( entity_is_trigger( cls ) )
+    {
+        auto s = std::make_shared< trigger_state_t >( );
+        trigger_construct( s->value );
+        trigger_construct( s->defaults );
+        return s;
+    }
     return nullptr;
 }
 
@@ -973,6 +993,11 @@ inline void entity_load_properties( entity_t& entity, const value_t& properties 
         gfx_settings_state_t* s = static_cast< gfx_settings_state_t* >( entity.m_state.get( ) );
         gfx_settings_load( s->value, properties, s->defaults );
     }
+    else if ( entity_is_trigger( entity.m_type ) && entity.m_state )
+    {
+        trigger_state_t* s = static_cast< trigger_state_t* >( entity.m_state.get( ) );
+        trigger_load( s->value, properties, s->defaults );
+    }
 }
 
 // The template mark's property step (each node's vt+0x1C): default = value.
@@ -996,6 +1021,11 @@ inline void entity_mark_properties( entity_t& entity )
     else if ( entity.m_type == "VuGlobalGfxSettingsEntity" && entity.m_state )
     {
         gfx_settings_state_t* s = static_cast< gfx_settings_state_t* >( entity.m_state.get( ) );
+        s->defaults = s->value;
+    }
+    else if ( entity_is_trigger( entity.m_type ) && entity.m_state )
+    {
+        trigger_state_t* s = static_cast< trigger_state_t* >( entity.m_state.get( ) );
         s->defaults = s->value;
     }
 }
