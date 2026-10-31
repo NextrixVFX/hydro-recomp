@@ -609,6 +609,52 @@ inline bool verify_compound_inertia( )
     return failed == 0;
 }
 
+// boat_nose_probe (boat/state.hxx) against retail's 0x41F740 (oracle case
+// boat_nose_probe; VuWater's lookup intercepted and answered): the six blocks
+// after, what the lookup was handed, and whether the event fired.
+inline bool verify_boat_nose_probe( )
+{
+    const int sizes[ 6 ] = { 0x520, 0x300, 0x1F0, 0x104, 0xC8, 0x104 };
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_nose_probe_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_nose_probe_words + g_golden_boat_nose_probe_offsets[ index ];
+        float answer;
+        std::memcpy( &answer, s++, 4 );
+        const bool asked = *s++ != 0;
+        const unsigned* point = s;
+        const unsigned* callback = s + 3;
+        s += 8;
+        const bool event = *s++ != 0;
+        std::vector< std::uint8_t > b[ 6 ];
+        for ( int k = 0; k < 6; ++k )
+        {
+            b[ k ].assign( reinterpret_cast< const std::uint8_t* >( s ), reinterpret_cast< const std::uint8_t* >( s ) + sizes[ k ] );
+            s += sizes[ k ] / 4;
+        }
+        boat_probe_io_t io;
+        boat_nose_probe( b[ 0 ].data( ), b[ 1 ].data( ), b[ 3 ].data( ), b[ 4 ].data( ) + 0x50, b[ 5 ].data( ), 0.016666668f, answer, io );
+        int bad = io.asked != asked || io.event != event ? 0x7000 : -1;
+        if ( bad < 0 && asked && ( std::memcmp( io.point, point, 12 ) != 0 || std::memcmp( io.callback, callback, 20 ) != 0 ) )
+            bad = 0x7001;
+        for ( int k = 0; k < 6 && bad < 0; ++k )
+        {
+            for ( int at = 0; at < sizes[ k ] && bad < 0; ++at )
+                if ( b[ k ][ at ] != reinterpret_cast< const std::uint8_t* >( s )[ at ] )
+                    bad = 0x1000 * k + at;
+            s += sizes[ k ] / 4;
+        }
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "boat nose probe vector %d differs from retail at 0x%X (block x 0x1000 + byte; 0x7000 calls, 0x7001 the probe)",
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the Decision sub-tick 0x41F740 matches retail (VuWater's lookup answered): %d vectors", static_cast< int >( g_golden_boat_nose_probe_count ) );
+    else
+        LOG_ERROR( "boat nose probe FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_nose_probe_count ) );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
@@ -622,5 +668,6 @@ inline bool verify_boat_all( )
     ok = verify_cylinder_shape( ) && ok;
     ok = verify_sphere_shape( ) && ok;
     ok = verify_compound_inertia( ) && ok;
+    ok = verify_boat_nose_probe( ) && ok;
     return ok;
 }
