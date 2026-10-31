@@ -1,8 +1,10 @@
-﻿#pragma once
+#pragma once
 
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <emmintrin.h>
 
 // The VuWater*Wave family: the thirteen wave kinds that displace a water
 // surface. The ocean three live in water.hxx because they carry a whole
@@ -517,6 +519,163 @@ inline void banked_turn_vertex( const banked_turn_t& wave, float x, float y,
     const float across = angle / wave.extent;
     const float lift = ( ( band + 1.0f ) * 0.5f ) * wave.amplitude;
     height += wave_edge( across, wave.edge ) * lift;
+}
+
+// THE RECTANGULAR AND CIRCULAR OCEAN WAVES' BASE KERNELS, @0x59ed30 and
+// @0x59fed0 (slot 3 @0x59da30 / @0x59dec0, both flags clear), and their
+// ctx+100 variants @0x59f2b0 / @0x5a03f0, which are the same body behind the
+// family's per-vertex tag test.
+//
+// They read a DOUBLE-BUFFERED field of bicubic bezier patches, 16 floats per
+// cell, built elsewhere (VuWaterOceanWave_BuildBezierPatches @0x59d6c0, not
+// recreated here). Buffer k sits at wave +176 + 16k: its time as a double at
+// +0 and its patch array at +12. The members, as the kernels read them:
+//
+//   +108  shift (log2 of the field size)     +116  mask (size - 1)
+//   +120  the field scale                    +128 / +132  the rotation's
+//                                                         sine / cosine
+//   +136  the current time, a double         +164 / +168  current / previous
+//                                                         buffer index
+//   +208 / +212  the centre
+//   rectangular: +224 / +228 the sizes, +232 / +236 the two decays
+//   circular:    +224 the radius, +228 the decay
+//
+// Each vertex: rotate (dx, dy) by the field's angle and scale it; the cell is
+// nearbyint(v - 0.5) on each axis, and v minus that integer is the patch
+// parameter. THE ROUNDING IS AN x87 `fld; fsub 0.5; fistp` - round to nearest
+// EVEN on the exact difference - so an exact tie lands on the even cell and
+// the parameter can come out as exactly 1.0; floor or truncation would not.
+// The footprint test and its fade use the UNROTATED offset on the rectangle
+// and the rotated one's length on the circle. The height takes the current
+// field times the fade; displacement[ 2 ] takes the difference against the
+// previous field divided by the two buffers' time gap - a vertical velocity -
+// computed in DOUBLE (cvtps2pd, subsd, divsd, cvtpd2ps).
+struct ocean_patch_t
+{
+    int shift = 0;
+    int mask = 0;
+    float scale = 0.0f;
+    float sine = 0.0f;
+    float cosine = 1.0f;
+    double now = 0.0;
+    int current = 0;
+    int previous = 0;
+    double time[ 2 ]{};
+    const float* patches[ 2 ]{};
+    float centre_x = 0.0f;
+    float centre_y = 0.0f;
+    float shape[ 4 ]{};   // rect: size x, size y, decay x, decay y; circle: radius, decay
+};
+
+// One patch, in retail's term order: the control points are NOT visited in
+// index order (0, 11, 10, 3 / 4, 12, 15, 9 / 5, 13, 14, 8 / 1, 6, 7, 2), the
+// first row is summed before its u weight is applied and every later term is
+// weighted on its own. Retail evaluates it twice per vertex with identical
+// weights, once per buffer.
+inline float ocean_patch_eval( const float* p, const float* bu, const float* bw )
+{
+    float t = p[ 11 ] * bw[ 1 ];
+    t = t + p[ 0 ] * bw[ 0 ];
+    t = t + p[ 10 ] * bw[ 2 ];
+    t = t + p[ 3 ] * bw[ 3 ];
+    t = t * bu[ 0 ];
+    t = t + ( p[ 4 ] * bw[ 0 ] ) * bu[ 1 ];
+    t = t + ( p[ 12 ] * bw[ 1 ] ) * bu[ 1 ];
+    t = t + ( p[ 15 ] * bw[ 2 ] ) * bu[ 1 ];
+    t = t + ( p[ 9 ] * bw[ 3 ] ) * bu[ 1 ];
+    t = t + ( p[ 5 ] * bw[ 0 ] ) * bu[ 2 ];
+    t = t + ( p[ 13 ] * bw[ 1 ] ) * bu[ 2 ];
+    t = t + ( p[ 14 ] * bw[ 2 ] ) * bu[ 2 ];
+    t = t + ( p[ 8 ] * bw[ 3 ] ) * bu[ 2 ];
+    t = t + ( p[ 1 ] * bw[ 0 ] ) * bu[ 3 ];
+    t = t + ( p[ 6 ] * bw[ 1 ] ) * bu[ 3 ];
+    t = t + ( p[ 7 ] * bw[ 2 ] ) * bu[ 3 ];
+    t = t + ( p[ 2 ] * bw[ 3 ] ) * bu[ 3 ];
+    return t;
+}
+
+// The cubic bernstein weights retail builds: (a*a)*a, ((3t)*a)*a, ((3t)*t)*a,
+// (t*t)*t with a = 1 - t.
+inline void ocean_bernstein( float t, float* b )
+{
+    const float a = 1.0f - t;
+    const float t3 = t * 3.0f;
+    b[ 0 ] = ( a * a ) * a;
+    b[ 1 ] = ( t3 * a ) * a;
+    b[ 2 ] = ( t3 * t ) * a;
+    b[ 3 ] = ( t * t ) * t;
+}
+
+// fld m32; fsub 0.5 (m32); fistp m32: the difference is exact in the x87's
+// extended precision and so is it in a double, and cvtsd2si rounds to nearest
+// even under the default MXCSR as fistp does under the default control word -
+// including the 0x80000000 "indefinite" on overflow.
+inline int ocean_cell( float v )
+{
+    return _mm_cvtsd_si32( _mm_set_sd( static_cast< double >( v ) - 0.5 ) );
+}
+
+// comiss a, b; ja: a > b, false when unordered.
+inline bool ocean_gt( float a, float b )
+{
+    return _mm_comigt_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) != 0;
+}
+
+inline void ocean_patch_vertex( const ocean_patch_t& wave, bool circle, float x, float y,
+    float* displacement, float& height )
+{
+    const float dy = y - wave.centre_y;
+    const float dx = x - wave.centre_x;
+    const float a = ( wave.cosine * dx ) - ( wave.sine * dy );
+    const float b = ( wave.sine * dx ) + ( wave.cosine * dy );
+    const float va = a * wave.scale;
+    const float vb = b * wave.scale;
+    const int ia = ocean_cell( va );
+    const int ib = ocean_cell( vb );
+    const float u = va - static_cast< float >( ia );
+    const float w = vb - static_cast< float >( ib );
+    const int cell = ( ( ib & wave.mask ) << wave.shift ) + ( ia & wave.mask );
+
+    float fade = 1.0f;
+    float fade_b = 1.0f;
+    if ( !circle )
+    {
+        const float ua = std::fabs( ( 2.0f / wave.shape[ 0 ] ) * dx );
+        if ( !ocean_gt( 1.0f, ua ) )
+            return;
+        const float ub = std::fabs( ( 2.0f / wave.shape[ 1 ] ) * dy );
+        if ( !ocean_gt( 1.0f, ub ) )
+            return;
+        if ( ocean_gt( ua, wave.shape[ 2 ] ) )
+            fade = ( ua - 1.0f ) / ( wave.shape[ 2 ] - 1.0f );
+        if ( ocean_gt( ub, wave.shape[ 3 ] ) )
+            fade_b = ( ub - 1.0f ) / ( wave.shape[ 3 ] - 1.0f );
+    }
+    else
+    {
+        const float r = _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( b * b ) + ( a * a ) ) ) ) / wave.shape[ 0 ];
+        if ( !ocean_gt( 1.0f, r ) )
+            return;
+        if ( ocean_gt( r, wave.shape[ 1 ] ) )
+            fade = ( r - 1.0f ) / ( wave.shape[ 1 ] - 1.0f );
+    }
+
+    float bu[ 4 ];
+    float bw[ 4 ];
+    ocean_bernstein( u, bu );
+    ocean_bernstein( w, bw );
+    const float* now = wave.patches[ wave.current ] + 16 * cell;
+    const float* before = wave.patches[ wave.previous ] + 16 * cell;
+    float lift = ocean_patch_eval( now, bu, bw ) * fade;
+    float last = ocean_patch_eval( before, bu, bw ) * fade;
+    if ( !circle )
+    {
+        lift = lift * fade_b;
+        last = last * fade_b;
+    }
+    height = height + lift;
+    const double rate = static_cast< double >( lift - last ) / ( wave.now - wave.time[ wave.previous ] );
+    displacement[ 2 ] = static_cast< float >( rate ) + displacement[ 2 ];
 }
 
 // The walk retail performs around that body: count vertices from the context's
