@@ -6,6 +6,7 @@
 #include <workspace/core/entity/corona.hxx>
 #include <workspace/core/entity/draw.hxx>
 #include <workspace/core/entity/rig.hxx>
+#include <workspace/core/entity/gfx.hxx>
 
 #include <cstring>
 
@@ -908,6 +909,13 @@ struct directional_light_state_t
     directional_light_t defaults;
 };
 
+// VuGlobalGfxSettingsEntity (engine entity/gfx.hxx).
+struct gfx_settings_state_t
+{
+    gfx_settings_t value;
+    gfx_settings_t defaults;
+};
+
 inline std::shared_ptr< void > entity_state_for( const std::string& cls )
 {
     if ( cls == "VuCoronaEntity" )
@@ -929,6 +937,13 @@ inline std::shared_ptr< void > entity_state_for( const std::string& cls )
         auto s = std::make_shared< directional_light_state_t >( );
         directional_light_construct( s->value );
         directional_light_construct( s->defaults );
+        return s;
+    }
+    if ( cls == "VuGlobalGfxSettingsEntity" )
+    {
+        auto s = std::make_shared< gfx_settings_state_t >( );
+        gfx_settings_construct( s->value );
+        gfx_settings_construct( s->defaults );
         return s;
     }
     return nullptr;
@@ -953,6 +968,11 @@ inline void entity_load_properties( entity_t& entity, const value_t& properties 
         directional_light_state_t* s = static_cast< directional_light_state_t* >( entity.m_state.get( ) );
         directional_light_load( s->value, properties, s->defaults );
     }
+    else if ( entity.m_type == "VuGlobalGfxSettingsEntity" && entity.m_state )
+    {
+        gfx_settings_state_t* s = static_cast< gfx_settings_state_t* >( entity.m_state.get( ) );
+        gfx_settings_load( s->value, properties, s->defaults );
+    }
 }
 
 // The template mark's property step (each node's vt+0x1C): default = value.
@@ -971,6 +991,11 @@ inline void entity_mark_properties( entity_t& entity )
     else if ( entity.m_type == "VuDirectionalLightEntity" && entity.m_state )
     {
         directional_light_state_t* s = static_cast< directional_light_state_t* >( entity.m_state.get( ) );
+        s->defaults = s->value;
+    }
+    else if ( entity.m_type == "VuGlobalGfxSettingsEntity" && entity.m_state )
+    {
+        gfx_settings_state_t* s = static_cast< gfx_settings_state_t* >( entity.m_state.get( ) );
         s->defaults = s->value;
     }
 }

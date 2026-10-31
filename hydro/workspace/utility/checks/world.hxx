@@ -124,10 +124,43 @@ inline bool verify_light_rig( )
     return failed == 0;
 }
 
+// VuGlobalGfxSettingsEntity's 26 property loads (engine entity/gfx.hxx through
+// the tree's entity_load_properties) against retail's VuEntity::load on every
+// such entity in the level templates and projects plus two hand-built ones
+// (oracle case load_gfx_settings), bit for bit.
+inline bool verify_gfx_settings( )
+{
+    std::map< std::string, entity_t* > by_name;
+    const std::unique_ptr< entity_t > tree = world_check_tree( g_golden_gfx_settings_document, g_golden_gfx_settings_document_bytes, by_name );
+    int failed = 0;
+    int compared = 0;
+    for ( std::size_t k = 0; k < g_golden_gfx_settings_count; ++k )
+    {
+        const golden_entity_targets_t& want = g_golden_gfx_settings[ k ];
+        const auto found = by_name.find( want.m_child );
+        if ( found == by_name.end( ) || !found->second->m_state || found->second->m_type != want.m_type )
+        {
+            LOG_ERROR( "gfx settings: '%s' (%s) missing or without state", want.m_source, want.m_child );
+            ++failed;
+            continue;
+        }
+        std::vector< std::uint32_t > ours( 26 );
+        gfx_settings_words( static_cast< const gfx_settings_state_t* >( found->second->m_state.get( ) )->value, ours.data( ) );
+        world_check_words( "gfx settings", want, ours, failed, compared );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "gfx_settings_load matches VuGlobalGfxSettingsEntity's 26 loads (base ctor 0x5A6520) on %d entities: %d values, bit for bit",
+            static_cast< int >( g_golden_gfx_settings_count ), compared );
+    else
+        LOG_ERROR( "the gfx settings' property loads FAILED %d checks", failed );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
     ok = verify_prop_draw_matrix( ) && ok;
     ok = verify_light_rig( ) && ok;
+    ok = verify_gfx_settings( ) && ok;
     return ok;
 }

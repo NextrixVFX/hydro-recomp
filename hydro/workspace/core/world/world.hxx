@@ -781,62 +781,8 @@ private:
                 source.foaminess = bind.real( "Foaminess" );
                 m_ripple_sources.emplace( here, source );
             }
-            if ( type->text == "VuGlobalGfxSettingsEntity" && properties != nullptr )
-            {
-                // Every key here maps onto a named constant in the retail
-                // shaders: Contrast/Tint feed PostProcess/Effect, and the
-                // Water * keys feed the water shader's gAmbientColor,
-                // gDiffuseColor, gFoamAmbientColor, gFoamDiffuseColor and
-                // gFoamTextureSize. See memory/water.md.
-                if ( properties->kind == value_t::kind_t::object )
-                    for ( const auto& pair : properties->object )
-                    {
-                        const value_t* red = find( pair.second, "R" );
-                        if ( red != nullptr )
-                            LOG_VERBOSE( "gfx %-28s = %.0f %.0f %.0f", pair.first.c_str( ),
-                                number( red, -1.0f ),
-                                number( find( pair.second, "G" ), -1.0f ),
-                                number( find( pair.second, "B" ), -1.0f ) );
-                        else
-                            LOG_VERBOSE( "gfx %-28s = %.4f", pair.first.c_str( ),
-                                number( &pair.second, -999.0f ) );
-                    }
-                // Every fallback below is VuGlobalGfxSettingsEntity's own
-                // constructor default, read out of the constructor under
-                // emulation (tools/ctor.py) rather than chosen: Fog Start
-                // 0x43FA0000 = 500, Fog End 0x447A0000 = 1000, Fog Color
-                // 0xFF000000 = black at full alpha. The values that stood here
-                // before - 0, 900 and (156,196,215) - were invented.
-                // The far plane is authored HERE, not on any camera - neither
-                // VuBoatCamera_update nor the front-end camera sets one, which
-                // is why a placeholder stood in for it. Constructor default
-                // 0x43FA0000 = 500.
-                const c_entity_binder bind( type->text, overlay, properties );
-                m_authored_far = bind.real( "Camera Far Plane" );
-                float fog_color[ 4 ]{};
-                bind.color( "Fog Color", fog_color );
-                const float red = fog_color[ 0 ];
-                const float green = fog_color[ 1 ];
-                const float blue = fog_color[ 2 ];
-                const float start = bind.real( "Fog Start" );
-                const float end = bind.real( "Fog End" );
-                LOG_VERBOSE( "gfx settings: fog %.0f..%.0f  colour %.3f %.3f %.3f",
-                    start, end, red, green, blue );
-                // Hydroelectric authors Fog End 1800 but does NOT author
-                // Camera Far Plane, so the far plane falls back to the
-                // constructor's 500 - and geometry would be clipped long
-                // before the fog it is meant to fade into reaches full
-                // density. One of the two comes from somewhere not yet found.
-                // Reported rather than reconciled: picking a value here would
-                // be an invention.
-                if ( end > m_authored_far )
-                {
-                    LOG_WARNING( "gfx settings: Fog End %.0f is beyond the far plane %.0f - "
-                        "the far plane's real source has not been found",
-                        end, m_authored_far );
-                }
-                c_engine::fog( start, end, red, green, blue );
-            }
+            // VuGlobalGfxSettingsEntity feeds the fog and the far plane from the
+            // retail entity tree (load_entity_tree).
             // VuFoliageEntity drew a hand-built billboard quad from an invented
             // vertex layout. Deleted; build it from the entity's own draw path.
             if ( type->text == "VuStaticPfxEntity" )
@@ -3040,6 +2986,33 @@ private:
         // root, '/'-joined.
         const auto walk = [ & ]( const auto& self, entity_t& e, const std::string& trail ) -> void
         {
+            // VuGlobalGfxSettingsEntity (engine entity/gfx.hxx): the far plane is
+            // its Camera Far Plane - neither VuBoatCamera_update nor the front-end
+            // camera sets one - and the fog its Fog Start / End and Fog Color's R,
+            // G, B bytes / 255. The other 22 values are loaded and not consumed
+            // yet (Contrast / Tint feed PostProcess/Effect and the Water * ones the
+            // water shader's constants - memory water.md - neither wired), and
+            // how retail applies the settings (Always Active, the ramp times, the
+            // Rectangular / Elliptical volumes that blend over it) is unread: the
+            // last one in tree order is applied at load, ours and flagged.
+            if ( e.m_type == "VuGlobalGfxSettingsEntity" && e.m_state )
+            {
+                const gfx_settings_t& g = static_cast< const gfx_settings_state_t* >( e.m_state.get( ) )->value;
+                m_authored_far = g.camera_far_plane;
+                const float red = static_cast< float >( g.fog_color & 0xFF ) / 255.0f;
+                const float green = static_cast< float >( ( g.fog_color >> 8 ) & 0xFF ) / 255.0f;
+                const float blue = static_cast< float >( ( g.fog_color >> 16 ) & 0xFF ) / 255.0f;
+                LOG_VERBOSE( "gfx settings %s: far %.0f  fog %.0f..%.0f  colour %.3f %.3f %.3f", trail.c_str( ), g.camera_far_plane,
+                    g.fog_start, g.fog_end, red, green, blue );
+                // Hydroelectric authors Fog End 1800 and no Camera Far Plane, so
+                // the far plane is the ctor's 500 and geometry clips long before
+                // the fog reaches full density - one of the two comes from
+                // somewhere not yet found. Reported, not reconciled.
+                if ( g.fog_end > m_authored_far )
+                    LOG_WARNING( "gfx settings: Fog End %.0f is beyond the far plane %.0f - the far plane's real source has not been found",
+                        g.fog_end, m_authored_far );
+                c_engine::fog( g.fog_start, g.fog_end, red, green, blue );
+            }
             // The rig: the hull shader's gAmbLightColor from VuAmbientLightEntity's
             // Color, gDirLightFrontColor / gDirLightBackColor from
             // VuDirectionalLightEntity's (the shader's light is TWO-SIDED), each
