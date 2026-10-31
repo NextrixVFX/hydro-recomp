@@ -45,8 +45,9 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     world.m_registry = &registry;
     world.m_ctor_for = entity_ctor_for;
     world.m_template = [ this ]( const std::string& name ) { return template_document( name ); };
-    world.m_components_for = entity_components_constructed;
+    world.m_components_for = entity_components_scripted;
     world.m_component_load = entity_load_component;
+    world.m_component_post = entity_post_load_component;
     world.m_component_mark = entity_mark_component;
     world.m_state_for = entity_state_for;
     world.m_properties_load = entity_load_properties;

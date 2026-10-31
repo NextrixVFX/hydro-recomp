@@ -10,6 +10,7 @@
 #include <workspace/core/entity/trigger.hxx>
 #include <workspace/core/entity/pfx.hxx>
 #include <workspace/core/entity/actions.hxx>
+#include <workspace/core/game/plugs.hxx>
 
 #include <cstring>
 
@@ -370,6 +371,7 @@ inline const entity_ctor_t g_entity_ctors[] = {
     { "VuStaticWakeWaveEntity", 0x7535BCu, 0u },
     { "VuSteeringSensitivitySettingsEntity", 0x73E10Cu, 0u },
     { "VuStringEntity", 0x7552D0u, 0u },
+    { "VuSubstituteAssetEntity", 0x7570C4u, 0u },
     { "VuSubtractIntegersEntity", 0x7540F4u, 0u },
     { "VuSwapSkyboxEntity", 0x756FE0u, 0u },
     { "VuSwitchEntity", 0x754A30u, 0u },
@@ -962,6 +964,8 @@ inline const entity_component_row_t g_entity_component_rows[] = {
     { "VuSteeringSensitivitySettingsEntity", "VuUIDrawComponent", 0x738A44u },
     { "VuStringEntity", "VuTransformComponent", 0x74D324u },
     { "VuStringEntity", "VuScriptComponent", 0x74C3F0u },
+    { "VuSubstituteAssetEntity", "VuTransformComponent", 0x74D324u },
+    { "VuSubstituteAssetEntity", "VuScriptComponent", 0x74C3F0u },
     { "VuSubtractIntegersEntity", "VuTransformComponent", 0x74D324u },
     { "VuSubtractIntegersEntity", "VuScriptComponent", 0x74C3F0u },
     { "VuSwapSkyboxEntity", "VuTransformComponent", 0x74D324u },
@@ -1075,6 +1079,11 @@ inline const entity_component_row_t g_entity_component_rows[] = {
     { "VuWhirlpoolWaveEntity", "VuTransformComponent", 0x74D324u },
     { "VuWhirlpoolWaveEntity", "Vu3dLayoutComponent", 0x74C550u },
 };
+
+// The captured script-graph rows (game/plugs.hxx) as engine entity/script.hxx takes them.
+inline const script_facts_t g_script_facts = { g_entity_type_chains, sizeof( g_entity_type_chains ) / sizeof( g_entity_type_chains[ 0 ] ),
+    g_script_plug_rows, sizeof( g_script_plug_rows ) / sizeof( g_script_plug_rows[ 0 ] ), g_script_ref_rows,
+    sizeof( g_script_ref_rows ) / sizeof( g_script_ref_rows[ 0 ] ) };
 
 inline std::vector< entity_component_t > entity_components_for( const std::string& cls )
 {
@@ -1470,4 +1479,26 @@ inline std::vector< entity_component_t > entity_components_constructed( const st
             c.m_state = state;
         }
     return out;
+}
+
+// entity_components_constructed with the VuScriptComponent's state too: the
+// plugs and refs its owner's ctor declares (game/plugs.hxx), no link yet. A
+// separate step because the UI's loader keeps its own state on that component
+// (its "Enable" node - core/ui entity.hxx).
+inline std::vector< entity_component_t > entity_components_scripted( const std::string& cls )
+{
+    std::vector< entity_component_t > out = entity_components_constructed( cls );
+    for ( entity_component_t& c : out )
+        if ( c.m_vtable == k_script_component_vtable )
+            c.m_state = script_construct( cls, g_script_facts );
+    return out;
+}
+
+// The components' post-loads recreated so far: VuScriptComponent's (vt+0xC
+// 0x503D70, vt+0x10 0x504320 - engine entity/script.hxx). Every other is a
+// hook (the transform's runs inside entity_load_component).
+inline void entity_post_load_component( entity_t& owner, entity_component_t& component, const value_t& data, bool override )
+{
+    if ( component.m_vtable == k_script_component_vtable && component.m_state )
+        script_load( owner, data, override, g_script_facts );
 }
