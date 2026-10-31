@@ -47,6 +47,11 @@
   <PropertyGroup>
     <HydroGoldenDir Condition="'$(HydroGoldenDir)' == ''">$(MSBuildThisFileDirectory)..\..\hydro-tools\oracle\generated\</HydroGoldenDir>
   </PropertyGroup>
+  <ItemDefinitionGroup Condition="Exists('$(HydroGoldenDir)golden_data.hxx')">
+    <ClCompile>
+      <PreprocessorDefinitions>HYDRO_GOLDEN_PRESENT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(ProjectDir)..\build\$(ProjectName)\$(Configuration)\</OutDir>
     <IntDir>$(ProjectDir)..\build\$(ProjectName)\$(Configuration)\Intermediates\</IntDir>
