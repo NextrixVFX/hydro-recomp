@@ -230,6 +230,9 @@
     <ClInclude Include="workspace\core\entity\light.hxx">
       <Filter>workspace\core\entity</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\entity\object.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\entity\schema.hxx">
       <Filter>workspace\core\entity</Filter>
     </ClInclude>

@@ -3,6 +3,7 @@
 #include <workspace/utility/broad.hxx>
 #include <workspace/utility/boat.hxx>
 #include <workspace/core/assets/reader.hxx>
+#include <workspace/core/entity/object.hxx>
 
 #include <algorithm>
 #include <cstdio>
@@ -251,6 +252,56 @@ inline bool verify_vujb_lookup( )
     return failed == 0;
 }
 
+// vu_entity( ) (entity/object.hxx) against the object graph retail's VuEntity
+// ctor 0x500710 builds (oracle case vu_entity): every written byte of every
+// object, and every pointer between them by what it points at.
+inline bool verify_vu_entity( )
+{
+    const std::vector< image_object_t > ours = vu_entity( 0x12345678u );
+    const unsigned* s = g_golden_vu_entity_words;
+    const unsigned count = *s++;
+    int failed = 0;
+    if ( count != ours.size( ) )
+    {
+        LOG_ERROR( "VuEntity graph: retail built %u objects, ours %d", count, static_cast< int >( ours.size( ) ) );
+        return false;
+    }
+    for ( unsigned k = 0; k < count; ++k )
+    {
+        const unsigned size = *s++;
+        const unsigned char* bytes = reinterpret_cast< const unsigned char* >( s );
+        s += ( size + 3 ) / 4;
+        const unsigned char* mask = reinterpret_cast< const unsigned char* >( s );
+        s += ( size + 3 ) / 4;
+        std::vector< image_ref_t > refs( *s++ );
+        for ( auto& r : refs )
+        {
+            r = { static_cast< int >( s[ 0 ] ), static_cast< int >( s[ 1 ] ), static_cast< int >( s[ 2 ] ) };
+            s += 3;
+        }
+        const unsigned heap = *s++;
+        s += heap;
+        const image_object_t& o = ours[ k ];
+        int bad = -1;
+        if ( size != o.image.size( ) || refs != o.refs || heap != 0 )
+            bad = -2;
+        for ( unsigned at = 0; bad == -1 && at < size; ++at )
+        {
+            if ( mask[ at ] && bytes[ at ] != o.image[ at ] )
+                bad = static_cast< int >( at );
+        }
+        if ( bad != -1 )
+        {
+            ++failed;
+            LOG_ERROR( "VuEntity graph object %u differs from retail at byte %d (-2: size, pointers or heap slots)", k, bad );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "vu_entity matches retail's VuEntity ctor 0x500710: %u objects (entity, map head, transform component, "
+                     "3 property nodes), every written byte and every pointer between them", count );
+    return failed == 0;
+}
+
 // Every oracle-backed check. Returns false if any failed, so --selftest can
 // set the process exit code and a build script can gate on it.
 inline bool verify_all( )
@@ -259,6 +310,7 @@ inline bool verify_all( )
     ok = verify_math( ) && ok;
     ok = verify_vujb( ) && ok;
     ok = verify_vujb_lookup( ) && ok;
+    ok = verify_vu_entity( ) && ok;
     ok = verify_solver_row( ) && ok;
     ok = verify_iteration( ) && ok;
     ok = verify_split_iterations( ) && ok;

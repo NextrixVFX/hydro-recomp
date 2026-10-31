@@ -161,6 +161,7 @@ copy /Y "$(ProjectDir)impl\engine.hxx" "$(ProjectDir)..\hydro\impl\engine\engine
     <ClInclude Include="workspace\core\dynamics\writeback.hxx" />
     <ClInclude Include="workspace\core\entity\bind.hxx" />
     <ClInclude Include="workspace\core\entity\light.hxx" />
+    <ClInclude Include="workspace\core\entity\object.hxx" />
     <ClInclude Include="workspace\core\entity\schema.hxx" />
     <ClInclude Include="workspace\core\render\device.hxx" />
     <ClInclude Include="workspace\core\render\mesh.hxx" />

@@ -27,14 +27,14 @@ Measured, not estimated: see **[docs/INVENTORY.md](docs/INVENTORY.md)** (summary
 
 | retail functions | 8,638 |
 |---|---:|
-| **verified** - retail executed in an oracle case and recreated here | **321** |
+| **verified** - retail executed in an oracle case and recreated here | **323** |
 | callee - executed inside a checked case, not recreated on its own (CRT / STL / engine helpers) | 61 |
 | cited - recreated or referenced here, but no oracle case runs it yet | 189 |
-| absent | 8,067 |
+| absent | 8,065 |
 
 Verified so far, by area: Bullet physics (collision, broadphase, the constraint solver, integration - 154
 functions), the boat's tick path and fluid / buoyancy forces, the water wave kernels, the VUJB asset document
-reader, VuTransformComponent, and fifteen pieces of the boat constructor.
+reader, VuTransformComponent, the VuEntity constructor's object graph, and fifteen pieces of the boat constructor.
 
 **What runs today:** the Hydroelectric track loads and renders - terrain, lights, fog, props, skinned props,
 coronas, particle effects, triggers, the event graph, and the ocean with point waves.
@@ -126,3 +126,21 @@ This repository contains no files from the game: no executable, no asset pack, n
 data. The recreation is written by hand (and by the translators in `hydro-tools/codegen`) from analysis of the
 author's own legally owned copy, and you need your own copy to run it. Hydro Thunder Hurricane and its assets
 belong to their respective owners.
+
+## Acknowledgements
+
+- **[VuDumper](https://github.com/NextrixVFX/VuDumper)** - the RTTI / SDK dumper for the Vu engine this
+  game is built on. Its dump of the retail binary - 1,248 classes with their inheritance, vtable and
+  type-descriptor addresses, named engine globals, and each property's loader address - is the map the
+  reverse engineering starts from: it says which class a function belongs to and where to look before a
+  single function is decompiled, and it is one of the two sources of the generated property schema
+  (`engine/workspace/core/entity/schema.hxx`).
+- **[Unicorn](https://github.com/unicorn-engine/unicorn)** - the CPU emulator the differential oracle runs on.
+  Every "verified" in this project means retail's own machine code was executed under Unicorn on chosen inputs
+  and this repository's recreation reproduced its output exactly; without it the claim "1:1" would rest on
+  reading code rather than on measuring it.
+- **[Bullet Physics](https://github.com/bulletphysics/bullet3)** (2.79, zlib licence) - the physics library
+  the retail game ships statically linked. Its source is vendored in `engine/impl/bullet` as reference only -
+  it is not compiled: the physics this project runs is recreated function by function from retail's own
+  build of it (collision, broadphase, the constraint solver, integration), which is the largest verified
+  subsystem so far.

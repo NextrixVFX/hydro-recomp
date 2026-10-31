@@ -18,10 +18,10 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 321 | 163210 |
+| verified | 323 | 163596 |
 | callee | 61 | 5761 |
 | cited | 189 | 117856 |
-| absent | 8067 | 1939433 |
+| absent | 8065 | 1939047 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -30,7 +30,7 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 
 | subsystem | functions | verified | callee | cited | absent | verified bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| unattributed | 1845 | 103 | 24 | 24 | 1694 | 70646 of 695394 |
+| unattributed | 1845 | 105 | 24 | 24 | 1692 | 71032 of 695394 |
 | physics (Bullet) | 646 | 154 | 14 | 34 | 444 | 67745 of 256657 |
 | entity / component / script framework | 1094 | 17 | 3 | 60 | 1014 | 5253 of 207438 |
 | HUD / UI / fonts | 648 | 1 | 0 | 3 | 644 | 135 of 184315 |

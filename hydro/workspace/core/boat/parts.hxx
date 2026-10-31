@@ -2,6 +2,7 @@
 
 #include <workspace/core/assets/tree.hxx>
 #include <workspace/core/boat/math.hxx>
+#include <workspace/core/entity/object.hxx>
 
 #include <cstdint>
 #include <cstring>
@@ -14,25 +15,9 @@
 // when the code that reads it is recreated. Heap pointers are not part of
 // the image (their slots stay 0): each is an owned member instead.
 
-inline void parts_put32( std::uint8_t* image, int at, std::uint32_t value )
-{
-    std::memcpy( image + at, &value, 4 );
-}
+// The byte-image helpers (image_put32, image_zero, image_empty_string) are
+// engine/workspace/core/entity/object.hxx's.
 
-inline void parts_zero( std::uint8_t* image, int first_word, int last_word )
-{
-    for ( int word = first_word; word <= last_word; ++word )
-        parts_put32( image, 4 * word, 0 );
-}
-
-// An MSVC std::string's empty state as its ctor (0x407860) writes it:
-// capacity 15 at +20, size 0 at +16, a NUL first byte.
-inline void parts_empty_string( std::uint8_t* image, int at )
-{
-    parts_put32( image, at + 20, 15 );
-    parts_put32( image, at + 16, 0 );
-    image[ at ] = 0;
-}
 
 // 0x5240C0 on a fresh 0x104-byte block. +0x34 is a new 16-byte block (its
 // contents never written); +0x38 / +0x44 are _aligned_malloc(0x140, 16)
@@ -50,33 +35,33 @@ inline std::unique_ptr< boat_5240c0_t > boat_5240c0( )
 {
     auto o = std::make_unique< boat_5240c0_t >( );
     std::uint8_t* b = o->image;
-    parts_zero( b, 0, 3 );
-    parts_put32( b, 20, 0x447A0000u );
-    parts_put32( b, 24, 0x447A0000u );
-    parts_put32( b, 28, 0x3F800000u );
-    parts_zero( b, 8, 10 );
-    parts_put32( b, 48, 0 );
-    parts_zero( b, 14, 16 );
+    image_zero( b, 0, 3 );
+    image_put32( b, 20, 0x447A0000u );
+    image_put32( b, 24, 0x447A0000u );
+    image_put32( b, 28, 0x3F800000u );
+    image_zero( b, 8, 10 );
+    image_put32( b, 48, 0 );
+    image_zero( b, 14, 16 );
     o->at_38.reset( new std::uint8_t[ 0x140 ] );
-    parts_put32( b, 64, 8 );
-    parts_zero( b, 17, 19 );
+    image_put32( b, 64, 8 );
+    image_zero( b, 17, 19 );
     o->at_44.reset( new std::uint8_t[ 0x140 ] );
-    parts_put32( b, 76, 8 );
+    image_put32( b, 76, 8 );
     b[ 80 ] = 0;
-    parts_zero( b, 21, 22 );
-    parts_put32( b, 92, 0x7F7FFFFFu );
-    parts_zero( b, 24, 26 );
-    parts_zero( b, 28, 30 );
-    parts_zero( b, 32, 34 );
-    parts_zero( b, 36, 38 );
-    parts_zero( b, 40, 42 );
-    parts_zero( b, 44, 46 );
-    parts_zero( b, 48, 50 );
-    parts_zero( b, 52, 54 );
-    parts_zero( b, 56, 57 );
-    parts_put32( b, 232, 0x3F800000u );
-    parts_zero( b, 60, 62 );
-    parts_put32( b, 256, 0xFF7FFFFFu );
+    image_zero( b, 21, 22 );
+    image_put32( b, 92, 0x7F7FFFFFu );
+    image_zero( b, 24, 26 );
+    image_zero( b, 28, 30 );
+    image_zero( b, 32, 34 );
+    image_zero( b, 36, 38 );
+    image_zero( b, 40, 42 );
+    image_zero( b, 44, 46 );
+    image_zero( b, 48, 50 );
+    image_zero( b, 52, 54 );
+    image_zero( b, 56, 57 );
+    image_put32( b, 232, 0x3F800000u );
+    image_zero( b, 60, 62 );
+    image_put32( b, 256, 0xFF7FFFFFu );
     o->at_34.reset( new std::uint8_t[ 16 ] );
     return o;
 }
@@ -102,7 +87,7 @@ inline void boat_41b400( boat_41b400_t& o )
         0x3F800000u, 0x3F800000u, 0xC0423C2Du, 0xC05A503Cu, 0xFF808080u, 0xFFFFFFFFu, 0x41600000u, 0xFF808080u,
         0xFFFFFFFFu, 0x3F000000u, 0x3F000000u, 0xFFC0C0C0u, 0xFFFFFFFFu, 0xFFFFFFFFu };
     for ( int word = 0; word < 22; ++word )
-        parts_put32( o.image, 4 * word, words[ word ] );
+        image_put32( o.image, 4 * word, words[ word ] );
 }
 
 // 0x41CA50 (thiscall, one unused argument): words 12..34 and 37 zeroed.
@@ -113,8 +98,8 @@ struct boat_41ca50_t
 
 inline void boat_41ca50( boat_41ca50_t& o )
 {
-    parts_zero( o.image, 12, 34 );
-    parts_put32( o.image, 148, 0 );
+    image_zero( o.image, 12, 34 );
+    image_put32( o.image, 148, 0 );
 }
 
 // 0x4192E0 (thiscall, the owner at +0x30): two empty strings (+0, +0x18), an
@@ -130,18 +115,18 @@ struct boat_4192e0_t
 inline void boat_4192e0( boat_4192e0_t& o, std::uint32_t owner )
 {
     std::uint8_t* b = o.image;
-    parts_empty_string( b, 0 );
-    parts_empty_string( b, 24 );
-    parts_put32( b, 48, owner );
-    parts_zero( b, 14, 35 );
+    image_empty_string( b, 0 );
+    image_empty_string( b, 24 );
+    image_put32( b, 48, owner );
+    image_zero( b, 14, 35 );
     b[ 144 ] = 0;
-    parts_put32( b, 148, 0 );
-    parts_put32( b, 152, 0x7F7FFFFFu );
-    parts_put32( b, 156, 0x7F7FFFFFu );
-    parts_put32( b, 160, 0x7F7FFFFFu );
-    parts_put32( b, 168, 0xFF7FFFFFu );
-    parts_put32( b, 172, 0xFF7FFFFFu );
-    parts_put32( b, 176, 0xFF7FFFFFu );
+    image_put32( b, 148, 0 );
+    image_put32( b, 152, 0x7F7FFFFFu );
+    image_put32( b, 156, 0x7F7FFFFFu );
+    image_put32( b, 160, 0x7F7FFFFFu );
+    image_put32( b, 168, 0xFF7FFFFFu );
+    image_put32( b, 172, 0xFF7FFFFFu );
+    image_put32( b, 176, 0xFF7FFFFFu );
     o.at_34 = boat_new_5240c0( );
 }
 
@@ -151,7 +136,7 @@ inline void parts_handle( std::uint8_t* image, int at )
 {
     const std::uint16_t one = 1;
     std::memcpy( image + at, &one, 2 );
-    parts_put32( image, at + 4, 0 );
+    image_put32( image, at + 4, 0 );
 }
 
 // 0x40FE00 (thiscall, the owner at +0): three empty strings (+0x14, +0x2C,
@@ -165,18 +150,18 @@ struct boat_40fe00_t
 inline void boat_40fe00( boat_40fe00_t& o, std::uint32_t owner )
 {
     std::uint8_t* b = o.image;
-    parts_put32( b, 0, owner );
-    parts_zero( b, 1, 4 );
-    parts_empty_string( b, 20 );
-    parts_empty_string( b, 44 );
-    parts_empty_string( b, 68 );
-    parts_put32( b, 92, 0xBF800000u );
-    parts_put32( b, 96, 0 );
+    image_put32( b, 0, owner );
+    image_zero( b, 1, 4 );
+    image_empty_string( b, 20 );
+    image_empty_string( b, 44 );
+    image_empty_string( b, 68 );
+    image_put32( b, 92, 0xBF800000u );
+    image_put32( b, 96, 0 );
     for ( int word = 25; word <= 28; ++word )
-        parts_put32( b, 4 * word, 0x3F800000u );
-    parts_zero( b, 29, 30 );
+        image_put32( b, 4 * word, 0x3F800000u );
+    image_zero( b, 29, 30 );
     for ( int k = 0; k < 3; ++k )
-        parts_empty_string( b, 124 + 24 * k );
+        image_empty_string( b, 124 + 24 * k );
     for ( int k = 0; k < 3; ++k )
         parts_handle( b, 196 + 8 * k );
 }
@@ -193,31 +178,31 @@ struct boat_413590_t
 inline void boat_413590( boat_413590_t& o, std::uint32_t owner )
 {
     std::uint8_t* b = o.image;
-    parts_put32( b, 0, owner );
-    parts_put32( b, 4, 0x3F800000u );
-    parts_put32( b, 8, 0 );
-    parts_put32( b, 12, 0x3F800000u );
-    parts_zero( b, 4, 9 );
-    parts_put32( b, 40, 0x3F99999Au );
-    parts_put32( b, 44, 0x3F99999Au );
-    parts_zero( b, 12, 14 );
+    image_put32( b, 0, owner );
+    image_put32( b, 4, 0x3F800000u );
+    image_put32( b, 8, 0 );
+    image_put32( b, 12, 0x3F800000u );
+    image_zero( b, 4, 9 );
+    image_put32( b, 40, 0x3F99999Au );
+    image_put32( b, 44, 0x3F99999Au );
+    image_zero( b, 12, 14 );
     o.at_30.reset( new std::uint8_t[ 0x20 ] );
-    parts_put32( b, 56, 8 );
-    parts_zero( b, 15, 17 );
+    image_put32( b, 56, 8 );
+    image_zero( b, 15, 17 );
     const std::uint16_t zero = 0;
     std::memcpy( b + 72, &zero, 2 );
     for ( int k = 0; k < 5; ++k )
-        parts_empty_string( b, 76 + 24 * k );
+        image_empty_string( b, 76 + 24 * k );
     for ( int k = 0; k < 5; ++k )
         parts_handle( b, 196 + 8 * k );
-    parts_zero( b, 59, 64 );
+    image_zero( b, 59, 64 );
 }
 
 // 0x413280: 16 words - 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 and four zeros.
 inline void parts_413280( std::uint8_t* image, int at )
 {
     for ( int word = 0; word < 16; ++word )
-        parts_put32( image, at + 4 * word, ( word == 0 || word == 5 || word == 10 ) ? 0x3F800000u : 0u );
+        image_put32( image, at + 4 * word, ( word == 0 || word == 5 || word == 10 ) ? 0x3F800000u : 0u );
 }
 
 // 0x57CB10: 23 words; +0x0C, +0x1C, +0x2C, +0x3C left.
@@ -228,7 +213,7 @@ inline void parts_57cb10( std::uint8_t* image, int at )
         { 10, 0x3F800000u }, { 12, 0x3F800000u }, { 13, 0 }, { 14, 0 }, { 16, 0x3F800000u }, { 17, 0x40000000u },
         { 18, 0x3F800000u }, { 19, 0x3F800000u }, { 20, 0x40000000u }, { 21, 0xC0800000u }, { 22, 0xC0800000u } };
     for ( const auto& w : writes )
-        parts_put32( image, at + 4 * w.word, w.value );
+        image_put32( image, at + 4 * w.word, w.value );
 }
 
 // 0x50BA20 (a base ctor): zeroes, 0x57CB10 at +0x184, four identities
@@ -237,8 +222,8 @@ inline void parts_57cb10( std::uint8_t* image, int at )
 inline void parts_50ba20( std::uint8_t* image, int at )
 {
     for ( int word : { 0, 1, 2, 4, 5, 6, 8, 9, 10, 92, 94, 95, 96 } )
-        parts_put32( image, at + 4 * word, 0 );
-    parts_put32( image, at + 4 * 93, 0x3F800000u );
+        image_put32( image, at + 4 * word, 0 );
+    image_put32( image, at + 4 * 93, 0x3F800000u );
     parts_57cb10( image, at + 4 * 97 );
     for ( int matrix : { 12, 28, 44, 60 } )
     {
@@ -249,7 +234,7 @@ inline void parts_50ba20( std::uint8_t* image, int at )
     static const std::uint32_t basis[ 16 ] = {
         0x3F800000u, 0, 0, 0, 0, 0, 0xBF800000u, 0, 0, 0x3F800000u, 0, 0, 0, 0, 0, 0x3F800000u };
     for ( int word = 0; word < 16; ++word )
-        parts_put32( image, at + 4 * ( 76 + word ), basis[ word ] );
+        image_put32( image, at + 4 * ( 76 + word ), basis[ word ] );
 }
 
 // 0x51E4A0, VuBreakableModelInstance (vtable 0x74CD9C): 0x74 bytes.
@@ -262,7 +247,7 @@ inline void parts_51e4a0( std::uint8_t* image, int at )
         { 21, 0x40490FDBu }, { 22, 0x40490FDBu }, { 24, 0 }, { 25, 0 }, { 26, 0x411CE560u }, { 27, 0 },
         { 28, 0 } };
     for ( const auto& w : writes )
-        parts_put32( image, at + 4 * w.word, w.value );
+        image_put32( image, at + 4 * w.word, w.value );
     const std::uint16_t zero = 0;
     std::memcpy( image + at + 28, &zero, 2 );
 }
@@ -287,8 +272,8 @@ inline void boat_409750( boat_409750_t& o, std::uint32_t owner )
         { 740, 0 }, { 744, 0 }, { 748, 0 }, { 752, 0x3F800000u }, { 756, 0 }, { 760, 0 }, { 764, 0x3F800000u },
         { 772, 0 } };
     for ( const auto& w : writes )
-        parts_put32( b, w.at, w.value );
-    parts_put32( b, 576, owner );
+        image_put32( b, w.at, w.value );
+    image_put32( b, 576, owner );
     b[ 708 ] = 1;
     b[ 720 ] = 0;
 }
@@ -308,32 +293,32 @@ struct boat_410d90_t
 inline void boat_410d90( boat_410d90_t& o, std::uint32_t owner )
 {
     std::uint8_t* b = o.image;
-    parts_put32( b, 0, owner );
+    image_put32( b, 0, owner );
     parts_51e4a0( b, 4 );
-    parts_put32( b, 140, 15 );
-    parts_put32( b, 136, 0 );
+    image_put32( b, 140, 15 );
+    image_put32( b, 136, 0 );
     b[ 120 ] = 0;
-    parts_put32( b, 144, 0x40000000u );
+    image_put32( b, 144, 0x40000000u );
     b[ 148 ] = 0;
-    parts_zero( b, 38, 41 );
+    image_zero( b, 38, 41 );
     o.at_9c.reset( new std::uint8_t[ 0x20 ] );
-    parts_put32( b, 164, 8 );
-    parts_put32( b, 168, 0x7F7FFFFFu );
-    parts_put32( b, 172, 0x7F7FFFFFu );
-    parts_put32( b, 176, 0x7F7FFFFFu );
-    parts_put32( b, 184, 0xFF7FFFFFu );
-    parts_put32( b, 188, 0xFF7FFFFFu );
-    parts_put32( b, 192, 0xFF7FFFFFu );
-    parts_put32( b, 200, 0 );
+    image_put32( b, 164, 8 );
+    image_put32( b, 168, 0x7F7FFFFFu );
+    image_put32( b, 172, 0x7F7FFFFFu );
+    image_put32( b, 176, 0x7F7FFFFFu );
+    image_put32( b, 184, 0xFF7FFFFFu );
+    image_put32( b, 188, 0xFF7FFFFFu );
+    image_put32( b, 192, 0xFF7FFFFFu );
+    image_put32( b, 200, 0 );
     b[ 204 ] = 0;
     static const std::uint32_t block[ 16 ] = {
         0xC0A00000u, 0xC0A00000u, 0x41200000u, 0, 0x40A00000u, 0x40A00000u, 0x41A00000u, 0,
         0xC0C90FDBu, 0xC0C90FDBu, 0x40C90FDBu, 0, 0x40C90FDBu, 0x40C90FDBu, 0x40C90FDBu, 0 };
     for ( int word = 0; word < 16; ++word )
-        parts_put32( b, 36 + 4 * word, block[ word ] );
-    parts_put32( b, 100, 0 );
-    parts_put32( b, 104, 0 );
-    parts_put32( b, 108, 0x419CE560u );
+        image_put32( b, 36 + 4 * word, block[ word ] );
+    image_put32( b, 100, 0 );
+    image_put32( b, 104, 0 );
+    image_put32( b, 108, 0x419CE560u );
 }
 
 // 0x4131E0 (__userpurge: this in ECX, a float in XMM1 -> +0, then three
@@ -347,21 +332,21 @@ struct boat_4131e0_t
 inline void boat_4131e0( boat_4131e0_t& o, std::uint32_t xmm1, std::uint32_t a3, std::uint32_t a4, const std::uint8_t* a5 )
 {
     std::uint8_t* b = o.image;
-    parts_put32( b, 4, a3 );
-    parts_put32( b, 80, a4 );
-    parts_put32( b, 0, xmm1 );
+    image_put32( b, 4, a3 );
+    image_put32( b, 80, a4 );
+    image_put32( b, 0, xmm1 );
     std::memcpy( b + 96, a5, 16 );
-    parts_put32( b, 112, 0 );
-    parts_put32( b, 116, 0 );
-    parts_put32( b, 120, 0x3F000000u );
-    parts_put32( b, 124, 0 );
-    parts_put32( b, 128, 0x3F4CCCCDu );
-    parts_put32( b, 132, 0x3F800000u );
+    image_put32( b, 112, 0 );
+    image_put32( b, 116, 0 );
+    image_put32( b, 120, 0x3F000000u );
+    image_put32( b, 124, 0 );
+    image_put32( b, 128, 0x3F4CCCCDu );
+    image_put32( b, 132, 0x3F800000u );
     b[ 136 ] = 0;
-    parts_put32( b, 140, 0x3BA3D70Au );
-    parts_put32( b, 144, 0x3C23D70Au );
-    parts_put32( b, 148, 0x3C23D70Au );
-    parts_put32( b, 152, 0x3C23D70Au );
+    image_put32( b, 140, 0x3BA3D70Au );
+    image_put32( b, 144, 0x3C23D70Au );
+    image_put32( b, 148, 0x3C23D70Au );
+    image_put32( b, 152, 0x3C23D70Au );
     parts_413280( b, 16 );
 }
 
@@ -370,7 +355,7 @@ inline void boat_4131e0( boat_4131e0_t& o, std::uint32_t xmm1, std::uint32_t a3,
 inline void parts_static_identity( std::uint8_t* image, int at )
 {
     for ( int word = 0; word < 16; ++word )
-        parts_put32( image, at + 4 * word, ( word % 5 == 0 ) ? 0x3F800000u : 0u );
+        image_put32( image, at + 4 * word, ( word % 5 == 0 ) ? 0x3F800000u : 0u );
 }
 
 // 0x41B1B0: 12 words (+0x0C = FLT_MAX), the static identity at +0x30, +0x70 = 0.
@@ -381,10 +366,10 @@ struct boat_41b1b0_t
 
 inline void boat_41b1b0( boat_41b1b0_t& o )
 {
-    parts_zero( o.image, 0, 11 );
-    parts_put32( o.image, 12, 0x7F7FFFFFu );
+    image_zero( o.image, 0, 11 );
+    image_put32( o.image, 12, 0x7F7FFFFFu );
     parts_static_identity( o.image, 48 );
-    parts_put32( o.image, 112, 0 );
+    image_put32( o.image, 112, 0 );
 }
 
 // 0x50B8D0, Vu3dLayoutComponent (vtable 0x74C550; owner at +8): two vectors
@@ -398,17 +383,17 @@ struct vu_3d_layout_t
 inline void vu_3d_layout( vu_3d_layout_t& o, std::uint32_t owner )
 {
     std::uint8_t* b = o.image;
-    parts_put32( b, 4, 0 );
-    parts_put32( b, 8, owner );
-    parts_put32( b, 12, 0 );
-    parts_put32( b, 0, 0x0074C550u );
-    parts_zero( b, 4, 5 );
-    parts_put32( b, 24, 0xBF800000u );
-    parts_put32( b, 28, 0xBF800000u );
-    parts_put32( b, 32, 0xBF800000u );
-    parts_put32( b, 40, 0x3F800000u );
-    parts_put32( b, 44, 0x3F800000u );
-    parts_put32( b, 48, 0x3F800000u );
+    image_put32( b, 4, 0 );
+    image_put32( b, 8, owner );
+    image_put32( b, 12, 0 );
+    image_put32( b, 0, 0x0074C550u );
+    image_zero( b, 4, 5 );
+    image_put32( b, 24, 0xBF800000u );
+    image_put32( b, 28, 0xBF800000u );
+    image_put32( b, 32, 0xBF800000u );
+    image_put32( b, 40, 0x3F800000u );
+    image_put32( b, 44, 0x3F800000u );
+    image_put32( b, 48, 0x3F800000u );
 }
 
 // A VuBasicProperty<bool, 2> node (vtable 0x737450, 0x1C bytes): its name
@@ -433,27 +418,27 @@ struct vu_3d_draw_t
 inline void vu_3d_draw( vu_3d_draw_t& o, std::uint32_t owner, std::uint8_t reflect )
 {
     std::uint8_t* b = o.image;
-    parts_put32( b, 4, 0 );
-    parts_put32( b, 8, owner );
-    parts_put32( b, 12, 0 );
-    parts_put32( b, 0, 0x0074D244u );
-    parts_zero( b, 4, 6 );
+    image_put32( b, 4, 0 );
+    image_put32( b, 8, owner );
+    image_put32( b, 12, 0 );
+    image_put32( b, 0, 0x0074D244u );
+    image_zero( b, 4, 6 );
     b[ 28 ] = reflect;
     b[ 29 ] = 1;
     b[ 30 ] = 0;
-    parts_put32( b, 32, 0 );
-    parts_zero( b, 9, 11 );
-    parts_zero( b, 13, 15 );
+    image_put32( b, 32, 0 );
+    image_zero( b, 9, 11 );
+    image_zero( b, 13, 15 );
     const std::uint32_t names[ 2 ] = { 0x006CDEA0u, 0x006CDEBCu };
     for ( int k = 0; k < 2; ++k )
     {
         std::uint8_t* p = o.properties[ k ].image;
-        parts_put32( p, 0, 0x00737450u );
-        parts_put32( p, 4, names[ k ] );
+        image_put32( p, 0, 0x00737450u );
+        image_put32( p, 4, names[ k ] );
         const std::uint16_t one = 1;
         std::memcpy( p + 8, &one, 2 );
-        parts_put32( p, 12, 0 );
-        parts_put32( p, 16, 0 );
+        image_put32( p, 12, 0 );
+        image_put32( p, 16, 0 );
         p[ 20 ] = b[ 28 + k ];
         p[ 21 ] = b[ 28 + k ];
         o.properties[ k ].member = 28 + k;
@@ -472,20 +457,20 @@ struct vu_animated_model_t
 inline void vu_animated_model( vu_animated_model_t& o )
 {
     std::uint8_t* b = o.image;
-    parts_put32( b, 4, 0 );
-    parts_put32( b, 8, 0 );
-    parts_put32( b, 0, 0x0074D2F8u );
-    parts_zero( b, 3, 6 );
-    parts_put32( b, 36, 0 );
-    parts_put32( b, 40, 1 );
+    image_put32( b, 4, 0 );
+    image_put32( b, 8, 0 );
+    image_put32( b, 0, 0x0074D2F8u );
+    image_zero( b, 3, 6 );
+    image_put32( b, 36, 0 );
+    image_put32( b, 40, 1 );
     for ( int word = 0; word < 8; ++word )
-        parts_put32( b, 44 + 4 * word, 0 );
-    parts_put32( b, 76, 0 );
+        image_put32( b, 44 + 4 * word, 0 );
+    image_put32( b, 76, 0 );
     parts_static_identity( b, 80 );
-    parts_put32( b, 144, 0xFFFFFFFFu );
+    image_put32( b, 144, 0xFFFFFFFFu );
     const std::uint16_t zero = 0;
     std::memcpy( b + 148, &zero, 2 );
-    parts_zero( b, 7, 8 );
+    image_zero( b, 7, 8 );
 }
 
 // An MSVC x86 std::string after assign (0x401DB0) of `text`: up to 15
@@ -498,8 +483,8 @@ inline bool parts_string( std::uint8_t* image, int at, const std::string& text )
         return true;
     std::memcpy( image + at, text.data( ), text.size( ) );
     image[ at + text.size( ) ] = 0;
-    parts_put32( image, at + 16, static_cast< std::uint32_t >( text.size( ) ) );
-    parts_put32( image, at + 20, 15 );
+    image_put32( image, at + 16, static_cast< std::uint32_t >( text.size( ) ) );
+    image_put32( image, at + 20, 15 );
     return false;
 }
 
@@ -519,19 +504,19 @@ inline void vu_string_property( vu_string_property_t& o, std::uint32_t name, std
     const std::string& value )
 {
     std::uint8_t* b = o.image;
-    parts_put32( b, 4, name );
+    image_put32( b, 4, name );
     const std::uint16_t one = 1;
     std::memcpy( b + 8, &one, 2 );
-    parts_put32( b, 12, 0 );
-    parts_put32( b, 16, 0 );
-    parts_put32( b, 0, 0x007374B8u );
-    parts_empty_string( b, 20 );
+    image_put32( b, 12, 0 );
+    image_put32( b, 16, 0 );
+    image_put32( b, 0, 0x007374B8u );
+    image_empty_string( b, 20 );
     o.heap = parts_string( b, 20, value );
     o.fallback = value;
-    parts_empty_string( b, 44 );
+    image_empty_string( b, 44 );
     parts_string( b, 44, value );
     o.current = value;
-    parts_put32( b, 68, target );
+    image_put32( b, 68, target );
 }
 
 // A ConstantDB float read the way 0x415D60 inlines it: tag 1 (int -> float),
@@ -567,51 +552,51 @@ struct boat_splash_t
 inline void boat_splash( boat_splash_t& o, std::uint32_t owner, const value_t& constant_db )
 {
     std::uint8_t* b = o.image;
-    parts_put32( b, 0, owner );
-    parts_put32( b, 24, 15 );
-    parts_put32( b, 20, 0 );
+    image_put32( b, 0, owner );
+    image_put32( b, 24, 15 );
+    image_put32( b, 20, 0 );
     b[ 4 ] = 0;
-    parts_zero( b, 7, 9 );
-    parts_zero( b, 11, 13 );
-    parts_zero( b, 15, 17 );
-    parts_put32( b, 76, 0x447A0000u );
-    parts_put32( b, 80, 0x447A0000u );
-    parts_put32( b, 84, 0x3F9D70A4u );
-    parts_put32( b, 88, 0x3F800000u );
-    parts_put32( b, 92, 0 );
+    image_zero( b, 7, 9 );
+    image_zero( b, 11, 13 );
+    image_zero( b, 15, 17 );
+    image_put32( b, 76, 0x447A0000u );
+    image_put32( b, 80, 0x447A0000u );
+    image_put32( b, 84, 0x3F9D70A4u );
+    image_put32( b, 88, 0x3F800000u );
+    image_put32( b, 92, 0 );
     for ( int word = 24; word <= 27; ++word )
-        parts_put32( b, 4 * word, 0x3F800000u );
-    parts_zero( b, 28, 37 );
-    parts_put32( b, 152, 0x3F800000u );
-    parts_zero( b, 39, 41 );
-    parts_zero( b, 43, 45 );
-    parts_zero( b, 47, 49 );
-    parts_zero( b, 51, 52 );
+        image_put32( b, 4 * word, 0x3F800000u );
+    image_zero( b, 28, 37 );
+    image_put32( b, 152, 0x3F800000u );
+    image_zero( b, 39, 41 );
+    image_zero( b, 43, 45 );
+    image_zero( b, 47, 49 );
+    image_zero( b, 51, 52 );
     for ( int k = 0; k < 4; ++k )
-        parts_empty_string( b, 212 + 24 * k );
+        image_empty_string( b, 212 + 24 * k );
     for ( int k = 0; k < 4; ++k )
     {
         const std::uint16_t one = 1;
         std::memcpy( b + 308 + 8 * k, &one, 2 );
-        parts_put32( b, 308 + 8 * k + 4, 0 );
+        image_put32( b, 308 + 8 * k + 4, 0 );
     }
-    parts_zero( b, 85, 87 );
-    parts_put32( b, 352, 0x43B40000u );
-    parts_put32( b, 356, 0 );
-    parts_put32( b, 360, 0x7F7FFFFFu );
-    parts_zero( b, 91, 92 );
+    image_zero( b, 85, 87 );
+    image_put32( b, 352, 0x43B40000u );
+    image_put32( b, 356, 0 );
+    image_put32( b, 360, 0x7F7FFFFFu );
+    image_zero( b, 91, 92 );
     b[ 372 ] = 0;
-    parts_put32( b, 376, 0 );
+    image_put32( b, 376, 0 );
     o.pfx.clear( );
-    parts_zero( b, 101, 108 );
-    parts_zero( b, 110, 115 );
-    parts_put32( b, 464, 0x3E4CCCCDu );
-    parts_put32( b, 468, 0x3F4CCCCDu );
-    parts_put32( b, 472, 0x3F800000u );
-    parts_zero( b, 119, 122 );
+    image_zero( b, 101, 108 );
+    image_zero( b, 110, 115 );
+    image_put32( b, 464, 0x3E4CCCCDu );
+    image_put32( b, 468, 0x3F4CCCCDu );
+    image_put32( b, 472, 0x3F800000u );
+    image_zero( b, 119, 122 );
     b[ 492 ] = 0;
     o.at_1cc = boat_new_5240c0( );
-    parts_put32( o.at_1cc->image, 256, 0 );
+    image_put32( o.at_1cc->image, 256, 0 );
 
     const value_t& boat = member( member( constant_db, "VuDBAsset" ), "Boat" );
     const value_t& pfx = member( boat, "BigSplashPfx" );
