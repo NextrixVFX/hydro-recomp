@@ -884,9 +884,174 @@ inline bool verify_wake_lookup( )
     return false;
 }
 
+// water_build_world (world/surface.hxx) against retail on Hydroelectric's water: child 8 "Water" of
+// VuTemplateAsset/Levels/Hydroelectric re-encoded as a project, loaded by hydro's tree (entity_load_project
+// with the verified callbacks) and by retail's VuEntity::load, then every water entity's slot 6 in
+// gameInitialize order (oracle case water_build). Compared: each water entity's loaded property words and
+// transform words (+ the world euler of 0x534AA0), every surface's and wave's recreated words, the surface tree
+// and every surface's wave tree node for node, the wave list, each wave's entry list and the pool.
+inline bool verify_water_build( )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_water_build_document );
+    static const value_t document =
+        c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_water_build_document_bytes ) ).parse( );
+    static const entity_registry_t registry = build_entity_registry( { } );
+    entity_world_t world;
+    world.m_registry = &registry;
+    world.m_ctor_for = entity_ctor_for;
+    world.m_template = []( const std::string& ) -> const value_t* { return nullptr; };
+    world.m_components_for = entity_components_constructed;
+    world.m_component_load = entity_load_component;
+    world.m_component_mark = entity_mark_component;
+    world.m_state_for = entity_state_for;
+    world.m_properties_load = entity_load_properties;
+    world.m_properties_mark = entity_mark_properties;
+    const std::unique_ptr< entity_t > tree = entity_load_project( member( document, "VuProject" ), "Data/Projects/Water.vuprj", world );
+    if ( !tree )
+    {
+        LOG_ERROR( "water_build: the document did not load" );
+        return false;
+    }
+    water_built_t built{};
+    water_build_world( *tree, built, []( entity_t& e ) { return entity_transform( e ); } );
+    int failed = 0;
+    int compared = 0;
+    auto cmp = [ & ]( const char* what, int a, int b, std::uint32_t ours, std::uint32_t theirs ) {
+        ++compared;
+        if ( ours != theirs && ++failed <= 12 )
+            LOG_ERROR( "water_build %s %d word %d: ours 0x%08X retail 0x%08X", what, a, b, ours, theirs );
+    };
+    // The water entities in visit order: their loads and transform words.
+    std::vector< entity_t* > order;
+    const auto post = [ & ]( const auto& self, entity_t& e ) -> void {
+        for ( auto& child : e.m_children )
+            self( self, *child );
+        if ( water_kind_of( e.m_type ) != water_kind_none )
+            order.push_back( &e );
+    };
+    post( post, *tree );
+    if ( order.size( ) != g_golden_water_entities_count )
+    {
+        LOG_ERROR( "water_build: %d water entities, retail %d", static_cast< int >( order.size( ) ), static_cast< int >( g_golden_water_entities_count ) );
+        return false;
+    }
+    int props = 0;
+    for ( std::size_t i = 0; i < order.size( ); ++i )
+    {
+        const golden_water_entity_t& g = g_golden_water_entities[ i ];
+        entity_t& e = *order[ i ];
+        const water_entity_state_t* s = static_cast< const water_entity_state_t* >( e.m_state.get( ) );
+        const transform_component_t* t = entity_transform( e );
+        if ( !s || !t || static_cast< int >( water_kind_of( e.m_type ) ) != g.m_kind || e.m_name != g.m_name )
+        {
+            LOG_ERROR( "water_build: entity %d is %s '%s', retail kind %d '%s' (or has no state / transform)", static_cast< int >( i ),
+                e.m_type.c_str( ), e.m_name.c_str( ), g.m_kind, g.m_name );
+            ++failed;
+            continue;
+        }
+        for ( int k = 0; k < k_water_entity_words; ++k )
+            if ( s->value.known[ k ] )
+            {
+                cmp( "entity property", static_cast< int >( i ), 0x60 + 4 * k, s->value.word[ k ], g.m_words[ k ] );
+                ++props;
+            }
+        std::uint32_t words[ k_water_transform_words ];
+        water_transform_words( *t, words );
+        for ( int k = 0; k < k_water_transform_words; ++k )
+            if ( k != 35 && k != 39 && k != 43 )
+                cmp( "entity transform", static_cast< int >( i ), 0x10 + 4 * k, words[ k ], g.m_transform[ k ] );
+    }
+    // The objects.
+    if ( built.surfaces.size( ) != g_golden_water_surfaces_count || built.waves.size( ) != g_golden_water_waves_count )
+    {
+        LOG_ERROR( "water_build: %d surfaces / %d waves, retail %d / %d", static_cast< int >( built.surfaces.size( ) ),
+            static_cast< int >( built.waves.size( ) ), static_cast< int >( g_golden_water_surfaces_count ),
+            static_cast< int >( g_golden_water_waves_count ) );
+        return false;
+    }
+    for ( std::size_t i = 0; i < built.surfaces.size( ); ++i )
+        for ( int k = 0; k < 65; ++k )
+            if ( built.surfaces[ i ].known[ k ] )
+                cmp( "surface", static_cast< int >( i ), 4 * k, built.surfaces[ i ].word[ k ], g_golden_water_surfaces[ i ][ k ] );
+    for ( std::size_t i = 0; i < built.waves.size( ); ++i )
+        for ( int k = 0; k < 80; ++k )
+            if ( built.waves[ i ].known[ k ] && k != 64 / 4 )   // +0x40 the entry list: compared as the lists below
+                cmp( "wave", static_cast< int >( i ), 4 * k, built.waves[ i ].word[ k ], k < g_golden_water_waves[ i ].m_words ? g_golden_water_waves[ i ].m_word[ k ] : 0xDEADBEEFu );
+    // The trees: the surface tree, then each surface's wave tree.
+    int nodes = 0;
+    for ( std::size_t i = 0; i < g_golden_water_trees_count; ++i )
+    {
+        const golden_water_tree_t& g = g_golden_water_trees[ i ];
+        const water_tree_t& t = i == 0 ? built.hold.surface_tree : built.hold.surfaces[ i - 1 ].waves;
+        const int id = static_cast< int >( i );
+        cmp( "tree root", id, 0, static_cast< std::uint32_t >( t.root ), static_cast< std::uint32_t >( g.m_root ) );
+        cmp( "tree free", id, 0, static_cast< std::uint32_t >( t.free ), static_cast< std::uint32_t >( g.m_free ) );
+        cmp( "tree leaves", id, 0, static_cast< std::uint32_t >( t.leaves ), static_cast< std::uint32_t >( g.m_leaves ) );
+        cmp( "tree used", id, 0, static_cast< std::uint32_t >( t.used ), static_cast< std::uint32_t >( g.m_used ) );
+        cmp( "tree free count", id, 0, static_cast< std::uint32_t >( t.free_count ), static_cast< std::uint32_t >( g.m_free_count ) );
+        cmp( "tree size", id, 0, static_cast< std::uint32_t >( t.nodes.size( ) ), static_cast< std::uint32_t >( g.m_count ) );
+        for ( int n = 0; n < g.m_count && n < static_cast< int >( t.nodes.size( ) ); ++n )
+        {
+            const golden_water_node_t& gn = g_golden_water_nodes[ g.m_first + n ];
+            const water_tree_node_t& o = t.nodes[ n ];
+            std::uint32_t r[ 4 ];
+            std::memcpy( r, o.rect, 16 );
+            for ( int k = 0; k < 4; ++k )
+                cmp( "tree node rect", id, n, r[ k ], gn.m_rect[ k ] );
+            cmp( "tree node parent", id, n, static_cast< std::uint32_t >( o.parent ), static_cast< std::uint32_t >( gn.m_parent ) );
+            cmp( "tree node first", id, n, static_cast< std::uint32_t >( o.first ), static_cast< std::uint32_t >( gn.m_first ) );
+            cmp( "tree node second", id, n, static_cast< std::uint32_t >( o.second ), static_cast< std::uint32_t >( gn.m_second ) );
+            cmp( "tree node tag", id, n, o.tag, static_cast< std::uint32_t >( gn.m_tag ) );
+            ++nodes;
+        }
+    }
+    // The wave list from its head, each wave's entries, the pool.
+    std::size_t at = 0;
+    for ( int e = built.hold.list; e >= 0; e = built.hold.pool[ e ].next, ++at )
+    {
+        if ( at >= g_golden_water_list_count )
+            break;
+        cmp( "list pool", static_cast< int >( at ), 0, static_cast< std::uint32_t >( e ), static_cast< std::uint32_t >( g_golden_water_list[ at ][ 0 ] ) );
+        cmp( "list wave", static_cast< int >( at ), 0, static_cast< std::uint32_t >( built.hold.pool[ e ].leaf ),
+            static_cast< std::uint32_t >( g_golden_water_list[ at ][ 1 ] ) );
+    }
+    cmp( "list length", 0, 0, static_cast< std::uint32_t >( at ), static_cast< std::uint32_t >( g_golden_water_list_count ) );
+    for ( std::size_t i = 0; i < built.hold.waves.size( ); ++i )
+    {
+        int k = 0;
+        const int first = g_golden_water_entry_range[ i ][ 0 ];
+        const int count = g_golden_water_entry_range[ i ][ 1 ];
+        for ( int e = built.hold.waves[ i ].entries; e >= 0; e = built.hold.pool[ e ].next, ++k )
+        {
+            if ( k >= count )
+                break;
+            const golden_water_entry_t& g = g_golden_water_entries[ first + k ];
+            cmp( "entry pool", static_cast< int >( i ), k, static_cast< std::uint32_t >( e ), static_cast< std::uint32_t >( g.m_pool ) );
+            cmp( "entry surface", static_cast< int >( i ), k, static_cast< std::uint32_t >( built.hold.pool[ e ].surface ),
+                static_cast< std::uint32_t >( g.m_surface ) );
+            cmp( "entry leaf", static_cast< int >( i ), k, static_cast< std::uint32_t >( built.hold.pool[ e ].leaf ), static_cast< std::uint32_t >( g.m_leaf ) );
+        }
+        cmp( "entries", static_cast< int >( i ), 0, static_cast< std::uint32_t >( k ), static_cast< std::uint32_t >( count ) );
+    }
+    cmp( "pool count", 0, 0, static_cast< std::uint32_t >( built.hold.pool_count ), static_cast< std::uint32_t >( g_golden_water_pool[ 0 ] ) );
+    cmp( "pool free", 0, 0, static_cast< std::uint32_t >( built.hold.pool_free ), static_cast< std::uint32_t >( g_golden_water_pool[ 1 ] ) );
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "water_build_world matches retail's game initialise of Hydroelectric's water (0x5DB510 / 0x5D6F80 / the wave entities' slot 6, "
+                     "0x5284C0 / 0x5359E0 / 0x529860 / 0x528D70 / 0x529A90): %d entities (%d property words), %d surfaces, %d waves, %d tree "
+                     "nodes, %d values, bit for bit",
+            static_cast< int >( order.size( ) ), props, static_cast< int >( built.surfaces.size( ) ), static_cast< int >( built.waves.size( ) ),
+            nodes, compared );
+        return true;
+    }
+    LOG_ERROR( "water_build FAILED %d of %d values", failed, compared );
+    return false;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
+    ok = verify_water_build( ) && ok;
     ok = verify_ocean_kernels( ) && ok;
     ok = verify_wake_kernels( ) && ok;
     ok = verify_wave_bridges( ) && ok;
