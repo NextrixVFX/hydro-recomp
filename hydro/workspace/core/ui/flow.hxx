@@ -126,6 +126,14 @@ struct front_end_engine_t
     std::function< void( ) > m_save_check;
     std::function< void( ) > m_preload_action_game;
     std::function< void( bool ) > m_snap_pause;
+    // The enter's other platform reaches, by retail address / role (0x530BB0 on g 0x759060 - UNREAD, arg 1 on
+    // enter; the audio pause g_vuaudio +20 slot 14 (1 then 0); the game mode manager g 0x758FF0 slot 9; the
+    // profile and cloud save managers 0x5547F0 / 0x4ABD60).
+    std::function< void( const char*, int ) > m_platform;
+    // The title voice-over 0x50FBF0 (FMOD; true = an event was made, then started) and the byte 0x758FCD that
+    // says it already played this run.
+    std::function< bool( const char* ) > m_title_voice;
+    bool m_title_played = false;
 };
 
 class c_front_end
@@ -249,8 +257,52 @@ public:
             m_fsm.current( )->m_draw( );
     }
 
-    // The FSM start at the end of the InitialScreen load 0x4BF630.
+    // The FSM start at the end of the enter 0x4BF630.
     void start( ) { m_fsm.start( ); }
+
+    // slot 2 0x4BF630, the mode's enter. `game_data` is gameutil +80. The
+    // first screen: "Screens/Start" when InitialScreen (a string member, else
+    // "") is empty; otherwise "Screens/Main", with InitialScreen pushed on top
+    // of it when GameResults exists (any non-null tag). The top is loaded
+    // (0x4C0550) and popped. Then the title voice-over the first time (its
+    // preload byte +168 set either way; later entries preload ActionGameData
+    // at once), the FSM start, the profile / cloud managers.
+    void enter( const value_t& game_data )
+    {
+        platform( "0x530BB0", 1 );
+        platform( "audio pause", 1 );
+        platform( "mode manager", 9 );
+        m_snap_project = m_engine.m_load_project ? m_engine.m_load_project( "Screens/SnapMode" ) : 0;
+        if ( m_snap_project && m_engine.m_init_project )
+            m_engine.m_init_project( m_snap_project );
+        const value_t& initial = member( game_data, "InitialScreen" );
+        const std::string first = initial.tag == 4 ? initial.text : std::string( );
+        if ( first.empty( ) )
+            m_stack.push_back( "Screens/Start" );
+        else
+        {
+            m_stack.push_back( "Screens/Main" );
+            if ( member( game_data, "GameResults" ).tag != 0 )
+                m_stack.push_back( first );
+        }
+        load( m_stack.back( ) );
+        m_stack.pop_back( );
+        if ( m_engine.m_title_played )
+        {
+            if ( m_engine.m_preload_action_game )
+                m_engine.m_preload_action_game( );
+        }
+        else
+        {
+            m_engine.m_title_played = true;
+            m_preload_pending = true;
+            m_title_voice = m_engine.m_title_voice && m_engine.m_title_voice( "Global/Voice/vo_title_HydroHurricane" );
+        }
+        m_fsm.start( );
+        platform( "profile", 0 );
+        platform( "cloud", 0 );
+        platform( "audio pause", 0 );
+    }
 
     front_end_engine_t& m_engine;
     c_fsm m_fsm;
@@ -260,12 +312,19 @@ public:
     std::string m_current;  // +100
     std::deque< std::string > m_stack;  // +124
     int m_project = 0;      // +144 (0 = none)
+    int m_snap_project = 0; // +148 (Screens/SnapMode)
     int m_depth = 0;        // +152
     float m_transition_duration = 0.0f;  // +156
     bool m_title_voice = false;      // +164 (the voice-over event is live)
     bool m_preload_pending = false;  // +168
 
 private:
+    void platform( const char* what, int arg )
+    {
+        if ( m_engine.m_platform )
+            m_engine.m_platform( what, arg );
+    }
+
     void play( const char* name )
     {
         if ( m_engine.m_sound )

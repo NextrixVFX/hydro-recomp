@@ -574,9 +574,103 @@ inline bool verify_ui_screen_events( )
     return failed == 0;
 }
 
+// c_front_end::enter (hydro core/ui/flow.hxx) against retail's slot 2
+// 0x4BF630 on three game-data variants (oracle case front_end_initial), then
+// two ticks each: the hooks in order, next / current, the stack, the FSM state,
+// time and conditions, the preload byte, the tick's return.
+inline bool verify_ui_front_end_enter( )
+{
+    const unsigned* cdb = g_golden_vujb_words + g_golden_vujb_offsets[ 0 ];
+    const unsigned char* cdb_raw = reinterpret_cast< const unsigned char* >( cdb + 2 );
+    const value_t constant_db = c_reader( std::vector< std::uint8_t >( cdb_raw, cdb_raw + cdb[ 1 ] ) ).parse( );
+    int failed = 0;
+    int steps = 0;
+    for ( std::size_t v = 0; v < g_golden_fei_variants_count; ++v )
+    {
+        const golden_fei_variant_t& var = g_golden_fei_variants[ v ];
+        std::vector< std::pair< std::string, std::string > > log;
+        front_end_engine_t engine;
+        engine.m_display = []( int& w, int& h ) { w = 1280; h = 720; };
+        engine.m_sound = [ &log ]( const char* name ) { log.push_back( { "sound", name } ); };
+        engine.m_load_project = [ &log ]( const std::string& name ) { log.push_back( { "load", name } ); return 0; };
+        engine.m_analytics = [ &log ]( const char* event, const std::string& ) { log.push_back( { "analytics", event } ); };
+        engine.m_preload_action_game = [ &log ] { log.push_back( { "preload", "ActionGameData" } ); };
+        engine.m_title_voice = [ &log ]( const char* name ) { log.push_back( { "voice", name } ); return false; };
+        engine.m_platform = [ &log ]( const char* what, int arg )
+        {
+            const std::string w = what;
+            log.push_back( { w, w == "mode manager" ? "slot 9" : ( w == "profile" || w == "cloud" ) ? "" : std::to_string( arg ) } );
+        };
+        value_t data;
+        if ( var.m_initial || var.m_results )
+        {
+            data.kind = value_t::kind_t::object;
+            data.tag = 6;
+        }
+        if ( var.m_initial )
+        {
+            value_t s;
+            s.kind = value_t::kind_t::text;
+            s.tag = 4;
+            s.text = var.m_initial;
+            data.object.push_back( { "InitialScreen", s } );
+        }
+        if ( var.m_results )
+        {
+            value_t place;
+            place.kind = value_t::kind_t::integer;
+            place.tag = 1;
+            place.integer = 1;
+            value_t results;
+            results.kind = value_t::kind_t::object;
+            results.tag = 6;
+            results.object.push_back( { "Place", place } );
+            data.object.push_back( { "GameResults", results } );
+        }
+        c_front_end fe( engine, constant_db );
+        for ( int s = 0; s < var.m_steps; ++s )
+        {
+            const golden_fei_step_t& st = g_golden_fei_steps[ var.m_first_step + s ];
+            log.clear( );
+            std::string ret;
+            if ( std::strcmp( st.m_op, "enter" ) == 0 )
+                fe.enter( data );
+            else
+                ret = fe.tick( 0.016666668f );
+            ++steps;
+            bool same = log.size( ) == static_cast< std::size_t >( st.m_logs ) && ( !st.m_ret || ret == st.m_ret ) &&
+                        fe.m_next == st.m_next && fe.m_current == st.m_current && fe.m_stack.size( ) == static_cast< std::size_t >( st.m_stack ) &&
+                        fe.m_fsm.current( ) && fe.m_fsm.current( )->m_name == st.m_state &&
+                        static_cast< int >( fe.m_preload_pending ) == st.m_preload &&
+                        fe.m_fsm.m_conditions.size( ) == static_cast< std::size_t >( st.m_condition_count );
+            for ( int k = 0; same && k < st.m_logs; ++k )
+                same = log[ k ].first == g_golden_fei_logs[ st.m_first_log + k ].m_kind && log[ k ].second == g_golden_fei_logs[ st.m_first_log + k ].m_a;
+            for ( int k = 0; same && k < st.m_stack; ++k )
+                same = fe.m_stack[ k ] == g_golden_fei_stack[ st.m_first_stack + k ];
+            for ( int k = 0; same && k < st.m_condition_count; ++k )
+                same = static_cast< unsigned >( fe.m_fsm.m_conditions[ k ].m_value | ( fe.m_fsm.m_conditions[ k ].m_pulse << 8 ) ) == st.m_conditions[ k ];
+            std::uint32_t time = 0;
+            std::memcpy( &time, &fe.m_fsm.m_time, 4 );
+            if ( !same || time != st.m_time )
+            {
+                if ( ++failed <= 8 )
+                    LOG_ERROR( "ui front end enter: variant %s step %d (%s) differs from retail", var.m_name, s, st.m_op );
+            }
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the front end's enter matches retail's 0x4BF630 on %d game-data variants (%d steps with the ticks after): "
+                     "the first screen, the stack, the title voice-over / preload, the FSM start, every hook in order",
+            static_cast< int >( g_golden_fei_variants_count ), steps );
+    else
+        LOG_ERROR( "the front end's enter FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_front_end_enter( ) && ok;
     ok = verify_ui_screen_events( ) && ok;
     ok = verify_ui_button( ) && ok;
     ok = verify_ui_front_end( ) && ok;
