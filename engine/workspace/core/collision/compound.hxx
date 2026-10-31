@@ -589,3 +589,30 @@ inline int compound_process_collision( collision_dispatcher_t& d, compound_algor
     }
     return 1;
 }
+
+// btCompoundShape::calculateLocalInertia @0x5275F0 (slot 7; thiscall mass,
+// inertia&; retn 8): the identity 0x413280 (origin 0), the compound's own
+// getAabb (slot 1, compound_get_aabb) through it, then the box formula on
+// the aabb: l = ((hi - lo) x 0.5) x 2 per lane, k = mass x 1/12 (0x6F760C),
+// I = ((y^2 + z^2) k, (x^2 + z^2) k, (x^2 + y^2) k) - the w lane is NOT
+// written. setMargin @0x527B00 (slot 9) is `margin` (+0x48) = the argument.
+inline void compound_local_inertia( const compound_shape_t& c, float mass, float* inertia )
+{
+    float identity[ 16 ] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0 };
+    float lo[ 4 ], hi[ 4 ];
+    compound_get_aabb( c, identity, lo, hi );
+    const float half = 0.5f, two = 2.0f;
+    std::uint32_t twelfth_bits = 0x3DAAAAABu;
+    float twelfth;
+    std::memcpy( &twelfth, &twelfth_bits, 4 );
+    const float k = mass * twelfth;
+    float ly = ( ( hi[ 1 ] - lo[ 1 ] ) * half ) * two;
+    float lz = ( ( hi[ 2 ] - lo[ 2 ] ) * half ) * two;
+    float lx = ( ( hi[ 0 ] - lo[ 0 ] ) * half ) * two;
+    ly = ly * ly;
+    lz = lz * lz;
+    lx = lx * lx;
+    inertia[ 0 ] = ( ly + lz ) * k;
+    inertia[ 1 ] = ( lx + lz ) * k;
+    inertia[ 2 ] = ( lx + ly ) * k;
+}

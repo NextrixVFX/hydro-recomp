@@ -564,6 +564,51 @@ inline bool verify_sphere_shape( )
     return failed == 0;
 }
 
+// compound_local_inertia / the compound's setMargin (engine collision/
+// compound.hxx) against retail's 0x5275F0 / 0x527B00 on compounds retail
+// built (oracle case compound_inertia): the margin word and the inertia.
+inline bool verify_compound_inertia( )
+{
+    const unsigned* s = g_golden_compound_inertia_words;
+    const unsigned count = *s++;
+    auto f = []( unsigned w ) { float v; std::memcpy( &v, &w, 4 ); return v; };
+    int failed = 0;
+    for ( unsigned index = 0; index < count; ++index )
+    {
+        const bool has_child = *s++ != 0;
+        convex_shape_t box{};
+        box.type = 0;
+        for ( int k = 0; k < 3; ++k )
+        {
+            box.local_scaling[ k ] = 1.0f;
+            box.implicit[ k ] = f( s[ k ] );
+        }
+        box.margin = f( s[ 3 ] );
+        s += 4;
+        float transform[ 16 ];
+        for ( auto& x : transform )
+            x = f( *s++ );
+        compound_shape_t c;
+        c.margin = f( *s++ );   // setMargin 0x527B00
+        const float mass = f( *s++ );
+        const unsigned margin_after = *s++;
+        std::uint32_t inertia[ 4 ] = { 0xCDCDCDCDu, 0xCDCDCDCDu, 0xCDCDCDCDu, 0xCDCDCDCDu };
+        bool bad = std::memcmp( &c.margin, &margin_after, 4 ) != 0;
+        if ( has_child && compound_add_child( c, transform, box ) != 1 )
+            bad = true;
+        compound_local_inertia( c, mass, reinterpret_cast< float* >( inertia ) );
+        bad = bad || std::memcmp( inertia, s, 16 ) != 0;
+        s += 4;
+        if ( bad && ++failed <= 4 )
+            LOG_ERROR( "compound inertia vector %u differs from retail", index );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "btCompoundShape calculateLocalInertia 0x5275F0 / setMargin 0x527B00 match retail: %u vectors", count );
+    else
+        LOG_ERROR( "compound inertia FAILED %d of %u vectors", failed, count );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
@@ -576,5 +621,6 @@ inline bool verify_boat_all( )
     ok = verify_box_shape( ) && ok;
     ok = verify_cylinder_shape( ) && ok;
     ok = verify_sphere_shape( ) && ok;
+    ok = verify_compound_inertia( ) && ok;
     return ok;
 }
