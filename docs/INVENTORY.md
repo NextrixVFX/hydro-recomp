@@ -18,10 +18,10 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 330 | 169359 |
-| callee | 88 | 10619 |
-| cited | 189 | 113290 |
-| absent | 8031 | 1932992 |
+| verified | 344 | 207036 |
+| callee | 114 | 15241 |
+| cited | 193 | 115701 |
+| absent | 7987 | 1888282 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -30,17 +30,17 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 
 | subsystem | functions | verified | callee | cited | absent | verified bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| unattributed | 1845 | 106 | 47 | 24 | 1668 | 71162 of 695394 |
-| physics (Bullet) | 646 | 156 | 14 | 33 | 443 | 68199 of 256657 |
-| entity / component / script framework | 1094 | 17 | 5 | 61 | 1011 | 5253 of 207438 |
-| HUD / UI / fonts | 648 | 1 | 0 | 3 | 644 | 135 of 184315 |
-| game modes / race | 766 | 1 | 2 | 0 | 763 | 81 of 179957 |
+| unattributed | 1845 | 111 | 62 | 25 | 1647 | 104388 of 695394 |
+| physics (Bullet) | 646 | 156 | 15 | 33 | 442 | 68199 of 256657 |
+| entity / component / script framework | 1094 | 23 | 9 | 62 | 1000 | 7275 of 207438 |
+| HUD / UI / fonts | 648 | 2 | 0 | 3 | 643 | 2305 of 184315 |
+| game modes / race | 766 | 1 | 4 | 0 | 761 | 81 of 179957 |
 | rendering / gfx | 552 | 10 | 0 | 16 | 526 | 2216 of 126915 |
 | water | 325 | 8 | 0 | 19 | 298 | 6613 of 96416 |
-| boat | 264 | 11 | 2 | 10 | 241 | 7924 of 87400 |
-| engine core / math / containers | 391 | 6 | 0 | 6 | 379 | 1863 of 76072 |
-| other classes | 731 | 9 | 2 | 0 | 720 | 5251 of 67698 |
-| assets | 286 | 0 | 0 | 2 | 284 | 0 of 61239 |
+| boat | 264 | 11 | 4 | 10 | 239 | 7924 of 87400 |
+| engine core / math / containers | 391 | 6 | 1 | 6 | 378 | 1863 of 76072 |
+| other classes | 731 | 9 | 2 | 1 | 719 | 5251 of 67698 |
+| assets | 286 | 2 | 1 | 3 | 280 | 259 of 61239 |
 | particles | 215 | 1 | 1 | 13 | 200 | 279 of 45495 |
 | audio | 163 | 1 | 0 | 0 | 162 | 251 of 30823 |
 | input | 156 | 0 | 0 | 0 | 156 | 0 of 30388 |

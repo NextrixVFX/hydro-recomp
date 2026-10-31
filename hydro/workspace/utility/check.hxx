@@ -6,6 +6,7 @@
 #include <workspace/core/world/transform.hxx>
 #include <workspace/core/boat/parts.hxx>
 #include <workspace/core/boat/construct.hxx>
+#include <workspace/core/game/types.hxx>
 #include <workspace/utility/golden.hxx>
 #include <workspace/utility/logger.hxx>
 
@@ -900,10 +901,50 @@ inline bool verify_boat_ctor( )
     return failed == 0;
 }
 
+// build_entity_registry (game/types.hxx) against the VuEntityRegistry retail's
+// start-up builds (oracle case entity_registry): fed the same VuTemplateAsset
+// names the oracle served, every entry - class, category, display name and
+// create fn - must sit at retail's vector position, and the class -> index map
+// must name each one there.
+inline bool verify_entity_registry( )
+{
+    std::vector< std::string > names( g_golden_entity_templates, g_golden_entity_templates + g_golden_entity_templates_count );
+    const entity_registry_t registry = build_entity_registry( names );
+    int failed = 0;
+    if ( registry.m_types.size( ) != g_golden_entity_types_count || registry.m_index.size( ) != g_golden_entity_map_size )
+    {
+        LOG_ERROR( "entity registry: retail has %d types (map %d), ours %d (map %d)", static_cast< int >( g_golden_entity_types_count ),
+            static_cast< int >( g_golden_entity_map_size ), static_cast< int >( registry.m_types.size( ) ),
+            static_cast< int >( registry.m_index.size( ) ) );
+        return false;
+    }
+    for ( std::size_t k = 0; k < g_golden_entity_types_count; ++k )
+    {
+        const golden_entity_type_t& want = g_golden_entity_types[ k ];
+        const entity_type_t& have = registry.m_types[ k ];
+        const auto at = registry.m_index.find( want.m_class );
+        if ( have.m_class != want.m_class || have.m_category != want.m_category || have.m_display != want.m_display ||
+             have.m_create != want.m_create || at == registry.m_index.end( ) || at->second != static_cast< int >( k ) )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "entity registry: entry %d is %s / %s, retail %s / %s", static_cast< int >( k ), have.m_class.c_str( ),
+                    have.m_category.c_str( ), want.m_class, want.m_category );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "build_entity_registry matches retail's VuEntityRegistry (0x5685B0 + 0x556AC0 + 0x4D4180): %d types "
+                     "in retail's order, %d of them templates", static_cast< int >( g_golden_entity_types_count ),
+            static_cast< int >( g_golden_entity_templates_count ) );
+    else
+        LOG_ERROR( "build_entity_registry FAILED %d of %d entries", failed, static_cast< int >( g_golden_entity_types_count ) );
+    return failed == 0;
+}
+
 // Every oracle-backed check on game code.
 inline bool verify_game( )
 {
     bool ok = true;
+    ok = verify_entity_registry( ) && ok;
     ok = verify_boat_ctor( ) && ok;
     ok = verify_boat_parts( ) && ok;
     ok = verify_transform_load( ) && ok;
