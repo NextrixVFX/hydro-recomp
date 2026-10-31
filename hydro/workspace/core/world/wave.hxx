@@ -779,13 +779,13 @@ inline void wake_vertex( const wake_wave_t& wave, float x, float y, float* displ
 }
 
 // The tick both wake waves share @0x52c210 (thiscall, float dt; al): both
-// records age by dt, and the wave stays alive unless its mode (+4) is 1 AND
+// records age by dt, and the wave stays alive unless its refcount (+4) is 1 AND
 // both records are past their life.
-inline bool wake_tick( wake_wave_t& wave, int mode, float dt )
+inline bool wake_tick( wake_wave_t& wave, int refcount, float dt )
 {
     wave.a.age = dt + wave.a.age;
     wave.b.age = dt + wave.b.age;
-    if ( mode != 1 )
+    if ( refcount != 1 )
         return true;
     return !( ocean_gt( wave.a.age, wave.a.life ) && ocean_gt( wave.b.age, wave.b.life ) );
 }
@@ -1030,6 +1030,86 @@ inline wave_image_t whirlpool_create( const wave_source_t& s )
     w.setf( 48, y );
     w.setf( 52, outer );
     return w;
+}
+
+// ---------------------------------------------------------------------------
+// THE WAVES' SLOT 2 TICKS (thiscall, float dt; al = still alive).
+//
+// +4 IS A REFCOUNT, NOT A MODE: VuWaterWave's ctor @0x5a6390 sets it to 1,
+// every allocator adds one for its owner, the water tick @0x529e30 drops the
+// manager's and the entity's onDisable drops its own. So `+4 != 1` - which
+// the family's notes elsewhere call "mode != 1" - reads "someone besides the
+// water manager still holds this wave". The wake's tick above takes it the
+// same way.
+inline bool whirlpool_tick( float& clock, int refcount, float dt )   // @0x5a1680, clock +0x74
+{
+    clock = dt + clock;
+    return refcount != 1;
+}
+
+inline bool directional_tick( float& clock, int refcount, float dt )   // @0x59aad0, clock +0x7c
+{
+    clock = dt + clock;
+    return refcount != 1;
+}
+
+// @0x59c380, shared by the banked turn, bump, directional flow and ramp
+// waves: no clock at all.
+inline bool static_wave_tick( int refcount )
+{
+    return refcount != 1;
+}
+
+// @0x5a34b0: the point wave's lifetime. Past (rate * outer) + tail width it
+// fires its callback (+0x8c, the entity's VuPointWaveCallbackIF - its slot 0
+// is the entity's OnExpired path) once, guarded by +0x90 and by the callback
+// being set, and from then on lives only while referenced.
+struct point_wave_life_t
+{
+    float tail_width = 0.0f;   // +0x5c
+    float outer_radius = 0.0f; // +0x68
+    float elapsed = 0.0f;      // +0x78
+    float rate = 0.0f;         // +0x7c
+    bool has_callback = false; // +0x8c != 0
+    bool expired = false;      // +0x90
+};
+
+inline bool point_wave_tick( point_wave_life_t& wave, int refcount, float dt, void ( *expire )( void* ), void* user )
+{
+    wave.elapsed = dt + wave.elapsed;
+    const float limit = ( wave.rate * wave.outer_radius ) + wave.tail_width;
+    if ( !ocean_gt( wave.elapsed, limit ) )
+        return true;
+    if ( !wave.expired && wave.has_callback )
+        expire( user );
+    wave.expired = true;
+    return refcount != 1;
+}
+
+// @0x59cc00, the three ocean waves' tick: NOT a fixed-step accumulator - it
+// advances the double time by dt, flips BOTH buffer indices ((i + 1) % 2,
+// retail's signed-remainder idiom), rebuilds the field into the new current
+// buffer (EvolveField @0x59d4d0, VuWaterMap_BuildBezierPatches @0x608bb0,
+// 0x59d640, BuildBezierPatches @0x59d6c0 - the hook) and stamps that buffer's
+// time, every tick. A wave held only by the manager returns false at once.
+struct ocean_clock_t
+{
+    double time = 0.0;          // +0x88
+    int current = 0;            // +0xa4
+    int previous = 1;           // +0xa8
+    double buffer_time[ 2 ]{};  // +0xb0, +0xc0
+};
+
+inline bool ocean_tick( ocean_clock_t& wave, int refcount, float dt, void ( *rebuild )( void* ), void* user )
+{
+    if ( refcount == 1 )
+        return false;
+    wave.time = static_cast< double >( dt ) + wave.time;
+    wave.current = ( wave.current + 1 ) % 2;
+    wave.previous = ( wave.previous + 1 ) % 2;
+    rebuild( user );
+    wave.buffer_time[ wave.current ] = wave.time;
+    return true;
 }
 
 // ---------------------------------------------------------------------------

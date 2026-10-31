@@ -297,6 +297,98 @@ inline bool verify_water_tick( )
     return failed == 0;
 }
 
+// The waves' slot 2 ticks against retail's: al, the members each tick writes (as words), and the calls it
+// makes - the point wave's one-shot callback and the ocean's four rebuild calls.
+inline bool verify_wave_ticks( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_wave_ticks_count; ++index )
+    {
+        const golden_wave_tick_t& g = g_golden_wave_ticks[ index ];
+        int calls = 0;
+        auto count = []( void* u ) { ++*static_cast< int* >( u ); };
+        bool alive = false;
+        bool ok = true;
+        auto word = [ & ]( int offset ) { return g.m_after[ offset / 4 ]; };
+        auto same = [ & ]( int offset, float value ) {
+            std::uint32_t bits;
+            std::memcpy( &bits, &value, 4 );
+            return bits == word( offset );
+        };
+        switch ( g.m_kind )
+        {
+        case 0:
+        {
+            float clock = g.m_in[ 0 ];
+            alive = whirlpool_tick( clock, g.m_refs, g.m_dt );
+            ok = same( 0x74, clock );
+            break;
+        }
+        case 1:
+        {
+            float clock = g.m_in[ 1 ];
+            alive = directional_tick( clock, g.m_refs, g.m_dt );
+            ok = same( 0x7C, clock );
+            break;
+        }
+        case 2: alive = static_wave_tick( g.m_refs ); break;
+        case 3:
+        {
+            point_wave_life_t w{};
+            w.rate = g.m_in[ 1 ];
+            w.tail_width = g.m_in[ 2 ];
+            w.outer_radius = g.m_in[ 3 ];
+            w.elapsed = g.m_in[ 4 ];
+            w.has_callback = g.m_point[ 0 ] != 0;
+            w.expired = g.m_point[ 1 ] != 0;
+            alive = point_wave_tick( w, g.m_refs, g.m_dt, count, &calls );
+            ok = same( 0x78, w.elapsed ) && ( word( 0x90 ) & 0xFFu ) == ( w.expired ? 1u : 0u );
+            break;
+        }
+        default:
+        {
+            ocean_clock_t w{};
+            w.time = g.m_ocean[ 0 ];
+            w.buffer_time[ 0 ] = g.m_ocean[ 1 ];
+            w.buffer_time[ 1 ] = g.m_ocean[ 2 ];
+            w.current = g.m_index[ 0 ];
+            w.previous = g.m_index[ 1 ];
+            int rebuilds = 0;
+            alive = ocean_tick( w, g.m_refs, g.m_dt, count, &rebuilds );
+            calls = rebuilds * 4;   // retail's four rebuild calls per rebuild
+            double t;
+            double b0;
+            double b1;
+            std::memcpy( &t, &g.m_after[ 0x88 / 4 ], 8 );
+            std::memcpy( &b0, &g.m_after[ 0xB0 / 4 ], 8 );
+            std::memcpy( &b1, &g.m_after[ 0xC0 / 4 ], 8 );
+            ok = std::memcmp( &t, &w.time, 8 ) == 0 && std::memcmp( &b0, &w.buffer_time[ 0 ], 8 ) == 0 &&
+                 std::memcmp( &b1, &w.buffer_time[ 1 ], 8 ) == 0 &&
+                 word( 0xA4 ) == static_cast< std::uint32_t >( w.current ) &&
+                 word( 0xA8 ) == static_cast< std::uint32_t >( w.previous );
+            break;
+        }
+        }
+        ok = ok && alive == ( g.m_al != 0 ) && calls == g.m_calls;
+        if ( !ok )
+        {
+            ++failed;
+            LOG_ERROR( "wave tick kind %d refs %d dt %.6g: ours al %d calls %d, retail al %d calls %d", g.m_kind, g.m_refs,
+                g.m_dt, alive, calls, g.m_al, g.m_calls );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the wave ticks match retail's slot 2s (@0x5a1680 / @0x59aad0 / @0x59c380 / @0x5a34b0 / @0x59cc00) on %d samples",
+            static_cast< int >( g_golden_wave_ticks_count ) );
+    }
+    else
+    {
+        LOG_ERROR( "the wave ticks FAILED %d of %d samples", failed, static_cast< int >( g_golden_wave_ticks_count ) );
+    }
+    return failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
@@ -304,5 +396,6 @@ inline bool verify_water_all( )
     ok = verify_wake_kernels( ) && ok;
     ok = verify_wave_bridges( ) && ok;
     ok = verify_water_tick( ) && ok;
+    ok = verify_wave_ticks( ) && ok;
     return ok;
 }
