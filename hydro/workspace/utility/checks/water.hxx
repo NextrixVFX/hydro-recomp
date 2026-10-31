@@ -642,16 +642,22 @@ struct quad_pattern_record_t
     std::vector< std::uint32_t > calls;
 };
 
-inline bool verify_quad_pattern_tick( )
+// The model box the geom golden carries (min x y z, max x y z); the quad golden has none.
+inline const float* pattern_box( const golden_geom_pattern_t& g ) { return g.m_box; }
+inline const float* pattern_box( const golden_quad_pattern_t& ) { return nullptr; }
+
+template < typename G >
+inline int pattern_tick_failures( const G* table, std::size_t count, const unsigned* words, const unsigned* calls, bool geom )
 {
     int failed = 0;
-    for ( std::size_t index = 0; index < g_golden_quad_patterns_count; ++index )
+    for ( std::size_t index = 0; index < count; ++index )
     {
-        const golden_quad_pattern_t& g = g_golden_quad_patterns[ index ];
+        const G& g = table[ index ];
+        const float* box = geom ? pattern_box( g ) : nullptr;
         std::vector< pfx_quad_particle_t > parts( g.m_count );
         for ( int i = 0; i < g.m_count; ++i )
         {
-            std::memcpy( parts[ i ].w, g_golden_quad_pattern_words + g.m_words + 30 * i, 120 );
+            std::memcpy( parts[ i ].w, words + g.m_words + 30 * i, 120 );
             parts[ i ].w[ 0 ] = static_cast< std::uint32_t >( i + 1 < g.m_count ? i + 1 : -1 );
             parts[ i ].w[ 1 ] = static_cast< std::uint32_t >( i > 0 ? i - 1 : -1 );
         }
@@ -670,10 +676,10 @@ inline bool verify_quad_pattern_tick( )
             auto& r = *static_cast< quad_pattern_record_t* >( u );
             r.calls.insert( r.calls.end( ), { 0u, bits, 1u, bits } );
         };
-        pfx_quad_pattern_tick( p, pool, g.m_clock, g.m_inst_scale, g.m_matrix, g.m_space, g.m_delay, g.m_dt, children, &rec );
+        pfx_pattern_tick( p, pool, g.m_clock, g.m_inst_scale, g.m_matrix, g.m_space, g.m_delay, g.m_dt, children, &rec, box );
         bool ok = true;
         for ( int i = 0; i < g.m_count && ok; ++i )
-            ok = std::memcmp( parts[ i ].w, g_golden_quad_pattern_words + g.m_words + 30 * ( g.m_count + i ), 120 ) == 0;
+            ok = std::memcmp( parts[ i ].w, words + g.m_words + 30 * ( g.m_count + i ), 120 ) == 0;
         ok = ok && static_cast< std::uint32_t >( p.head ) == g.m_pattern[ 0 ] && static_cast< std::uint32_t >( p.tail ) == g.m_pattern[ 1 ] &&
              static_cast< std::uint32_t >( p.count ) == g.m_pattern[ 2 ];
         const int slots[ 6 ] = { 3, 4, 5, 7, 8, 9 };
@@ -687,14 +693,21 @@ inline bool verify_quad_pattern_tick( )
         auto pool_id = [ & ]( int n ) { return ( g.m_pool_pre ? n == 20 : n == -1 ) ? -9 : n; };
         ok = ok && pool_id( pool.tail ) == g.m_pool[ 0 ] && pool_id( pool.head ) == g.m_pool[ 1 ] && pool.count == g.m_pool[ 2 ];
         ok = ok && rec.calls.size( ) == static_cast< std::size_t >( 2 * g.m_calls ) &&
-             ( rec.calls.empty( ) || std::memcmp( rec.calls.data( ), g_golden_quad_pattern_calls + g.m_call,
+             ( rec.calls.empty( ) || std::memcmp( rec.calls.data( ), calls + g.m_call,
                                          rec.calls.size( ) * 4 ) == 0 );
         if ( !ok )
         {
             ++failed;
-            LOG_ERROR( "pfx_quad_pattern_tick sample %d differs from @0x591c30", static_cast< int >( index ) );
+            LOG_ERROR( "pfx pattern tick (%s) sample %d differs from retail", geom ? "geom" : "quad", static_cast< int >( index ) );
         }
     }
+    return failed;
+}
+
+inline bool verify_quad_pattern_tick( )
+{
+    const int failed = pattern_tick_failures( g_golden_quad_patterns, g_golden_quad_patterns_count, g_golden_quad_pattern_words,
+        g_golden_quad_pattern_calls, false );
     if ( failed == 0 )
     {
         LOG_SUCCESS( "pfx_quad_pattern_tick matches VuPfxQuadPatternInstance's tick @0x591c30 on %d patterns (particles, list, AABB, pool, child ticks)",
@@ -703,6 +716,23 @@ inline bool verify_quad_pattern_tick( )
     else
     {
         LOG_ERROR( "pfx_quad_pattern_tick FAILED %d of %d", failed, static_cast< int >( g_golden_quad_patterns_count ) );
+    }
+    return failed == 0;
+}
+
+// pfx_pattern_tick in its geom form against VuPfxGeomPatternInstance's tick @0x58fea0, the same comparison.
+inline bool verify_geom_pattern_tick( )
+{
+    const int failed = pattern_tick_failures( g_golden_geom_patterns, g_golden_geom_patterns_count, g_golden_geom_pattern_words,
+        g_golden_geom_pattern_calls, true );
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "pfx_pattern_tick (geom) matches VuPfxGeomPatternInstance's tick @0x58fea0 on %d patterns (particles, list, AABB, pool, child ticks)",
+            static_cast< int >( g_golden_geom_patterns_count ) );
+    }
+    else
+    {
+        LOG_ERROR( "pfx_pattern_tick (geom) FAILED %d of %d", failed, static_cast< int >( g_golden_geom_patterns_count ) );
     }
     return failed == 0;
 }
@@ -720,5 +750,6 @@ inline bool verify_water_all( )
     ok = verify_water_tree( ) && ok;
     ok = verify_water_waves( ) && ok;
     ok = verify_quad_pattern_tick( ) && ok;
+    ok = verify_geom_pattern_tick( ) && ok;
     return ok;
 }

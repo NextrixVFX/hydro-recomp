@@ -135,8 +135,16 @@ struct pfx_pool_t
 // system: clock +0xA4, instance scale +0xA8, matrix +0x1C (16 floats);
 // params: Space +0x34, Start Delay +0x38. `children` ticks the child nodes
 // (each node's slot 1 with dt - Vu virtuals, a hook).
-inline void pfx_quad_pattern_tick( pfx_quad_pattern_t& p, pfx_pool_t& pool, float clock, float instance_scale,
-    const float* system_matrix, int space, float start_delay, float dt, void ( *children )( void*, float ), void* user )
+// The geom pattern's tick @0x58fea0 is the same body with three differences,
+// all read from its disassembly: the rotation is three angles (+0x44 ..
+// +0x4C) advanced by an angular velocity (+0x54 .. +0x5C); world z is NOT a
+// retirement test; and the AABB radius is particle scale * instance scale *
+// the half-diagonal of the model's box - params +0x6C's asset +0x5C .. +0x74,
+// or the CRT-initialised static at 0x7593f0 when there is none - computed
+// sqrt( (hy*hy + hx*hx) + hz*hz ).
+inline void pfx_pattern_tick( pfx_quad_pattern_t& p, pfx_pool_t& pool, float clock, float instance_scale,
+    const float* system_matrix, int space, float start_delay, float dt, void ( *children )( void*, float ), void* user,
+    const float* geom_box )
 {
     std::vector< pfx_quad_particle_t >& v = *p.particles;
     auto link = [ & ]( int n, int slot ) { return static_cast< int >( v[ n ].w[ slot ] ); };
@@ -151,7 +159,16 @@ inline void pfx_quad_pattern_tick( pfx_quad_pattern_t& p, pfx_pool_t& pool, floa
             q.set( 0x0C, q.f( 0x0C ) + vy );
             q.set( 0x10, q.f( 0x10 ) + vz );
             q.set( 0x3C, dt + q.f( 0x3C ) );
-            q.set( 0x44, ( q.f( 0x48 ) * dt ) + q.f( 0x44 ) );
+            if ( geom_box == nullptr )
+            {
+                q.set( 0x44, ( q.f( 0x48 ) * dt ) + q.f( 0x44 ) );
+            }
+            else
+            {
+                q.set( 0x44, ( dt * q.f( 0x54 ) ) + q.f( 0x44 ) );
+                q.set( 0x48, ( q.f( 0x58 ) * dt ) + q.f( 0x48 ) );
+                q.set( 0x4C, ( q.f( 0x5C ) * dt ) + q.f( 0x4C ) );
+            }
         }
         children( user, dt );
         for ( int n = p.head; n >= 0; )
@@ -160,7 +177,7 @@ inline void pfx_quad_pattern_tick( pfx_quad_pattern_t& p, pfx_pool_t& pool, floa
             pfx_quad_particle_t& q = v[ n ];
             auto below = []( float x ) { return !_mm_comige_ss( _mm_set_ss( x ), _mm_setzero_ps( ) ); };   // jb: < 0 or NaN
             const bool dead = below( q.f( 0x40 ) - q.f( 0x3C ) ) || below( q.f( 0x34 ) ) || below( q.f( 0x38 ) ) ||
-                              below( q.f( 0x4C ) );
+                              ( geom_box == nullptr && below( q.f( 0x4C ) ) );
             if ( dead )
             {
                 const int prev = link( n, 1 );
@@ -200,6 +217,14 @@ inline void pfx_quad_pattern_tick( pfx_quad_pattern_t& p, pfx_pool_t& pool, floa
     float hi[ 3 ] = { -big, -big, -big };
     auto mn = []( float a, float b ) { return _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); };
     auto mx = []( float a, float b ) { return _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); };
+    float half_diagonal = 0.0f;
+    if ( geom_box != nullptr )
+    {
+        const float hy = ( geom_box[ 4 ] - geom_box[ 1 ] ) * 0.5f;
+        const float hx = ( geom_box[ 3 ] - geom_box[ 0 ] ) * 0.5f;
+        const float hz = ( geom_box[ 5 ] - geom_box[ 2 ] ) * 0.5f;
+        half_diagonal = _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( ( hy * hy ) + ( hx * hx ) ) + ( hz * hz ) ) ) );
+    }
     for ( int n = p.head; n >= 0; n = link( n, 0 ) )
     {
         const pfx_quad_particle_t& q = v[ n ];
@@ -209,7 +234,8 @@ inline void pfx_quad_pattern_tick( pfx_quad_pattern_t& p, pfx_pool_t& pool, floa
         const float x = ( ( ( m[ 0 ] * px ) + ( m[ 4 ] * py ) ) + ( m[ 8 ] * pz ) ) + m[ 12 ];
         const float y = ( ( ( m[ 1 ] * px ) + ( m[ 5 ] * py ) ) + ( m[ 9 ] * pz ) ) + m[ 13 ];
         const float z = ( ( ( m[ 2 ] * px ) + ( m[ 6 ] * py ) ) + ( pz * m[ 10 ] ) ) + m[ 14 ];
-        const float r = ( instance_scale * 0.5f ) * q.f( 0x38 );
+        const float r = geom_box == nullptr ? ( instance_scale * 0.5f ) * q.f( 0x38 )
+                                            : ( q.f( 0x38 ) * instance_scale ) * half_diagonal;
         lo[ 0 ] = mn( lo[ 0 ], x - r );
         lo[ 1 ] = mn( lo[ 1 ], y - r );
         lo[ 2 ] = mn( lo[ 2 ], z - r );
@@ -223,6 +249,12 @@ inline void pfx_quad_pattern_tick( pfx_quad_pattern_t& p, pfx_pool_t& pool, floa
     p.aabb[ 3 ] = hi[ 0 ];
     p.aabb[ 4 ] = hi[ 1 ];
     p.aabb[ 5 ] = hi[ 2 ];
+}
+
+inline void pfx_quad_pattern_tick( pfx_quad_pattern_t& p, pfx_pool_t& pool, float clock, float instance_scale,
+    const float* system_matrix, int space, float start_delay, float dt, void ( *children )( void*, float ), void* user )
+{
+    pfx_pattern_tick( p, pool, clock, instance_scale, system_matrix, space, start_delay, dt, children, user, nullptr );
 }
 
 // VuStaticPfxEntity. The effect document is a VuPfxAsset. A quad pattern
