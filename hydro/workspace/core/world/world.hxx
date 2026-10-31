@@ -14,6 +14,8 @@
 #include <workspace/core/world/control.hxx>
 #include <workspace/core/world/pfx.hxx>
 #include <workspace/core/entity/light.hxx>
+#include <workspace/core/entity/node.hxx>
+#include <workspace/core/game/types.hxx>
 #include <workspace/core/world/water.hxx>
 #include <workspace/core/assets/texture.hxx>
 #include <workspace/utility/logger.hxx>
@@ -1111,54 +1113,7 @@ private:
                 const c_entity_binder bind( type->text, overlay, properties );
                 m_booleans.emplace( here, bind.boolean( "Value", false ) );
             }
-            // VuCoronaEntity. Every name below is a property declared in
-            // VuCoronaEntity_ctor @0x5e8d80 and every default is
-            // VuCoronaParams_ctor's @0x61ce60 - the pre-ctor initialiser
-            // @0x5e8d00 zeroes only handles, so the params constructor is the
-            // sole definition of a corona's defaults. The FIVE angle fields
-            // are VuAngleProperty, so the authored numbers are DEGREES; the
-            // ctor's own 2*pi cone and pi rotation amount are radians and are
-            // written as such.
-            if ( type->text == "VuCoronaEntity" )
-            {
-                c_corona_entity::corona_t light{};
-                light.path = here;
-                std::memcpy( light.world, world, sizeof( light.world ) );
-                if ( properties != nullptr )
-                {
-                    // All fifteen through the schema: VuCoronaEntity's own
-                    // constructor, emulated, with the defaults that
-                    // VuCoronaParams_ctor @0x61CE60 stores. The five
-                    // VuAngleProperty fields are converted by the binder, so
-                    // the explicit 0.017453292f multiplies are gone.
-                    const c_entity_binder bind( type->text, overlay, properties );
-                    light.visible = bind.boolean( "Initially Visible", true );
-                    light.draw_distance = bind.real( "Draw Distance", light.draw_distance );
-                    light.fade_distance = bind.real( "Fade Distance", light.fade_distance );
-                    light.query_radius = bind.real( "Query Radius", light.query_radius );
-                    light.cone = bind.real( "Cone Angle", light.cone );
-                    light.penumbra = bind.real( "Penumbra Angle", light.penumbra );
-                    light.back_light = bind.boolean( "Enable Back Light", false );
-                    const value_t* tint = field( overlay, properties, "Texture Color" );
-                    if ( tint != nullptr )
-                    {
-                        light.color[ 0 ] = number( find( *tint, "R" ), 255.0f ) / 255.0f;
-                        light.color[ 1 ] = number( find( *tint, "G" ), 255.0f ) / 255.0f;
-                        light.color[ 2 ] = number( find( *tint, "B" ), 255.0f ) / 255.0f;
-                        light.color[ 3 ] = number( find( *tint, "A" ), 255.0f ) / 255.0f;
-                    }
-                    light.screen_space = bind.boolean( "Texture Size Screen Space", false );
-                    light.size = bind.real( "Texture Size", light.size );
-                    light.rotation_offset = bind.real( "Rotation Offset", light.rotation_offset );
-                    light.rotation_amount = bind.real( "Rotation Amount", light.rotation_amount );
-                    light.rotation_speed = bind.real( "Rotation Speed", light.rotation_speed );
-                    bind.vector( "Rotation Axis", light.axis );
-                    const std::string image = bind.text( "Texture Name" );
-                    if ( !image.empty( ) )
-                        light.texture = image;
-                }
-                m_coronas.add( light );
-            }
+            // VuCoronaEntity is loaded from the retail entity tree (load_entity_tree).
             ++m_type_census[ type->text ];
             // The class behind each path, so the graph audit can say which
             // ENTITY TYPES the unhandled events are landing on - the only
@@ -3108,6 +3063,111 @@ private:
         return count;
     }
 
+    // A VuTemplateAsset's whole document, what factory slot 7 0x555690 loads,
+    // or null when the pack has none of that name.
+    const value_t* template_document( const std::string& name )
+    {
+        template_root( name );
+        const auto found = m_templates.find( name );
+        return found != m_templates.end( ) && found->second.tag == 6 ? &found->second : nullptr;
+    }
+
+    // The project as retail loads it (the race game 0x4B4360 -> VuProject::load
+    // 0x556390): the registry as start-up leaves it, the asset's AssetData
+    // "File" path (0x55FBE0), and the entity tree through every recreated load.
+    // The coronas are fed from it: each VuCoronaEntity's transform world and its
+    // property targets. A corona below an UNKNOWN entity is never created, and
+    // one whose world is unknown is not placed - both counted, neither stood in
+    // for.
+    void load_entity_tree( const char* asset, const value_t& project )
+    {
+        std::vector< std::uint8_t > bytes;
+        const std::string prefix = "VuProjectAsset/";
+        std::string path;
+        if ( std::strncmp( asset, prefix.c_str( ), prefix.size( ) ) == 0 && m_archive.read( "Assets/AssetData", bytes ) )
+        {
+            const value_t database = c_reader( bytes ).parse( );
+            const value_t& file = member( member( member( database, "VuProjectAsset" ), asset + prefix.size( ) ), "File" );
+            if ( file.tag == 4 )
+                path = file.text;
+        }
+        if ( path.empty( ) )
+        {
+            LOG_ERROR( "entity tree: %s has no AssetData \"File\" - the project is not loaded the retail way", asset );
+            return;
+        }
+        const entity_registry_t registry = build_entity_registry( m_archive.names( "VuTemplateAsset/" ) );
+        entity_world_t world;
+        world.m_registry = &registry;
+        world.m_ctor_for = entity_ctor_for;
+        world.m_template = [ this ]( const std::string& name ) { return template_document( name ); };
+        world.m_components_for = entity_components_constructed;
+        world.m_component_load = entity_load_component;
+        world.m_component_mark = entity_mark_component;
+        world.m_state_for = entity_state_for;
+        world.m_properties_load = entity_load_properties;
+        world.m_properties_mark = entity_mark_properties;
+        m_tree = entity_load_project( project, path, world );
+        if ( !m_tree )
+        {
+            LOG_ERROR( "entity tree: VuProject::load failed on %s (%s)", asset, path.c_str( ) );
+            return;
+        }
+        int entities = 0;
+        int unknown = 0;
+        int unplaced = 0;
+        int placed = 0;
+        // The event graph addresses an entity by its names below the project
+        // root, '/'-joined.
+        const auto walk = [ & ]( const auto& self, entity_t& e, const std::string& trail ) -> void
+        {
+            ++entities;
+            unknown += e.m_ctor ? 0 : 1;
+            if ( e.m_type == "VuCoronaEntity" && e.m_state )
+            {
+                const transform_component_t* t = entity_transform( e );
+                if ( !t || e.m_world_unknown )
+                    ++unplaced;
+                else
+                {
+                    m_coronas.add( corona_from( trail, *t, static_cast< const corona_state_t* >( e.m_state.get( ) )->value ) );
+                    ++placed;
+                }
+            }
+            for ( auto& child : e.m_children )
+                self( self, *child, trail.empty( ) ? child->m_name : trail + "/" + child->m_name );
+        };
+        walk( walk, *m_tree, std::string( ) );
+        LOG_INFO( "entity tree: %s (%s) - %d entities, %d UNKNOWN (nothing below one is loaded); %d coronas placed, %d with an "
+                  "unknown world", asset, path.c_str( ), entities, unknown, placed, unplaced );
+    }
+
+    // VuCoronaEntity's members as c_corona_entity reads them. The colour is
+    // the VuColor the property load packed (R, G, B, A bytes).
+    static c_corona_entity::corona_t corona_from( const std::string& path, const transform_component_t& t, const corona_properties_t& c )
+    {
+        c_corona_entity::corona_t light{};
+        light.path = path;
+        std::memcpy( light.world, t.world, sizeof( light.world ) );
+        light.visible = c.initially_visible != 0;
+        light.texture = c.texture_name;
+        light.draw_distance = c.draw_distance;
+        light.fade_distance = c.fade_distance;
+        light.query_radius = c.query_radius;
+        light.cone = c.cone;
+        light.penumbra = c.penumbra;
+        light.back_light = c.back_light != 0;
+        for ( int k = 0; k < 4; ++k )
+            light.color[ k ] = static_cast< float >( ( c.texture_color >> ( 8 * k ) ) & 0xFF ) / 255.0f;
+        light.screen_space = c.screen_space != 0;
+        light.size = c.texture_size;
+        light.rotation_offset = c.rotation_offset;
+        light.rotation_amount = c.rotation_amount;
+        light.rotation_speed = c.rotation_speed;
+        std::memcpy( light.axis, c.rotation_axis, sizeof( light.axis ) );
+        return light;
+    }
+
     void load_project( const char* asset )
     {
         std::vector< std::uint8_t > project;
@@ -3127,6 +3187,7 @@ private:
         float identity[ 16 ]{};
         math_identity( identity );
         visit( *entity, identity );
+        load_entity_tree( asset, *project_node );
         m_rig.report( );
         for ( const auto& pair : m_type_census )
             LOG_VERBOSE( "census %-40s %d", pair.first.c_str( ), pair.second );
@@ -3361,6 +3422,8 @@ private:
     float m_wave_wind = 10.0f;
     float m_wave_size = 10.0f;
     std::map< std::string, value_t > m_templates;
+    // The project's entity tree as retail's VuProject::load builds it.
+    std::unique_ptr< entity_t > m_tree;
     // Loaded VuTimedEventAssets, keyed by asset name. A control points into
     // this, so entries are only ever added.
     std::map< std::string, std::vector< timed_event_t > > m_timed;

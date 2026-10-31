@@ -157,6 +157,16 @@ public:
         return static_cast< int >( m_entries.size( ) );
     }
 
+    // Every asset named "<prefix><name>", as <name>, in directory order.
+    std::vector< std::string > names( const std::string& prefix ) const
+    {
+        std::vector< std::string > out;
+        for ( const entry_t& entry : m_entries )
+            if ( entry.name.compare( 0, prefix.size( ), prefix ) == 0 )
+                out.push_back( entry.name.substr( prefix.size( ) ) );
+        return out;
+    }
+
 private:
     struct entry_t
     {
