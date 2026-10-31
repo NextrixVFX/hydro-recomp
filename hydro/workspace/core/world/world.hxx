@@ -495,13 +495,8 @@ private:
             // VuBooleanEntity are built from the retail entity tree
             // (load_entity_tree; engine entity/actions.hxx).
             // VuCoronaEntity is loaded from the retail entity tree (load_entity_tree).
-            ++m_type_census[ type->text ];
-            // The class behind each path, so the graph audit can say which
-            // ENTITY TYPES the unhandled events are landing on - the only
-            // thing that says which constructor to read next. A '#' name is a
-            // template reference, not a class.
-            if ( !here.empty( ) && type->text[ 0 ] != '#' )
-                m_entity_type[ here ] = type->text;
+            // The per-class census and the class behind each path come from the
+            // retail entity tree (load_entity_tree).
             // VuRotateMotionEntity is built from the retail entity tree, and its
             // adopter recorded there (load_entity_tree).
             // VuPlayAnimationEntity's properties come from the retail entity tree
