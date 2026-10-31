@@ -28,6 +28,9 @@
     <Filter Include="workspace\core\trigger">
       <UniqueIdentifier>{75d54d9f-4cc4-59df-9bb7-b8b58cd2a0d0}</UniqueIdentifier>
     </Filter>
+    <Filter Include="workspace\core\ui">
+      <UniqueIdentifier>{974a4459-9afe-5230-a2c3-2ee6adec3a26}</UniqueIdentifier>
+    </Filter>
     <Filter Include="workspace\core\world">
       <UniqueIdentifier>{10f6b410-6628-5c8a-ba73-eef168e61159}</UniqueIdentifier>
     </Filter>
@@ -122,6 +125,12 @@
     </ClInclude>
     <ClInclude Include="workspace\core\trigger\volume.hxx">
       <Filter>workspace\core\trigger</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\ui\entity.hxx">
+      <Filter>workspace\core\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\ui\schema.hxx">
+      <Filter>workspace\core\ui</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\world\control.hxx">
       <Filter>workspace\core\world</Filter>

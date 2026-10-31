@@ -130,6 +130,8 @@
     <ClInclude Include="workspace\core\light\rig.hxx" />
     <ClInclude Include="workspace\core\trigger\set.hxx" />
     <ClInclude Include="workspace\core\trigger\volume.hxx" />
+    <ClInclude Include="workspace\core\ui\entity.hxx" />
+    <ClInclude Include="workspace\core\ui\schema.hxx" />
     <ClInclude Include="workspace\core\world\control.hxx" />
     <ClInclude Include="workspace\core\world\pfx.hxx" />
     <ClInclude Include="workspace\core\world\query.hxx" />
