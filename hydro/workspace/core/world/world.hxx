@@ -150,14 +150,6 @@ private:
     // place_model: models.hxx
     void place_model( const std::string& asset, const float* world, int bob = 0, int alpha_override = -1, const float* tint = nullptr, const char* skin = nullptr, int geometry_override = -1, std::vector< int >* out_placements = nullptr );
 
-    const value_t* field( const value_t* overlay, const value_t* properties, const char* key ) const
-    {
-        const value_t* value = overlay != nullptr ? find( *overlay, key ) : nullptr;
-        if ( value == nullptr && properties != nullptr )
-            value = find( *properties, key );
-        return value;
-    }
-
     const value_t* template_root( const std::string& name )
     {
         auto existing = m_templates.find( name );
@@ -242,9 +234,8 @@ private:
     // THE ENTITY DOES NOTHING AT LOAD. @0x408f90 is the whole of its
     // behaviour, and it runs only when the "Trigger" input plug fires.
     //
-    // No member carries a literal default: every one of them is filled from
-    // the schema by read_front_end_camera, so the constructor's values live in
-    // exactly one place and cannot drift out of step with it.
+    // The members are VuSetFrontEndCameraEntity's loaded targets (engine
+    // entity/actions.hxx, from the retail tree).
     struct front_end_camera_t
     {
         float interpolation_time = 0.0f;
@@ -256,29 +247,8 @@ private:
         float far_plane = 0.0f;
     };
 
-    // VuSetFrontEndCameraEntity, all seven properties through the schema.
-    // Its constructor @0x408b00 builds the nodes in this order and binds them
-    // to +0x60, +0x64, +0x65, +0x66, +0x68, +0x78 and +0x88; every default
-    // therefore comes from the constructor by way of the schema instead of
-    // being written here. None of the seven is a VuAngleProperty or a
-    // VuPercentageProperty, so nothing is converted on the way in.
-    //
     // The remaining front-end camera path - the screen-to-screen blend - was
     // inferred and is banked in reference/shot.hxx.
-    front_end_camera_t read_front_end_camera( const value_t* overlay,
-        const value_t* properties ) const
-    {
-        front_end_camera_t shot{};
-        const c_entity_binder bind( "VuSetFrontEndCameraEntity", overlay, properties );
-        shot.interpolation_time = bind.real( "Interpolation Time" );
-        shot.modify_eye = bind.boolean( "Modify Eye Position" );
-        shot.modify_target = bind.boolean( "Modify Target Position" );
-        shot.modify_far = bind.boolean( "Modify Far Plane" );
-        bind.vector( "Eye Position", shot.eye );
-        bind.vector( "Target Position", shot.target );
-        shot.far_plane = bind.real( "Far Plane" );
-        return shot;
-    }
 
     // A type that starts with '#' is a VuTemplateAsset. The instance transform
     // and properties replace the template root; the template supplies the entity.
@@ -297,11 +267,6 @@ private:
             && !label->text.empty( )
             ? ( trail.empty( ) ? label->text : trail + "/" + label->text )
             : trail;
-        int rotator = -1;
-        // A motion entity sits as a CHILD of the thing it drives, and it can
-        // arrive through a template expansion, so whether one exists is not
-        // knowable until the subtree has been walked.
-        bool mine = false;
         // A TEMPLATE INSTANCE OVERRIDES ITS CHILDREN BY NAME. The instance
         // node's "ChildEntities" is an OBJECT keyed by child name - not the
         // LIST an ordinary entity carries - and each entry holds "Components"
@@ -426,16 +391,7 @@ private:
             const value_t* properties = find( *data, "Properties" );
             record_authored( type->text, properties );
             record_authored( type->text, overlay );
-            // RECORDED, NOT APPLIED. The entity's whole behaviour is its
-            // "Trigger" plug handler @0x408f90; the constructor @0x408b00
-            // touches no camera and the load walk must not either. What used
-            // to stand here read Eye Position, Target Position and Far Plane
-            // straight onto the viewer the moment the entity was seen, which
-            // both ignored the three Modify booleans that gate them and fired
-            // without the trigger that is the only thing that runs the
-            // handler.
-            if ( type->text == "VuSetFrontEndCameraEntity" && !here.empty( ) )
-                m_front_end.emplace( here, read_front_end_camera( overlay, properties ) );
+            // VuSetFrontEndCameraEntity is built from the retail entity tree (load_entity_tree).
             // VuWaterSurfaceEntity is handled by the water work in its own
             // right - it has 14 authored properties and none of the geometry,
             // height resolution or displacement that read them has been
@@ -529,13 +485,7 @@ private:
             // VuFoliageEntity drew a hand-built billboard quad from an invented
             // vertex layout. Deleted; build it from the entity's own draw path.
             // VuStaticPfxEntity is built from the retail entity tree (load_entity_tree).
-            if ( type->text == "VuSkyBoxEntity" && properties != nullptr )
-            {
-                const c_entity_binder bind( type->text, overlay, properties );
-                const std::string asset = bind.text( "Model Asset" );
-                if ( !asset.empty( ) )
-                    m_sky = asset;
-            }
+            // VuSkyBoxEntity is read from the retail entity tree (load_entity_tree).
             // VuAmbientLightEntity / VuDirectionalLightEntity feed the rig from the
             // retail entity tree (load_entity_tree).
             // Every Proxy_* name in a material is a placeholder, and this is
@@ -568,113 +518,10 @@ private:
             // in step; values of 1 and 15 appear.
             // VuTriggerPlaneEntity / VuTriggerBoxEntity are built from the retail
             // entity tree (load_entity_tree).
-            // VuOneShotFilterEntity. Its whole behaviour is three input plug
-            // handlers over one byte at this+96, all four plugs named by
-            // VuOneShotFilterEntity_ctor @0x5ded70:
-            //
-            //   "In"      VuOneShotFilter_onInPlug      @0x5df000  input
-            //   "Reset"   VuOneShotFilter_onResetPlug   @0x5decc0  input
-            //   "SetShot" VuOneShotFilter_onSetShotPlug @0x5dece0  input
-            //   "Out"     VuScriptOutputPlug_init                  output
-            //
-            // The ctor is what settles which is which: the three inputs go
-            // through VuScriptInputPlug_init @0x5e28f0, which binds a
-            // VuMethod1 handler at plug+96, and "Out" through
-            // VuScriptOutputPlug_init. Nothing in the authored data says.
-            if ( type->text == "VuOneShotFilterEntity" )
-                m_filters.emplace( here, filter_t{} );
-            // VuDelayEntity - the commonest node in the graph by a wide
-            // margin. VuDelayEntity_ctor @0x5df830 stores 0x3F800000 = 1.0
-            // into this+96 ("Delay", a VuBasicProperty<float,1>) and 0 into
-            // this+100 ("Random Window"), with the pending byte at +104 and
-            // the countdown at +108. Its input plug "In" is named inside the
-            // init helper @0x5e2a30 and its output plug "Out" in the ctor
-            // body; the countdown runs in a method registered under
-            // "OnManualTick", not "Decision".
-            if ( type->text == "VuDelayEntity" )
-            {
-                delay_t wait{};
-                if ( properties != nullptr )
-                {
-                    wait.delay = number( field( overlay, properties, "Delay" ), 1.0f );
-                    wait.window = number( field( overlay, properties, "Random Window" ), 0.0f );
-                }
-                m_delays.emplace( here, wait );
-            }
-            // VuGenericEventEntity. VuGenericEventEntity_ctor @0x5f00e0: one
-            // property, "Event Name" (a VuString at this+92, empty by
-            // default), the INPUT plug "Broadcast" (named in the init helper
-            // @0x5f0500, handler @0x5f0330) and the OUTPUT plug "OnReceived".
-            //
-            // IT IS A GLOBAL NAMED BUS, NOT A WIRE, and no connection in the
-            // authored data shows that. Broadcast hashes the literal
-            // "OnGenericEvent" with FNV-1a (basis 0x811c9dc5, prime
-            // 16777619) and posts that engine-wide event carrying its own
-            // Event Name string; every instance's "OnGenericEvent" hook
-            // @0x5f0420 compares the carried string against its OWN Event
-            // Name and fires "OnReceived" on a match. A broadcast therefore
-            // reaches every entity sharing the name, the sender included.
-            if ( type->text == "VuGenericEventEntity" )
-            {
-                const value_t* named = properties != nullptr
-                    ? field( overlay, properties, "Event Name" ) : nullptr;
-                m_events.emplace( here, named != nullptr && named->kind == value_t::kind_t::text
-                    ? named->text : std::string( ) );
-            }
-            // VuOnProjectInitializedEntity. VuOnProjectInitializedEntity_ctor
-            // @0x5ef8d0 declares ONE plug, the output "Trigger", and hooks
-            // @0x5efa60 under "OnProjectInitialized" - that handler does
-            // nothing but fire Trigger. This is the real mechanism behind the
-            // props that move from the first frame.
-            if ( type->text == "VuOnProjectInitializedEntity" )
-                m_initialized.push_back( here );
-            // VuIfEntity carries no state of its own - its ctor @0x5ddbe0
-            // declares only the Trigger input and the Operand/True/False
-            // outputs - so recording that the path exists is the whole thing.
-            if ( type->text == "VuIfEntity" )
-                m_ifs.insert( here );
-            // VuAttachEntity. Schema from VuAttachEntity_ctor @0x5f4fa0:
-            // "Attach at Start" (bool), "Relative Position" (vec3 at +100),
-            // "Relative Rotation" (vec3 at +116), "Node Name" (VuString at
-            // +132), and the two VuScriptRefs "Parent" (+156) and "Child"
-            // (+160). The input plugs are "Attach"
-            // (VuAttachEntity_doAttach @0x5f5550) and "Detach" (@0x5f5690).
-            if ( type->text == "VuAttachEntity" )
-            {
-                attach_t join{};
-                join.path = here;
-                if ( properties != nullptr )
-                {
-                    const c_entity_binder bind( type->text, overlay, properties );
-                    join.at_start = bind.boolean( "Attach at Start", false );
-                    bind.vector( "Relative Position", join.position );
-                    join.node = bind.text( "Node Name" );
-
-                    // "Relative Rotation" IS a VuRotation3dProperty - the
-                    // schema says degrees - and is deliberately NOT read
-                    // through the binder. join.rotation goes to
-                    // math_transform, which converts degrees to radians
-                    // itself, so binding it would convert twice and scale
-                    // every attach rotation by 57.3. Moving it means moving
-                    // math_transform's contract with it, which is a change to
-                    // every one of its callers, so both stay as they are.
-                    const value_t* turn = bind.authored( "Relative Rotation" );
-                    if ( turn != nullptr )
-                    {
-                        join.rotation[ 0 ] = number( find( *turn, "X" ), 0.0f );
-                        join.rotation[ 1 ] = number( find( *turn, "Y" ), 0.0f );
-                        join.rotation[ 2 ] = number( find( *turn, "Z" ), 0.0f );
-                    }
-                }
-                m_attaches.push_back( std::move( join ) );
-            }
-            // VuBooleanEntity's one property is "Value", the byte at +96 that
-            // VuBooleanEntity_ctor @0x5e5880 zeroes.
-            if ( type->text == "VuBooleanEntity" )
-            {
-                const c_entity_binder bind( type->text, overlay, properties );
-                m_booleans.emplace( here, bind.boolean( "Value", false ) );
-            }
+            // VuOneShotFilterEntity, VuDelayEntity, VuGenericEventEntity,
+            // VuOnProjectInitializedEntity, VuIfEntity, VuAttachEntity and
+            // VuBooleanEntity are built from the retail entity tree
+            // (load_entity_tree; engine entity/actions.hxx).
             // VuCoronaEntity is loaded from the retail entity tree (load_entity_tree).
             ++m_type_census[ type->text ];
             // The class behind each path, so the graph audit can say which
@@ -683,95 +530,35 @@ private:
             // template reference, not a class.
             if ( !here.empty( ) && type->text[ 0 ] != '#' )
                 m_entity_type[ here ] = type->text;
-            // VuRotateMotionEntity. Property names and every default below
-            // come from VuRotateMotionEntity_ctor @0x5d0dc0: Axis is a
-            // VuBasicProperty<VuVector3,8> defaulting to (0,0,1), Speed is a
-            // VuAngleProperty (radians) defaulting to pi/2, Local is a bool
-            // defaulting to true.
-            if ( type->text == "VuRotateMotionEntity" && properties != nullptr )
+            // VuRotateMotionEntity is built from the retail entity tree, and its
+            // adopter recorded there (load_entity_tree).
+            // VuPlayAnimationEntity's properties come from the retail entity tree
+            // (load_entity_tree). What stays here is its VuScriptComponent's
+            // plugs - the event-graph data, which the tree does not model yet:
+            //   Plugs.PlayAnimation.Connections[].EntityName -> the props it drives
+            //   Plugs.Trigger.Connections[0].EntityName      -> what fires it
+            if ( type->text == "VuPlayAnimationEntity" && !here.empty( ) )
             {
-                rotator_t motion{};
-                motion.path = here;
-                std::memcpy( motion.base, world, sizeof( motion.base ) );
-                // Read through the schema: the three keys, their units and
-                // their defaults all come from VuRotateMotionEntity's own
-                // constructor, emulated. Speed is a VuAngleProperty, so an
-                // authored 360 becomes radians here and the constructor's
-                // default of pi/2 is already in radians and is not converted
-                // again.
-                const c_entity_binder bind( type->text, overlay, properties );
-                motion.axis[ 0 ] = 0.0f;
-                motion.axis[ 1 ] = 0.0f;
-                motion.axis[ 2 ] = 1.0f;
-                bind.vector( "Axis", motion.axis );
-                motion.speed = bind.real( "Speed" );
-                motion.local = bind.boolean( "Local", true );
-                m_rotators.push_back( motion );
-                rotator = static_cast< int >( m_rotators.size( ) ) - 1;
-                mine = true;
-            }
-            if ( type->text == "VuPlayAnimationEntity" && properties != nullptr )
-            {
-                const value_t* clip = find( *properties, "Animation Asset" );
-                if ( clip != nullptr && clip->kind == value_t::kind_t::text && !clip->text.empty( ) )
+                const value_t* script = components != nullptr ? find( *components, "VuScriptComponent" ) : nullptr;
+                const value_t* plugs = script != nullptr ? find( *script, "Plugs" ) : nullptr;
+                const value_t* trigger = plugs != nullptr ? find( *plugs, "Trigger" ) : nullptr;
+                const value_t* triggers = trigger != nullptr ? find( *trigger, "Connections" ) : nullptr;
+                auto& link = m_play_links[ here ];
+                if ( triggers != nullptr && triggers->kind == value_t::kind_t::list && !triggers->list.empty( ) )
                 {
-                    play_t play{};
-                    play.clip = clip->text;
-                    play.path = here;
-                    // The second asset ref (+164), packed into the params by
-                    // onTriggerPlug only when it is set.
-                    const value_t* timed = find( *properties, "Timed Event Asset" );
-                    if ( timed != nullptr && timed->kind == value_t::kind_t::text )
-                        play.timed = timed->text;
-                    play.start = number( find( *properties, "Start Time" ), 0.0f );
-                    play.looping = number( find( *properties, "Looping" ), 1.0f ) > 0.5f;
-                    play.one_shot = number( find( *properties, "One Shot" ), 0.0f ) > 0.5f;
-                    // Defaults from VuPlayAnimationEntity_ctor @0x5f5950: Start
-                    // Time 0, Blend Time 0, Time Factor 1.0, Looping 1, One
-                    // Shot 0. The `factor <= 0 -> 1` clamp that stood here was
-                    // invented - a negative factor plays backward in retail.
-                    play.factor = number( find( *properties, "Time Factor" ), 1.0f );
-                    const value_t* script = components != nullptr
-                        ? find( *components, "VuScriptComponent" ) : nullptr;
-                    const value_t* plugs = script != nullptr ? find( *script, "Plugs" ) : nullptr;
-                    const value_t* trigger = plugs != nullptr ? find( *plugs, "Trigger" ) : nullptr;
-                    const value_t* triggers = trigger != nullptr ? find( *trigger, "Connections" ) : nullptr;
-                    if ( triggers != nullptr && triggers->kind == value_t::kind_t::list
-                        && !triggers->list.empty( ) )
-                    {
-                        const value_t* named = find( triggers->list.front( ), "EntityName" );
-                        if ( named != nullptr && named->kind == value_t::kind_t::text )
-                            play.trigger = named->text;
-                    }
-                    const value_t* plug = plugs != nullptr ? find( *plugs, "PlayAnimation" ) : nullptr;
-                    const value_t* links = plug != nullptr ? find( *plug, "Connections" ) : nullptr;
-                    if ( links != nullptr && links->kind == value_t::kind_t::list )
-                    {
-                        for ( const value_t& link : links->list )
-                        {
-                            const value_t* named = find( link, "EntityName" );
-                            if ( named != nullptr && named->kind == value_t::kind_t::text
-                                && !named->text.empty( ) )
-                                m_play.emplace( named->text, play );
-                        }
-                    }
-                    // The action entity itself, so a "Trigger" event arriving
-                    // from the event graph has something to land on. Its own
-                    // targets are not stored here any more: they are the
-                    // resolved connections of its "PlayAnimation" OUTPUT plug
-                    // in m_graph, which is where retail keeps them too.
-                    //
-                    // "One Shot" latches the ENTITY, not the clip -
-                    // VuPlayAnimationEntity_onTriggerPlug @0x5f5e80 sets the
-                    // byte at this+168 on the first trigger and returns early
-                    // ever after, so a one-shot action fires once per load.
-                    if ( !here.empty( ) )
-                    {
-                        action_t act{};
-                        act.one_shot = play.one_shot;
-                        m_actions.emplace( here, act );
-                    }
+                    const value_t* named = find( triggers->list.front( ), "EntityName" );
+                    if ( named != nullptr && named->kind == value_t::kind_t::text )
+                        link.first = named->text;
                 }
+                const value_t* plug = plugs != nullptr ? find( *plugs, "PlayAnimation" ) : nullptr;
+                const value_t* targets = plug != nullptr ? find( *plug, "Connections" ) : nullptr;
+                if ( targets != nullptr && targets->kind == value_t::kind_t::list )
+                    for ( const value_t& target : targets->list )
+                    {
+                        const value_t* named = find( target, "EntityName" );
+                        if ( named != nullptr && named->kind == value_t::kind_t::text && !named->text.empty( ) )
+                            link.second.push_back( named->text );
+                    }
             }
         }
 
@@ -795,31 +582,9 @@ private:
                 m_child_overrides = nullptr;
                 visit( child, world, true, nullptr, here );
                 m_child_overrides = saved_overrides;
-                // A direct child reports a rotator it created exactly once.
-                if ( m_pending_rotator >= 0 )
-                {
-                    rotator = m_pending_rotator;
-                    m_pending_rotator = -1;
-                }
             }
         }
 
-        // A motion entity is registered under the "Motion" category and sits
-        // as a CHILD of the thing it drives - every VuRotateMotionEntity in
-        // Hydroelectric is a "RotateMotion1" beneath a "WarningSiren" - and it
-        // can arrive through a template expansion, so it is only knowable
-        // after the subtree has been walked. Only the DIRECT parent adopts:
-        // letting every ancestor adopt made one rotator swallow 1918
-        // placements instead of its siren's 2.
-        //
-        // The placements themselves are made from the retail tree after this
-        // walk, so the adopter is recorded here (post-order: an inner adopter
-        // before an outer one) and adopts there (adopt_rotators).
-        if ( rotator >= 0 && !mine )
-            m_adopters.emplace_back( rotator, here );
-        // Report upward: this entity's own rotator if it IS the motion entity,
-        // otherwise nothing (a child's has already been consumed above).
-        m_pending_rotator = mine ? rotator : -1;
     }
 
     // adopt_rotator: motion.hxx
@@ -950,7 +715,7 @@ private:
         m_override_components.clear( );
         m_collect = nullptr;
         m_adopters.clear( );
-        m_pending_rotator = -1;
+        m_play_links.clear( );
         m_rig.clear( );
         m_type_census.clear( );
         m_authored_keys.clear( );
@@ -1160,6 +925,9 @@ private:
     // (rotator, the entity that adopts it - the motion entity's direct
     // parent), in visit()'s post-order; consumed by adopt_rotators.
     std::vector< std::pair< int, std::string > > m_adopters;
+    // Each VuPlayAnimationEntity's script plugs, by its path: the Trigger plug's first connection and the PlayAnimation
+    // plug's targets (the event-graph walk reads them; the properties come from the tree).
+    std::map< std::string, std::pair< std::string, std::vector< std::string > > > m_play_links;
     // The template instance override map in scope for the current child loop,
     // and the single override handed to the next visit().
     const value_t* m_child_overrides = nullptr;
@@ -1167,7 +935,6 @@ private:
     int m_overrides_seen = 0;
     int m_overrides_placed = 0;
     std::map< std::string, int > m_override_components;
-    int m_pending_rotator = -1;
     std::map< std::string, int > m_type_census;
     std::map< std::string, std::set< std::string > > m_authored_keys;
     std::map< std::string, std::string > m_entity_type;
@@ -1272,10 +1039,9 @@ private:
         std::string path;
         std::string node;
         float position[ 3 ]{};
-        // A VuRotation3dProperty, so the authored numbers are DEGREES per axis
-        // - confirmed in VuAttachEntity_ctor @0x5f4fa0, where "Relative
-        // Position" is a plain VuBasicProperty<VuVector3> and "Relative
-        // Rotation" is the rotation class.
+        // RADIANS: the loaded target - the level authors degrees and the
+        // property's filter 0x45CB50 converts (VuAttachEntity_ctor 0x5f4fa0
+        // re-tags "Relative Rotation" to that class, 0x73D24C).
         float rotation[ 3 ]{};
         bool at_start = false;
         // The live half. VuOffsetAttachComponent_attach @0x5af7a0 refuses a

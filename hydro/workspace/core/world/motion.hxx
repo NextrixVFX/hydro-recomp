@@ -171,13 +171,19 @@ inline void c_world::update_attaches( )
 
         // The relative matrix, exactly as VuAttachEntity_doAttach
         // @0x5f5550 builds it: identity, multiplied by
-        // VuMatrix_fromEuler("Relative Rotation"), then the three
-        // translation slots overwritten with "Relative Position" - which
-        // is what math_transform composes, with the rotation in degrees
-        // because the property is a VuRotation3dProperty.
-        const float scale[ 3 ] = { 1.0f, 1.0f, 1.0f };
+        // VuMatrix_fromEuler("Relative Rotation") - 0x410A40, 0x435640 on
+        // +0x74 (already RADIANS: the property's filter 0x45CB50 converted
+        // it), 0x4078C0 - then the three translation slots overwritten with
+        // "Relative Position" (+0x64..+0x6C).
+        float identity[ 16 ];
+        vu_identity( identity );
+        float euler[ 16 ];
+        vu_matrix_from_euler( euler, join.rotation );
         float relative[ 16 ]{};
-        math_transform( relative, join.position, join.rotation, scale );
+        hull_multiply( identity, relative, euler );
+        relative[ 12 ] = join.position[ 0 ];
+        relative[ 13 ] = join.position[ 1 ];
+        relative[ 14 ] = join.position[ 2 ];
         float placed[ 16 ]{};
         math_multiply( placed, seat->second.data( ), relative );
         if ( m_coronas.owns( child ) )

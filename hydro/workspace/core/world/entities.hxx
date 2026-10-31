@@ -70,10 +70,118 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     int pfx_placed = 0;
     int pfx_unplaced = 0;
     int triggers_unplaced = 0;
+    // The logic / action / motion / settings consumers (engine entity/actions.hxx).
+    std::vector< rotator_t > fresh_rotators;
+    std::map< const entity_t*, int > rotator_of;
+    std::vector< std::pair< int, std::string > > fresh_adopters;
+    int rotators_unplaced = 0;
+    std::vector< attach_t > fresh_attaches;
+    std::map< std::string, play_t > fresh_play;
+    std::map< std::string, action_t > fresh_actions;
+    std::map< std::string, delay_t > fresh_delays;
+    std::map< std::string, std::string > fresh_events;
+    std::map< std::string, bool > fresh_booleans;
+    std::map< std::string, front_end_camera_t > fresh_front_end;
+    std::map< std::string, filter_t > fresh_filters;
+    std::vector< std::string > fresh_initialized;
+    std::set< std::string > fresh_ifs;
+    std::string fresh_sky;
     // The event graph addresses an entity by its names below the project
     // root, '/'-joined.
     const auto walk = [ & ]( const auto& self, entity_t& e, const std::string& trail ) -> void
     {
+        // VuRotateMotionEntity: Axis / Speed (radians) / Local, its base the
+        // transform world; its DIRECT parent adopts it (recorded after the
+        // parent's subtree, below - the old walk's post-order).
+        if ( const auto* p = entity_action< rotate_motion_properties_t >( e ); p && e.m_type == "VuRotateMotionEntity" )
+        {
+            const transform_component_t* t = entity_transform( e );
+            if ( !t || e.m_world_unknown )
+                ++rotators_unplaced;
+            else
+            {
+                rotator_t motion{};
+                motion.path = trail;
+                std::memcpy( motion.base, t->world, sizeof( motion.base ) );
+                std::memcpy( motion.axis, p->axis, sizeof( motion.axis ) );
+                motion.speed = p->speed;
+                motion.local = p->local != 0;
+                rotator_of[ &e ] = static_cast< int >( fresh_rotators.size( ) );
+                fresh_rotators.push_back( motion );
+            }
+        }
+        // VuAttachEntity: the relative position / rotation (radians) and node
+        // name; its Parent / Child refs are the script component's (m_refs).
+        if ( const auto* p = entity_action< attach_properties_t >( e ); p && e.m_type == "VuAttachEntity" )
+        {
+            attach_t join{};
+            join.path = trail;
+            join.at_start = p->attach_at_start != 0;
+            std::memcpy( join.position, p->relative_position, sizeof( join.position ) );
+            std::memcpy( join.rotation, p->relative_rotation, sizeof( join.rotation ) );
+            join.node = p->node_name;
+            fresh_attaches.push_back( std::move( join ) );
+        }
+        // VuPlayAnimationEntity: the clip and its params from the loaded
+        // targets; which props it drives and what triggers it are its script
+        // component's plugs, collected by the event-graph walk (m_play_links).
+        if ( const auto* p = entity_action< play_animation_properties_t >( e ); p && e.m_type == "VuPlayAnimationEntity" &&
+             !p->animation_asset.empty( ) )
+        {
+            play_t play{};
+            play.clip = p->animation_asset;
+            play.timed = p->timed_event_asset;
+            play.path = trail;
+            play.start = p->start_time;
+            play.looping = p->looping != 0;
+            play.one_shot = p->one_shot != 0;
+            play.factor = p->time_factor;
+            const auto links = m_play_links.find( trail );
+            if ( links != m_play_links.end( ) )
+            {
+                play.trigger = links->second.first;
+                for ( const std::string& target : links->second.second )
+                    fresh_play.emplace( target, play );
+            }
+            if ( !trail.empty( ) )
+            {
+                action_t act{};
+                act.one_shot = play.one_shot;
+                fresh_actions.emplace( trail, act );
+            }
+        }
+        if ( const auto* p = entity_action< delay_properties_t >( e ); p && e.m_type == "VuDelayEntity" )
+        {
+            delay_t wait{};
+            wait.delay = p->delay;
+            wait.window = p->random_window;
+            fresh_delays.emplace( trail, wait );
+        }
+        if ( const auto* p = entity_action< generic_event_properties_t >( e ); p && e.m_type == "VuGenericEventEntity" )
+            fresh_events.emplace( trail, p->event_name );
+        if ( const auto* p = entity_action< boolean_properties_t >( e ); p && e.m_type == "VuBooleanEntity" )
+            fresh_booleans.emplace( trail, p->value != 0 );
+        if ( const auto* p = entity_action< front_end_camera_properties_t >( e ); p && e.m_type == "VuSetFrontEndCameraEntity" && !trail.empty( ) )
+        {
+            front_end_camera_t shot{};
+            shot.interpolation_time = p->interpolation_time;
+            shot.modify_eye = p->modify_eye != 0;
+            shot.modify_target = p->modify_target != 0;
+            shot.modify_far = p->modify_far != 0;
+            std::memcpy( shot.eye, p->eye, sizeof( shot.eye ) );
+            std::memcpy( shot.target, p->target, sizeof( shot.target ) );
+            shot.far_plane = p->far_plane;
+            fresh_front_end.emplace( trail, shot );
+        }
+        if ( const auto* p = entity_action< sky_box_properties_t >( e ); p && e.m_type == "VuSkyBoxEntity" && !p->model_asset.empty( ) )
+            fresh_sky = p->model_asset;
+        // The three graph nodes that carry no property: their path is the state.
+        if ( e.m_ctor && e.m_type == "VuOneShotFilterEntity" )
+            fresh_filters.emplace( trail, filter_t{ } );
+        if ( e.m_ctor && e.m_type == "VuOnProjectInitializedEntity" )
+            fresh_initialized.push_back( trail );
+        if ( e.m_ctor && e.m_type == "VuIfEntity" )
+            fresh_ifs.insert( trail );
         // VuTriggerPlaneEntity / VuTriggerBoxEntity (engine entity/trigger.hxx):
         // the volume is the transform - VuTriggerPlaneEntity_bounds 0x5D18B0
         // composes VuMatrix_multiply(fromScale(scale +0xB0), out, world
@@ -242,8 +350,30 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
         }
         for ( auto& child : e.m_children )
             self( self, *child, trail.empty( ) ? child->m_name : trail + "/" + child->m_name );
+        // After the subtree, as the old walk recorded it: this entity adopts each
+        // motion entity that is its DIRECT child.
+        for ( auto& child : e.m_children )
+        {
+            const auto it = rotator_of.find( child.get( ) );
+            if ( it != rotator_of.end( ) )
+                fresh_adopters.emplace_back( it->second, trail );
+        }
     };
     walk( walk, *m_tree, std::string( ) );
+    m_rotators = std::move( fresh_rotators );
+    m_adopters = std::move( fresh_adopters );
+    m_attaches = std::move( fresh_attaches );
+    m_play = std::move( fresh_play );
+    m_actions = std::move( fresh_actions );
+    m_delays = std::move( fresh_delays );
+    m_events = std::move( fresh_events );
+    m_booleans = std::move( fresh_booleans );
+    m_front_end = std::move( fresh_front_end );
+    m_filters = std::move( fresh_filters );
+    m_initialized = std::move( fresh_initialized );
+    m_ifs = std::move( fresh_ifs );
+    if ( !fresh_sky.empty( ) )
+        m_sky = fresh_sky;
     adopt_rotators( std::move( collected ) );
     for ( trigger_t& gate : fresh_triggers )
         m_triggers.add( std::move( gate ) );
