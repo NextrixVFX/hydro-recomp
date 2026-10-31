@@ -140,6 +140,9 @@
     <ClInclude Include="workspace\core\assets\tree.hxx">
       <Filter>workspace\core\assets</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\collision\box.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\collision\boxbox.hxx">
       <Filter>workspace\core\collision</Filter>
     </ClInclude>
@@ -156,6 +159,9 @@
       <Filter>workspace\core\collision</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\collision\convex.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\cylinder.hxx">
       <Filter>workspace\core\collision</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\collision\dbvt.hxx">
@@ -227,13 +233,43 @@
     <ClInclude Include="workspace\core\entity\bind.hxx">
       <Filter>workspace\core\entity</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\entity\corona.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\entity\draw.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\entity\dynamic.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\entity\gfx.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\entity\light.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\entity\node.hxx">
       <Filter>workspace\core\entity</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\entity\object.hxx">
       <Filter>workspace\core\entity</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\entity\pfx.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\entity\property.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\entity\registry.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\entity\rig.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\entity\schema.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\entity\trigger.hxx">
       <Filter>workspace\core\entity</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\render\device.hxx">

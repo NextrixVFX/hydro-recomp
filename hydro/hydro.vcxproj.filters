@@ -34,6 +34,9 @@
     <Filter Include="workspace\utility">
       <UniqueIdentifier>{7d7beff5-138a-5386-a875-0e95733090cb}</UniqueIdentifier>
     </Filter>
+    <Filter Include="workspace\utility\checks">
+      <UniqueIdentifier>{18301706-7bb5-51b0-8391-7c802fef35a8}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cxx" />
@@ -69,6 +72,9 @@
     <ClInclude Include="workspace\core\boat\construct.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\boat\driver.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\boat\entity.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
@@ -84,6 +90,12 @@
     <ClInclude Include="workspace\core\boat\parts.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\boat\sections.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\boat\state.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\boat\steer.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
@@ -97,6 +109,9 @@
       <Filter>workspace\core\game</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\game\input.hxx">
+      <Filter>workspace\core\game</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\game\types.hxx">
       <Filter>workspace\core\game</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\light\rig.hxx">
@@ -128,6 +143,18 @@
     </ClInclude>
     <ClInclude Include="workspace\core\world\world.hxx">
       <Filter>workspace\core\world</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\checks\boat.hxx">
+      <Filter>workspace\utility\checks</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\checks\ui.hxx">
+      <Filter>workspace\utility\checks</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\checks\water.hxx">
+      <Filter>workspace\utility\checks</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\checks\world.hxx">
+      <Filter>workspace\utility\checks</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

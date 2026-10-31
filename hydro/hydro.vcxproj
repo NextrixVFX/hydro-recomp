@@ -113,16 +113,20 @@
     <ClInclude Include="workspace\core\assets\skin.hxx" />
     <ClInclude Include="workspace\core\assets\texture.hxx" />
     <ClInclude Include="workspace\core\boat\construct.hxx" />
+    <ClInclude Include="workspace\core\boat\driver.hxx" />
     <ClInclude Include="workspace\core\boat\entity.hxx" />
     <ClInclude Include="workspace\core\boat\fluid.hxx" />
     <ClInclude Include="workspace\core\boat\hull.hxx" />
     <ClInclude Include="workspace\core\boat\math.hxx" />
     <ClInclude Include="workspace\core\boat\parts.hxx" />
+    <ClInclude Include="workspace\core\boat\sections.hxx" />
+    <ClInclude Include="workspace\core\boat\state.hxx" />
     <ClInclude Include="workspace\core\boat\steer.hxx" />
     <ClInclude Include="workspace\core\boat\tick.hxx" />
     <ClInclude Include="workspace\core\boat\update.hxx" />
     <ClInclude Include="workspace\core\game\game.hxx" />
     <ClInclude Include="workspace\core\game\input.hxx" />
+    <ClInclude Include="workspace\core\game\types.hxx" />
     <ClInclude Include="workspace\core\light\rig.hxx" />
     <ClInclude Include="workspace\core\trigger\set.hxx" />
     <ClInclude Include="workspace\core\trigger\volume.hxx" />
@@ -133,6 +137,10 @@
     <ClInclude Include="workspace\core\world\water.hxx" />
     <ClInclude Include="workspace\core\world\wave.hxx" />
     <ClInclude Include="workspace\core\world\world.hxx" />
+    <ClInclude Include="workspace\utility\checks\boat.hxx" />
+    <ClInclude Include="workspace\utility\checks\ui.hxx" />
+    <ClInclude Include="workspace\utility\checks\water.hxx" />
+    <ClInclude Include="workspace\utility\checks\world.hxx" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\engine\engine.vcxproj">
