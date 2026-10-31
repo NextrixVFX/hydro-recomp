@@ -1,8 +1,11 @@
-﻿#pragma once
+#pragma once
 
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <emmintrin.h>
+#include <vector>
 
 // The VuWater*Wave family: the thirteen wave kinds that displace a water
 // surface. The ocean three live in water.hxx because they carry a whole
@@ -517,6 +520,672 @@ inline void banked_turn_vertex( const banked_turn_t& wave, float x, float y,
     const float across = angle / wave.extent;
     const float lift = ( ( band + 1.0f ) * 0.5f ) * wave.amplitude;
     height += wave_edge( across, wave.edge ) * lift;
+}
+
+// THE RECTANGULAR AND CIRCULAR OCEAN WAVES' BASE KERNELS, @0x59ed30 and
+// @0x59fed0 (slot 3 @0x59da30 / @0x59dec0, both flags clear), and their
+// ctx+100 variants @0x59f2b0 / @0x5a03f0, which are the same body behind the
+// family's per-vertex tag test.
+//
+// They read a DOUBLE-BUFFERED field of bicubic bezier patches, 16 floats per
+// cell, built elsewhere (VuWaterOceanWave_BuildBezierPatches @0x59d6c0, not
+// recreated here). Buffer k sits at wave +176 + 16k: its time as a double at
+// +0 and its patch array at +12. The members, as the kernels read them:
+//
+//   +108  shift (log2 of the field size)     +116  mask (size - 1)
+//   +120  the field scale                    +128 / +132  the rotation's
+//                                                         sine / cosine
+//   +136  the current time, a double         +164 / +168  current / previous
+//                                                         buffer index
+//   +208 / +212  the centre
+//   rectangular: +224 / +228 the sizes, +232 / +236 the two decays
+//   circular:    +224 the radius, +228 the decay
+//
+// Each vertex: rotate (dx, dy) by the field's angle and scale it; the cell is
+// nearbyint(v - 0.5) on each axis, and v minus that integer is the patch
+// parameter. THE ROUNDING IS AN x87 `fld; fsub 0.5; fistp` - round to nearest
+// EVEN on the exact difference - so an exact tie lands on the even cell and
+// the parameter can come out as exactly 1.0; floor or truncation would not.
+// The footprint test and its fade use the UNROTATED offset on the rectangle
+// and the rotated one's length on the circle. The height takes the current
+// field times the fade; displacement[ 2 ] takes the difference against the
+// previous field divided by the two buffers' time gap - a vertical velocity -
+// computed in DOUBLE (cvtps2pd, subsd, divsd, cvtpd2ps).
+struct ocean_patch_t
+{
+    int shift = 0;
+    int mask = 0;
+    float scale = 0.0f;
+    float sine = 0.0f;
+    float cosine = 1.0f;
+    double now = 0.0;
+    int current = 0;
+    int previous = 0;
+    double time[ 2 ]{};
+    const float* patches[ 2 ]{};
+    float centre_x = 0.0f;
+    float centre_y = 0.0f;
+    float shape[ 4 ]{};   // rect: size x, size y, decay x, decay y; circle: radius, decay
+};
+
+// One patch, in retail's term order: the control points are NOT visited in
+// index order (0, 11, 10, 3 / 4, 12, 15, 9 / 5, 13, 14, 8 / 1, 6, 7, 2), the
+// first row is summed before its u weight is applied and every later term is
+// weighted on its own. Retail evaluates it twice per vertex with identical
+// weights, once per buffer.
+inline float ocean_patch_eval( const float* p, const float* bu, const float* bw )
+{
+    float t = p[ 11 ] * bw[ 1 ];
+    t = t + p[ 0 ] * bw[ 0 ];
+    t = t + p[ 10 ] * bw[ 2 ];
+    t = t + p[ 3 ] * bw[ 3 ];
+    t = t * bu[ 0 ];
+    t = t + ( p[ 4 ] * bw[ 0 ] ) * bu[ 1 ];
+    t = t + ( p[ 12 ] * bw[ 1 ] ) * bu[ 1 ];
+    t = t + ( p[ 15 ] * bw[ 2 ] ) * bu[ 1 ];
+    t = t + ( p[ 9 ] * bw[ 3 ] ) * bu[ 1 ];
+    t = t + ( p[ 5 ] * bw[ 0 ] ) * bu[ 2 ];
+    t = t + ( p[ 13 ] * bw[ 1 ] ) * bu[ 2 ];
+    t = t + ( p[ 14 ] * bw[ 2 ] ) * bu[ 2 ];
+    t = t + ( p[ 8 ] * bw[ 3 ] ) * bu[ 2 ];
+    t = t + ( p[ 1 ] * bw[ 0 ] ) * bu[ 3 ];
+    t = t + ( p[ 6 ] * bw[ 1 ] ) * bu[ 3 ];
+    t = t + ( p[ 7 ] * bw[ 2 ] ) * bu[ 3 ];
+    t = t + ( p[ 2 ] * bw[ 3 ] ) * bu[ 3 ];
+    return t;
+}
+
+// The cubic bernstein weights retail builds: (a*a)*a, ((3t)*a)*a, ((3t)*t)*a,
+// (t*t)*t with a = 1 - t.
+inline void ocean_bernstein( float t, float* b )
+{
+    const float a = 1.0f - t;
+    const float t3 = t * 3.0f;
+    b[ 0 ] = ( a * a ) * a;
+    b[ 1 ] = ( t3 * a ) * a;
+    b[ 2 ] = ( t3 * t ) * a;
+    b[ 3 ] = ( t * t ) * t;
+}
+
+// fld m32; fsub 0.5 (m32); fistp m32: the difference is exact in the x87's
+// extended precision and so is it in a double, and cvtsd2si rounds to nearest
+// even under the default MXCSR as fistp does under the default control word -
+// including the 0x80000000 "indefinite" on overflow.
+inline int ocean_cell( float v )
+{
+    return _mm_cvtsd_si32( _mm_set_sd( static_cast< double >( v ) - 0.5 ) );
+}
+
+// comiss a, b; ja: a > b, false when unordered.
+inline bool ocean_gt( float a, float b )
+{
+    return _mm_comigt_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) != 0;
+}
+
+inline void ocean_patch_vertex( const ocean_patch_t& wave, bool circle, float x, float y,
+    float* displacement, float& height )
+{
+    const float dy = y - wave.centre_y;
+    const float dx = x - wave.centre_x;
+    const float a = ( wave.cosine * dx ) - ( wave.sine * dy );
+    const float b = ( wave.sine * dx ) + ( wave.cosine * dy );
+    const float va = a * wave.scale;
+    const float vb = b * wave.scale;
+    const int ia = ocean_cell( va );
+    const int ib = ocean_cell( vb );
+    const float u = va - static_cast< float >( ia );
+    const float w = vb - static_cast< float >( ib );
+    const int cell = ( ( ib & wave.mask ) << wave.shift ) + ( ia & wave.mask );
+
+    float fade = 1.0f;
+    float fade_b = 1.0f;
+    if ( !circle )
+    {
+        const float ua = std::fabs( ( 2.0f / wave.shape[ 0 ] ) * dx );
+        if ( !ocean_gt( 1.0f, ua ) )
+            return;
+        const float ub = std::fabs( ( 2.0f / wave.shape[ 1 ] ) * dy );
+        if ( !ocean_gt( 1.0f, ub ) )
+            return;
+        if ( ocean_gt( ua, wave.shape[ 2 ] ) )
+            fade = ( ua - 1.0f ) / ( wave.shape[ 2 ] - 1.0f );
+        if ( ocean_gt( ub, wave.shape[ 3 ] ) )
+            fade_b = ( ub - 1.0f ) / ( wave.shape[ 3 ] - 1.0f );
+    }
+    else
+    {
+        const float r = _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( b * b ) + ( a * a ) ) ) ) / wave.shape[ 0 ];
+        if ( !ocean_gt( 1.0f, r ) )
+            return;
+        if ( ocean_gt( r, wave.shape[ 1 ] ) )
+            fade = ( r - 1.0f ) / ( wave.shape[ 1 ] - 1.0f );
+    }
+
+    float bu[ 4 ];
+    float bw[ 4 ];
+    ocean_bernstein( u, bu );
+    ocean_bernstein( w, bw );
+    const float* now = wave.patches[ wave.current ] + 16 * cell;
+    const float* before = wave.patches[ wave.previous ] + 16 * cell;
+    float lift = ocean_patch_eval( now, bu, bw ) * fade;
+    float last = ocean_patch_eval( before, bu, bw ) * fade;
+    if ( !circle )
+    {
+        lift = lift * fade_b;
+        last = last * fade_b;
+    }
+    height = height + lift;
+    const double rate = static_cast< double >( lift - last ) / ( wave.now - wave.time[ wave.previous ] );
+    displacement[ 2 ] = static_cast< float >( rate ) + displacement[ 2 ];
+}
+
+// VuWaterWakeWave's base kernel @0x52ca60 (slot 3 @0x52c260, both flags
+// clear) and its ctx+100 variant @0x52ce20. A wake wave is the stretch of a
+// boat's wake between TWO SEGMENT RECORDS, each 13 floats, copied in by the
+// constructor @0x52beb0 from the same 0x34-byte source into +88 and +140 (the
+// second is overwritten as the wake moves on). Each record, named for what
+// this kernel does with the slot (the authoring side is the boat's, not read):
+//
+//   +0 / +4  a point on the cross-section    +16 / +20  its forward direction
+//   +24  the life                            +28  the fade time
+//   +32  the amplitude                       +36  the radius
+//   +40  the speed                           +44  the frequency
+//   +48  the age, advanced by the shared tick @0x52c210
+//
+// and on the wave itself +76 / +80 the inner / outer radius ratios and +84
+// the height scale. A vertex counts only BETWEEN the two cross-sections (its
+// signed distances to them have opposite signs); every record field is then
+// blended at t = dB / (dB - dA), the vertex must lie inside the blended
+// radius, and the ring that has had time to travel out to it contributes a
+// sine. HEIGHT ONLY.
+//
+// THE SINE IS x87 `fsincos` on the folded phase, stored to a float. The
+// oracle measures it under Unicorn, whose fsincos is a host double sine; the
+// form below - the CRT double sine narrowed - matches those vectors. Real
+// hardware's fsincos is NOT measured here, and its float rounding could
+// differ in a rare last bit.
+struct wake_record_t
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float w = 0.0f;
+    float direction_x = 0.0f;
+    float direction_y = 0.0f;
+    float life = 0.0f;
+    float fade_time = 0.0f;
+    float amplitude = 0.0f;
+    float radius = 0.0f;
+    float speed = 0.0f;
+    float frequency = 0.0f;
+    float age = 0.0f;
+};
+static_assert( sizeof( wake_record_t ) == 0x34, "the constructor's 0x34-byte copy" );
+
+struct wake_wave_t
+{
+    float inner_ratio = 0.0f;   // +76
+    float outer_ratio = 0.0f;   // +80
+    float scale = 0.0f;         // +84
+    wake_record_t a{};          // +88
+    wake_record_t b{};          // +140
+};
+
+inline void wake_vertex( const wake_wave_t& wave, float x, float y, float* displacement, float& height )
+{
+    ( void )displacement;
+    const wake_record_t& a = wave.a;
+    const wake_record_t& b = wave.b;
+    const float da = ( a.direction_x * ( x - a.x ) ) + ( a.direction_y * ( y - a.y ) );
+    const float db = ( b.direction_y * ( y - b.y ) ) + ( b.direction_x * ( x - b.x ) );
+    if ( !ocean_gt( 0.0f, db * da ) )
+        return;
+    const float t = db / ( db - da );
+    const float s = 1.0f - t;
+    const float px = ( a.x * t ) + ( b.x * s );
+    const float py = ( a.y * t ) + ( b.y * s );
+    const float radius = ( b.radius * s ) + ( a.radius * t );
+    const float ey = y - py;
+    const float ex = x - px;
+    const float d2 = ( ey * ey ) + ( ex * ex );
+    if ( !ocean_gt( radius * radius, d2 ) )
+        return;
+    const float age = ( b.age * s ) + ( a.age * t );
+    const float speed = ( b.speed * s ) + ( a.speed * t );
+    const float d = _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( d2 ) ) );
+    // maxss( 0, q ): q when 0 is not greater, so a NaN q passes through.
+    const float travelled = _mm_cvtss_f32( _mm_max_ss( _mm_setzero_ps( ),
+        _mm_set_ss( d - ( wave.inner_ratio * radius ) ) ) );
+    const float local = age - ( travelled / speed );
+    if ( !ocean_gt( local, 0.0f ) )
+        return;
+    const float life = ( b.life * s ) + ( a.life * t );
+    if ( !ocean_gt( life, age ) )
+        return;
+    float amplitude = ( b.amplitude * s ) + ( a.amplitude * t );
+    const float k = d / radius;
+    const float frequency = ( b.frequency * s ) + ( a.frequency * t );
+    const float fade_time = ( b.fade_time * s ) + ( a.fade_time * t );
+    if ( ocean_gt( wave.inner_ratio, k ) )
+        amplitude = ( k / wave.inner_ratio ) * amplitude;
+    if ( ocean_gt( k, wave.outer_ratio ) )
+        amplitude = ( ( 1.0f - k ) / ( 1.0f - wave.outer_ratio ) ) * amplitude;
+    const float ratio = ( life - age ) / fade_time;
+    const float phase = ( frequency * local ) + 3.1415927f;
+    // minss( ratio, 1 ): 1 when ratio is not less, so a NaN ratio gives 1.
+    const float weight = _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( ratio ), _mm_set_ss( 1.0f ) ) ) * amplitude;
+    const float sine = static_cast< float >( std::sin( static_cast< double >( wave_fold( phase ) ) ) );
+    height = ( ( sine * weight ) * wave.scale ) + height;
+}
+
+// The tick both wake waves share @0x52c210 (thiscall, float dt; al): both
+// records age by dt, and the wave stays alive unless its refcount (+4) is 1 AND
+// both records are past their life.
+inline bool wake_tick( wake_wave_t& wave, int refcount, float dt )
+{
+    wave.a.age = dt + wave.a.age;
+    wave.b.age = dt + wave.b.age;
+    if ( refcount != 1 )
+        return true;
+    return !( ocean_gt( wave.a.age, wave.a.life ) && ocean_gt( wave.b.age, wave.b.life ) );
+}
+
+// ---------------------------------------------------------------------------
+// THE WAVE ENTITIES' WAVE CREATION: each entity's slot 6 packs a descriptor
+// from its loaded properties and its transform component (entity +0x50), and
+// its allocator on g_vuwater runs operator new, the wave's constructor, a pool
+// node and the tree insert 0x529a90. Recreated here is the descriptor and the
+// constructor - the members a wave object holds once built - as an IMAGE of
+// the object's words, so it can be compared with retail's word for word. The
+// pool and the tree are VuWater's, not this.
+//
+// Two words of every wave's bounds, +24 and +40, are written from STACK
+// TEMPORARIES the constructors never initialise (the high halves of the movq
+// pairs that store +20 and +36): their value is UNKNOWN and nothing here
+// reproduces it.
+//
+// The ocean constructor's spectrum, field and patch arrays (BuildSpectrum
+// @0x59d220 onward) are not part of the image: c_ocean in water.hxx carries
+// its own, and that path is not yet a transliteration.
+struct wave_image_t
+{
+    std::uint32_t word[ 64 ]{};
+    bool known[ 64 ]{};
+
+    void set( int offset, std::uint32_t value )
+    {
+        word[ offset / 4 ] = value;
+        known[ offset / 4 ] = true;
+    }
+    void setf( int offset, float value )
+    {
+        std::uint32_t bits;
+        std::memcpy( &bits, &value, 4 );
+        set( offset, bits );
+    }
+    float f( int offset ) const
+    {
+        float value;
+        std::memcpy( &value, &word[ offset / 4 ], 4 );
+        return value;
+    }
+};
+
+// What a constructor reads: the entity's words and its transform component's,
+// by byte offset.
+struct wave_source_t
+{
+    const std::uint32_t* entity = nullptr;      // entity words from +0x60
+    const std::uint32_t* transform = nullptr;   // component words from +0x80
+    std::uint32_t e( int offset ) const { return entity[ ( offset - 0x60 ) / 4 ]; }
+    std::uint32_t t( int offset ) const { return transform[ ( offset - 0x80 ) / 4 ]; }
+};
+
+inline float wave_bits( std::uint32_t u )
+{
+    float value;
+    std::memcpy( &value, &u, 4 );
+    return value;
+}
+
+// VuWaterWave's constructor @0x5a6390 (called with 0): +56 / +60 / +64 / +68
+// zero, +72 = 1.0. Its +12 .. +52 defaults are overwritten by every subclass.
+inline void wave_base( wave_image_t& w )
+{
+    w.set( 56, 0 );
+    w.set( 60, 0 );
+    w.set( 64, 0 );
+    w.set( 68, 0 );
+    w.set( 72, 0x3F800000u );
+}
+
+// The x87 fsin / fcos / fsincos the constructors run on a float: measured
+// under Unicorn, whose x87 trig is a host double function - see wake_vertex.
+inline float wave_x87_sin( float a ) { return static_cast< float >( std::sin( static_cast< double >( a ) ) ); }
+inline float wave_x87_cos( float a ) { return static_cast< float >( std::cos( static_cast< double >( a ) ) ); }
+
+// The ocean waves' shared constructor @0x59cb10 and the scalar half of
+// VuWaterOceanWave_Update @0x59ccb0 on descriptor words d[ 0 .. 7 ] (the
+// entity's +0x68 .. +0x87: Complexity, Bin Siz, Wave Direction, Gravity, Wind
+// Speed, Directional Power, Suppression Wave Length, Height Multiplier).
+inline void ocean_construct( wave_image_t& w, const std::uint32_t* d )
+{
+    wave_base( w );
+    int shift = 0;
+    int size = 1;
+    int mask = 0;
+    if ( d[ 0 ] != 0 )   // the complexity differs from the ctor's zero
+    {
+        shift = static_cast< int >( d[ 0 ] );
+        size = 1 << shift;
+        mask = size - 1;
+    }
+    for ( int k = 0; k < 8; ++k )
+        w.set( 76 + 4 * k, d[ k ] );
+    w.set( 108, static_cast< std::uint32_t >( shift ) );
+    w.set( 112, static_cast< std::uint32_t >( size ) );
+    w.set( 116, static_cast< std::uint32_t >( mask ) );
+    w.setf( 120, static_cast< float >( size ) / wave_bits( d[ 1 ] ) );
+    const float angle = wave_bits( d[ 2 ] ) - 3.1415927f;
+    w.setf( 124, angle );
+    w.setf( 128, wave_x87_sin( angle ) );
+    w.setf( 132, wave_x87_cos( angle ) );
+    // +136 the time (ctor 0.0); buffer 0's time = it; buffer 1's = its own
+    // zero minus 1.0; current 0, previous 1.
+    w.set( 136, 0 );
+    w.set( 140, 0 );
+    w.set( 164, 0 );
+    w.set( 168, 1 );
+    w.set( 176, 0 );
+    w.set( 180, 0 );
+    w.set( 192, 0 );
+    w.set( 196, 0xBFF00000u );
+}
+
+// VuRectangularOceanWaveEntity_onEnable @0x5d8ce0: buildRegionDesc @0x5d8e20,
+// then VuWater_createWave @0x528b40 -> VuWaterRectangularOceanWave_ctor
+// @0x59d940, whose bounds are @0x59dbf0.
+inline wave_image_t rectangular_ocean_create( const wave_source_t& s )
+{
+    std::uint32_t d[ 16 ];
+    for ( int k = 0; k < 8; ++k )
+        d[ k ] = s.e( 0x68 + 4 * k );
+    for ( int k = 0; k < 4; ++k )
+        d[ 8 + k ] = s.t( 0x80 + 4 * k );
+    d[ 12 ] = s.t( 0xB0 );
+    d[ 13 ] = s.t( 0xB4 );
+    d[ 14 ] = s.e( 0x8C );   // Decay Ratio X %
+    d[ 15 ] = s.e( 0x90 );   // Decay Ratio Y %
+    wave_image_t w{};
+    ocean_construct( w, d );
+    for ( int k = 0; k < 8; ++k )
+        w.set( 208 + 4 * k, d[ 8 + k ] );
+    const float half_y = w.f( 228 ) * 0.5f;
+    const float half_x = w.f( 224 ) * 0.5f;
+    const float y = w.f( 212 );
+    const float x = w.f( 208 );
+    w.setf( 12, x - half_x );
+    w.setf( 16, y - half_y );
+    w.set( 20, w.word[ 216 / 4 ] );
+    w.setf( 28, half_x + x );
+    w.setf( 32, half_y + y );
+    w.set( 36, w.word[ 216 / 4 ] );
+    w.setf( 44, x );
+    w.setf( 48, y );
+    w.setf( 52, _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( half_y * half_y ) + ( half_x * half_x ) ) ) ) );
+    return w;
+}
+
+// The circular one's slot 6 @0x5d9340: its descriptor @0x5d9440 (Radius and
+// Decay Ratio % in place of the scale and the two decays), then @0x528c20 ->
+// the ctor @0x59dcd0 with its bounds inline.
+inline wave_image_t circular_ocean_create( const wave_source_t& s )
+{
+    std::uint32_t d[ 14 ];
+    for ( int k = 0; k < 8; ++k )
+        d[ k ] = s.e( 0x68 + 4 * k );
+    for ( int k = 0; k < 4; ++k )
+        d[ 8 + k ] = s.t( 0x80 + 4 * k );
+    d[ 12 ] = s.e( 0x8C );   // Radius
+    d[ 13 ] = s.e( 0x90 );   // Decay Ratio %
+    wave_image_t w{};
+    ocean_construct( w, d );
+    for ( int k = 0; k < 6; ++k )
+        w.set( 208 + 4 * k, d[ 8 + k ] );
+    const float x = w.f( 208 );
+    const float y = w.f( 212 );
+    const float r = w.f( 224 );
+    w.setf( 12, x - r );
+    w.setf( 16, y - r );
+    w.set( 20, w.word[ 216 / 4 ] );
+    w.setf( 28, r + x );
+    w.setf( 32, r + y );
+    w.set( 36, w.word[ 216 / 4 ] );
+    w.setf( 44, x );
+    w.setf( 48, y );
+    w.setf( 52, r );
+    return w;
+}
+
+// VuBankedTurnWaveEntity's slot 6 @0x5d35f0: the 40-byte descriptor is the
+// position (16 bytes from the component's +0x80), the component's +0xA8, then
+// the entity's +0x60 .. +0x73 (Outer Radius, Inner Radius, Height, Angular
+// Size, Angular Decay Ratio); @0x528f40 -> the ctor @0x5a4d80, which copies it
+// flat to +76 and derives the kernel's direction (-fsin, fcos of +92) and its
+// extent (+108 * 0.5).
+inline wave_image_t banked_turn_create( const wave_source_t& s )
+{
+    std::uint32_t d[ 10 ];
+    for ( int k = 0; k < 4; ++k )
+        d[ k ] = s.t( 0x80 + 4 * k );
+    d[ 4 ] = s.t( 0xA8 );
+    for ( int k = 0; k < 5; ++k )
+        d[ 5 + k ] = s.e( 0x60 + 4 * k );
+    wave_image_t w{};
+    wave_base( w );
+    for ( int k = 0; k < 10; ++k )
+        w.set( 76 + 4 * k, d[ k ] );
+    const float angle = w.f( 92 );
+    w.setf( 116, -wave_x87_sin( angle ) );
+    w.setf( 120, wave_x87_cos( angle ) );
+    w.setf( 124, w.f( 108 ) * 0.5f );
+    const float x = w.f( 76 );
+    const float y = w.f( 80 );
+    const float outer = w.f( 96 );
+    w.setf( 12, x - outer );
+    w.setf( 16, y - outer );
+    w.set( 20, w.word[ 84 / 4 ] );
+    w.setf( 28, x + outer );
+    w.setf( 32, y + outer );
+    w.setf( 36, w.f( 84 ) + w.f( 104 ) );
+    w.setf( 44, x );
+    w.setf( 48, y );
+    w.setf( 52, outer );
+    return w;
+}
+
+// VuWhirlpoolWaveEntity's slot 6 @0x5d7d90: the position, then the entity's
+// +0x60 .. +0x77 (whirlpool_t's note above names each); @0x528d00 -> the ctor
+// @0x5a1470, flat to +76; +116 stays the ctor's zero. Its bounds reach DOWN by
+// the depth and not up.
+inline wave_image_t whirlpool_create( const wave_source_t& s )
+{
+    wave_image_t w{};
+    wave_base( w );
+    for ( int k = 0; k < 4; ++k )
+        w.set( 76 + 4 * k, s.t( 0x80 + 4 * k ) );
+    for ( int k = 0; k < 6; ++k )
+        w.set( 92 + 4 * k, s.e( 0x60 + 4 * k ) );
+    w.set( 116, 0 );
+    const float x = w.f( 76 );
+    const float y = w.f( 80 );
+    const float outer = w.f( 92 );
+    w.setf( 12, x - outer );
+    w.setf( 16, y - outer );
+    w.setf( 20, w.f( 84 ) - w.f( 100 ) );
+    w.setf( 28, x + outer );
+    w.setf( 32, y + outer );
+    w.set( 36, w.word[ 84 / 4 ] );
+    w.setf( 44, x );
+    w.setf( 48, y );
+    w.setf( 52, outer );
+    return w;
+}
+
+// ---------------------------------------------------------------------------
+// THE WAVES' SLOT 2 TICKS (thiscall, float dt; al = still alive).
+//
+// +4 IS A REFCOUNT, NOT A MODE: VuWaterWave's ctor @0x5a6390 sets it to 1,
+// every allocator adds one for its owner, the water tick @0x529e30 drops the
+// manager's and the entity's onDisable drops its own. So `+4 != 1` - which
+// the family's notes elsewhere call "mode != 1" - reads "someone besides the
+// water manager still holds this wave". The wake's tick above takes it the
+// same way.
+inline bool whirlpool_tick( float& clock, int refcount, float dt )   // @0x5a1680, clock +0x74
+{
+    clock = dt + clock;
+    return refcount != 1;
+}
+
+inline bool directional_tick( float& clock, int refcount, float dt )   // @0x59aad0, clock +0x7c
+{
+    clock = dt + clock;
+    return refcount != 1;
+}
+
+// @0x59c380, shared by the banked turn, bump, directional flow and ramp
+// waves: no clock at all.
+inline bool static_wave_tick( int refcount )
+{
+    return refcount != 1;
+}
+
+// @0x5a34b0: the point wave's lifetime. Past (rate * outer) + tail width it
+// fires its callback (+0x8c, the entity's VuPointWaveCallbackIF - its slot 0
+// is the entity's OnExpired path) once, guarded by +0x90 and by the callback
+// being set, and from then on lives only while referenced.
+struct point_wave_life_t
+{
+    float tail_width = 0.0f;   // +0x5c
+    float outer_radius = 0.0f; // +0x68
+    float elapsed = 0.0f;      // +0x78
+    float rate = 0.0f;         // +0x7c
+    bool has_callback = false; // +0x8c != 0
+    bool expired = false;      // +0x90
+};
+
+inline bool point_wave_tick( point_wave_life_t& wave, int refcount, float dt, void ( *expire )( void* ), void* user )
+{
+    wave.elapsed = dt + wave.elapsed;
+    const float limit = ( wave.rate * wave.outer_radius ) + wave.tail_width;
+    if ( !ocean_gt( wave.elapsed, limit ) )
+        return true;
+    if ( !wave.expired && wave.has_callback )
+        expire( user );
+    wave.expired = true;
+    return refcount != 1;
+}
+
+// @0x59cc00, the three ocean waves' tick: NOT a fixed-step accumulator - it
+// advances the double time by dt, flips BOTH buffer indices ((i + 1) % 2,
+// retail's signed-remainder idiom), rebuilds the field into the new current
+// buffer (EvolveField @0x59d4d0, VuWaterMap_BuildBezierPatches @0x608bb0,
+// 0x59d640, BuildBezierPatches @0x59d6c0 - the hook) and stamps that buffer's
+// time, every tick. A wave held only by the manager returns false at once.
+struct ocean_clock_t
+{
+    double time = 0.0;          // +0x88
+    int current = 0;            // +0xa4
+    int previous = 1;           // +0xa8
+    double buffer_time[ 2 ]{};  // +0xb0, +0xc0
+};
+
+inline bool ocean_tick( ocean_clock_t& wave, int refcount, float dt, void ( *rebuild )( void* ), void* user )
+{
+    if ( refcount == 1 )
+        return false;
+    wave.time = static_cast< double >( dt ) + wave.time;
+    wave.current = ( wave.current + 1 ) % 2;
+    wave.previous = ( wave.previous + 1 ) % 2;
+    rebuild( user );
+    wave.buffer_time[ wave.current ] = wave.time;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// VuWater's "Water" tick @0x529e30 (thiscall, float dt), registered with the
+// tick manager by VuWater's init @0x528200. The wave list is a singly linked
+// list of pool nodes {wave, next} at water +0x30; the pool's free list is at
+// +0x10 with its count at +8. Per node, in list order, with the next node
+// taken BEFORE the call:
+//
+//   alive = wave->slot2( wave +0x48 * dt )      the wave's own time scale
+//   if ( !alive )
+//       unlink the FIRST node holding this wave (not necessarily the one
+//       being visited - a wave listed twice loses its earlier node), push
+//       that node on the free list, remove the wave from the trees
+//       (0x529b90), and drop its refcount (+4), destroying it through slot 0
+//       with 1 once it reaches zero
+//
+// then the renderer's kick 0x595610 on +0x1C. Nodes and waves are held by
+// index (retail's pointers; -1 for null). The wave's tick, the tree removal,
+// the destructor and the renderer are Vu virtuals / the render thread: hooks.
+struct water_list_node_t
+{
+    int wave = -1;
+    int next = -1;
+};
+
+struct water_list_t
+{
+    std::vector< water_list_node_t > nodes;
+    int used = -1;        // +0x30
+    int free = -1;        // +0x10
+    int free_count = 0;   // +0x08
+};
+
+struct water_tick_hooks_t
+{
+    void* user = nullptr;
+    bool ( *tick )( void* user, int wave, float dt ) = nullptr;
+    void ( *remove )( void* user, int wave ) = nullptr;
+    void ( *destroy )( void* user, int wave, int flag ) = nullptr;
+    void ( *render )( void* user ) = nullptr;
+};
+
+inline void water_tick( water_list_t& list, const float* time_scale, int* refcount, float dt,
+    const water_tick_hooks_t& hooks )
+{
+    for ( int at = list.used; at >= 0; )
+    {
+        const int next = list.nodes[ at ].next;
+        const int wave = list.nodes[ at ].wave;
+        if ( !hooks.tick( hooks.user, wave, time_scale[ wave ] * dt ) )
+        {
+            int prev = -1;
+            int found = list.used;
+            while ( found >= 0 && list.nodes[ found ].wave != wave )
+            {
+                prev = found;
+                found = list.nodes[ found ].next;
+            }
+            if ( found >= 0 )
+            {
+                if ( prev >= 0 )
+                    list.nodes[ prev ].next = list.nodes[ found ].next;
+                else
+                    list.used = list.nodes[ found ].next;
+                list.nodes[ found ].next = list.free;
+                ++list.free_count;
+                list.free = found;
+                hooks.remove( hooks.user, wave );
+                if ( --refcount[ wave ] == 0 )
+                    hooks.destroy( hooks.user, wave, 1 );
+            }
+        }
+        at = next;
+    }
+    hooks.render( hooks.user );
 }
 
 // The walk retail performs around that body: count vertices from the context's
