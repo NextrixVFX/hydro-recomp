@@ -1,5 +1,7 @@
 #pragma once
 
+#include <workspace/core/world/tree.hxx>
+
 // The water area's oracle-backed checks (one file per parallel agent; included by check.hxx after every
 // shared check, so anything above is usable here). verify_water_all runs them all.
 
@@ -478,6 +480,58 @@ inline bool verify_matrix_helpers( )
     return failed == 0;
 }
 
+// water_tree_* against VuWater's 2D tree (ctor @0x598c70, chunk growth @0x598e50, leaf insert @0x598de0 ->
+// @0x599010 / @0x598f00, removal @0x599220) on 170 operations crossing two chunk growths: every operation's
+// return and, at the end, every node (rect words, parent, children, tag - stale words of freed nodes
+// included) and the header.
+inline bool verify_water_tree( )
+{
+    water_tree_t t{};
+    water_tree_init( t );
+    int failed = 0;
+    for ( std::size_t i = 0; i < g_golden_tree_ops_count; ++i )
+    {
+        const golden_tree_op_t& op = g_golden_tree_ops[ i ];
+        const int r = op.m_op == 0 ? water_tree_add( t, op.m_arg, op.m_rect ) : water_tree_remove( t, op.m_arg );
+        if ( r != op.m_result )
+        {
+            if ( ++failed <= 3 )
+                LOG_ERROR( "water tree op %d (%d): ours %d retail %d", static_cast< int >( i ), op.m_op, r, op.m_result );
+        }
+    }
+    int bad_nodes = 0;
+    if ( t.nodes.size( ) != g_golden_tree_nodes_count )
+    {
+        ++failed;
+        LOG_ERROR( "water tree: %d nodes, retail %d", static_cast< int >( t.nodes.size( ) ), static_cast< int >( g_golden_tree_nodes_count ) );
+    }
+    else
+    {
+        for ( std::size_t k = 0; k < g_golden_tree_nodes_count; ++k )
+        {
+            const golden_tree_node_t& g = g_golden_tree_nodes[ k ];
+            const water_tree_node_t& n = t.nodes[ k ];
+            if ( std::memcmp( n.rect, g.m_rect, 16 ) != 0 || n.parent != g.m_parent || n.first != g.m_first ||
+                 n.second != g.m_second || n.tag != g.m_tag )
+            {
+                if ( ++bad_nodes <= 3 )
+                    LOG_ERROR( "water tree node %d differs (parent %d / %d, first %d / %d, second %d / %d)",
+                        static_cast< int >( k ), n.parent, g.m_parent, n.first, g.m_first, n.second, g.m_second );
+            }
+        }
+    }
+    const int header[ 6 ] = { t.root, t.free, t.chunk, t.leaves, t.used, t.free_count };
+    const bool header_ok = std::memcmp( header, g_golden_tree_header, sizeof( header ) ) == 0;
+    if ( failed == 0 && bad_nodes == 0 && header_ok )
+    {
+        LOG_SUCCESS( "water_tree matches VuWater's 2D tree (@0x598c70 / @0x598e50 / @0x598de0 / @0x599010 / @0x598f00 / @0x599220) on %d operations, %d final nodes and the header",
+            static_cast< int >( g_golden_tree_ops_count ), static_cast< int >( g_golden_tree_nodes_count ) );
+        return true;
+    }
+    LOG_ERROR( "water_tree FAILED: %d op returns, %d nodes, header %s", failed, bad_nodes, header_ok ? "ok" : "differs" );
+    return false;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
@@ -488,5 +542,6 @@ inline bool verify_water_all( )
     ok = verify_wave_ticks( ) && ok;
     ok = verify_pfx_ticks( ) && ok;
     ok = verify_matrix_helpers( ) && ok;
+    ok = verify_water_tree( ) && ok;
     return ok;
 }
