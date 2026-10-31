@@ -2,6 +2,7 @@
 
 #include <workspace/core/entity/property.hxx>
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -85,4 +86,58 @@ inline void model_draw_load( model_draw_t& c, const value_t& properties, const m
         property_float( properties, "Rejection Scale Modifier", c.rejection_scale_modifier, d.rejection_scale_modifier, false );
     }
     property_bool( properties, "Dynamic Lighting", c.dynamic_lighting, d.dynamic_lighting );
+}
+
+// Vu3dDrawStaticModelComponent's draw (0x5B0730, installed as its VuMethod1
+// draw at 0x5B03C9) up to the model instance's draw 0x520130 - the GPU side,
+// a hook. `aabb_min` / `aabb_max` are the component's world aabb (+0x24 /
+// +0x34, which 0x531D10 builds from the model's aabb and the draw matrix
+// +0x13C), `eye` the draw params' +0, `reflection_pass` their +0x18 byte and
+// `skip` their +0x2D byte; `fade` is the component's +0x17C (1.0 from the ctor;
+// its other writer is unread). Returns the model instance drawn - -1 none, 0
+// LOD 0 (+0xBC, the Model Asset), 1 LOD 1 (+0xDC), 2 LOD 2 (+0xFC), 3 the
+// reflection model (+0x11C) - and fills what the component writes into it
+// first: +0x14 the Rejection Scale Modifier, +0x18 the colour (each byte x
+// fade, fistp - round to nearest - low byte kept), +0x1C Dynamic Lighting.
+struct static_draw_t
+{
+    int instance;
+    float rejection;
+    std::uint32_t color;
+    std::uint8_t dynamic_lighting;
+};
+
+inline static_draw_t static_model_select( const model_draw_t& c, const float* aabb_min, const float* aabb_max, const float* eye,
+    bool reflection_pass, bool skip, float fade )
+{
+    static_draw_t out{ -1, c.rejection_scale_modifier, 0u, c.dynamic_lighting };
+    const float half = draw_bits( 0x3F000000u );
+    const float dx = ( aabb_max[ 0 ] + aabb_min[ 0 ] ) * half - eye[ 0 ];
+    const float dy = ( aabb_max[ 1 ] + aabb_min[ 1 ] ) * half - eye[ 1 ];
+    const float dz = ( aabb_max[ 2 ] + aabb_min[ 2 ] ) * half - eye[ 2 ];
+    const float dist2 = ( dy * dy + dx * dx ) + dz * dz;
+    // comiss dist2, Draw Distance^2; jae: at or beyond it, nothing is drawn.
+    if ( dist2 >= c.draw_distance * c.draw_distance )
+        return out;
+    int instance;
+    if ( reflection_pass )
+        instance = 3;
+    else if ( c.lod0_draw_distance * c.lod0_draw_distance > dist2 )
+        instance = 0;
+    else if ( c.lod1_draw_distance * c.lod1_draw_distance > dist2 )
+        instance = 1;
+    else
+        instance = 2;
+    if ( skip )
+        return out;
+    out.instance = instance;
+    std::uint32_t packed = 0;
+    for ( int lane = 0; lane < 4; ++lane )
+    {
+        const float scaled = static_cast< float >( static_cast< std::int32_t >( ( c.color >> ( 8 * lane ) ) & 0xFF ) ) * fade;
+        const std::int32_t rounded = static_cast< std::int32_t >( std::nearbyint( scaled ) );
+        packed |= ( static_cast< std::uint32_t >( rounded ) & 0xFFu ) << ( 8 * lane );
+    }
+    out.color = packed;
+    return out;
 }

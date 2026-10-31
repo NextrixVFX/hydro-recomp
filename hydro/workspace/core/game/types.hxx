@@ -9,6 +9,7 @@
 #include <workspace/core/entity/gfx.hxx>
 #include <workspace/core/entity/trigger.hxx>
 #include <workspace/core/entity/pfx.hxx>
+#include <workspace/core/entity/actions.hxx>
 
 #include <cstring>
 
@@ -1243,8 +1244,80 @@ inline bool entity_is_trigger( const std::string& cls )
     return cls == "VuTriggerPlaneEntity" || cls == "VuTriggerBoxEntity";
 }
 
+// The logic / action / motion / settings entities (engine entity/actions.hxx):
+// one table row per class - its construct, its loads and the template mark.
+template < class T >
+struct props_state_t
+{
+    T value;
+    T defaults;
+};
+
+struct action_kind_t
+{
+    const char* m_class;
+    std::shared_ptr< void > ( *m_make )( );
+    void ( *m_load )( void* state, const value_t& properties );
+    void ( *m_mark )( void* state );
+};
+
+template < class T, void ( *Construct )( T& ), void ( *Load )( T&, const value_t&, const T& ) >
+struct action_kind_of
+{
+    static std::shared_ptr< void > make( )
+    {
+        auto s = std::make_shared< props_state_t< T > >( );
+        Construct( s->value );
+        Construct( s->defaults );
+        return s;
+    }
+    static void load( void* state, const value_t& properties )
+    {
+        props_state_t< T >* s = static_cast< props_state_t< T >* >( state );
+        Load( s->value, properties, s->defaults );
+    }
+    static void mark( void* state )
+    {
+        props_state_t< T >* s = static_cast< props_state_t< T >* >( state );
+        s->defaults = s->value;
+    }
+};
+
+#define HYDRO_ACTION_KIND( cls, T, C, L ) \
+    { cls, &action_kind_of< T, C, L >::make, &action_kind_of< T, C, L >::load, &action_kind_of< T, C, L >::mark }
+
+inline const action_kind_t* entity_action_kind( const std::string& cls )
+{
+    static const action_kind_t kinds[] = {
+        HYDRO_ACTION_KIND( "VuDelayEntity", delay_properties_t, delay_construct, delay_load ),
+        HYDRO_ACTION_KIND( "VuBooleanEntity", boolean_properties_t, boolean_construct, boolean_load ),
+        HYDRO_ACTION_KIND( "VuGenericEventEntity", generic_event_properties_t, generic_event_construct, generic_event_load ),
+        HYDRO_ACTION_KIND( "VuRotateMotionEntity", rotate_motion_properties_t, rotate_motion_construct, rotate_motion_load ),
+        HYDRO_ACTION_KIND( "VuAttachEntity", attach_properties_t, attach_construct, attach_load ),
+        HYDRO_ACTION_KIND( "VuPlayAnimationEntity", play_animation_properties_t, play_animation_construct, play_animation_load ),
+        HYDRO_ACTION_KIND( "VuSkyBoxEntity", sky_box_properties_t, sky_box_construct, sky_box_load ),
+        HYDRO_ACTION_KIND( "VuWaterTextureSettingsEntity", water_texture_properties_t, water_texture_construct, water_texture_load ),
+        HYDRO_ACTION_KIND( "VuSetFrontEndCameraEntity", front_end_camera_properties_t, front_end_camera_construct, front_end_camera_load ),
+    };
+    for ( const action_kind_t& k : kinds )
+        if ( cls == k.m_class )
+            return &k;
+    return nullptr;
+}
+
+#undef HYDRO_ACTION_KIND
+
+// The loaded properties of an entity of action class T, or null.
+template < class T >
+inline const T* entity_action( const entity_t& e )
+{
+    return e.m_state && entity_action_kind( e.m_type ) ? &static_cast< const props_state_t< T >* >( e.m_state.get( ) )->value : nullptr;
+}
+
 inline std::shared_ptr< void > entity_state_for( const std::string& cls )
 {
+    if ( const action_kind_t* k = entity_action_kind( cls ) )
+        return k->m_make( );
     if ( cls == "VuCoronaEntity" )
     {
         auto s = std::make_shared< corona_state_t >( );
@@ -1294,6 +1367,12 @@ inline std::shared_ptr< void > entity_state_for( const std::string& cls )
 // alike): each property node's vt+8 load, reset to its default first.
 inline void entity_load_properties( entity_t& entity, const value_t& properties )
 {
+    if ( const action_kind_t* k = entity_action_kind( entity.m_type ) )
+    {
+        if ( entity.m_state )
+            k->m_load( entity.m_state.get( ), properties );
+        return;
+    }
     if ( entity.m_type == "VuCoronaEntity" && entity.m_state )
     {
         corona_state_t* s = static_cast< corona_state_t* >( entity.m_state.get( ) );
@@ -1329,6 +1408,12 @@ inline void entity_load_properties( entity_t& entity, const value_t& properties 
 // The template mark's property step (each node's vt+0x1C): default = value.
 inline void entity_mark_properties( entity_t& entity )
 {
+    if ( const action_kind_t* k = entity_action_kind( entity.m_type ) )
+    {
+        if ( entity.m_state )
+            k->m_mark( entity.m_state.get( ) );
+        return;
+    }
     if ( entity.m_type == "VuCoronaEntity" && entity.m_state )
     {
         corona_state_t* s = static_cast< corona_state_t* >( entity.m_state.get( ) );

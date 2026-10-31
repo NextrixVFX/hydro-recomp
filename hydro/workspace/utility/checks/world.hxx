@@ -178,10 +178,10 @@ inline bool verify_triggers( )
             continue;
         }
         const trigger_properties_t& t = static_cast< const trigger_state_t* >( found->second->m_state.get( ) )->value;
-        world_check_words( "triggers", want, { t.initially_active }, failed, compared );
+        world_check_words( "triggers", want, { t.initially_active, trigger_type_mask( t.trigger_type ) }, failed, compared );
         ++compared;
-        if ( t.trigger_type != want.m_text && ++failed <= 8 )
-            LOG_ERROR( "triggers: '%s' Trigger Type is '%s', retail '%s'", want.m_source, t.trigger_type.c_str( ), want.m_text );
+        if ( t.trigger_type != want.m_texts[ 0 ] && ++failed <= 8 )
+            LOG_ERROR( "triggers: '%s' Trigger Type is '%s', retail '%s'", want.m_source, t.trigger_type.c_str( ), want.m_texts[ 0 ] );
     }
     if ( failed == 0 )
         LOG_SUCCESS( "trigger_load matches VuTriggerEntity's loads (ctor 0x61C6A0) on %d trigger planes / boxes: %d values, bit for bit",
@@ -224,8 +224,8 @@ inline bool verify_static_pfx( )
         const static_pfx_t& p = static_cast< const static_pfx_state_t* >( found->second->m_state.get( ) )->value;
         world_check_words( "static pfx", want, { p.initially_active, word( p.pfx_scale ), p.pfx_color }, failed, compared );
         ++compared;
-        if ( p.effect_name != want.m_text && ++failed <= 8 )
-            LOG_ERROR( "static pfx: '%s' Effect Name is '%s', retail '%s'", want.m_source, p.effect_name.c_str( ), want.m_text );
+        if ( p.effect_name != want.m_texts[ 0 ] && ++failed <= 8 )
+            LOG_ERROR( "static pfx: '%s' Effect Name is '%s', retail '%s'", want.m_source, p.effect_name.c_str( ), want.m_texts[ 0 ] );
         float color[ 4 ];
         static_pfx_color( p, color );
         std::vector< std::uint32_t > ours = { static_cast< std::uint32_t >( p.initially_active != 0 ), word( p.pfx_scale ) };
@@ -255,6 +255,186 @@ inline bool verify_static_pfx( )
     return failed == 0;
 }
 
+// An action entity's loaded targets as the oracle dumps them (load_actions):
+// non-text targets as words in node order (a VuVector3 as three), texts apart.
+inline bool world_action_words( const entity_t& e, std::vector< std::uint32_t >& w, std::vector< std::string >& texts )
+{
+    const auto f = []( float v )
+    {
+        std::uint32_t b;
+        std::memcpy( &b, &v, sizeof( b ) );
+        return b;
+    };
+    const auto vec = [ & ]( const float* v )
+    {
+        for ( int k = 0; k < 3; ++k )
+            w.push_back( f( v[ k ] ) );
+    };
+    if ( const auto* p = entity_action< delay_properties_t >( e ); p && e.m_type == "VuDelayEntity" )
+        w = { f( p->delay ), f( p->random_window ) };
+    else if ( const auto* p = entity_action< boolean_properties_t >( e ); p && e.m_type == "VuBooleanEntity" )
+        w = { p->value };
+    else if ( const auto* p = entity_action< generic_event_properties_t >( e ); p && e.m_type == "VuGenericEventEntity" )
+        texts = { p->event_name };
+    else if ( const auto* p = entity_action< rotate_motion_properties_t >( e ); p && e.m_type == "VuRotateMotionEntity" )
+    {
+        w = { p->initially_active, p->one_shot };
+        vec( p->axis );
+        w.push_back( f( p->speed ) );
+        w.push_back( p->local );
+    }
+    else if ( const auto* p = entity_action< attach_properties_t >( e ); p && e.m_type == "VuAttachEntity" )
+    {
+        w = { p->attach_at_start };
+        vec( p->relative_position );
+        vec( p->relative_rotation );
+        texts = { p->node_name };
+    }
+    else if ( const auto* p = entity_action< play_animation_properties_t >( e ); p && e.m_type == "VuPlayAnimationEntity" )
+    {
+        texts = { p->animation_asset, p->timed_event_asset };
+        w = { f( p->start_time ), f( p->blend_time ), f( p->time_factor ), p->looping, p->one_shot };
+    }
+    else if ( const auto* p = entity_action< sky_box_properties_t >( e ); p && e.m_type == "VuSkyBoxEntity" )
+        texts = { p->model_asset };
+    else if ( const auto* p = entity_action< water_texture_properties_t >( e ); p && e.m_type == "VuWaterTextureSettingsEntity" )
+        w = { f( p->gravity ), f( p->world_size ), f( p->wind_speed ), f( p->directional_power ), f( p->suppression_wave_length ),
+            f( p->height_factor ), f( p->time_factor ), f( p->normal_texture_scale ) };
+    else if ( const auto* p = entity_action< front_end_camera_properties_t >( e ); p && e.m_type == "VuSetFrontEndCameraEntity" )
+    {
+        w = { f( p->interpolation_time ), p->modify_eye, p->modify_target, p->modify_far };
+        vec( p->eye );
+        vec( p->target );
+        w.push_back( f( p->far_plane ) );
+    }
+    else
+        return false;
+    return true;
+}
+
+// The action / logic / motion / settings entities' property loads (engine
+// entity/actions.hxx, through types.hxx's action table and the tree's
+// entity_load_properties) against retail's VuEntity::load (oracle case
+// load_actions: nine types from the templates and projects plus hand-built).
+inline bool verify_actions( )
+{
+    std::map< std::string, entity_t* > by_name;
+    const std::unique_ptr< entity_t > tree = world_check_tree( g_golden_actions_document, g_golden_actions_document_bytes, by_name );
+    int failed = 0;
+    int compared = 0;
+    for ( std::size_t k = 0; k < g_golden_actions_count; ++k )
+    {
+        const golden_entity_targets_t& want = g_golden_actions[ k ];
+        const auto found = by_name.find( want.m_child );
+        std::vector< std::uint32_t > ours;
+        std::vector< std::string > texts;
+        if ( found == by_name.end( ) || found->second->m_type != want.m_type || !world_action_words( *found->second, ours, texts ) )
+        {
+            LOG_ERROR( "actions: '%s' (%s) missing or without state", want.m_source, want.m_child );
+            ++failed;
+            continue;
+        }
+        world_check_words( "actions", want, ours, failed, compared );
+        for ( std::size_t t = 0; t < texts.size( ); ++t )
+        {
+            ++compared;
+            if ( texts[ t ] != want.m_texts[ t ] && ++failed <= 8 )
+                LOG_ERROR( "actions: '%s' text %d is '%s', retail '%s'", want.m_source, static_cast< int >( t ), texts[ t ].c_str( ), want.m_texts[ t ] );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the action / logic / settings loads match retail's VuEntity::load on %d entities of 9 types: %d values, bit for bit",
+            static_cast< int >( g_golden_actions_count ), compared );
+    else
+        LOG_ERROR( "the action / logic / settings loads FAILED %d checks", failed );
+    return failed == 0;
+}
+
+// trigger_plane_crossing (hydro trigger/volume.hxx) against
+// VuTriggerPlaneEntity_testCrossings 0x5D1570 run on seeded planes and
+// instigators (oracle case trigger_plane_test): per (plane, instigator) whether
+// it fires and which plug, one failure per pair.
+inline bool verify_trigger_plane( )
+{
+    int failed = 0;
+    int pairs = 0;
+    int fires = 0;
+    for ( std::size_t p = 0; p < g_golden_trigger_planes_count; ++p )
+    {
+        const golden_trigger_plane_t& plane = g_golden_trigger_planes[ p ];
+        float world[ 16 ], scale[ 3 ];
+        std::memcpy( world, plane.m_world, sizeof( world ) );
+        std::memcpy( scale, plane.m_scale, sizeof( scale ) );
+        for ( int k = 0; k < plane.m_count; ++k )
+        {
+            const golden_trigger_instigator_t& g = g_golden_trigger_instigators[ plane.m_first + k ];
+            trigger_instigator_t who{};
+            who.mask = g.m_mask;
+            std::memcpy( who.prev, g.m_prev, sizeof( who.prev ) );
+            std::memcpy( &who.radius, &g.m_radius, 4 );
+            std::memcpy( who.cur, g.m_cur, sizeof( who.cur ) );
+            std::memcpy( &who.rate, &g.m_rate, 4 );
+            const int ours = trigger_plane_crossing( world, scale, plane.m_mask, who );
+            ++pairs;
+            fires += g.m_fired >= 0;
+            if ( ours != g.m_fired && ++failed <= 8 )
+                LOG_ERROR( "trigger plane: plane %d instigator %d gives %d, retail %d", static_cast< int >( p ), k, ours, g.m_fired );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "trigger_plane_crossing matches VuTriggerPlaneEntity_testCrossings 0x5D1570 on %d planes: %d plane / instigator pairs, %d "
+                     "crossings fired", static_cast< int >( g_golden_trigger_planes_count ), pairs, fires );
+    else
+        LOG_ERROR( "trigger_plane_crossing FAILED %d of %d pairs", failed, pairs );
+    return failed == 0;
+}
+
+// static_model_select (engine entity/draw.hxx) against
+// Vu3dDrawStaticModelComponent's draw 0x5B0730 on seeded inputs (oracle case
+// static_model_draw): which model instance is drawn (or none) and the three
+// words written into it, one failure per vector.
+inline bool verify_static_model_draw( )
+{
+    const auto f = []( unsigned w )
+    {
+        float v;
+        std::memcpy( &v, &w, sizeof( v ) );
+        return v;
+    };
+    int failed = 0;
+    int drawn = 0;
+    for ( std::size_t k = 0; k < g_golden_static_draws_count; ++k )
+    {
+        const golden_static_draw_t& g = g_golden_static_draws[ k ];
+        model_draw_t c;
+        model_draw_construct( c, false );
+        c.color = g.m_color;
+        c.draw_distance = f( g.m_draw );
+        c.lod0_draw_distance = f( g.m_lod0 );
+        c.lod1_draw_distance = f( g.m_lod1 );
+        c.rejection_scale_modifier = f( g.m_reject );
+        c.dynamic_lighting = static_cast< std::uint8_t >( g.m_dynamic );
+        const float lo[ 3 ] = { f( g.m_min[ 0 ] ), f( g.m_min[ 1 ] ), f( g.m_min[ 2 ] ) };
+        const float hi[ 3 ] = { f( g.m_max[ 0 ] ), f( g.m_max[ 1 ] ), f( g.m_max[ 2 ] ) };
+        const float eye[ 3 ] = { f( g.m_eye[ 0 ] ), f( g.m_eye[ 1 ] ), f( g.m_eye[ 2 ] ) };
+        const static_draw_t ours = static_model_select( c, lo, hi, eye, g.m_reflection != 0, g.m_skip != 0, f( g.m_fade ) );
+        std::uint32_t rejection;
+        std::memcpy( &rejection, &ours.rejection, 4 );
+        const bool same = ours.instance == g.m_instance &&
+                          ( ours.instance < 0 || ( rejection == g.m_w14 && ours.color == g.m_w18 && ours.dynamic_lighting == g.m_b1c ) );
+        drawn += g.m_instance >= 0;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "static model draw: vector %d draws %d (0x%08X 0x%08X %d), retail %d (0x%08X 0x%08X %d)", static_cast< int >( k ), ours.instance,
+                rejection, ours.color, ours.dynamic_lighting, g.m_instance, g.m_w14, g.m_w18, g.m_b1c );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "static_model_select matches Vu3dDrawStaticModelComponent's draw 0x5B0730 on %d vectors (%d drawn): instance, rejection, "
+                     "colour and lighting bit for bit", static_cast< int >( g_golden_static_draws_count ), drawn );
+    else
+        LOG_ERROR( "static_model_select FAILED %d vectors", failed );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
@@ -263,5 +443,8 @@ inline bool verify_world_all( )
     ok = verify_gfx_settings( ) && ok;
     ok = verify_triggers( ) && ok;
     ok = verify_static_pfx( ) && ok;
+    ok = verify_actions( ) && ok;
+    ok = verify_trigger_plane( ) && ok;
+    ok = verify_static_model_draw( ) && ok;
     return ok;
 }

@@ -1,6 +1,9 @@
 #pragma once
 
 #include <workspace/core/trigger/volume.hxx>
+#include <workspace/core/entity/trigger.hxx>
+
+#include <cstring>
 #include <workspace/utility/logger.hxx>
 
 #include <cmath>
@@ -25,6 +28,7 @@ public:
         m_reported = 0.0f;
         m_ticks = 0;
         m_probes = 0;
+        m_have_prev = false;
     }
     std::size_t size( ) const { return m_triggers.size( ); }
     bool empty( ) const { return m_triggers.empty( ); }
@@ -105,8 +109,36 @@ public:
                 m_driven, at[ 0 ], at[ 1 ], nearest, which );
         }
 
+        // The probe stands in for the player's boat, which registers as an
+        // instigator with mask("Boat") | mask("Human Boat") (VuBoatDB
+        // 0x421371 / 0x421396 through 0x536180, VuInstigatorComponent_register
+        // 0x531e10) - its radius is m_probe_radius, its rate 0 (both unread
+        // boat-side values; the boat is not in the scene).
+        const bool stepped = m_have_prev;
+        trigger_instigator_t who{};
+        who.mask = trigger_type_mask( "Boat" ) | trigger_type_mask( "Human Boat" );
+        std::memcpy( who.prev, m_prev, sizeof( who.prev ) );
+        who.radius = m_probe_radius;
+        std::memcpy( who.cur, at, sizeof( who.cur ) );
+        who.rate = 0.0f;
+        std::memcpy( m_prev, at, sizeof( m_prev ) );
+        m_have_prev = true;
         for ( trigger_t& gate : m_triggers )
         {
+            // A PLANE is VuTriggerPlaneEntity_testCrossings 0x5D1570, 1:1
+            // (trigger_plane_crossing): only active triggers are in the
+            // manager's list, and the Trigger Type is the mask test inside.
+            if ( !gate.box )
+            {
+                if ( !gate.active || !stepped )
+                    continue;
+                const int crossed = trigger_plane_crossing( gate.frame, gate.half, gate.mask, who );
+                if ( crossed >= 0 )
+                    fire( gate.path, crossed ? "OnEnter" : "OnExit" );
+                continue;
+            }
+            // A BOX still takes the derived test below - its own crossing test
+            // (VuTriggerBoxEntity's slot 12) is not transliterated.
             // The Trigger Type vocabulary is registered by
             // VuTriggerEntity_registerTriggerTypes at 0x4d9260, in this order:
             // "Human Boat", "AI Boat", "Boat", "Camera". First registered is
@@ -244,5 +276,8 @@ private:
     float m_driven = 0.0f;
     float m_reported = 0.0f;
     float m_last[ 2 ]{};
+    // The instigator's previous position (0x5D1570 reads it from the manager).
+    float m_prev[ 3 ]{};
+    bool m_have_prev = false;
     bool m_tracked = false;
 };
