@@ -2,6 +2,7 @@
 
 #include <workspace/core/boat/driver.hxx>
 #include <workspace/core/boat/sections.hxx>
+#include <workspace/core/boat/state.hxx>
 
 // The boat area's oracle-backed checks (one file per parallel agent; included by check.hxx after every
 // shared check, so anything above is usable here). verify_boat_all runs them all.
@@ -307,6 +308,51 @@ inline bool verify_boat_driver_load( )
     return failed == 0;
 }
 
+// boat_flash_timer / boat_beached_test (boat/state.hxx) against retail's
+// 0x41FF70 / 0x420010 (oracle case boat_tick_state): every byte of the boat,
+// body and proxy blocks after.
+inline bool verify_boat_tick_state( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_tick_state_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_tick_state_words + g_golden_boat_tick_state_offsets[ index ];
+        const unsigned function = *s++;
+        float dt;
+        std::memcpy( &dt, s++, 4 );
+        std::vector< std::uint8_t > boat( 0x520 ), body( 0x300 ), proxy( 0x10 );
+        std::memcpy( boat.data( ), s, 0x520 );
+        std::memcpy( body.data( ), s + 0x520 / 4, 0x300 );
+        std::memcpy( proxy.data( ), s + ( 0x520 + 0x300 ) / 4, 0x10 );
+        s += ( 0x520 + 0x300 + 0x10 ) / 4;
+        const unsigned char* want = reinterpret_cast< const unsigned char* >( s );
+        std::uint32_t proxy_word;
+        std::memcpy( &proxy_word, body.data( ) + 0xC8, 4 );
+        if ( function == 0x41FF70u )
+            boat_flash_timer( boat.data( ), body.data( ), proxy_word ? proxy.data( ) : nullptr, dt );
+        else
+            boat_beached_test( boat.data( ), body.data( ) );
+        int bad = -1;
+        for ( int at = 0; at < 0x520 && bad < 0; ++at )
+            if ( boat[ at ] != want[ at ] )
+                bad = at;
+        for ( int at = 0; at < 0x300 && bad < 0; ++at )
+            if ( body[ at ] != want[ 0x520 + at ] )
+                bad = 0x1000 + at;
+        for ( int at = 0; at < 0x10 && bad < 0; ++at )
+            if ( proxy[ at ] != want[ 0x820 + at ] )
+                bad = 0x2000 + at;
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "boat tick state 0x%X vector %d differs from retail at 0x%X (0x1xxx body, 0x2xxx proxy)", function,
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the boat's tick state helpers 0x41FF70 / 0x420010 match retail: %d vectors", static_cast< int >( g_golden_boat_tick_state_count ) );
+    else
+        LOG_ERROR( "boat tick state FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_tick_state_count ) );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
@@ -314,5 +360,6 @@ inline bool verify_boat_all( )
     ok = verify_boat_engine( ) && ok;
     ok = verify_boat_ai_driver( ) && ok;
     ok = verify_boat_driver_load( ) && ok;
+    ok = verify_boat_tick_state( ) && ok;
     return ok;
 }
