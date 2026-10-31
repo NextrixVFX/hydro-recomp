@@ -532,6 +532,109 @@ inline bool verify_water_tree( )
     return false;
 }
 
+// water_hold_add / water_hold_remove against VuWater's add @0x529a90 (walks @0x52b4d0 / @0x52b3e0, the
+// per-surface test @0x529c60) and removal @0x529b90 on 4 hand-built surfaces and 30 waves: after every op
+// each wave tree's node count and the pool count; at the end every tree's nodes and header, every wave's
+// entry list and the pool.
+inline bool verify_water_waves( )
+{
+    water_hold_t w{};
+    water_tree_init( w.surface_tree );
+    w.surfaces.resize( 4 );
+    for ( int i = 0; i < 4; ++i )
+    {
+        const golden_ww_surface_t& g = g_golden_ww_surfaces[ i ];
+        water_held_surface_t& s = w.surfaces[ i ];
+        std::memcpy( s.rows, g.m_rows, 64 );
+        s.z_low = g.m_z[ 0 ];
+        s.z_high = g.m_z[ 1 ];
+        s.half[ 0 ] = g.m_half[ 0 ];
+        s.half[ 1 ] = g.m_half[ 1 ];
+        water_tree_init( s.waves );
+        water_tree_add( w.surface_tree, i, g.m_rect );
+    }
+    w.pool.resize( 200 );
+    for ( int i = 0; i < 200; ++i )
+        w.pool[ i ].next = i + 1 < 200 ? i + 1 : -1;
+    w.pool_free = 0;
+    w.pool_count = 200;
+    for ( std::size_t k = 0; k < g_golden_ww_waves_count; ++k )
+    {
+        water_held_wave_t v{};
+        const float* b = g_golden_ww_waves[ k ].m_bounds;
+        std::memcpy( v.box, b, 32 );
+        v.centre[ 0 ] = b[ 8 ];
+        v.centre[ 1 ] = b[ 9 ];
+        v.radius = b[ 10 ];
+        v.point = g_golden_ww_waves[ k ].m_flag & 1;
+        w.waves.push_back( v );
+    }
+    int failed = 0;
+    for ( std::size_t i = 0; i < g_golden_ww_ops_count; ++i )
+    {
+        const golden_ww_op_t& op = g_golden_ww_ops[ i ];
+        if ( op.m_op == 0 )
+            water_hold_add( w, op.m_wave );
+        else
+            water_hold_remove( w, op.m_wave );
+        const int after[ 5 ] = { w.surfaces[ 0 ].waves.used, w.surfaces[ 1 ].waves.used, w.surfaces[ 2 ].waves.used,
+            w.surfaces[ 3 ].waves.used, w.pool_count };
+        if ( std::memcmp( after, op.m_after, sizeof( after ) ) != 0 && ++failed <= 3 )
+            LOG_ERROR( "water waves op %d (%d wave %d): the counts differ from retail", static_cast< int >( i ), op.m_op, op.m_wave );
+    }
+    int bad = 0;
+    for ( int k = 0; k < 5; ++k )
+    {
+        const water_tree_t& t = k == 0 ? w.surface_tree : w.surfaces[ k - 1 ].waves;
+        const golden_ww_tree_t& g = g_golden_ww_trees[ k ];
+        const int header[ 6 ] = { t.root, t.free, t.chunk, t.leaves, t.used, t.free_count };
+        if ( std::memcmp( header, &g, sizeof( header ) ) != 0 || static_cast< int >( t.nodes.size( ) ) != g.m_count )
+        {
+            ++bad;
+            continue;
+        }
+        for ( int n = 0; n < g.m_count; ++n )
+        {
+            const golden_tree_node_t& gn = g_golden_ww_nodes[ g.m_nodes + n ];
+            const water_tree_node_t& m = t.nodes[ n ];
+            // a leaf's object and a wave-tree leaf's tag were retail pointers, mapped in the golden to
+            // 0x20000 + surface / 0x10000 + wave
+            const int base = k == 0 ? 0x20000 : 0x10000;
+            const int want_first = gn.m_first >= 0x10000 ? gn.m_first - base : gn.m_first;
+            const std::uint32_t want_tag = gn.m_tag >= 0x20000u ? gn.m_tag - 0x20000u : gn.m_tag;
+            const int first = m.first;
+            const std::uint32_t tag = m.tag;
+            if ( std::memcmp( m.rect, gn.m_rect, 16 ) != 0 || m.parent != gn.m_parent || first != want_first ||
+                 m.second != gn.m_second || tag != want_tag )
+                ++bad;
+        }
+    }
+    for ( std::size_t k = 0; k < g_golden_ww_waves_count; ++k )
+    {
+        const int start = g_golden_ww_list_heads[ 2 * k ];
+        const int count = g_golden_ww_list_heads[ 2 * k + 1 ];
+        int e = w.waves[ k ].entries;
+        for ( int j = 0; j < count; ++j, e = e >= 0 ? w.pool[ e ].next : -1 )
+        {
+            const int* g = g_golden_ww_list_entries + 3 * ( start + j );
+            if ( e < 0 || w.pool[ e ].surface != g[ 0 ] || w.pool[ e ].leaf != g[ 1 ] || e != g[ 2 ] )
+                ++bad;
+        }
+        if ( e >= 0 )
+            ++bad;
+    }
+    if ( w.pool_count != g_golden_ww_pool[ 0 ] || w.pool_free != g_golden_ww_pool[ 1 ] )
+        ++bad;
+    if ( failed == 0 && bad == 0 )
+    {
+        LOG_SUCCESS( "water_hold matches VuWater's wave add / removal (@0x529a90 / @0x52b4d0 / @0x52b3e0 / @0x529c60 / @0x529b90) on %d ops: every count after each, every final tree node, entry list and the pool",
+            static_cast< int >( g_golden_ww_ops_count ) );
+        return true;
+    }
+    LOG_ERROR( "water_hold FAILED: %d ops' counts, %d final items", failed, bad );
+    return false;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
@@ -543,5 +646,6 @@ inline bool verify_water_all( )
     ok = verify_pfx_ticks( ) && ok;
     ok = verify_matrix_helpers( ) && ok;
     ok = verify_water_tree( ) && ok;
+    ok = verify_water_waves( ) && ok;
     return ok;
 }

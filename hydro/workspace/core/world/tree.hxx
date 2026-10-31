@@ -249,3 +249,168 @@ inline void water_tree_release_leaf( water_tree_t& t, int leaf )
     --t.leaves;
     t.free = leaf;
 }
+
+// ---------------------------------------------------------------------------
+// VuWater HOLDING ITS WAVES: the add @0x529a90 and the removal @0x529b90, with
+// the two surface-tree walks @0x52b4d0 (a box) and @0x52b3e0 (a point) and the
+// per-surface test @0x529c60. Both open with a dynamics-world lock (through
+// g_vudynamicsimpl 0x75900c) and a wait on the water renderer's thread (its
+// +0x2B5 byte): platform layer, hooks, not modelled.
+//
+// What each object contributes, by retail offset:
+//   surface  +0x90 .. +0xCF  world-to-surface rows (row-vector 4x4)
+//            +0xD8 / +0xE8   the z band     +0xF0 / +0xF4  the half extents
+//            +0xFC           its wave tree
+//   wave     +0x0C .. +0x2B  its box (min x, y, z, -, max x, y, z, -)
+//            +0x2C / +0x30   centre         +0x34 radius
+//            +0x40           its entry list (pool nodes {leaf, next})
+//            +0x44 bit 0     a POINT wave: tested by its box's centre alone
+//   water    +0x08 / +0x10   the pool's free count / head; +0x3C the surface tree
+struct water_held_surface_t
+{
+    float rows[ 16 ]{};
+    float z_low = 0.0f;
+    float z_high = 0.0f;
+    float half[ 2 ]{};
+    water_tree_t waves;
+};
+
+struct water_held_wave_t
+{
+    float box[ 8 ]{};
+    float centre[ 2 ]{};
+    float radius = 0.0f;
+    bool point = false;
+    int entries = -1;   // +0x40: the first pool node, -1 none
+};
+
+struct water_pool_node_t
+{
+    int leaf = -1;      // retail's leaf pointer: this leaf ...
+    int surface = -1;   // ... of this surface's wave tree (the leaf's +28 tag)
+    int next = -1;
+};
+
+struct water_hold_t
+{
+    water_tree_t surface_tree;   // leaves' objects: surface indices
+    std::vector< water_held_surface_t > surfaces;
+    std::vector< water_held_wave_t > waves;
+    std::vector< water_pool_node_t > pool;
+    int pool_free = -1;
+    int pool_count = 0;
+};
+
+// 0x529c60 (water, wave, surface).
+inline void water_hold_test( water_hold_t& w, int wave, int surface )
+{
+    water_held_wave_t& v = w.waves[ wave ];
+    water_held_surface_t& s = w.surfaces[ surface ];
+    if ( v.point )
+    {
+        const float z = ( v.box[ 6 ] + v.box[ 2 ] ) * 0.5f;
+        if ( water_tree_ge( s.z_low, z ) || water_tree_ge( z, s.z_high ) )
+            return;
+    }
+    else
+    {
+        const float* m = s.rows;
+        const float lx = ( ( ( m[ 4 ] * v.centre[ 1 ] ) + ( m[ 0 ] * v.centre[ 0 ] ) ) + ( m[ 8 ] * 0.0f ) ) + m[ 12 ];
+        const float ly = ( ( ( m[ 5 ] * v.centre[ 1 ] ) + ( m[ 1 ] * v.centre[ 0 ] ) ) + ( m[ 9 ] * 0.0f ) ) + m[ 13 ];
+        const float ex = water_max( std::fabs( lx ) - s.half[ 0 ], 0.0f );
+        const float ey = water_max( std::fabs( ly ) - s.half[ 1 ], 0.0f );
+        if ( water_tree_ge( ( ey * ey ) + ( ex * ex ), v.radius * v.radius ) )
+            return;
+        if ( water_tree_ge( s.z_low, v.box[ 6 ] ) || water_tree_ge( v.box[ 2 ], s.z_high ) )
+            return;
+    }
+    const float rect[ 4 ] = { v.box[ 0 ], v.box[ 1 ], v.box[ 4 ], v.box[ 5 ] };
+    const int leaf = water_tree_add( s.waves, wave, rect );
+    s.waves.nodes[ leaf ].tag = static_cast< std::uint32_t >( surface );
+    const int e = w.pool_free;
+    w.pool_free = w.pool[ e ].next;
+    --w.pool_count;
+    w.pool[ e ].leaf = leaf;
+    w.pool[ e ].surface = surface;
+    w.pool[ e ].next = v.entries;
+    v.entries = e;
+}
+
+// The walks @0x52b4d0 / @0x52b3e0: an explicit stack, a node's first child
+// pushed before its second (so the second is visited first); every surface
+// leaf whose box overlaps the query goes to 0x529c60. Retail's stack is 257
+// words with no bound check; a tree deep enough to overflow it is not modelled.
+inline void water_hold_add( water_hold_t& w, int wave )
+{
+    const water_held_wave_t& v = w.waves[ wave ];
+    const water_tree_t& t = w.surface_tree;
+    if ( t.root < 0 )
+        return;
+    float q[ 4 ];
+    if ( v.point )
+    {
+        q[ 0 ] = ( v.box[ 4 ] + v.box[ 0 ] ) * 0.5f;
+        q[ 1 ] = ( v.box[ 5 ] + v.box[ 1 ] ) * 0.5f;
+    }
+    else
+    {
+        q[ 0 ] = v.box[ 0 ];
+        q[ 1 ] = v.box[ 1 ];
+        q[ 2 ] = v.box[ 4 ];
+        q[ 3 ] = v.box[ 5 ];
+    }
+    std::vector< int > stack{ t.root };
+    while ( !stack.empty( ) )
+    {
+        const int n = stack.back( );
+        stack.pop_back( );
+        const float* r = t.nodes[ n ].rect;
+        const bool hit = v.point
+            ? ( water_tree_ge( q[ 0 ], r[ 0 ] ) && water_tree_ge( q[ 1 ], r[ 1 ] ) && water_tree_ge( r[ 2 ], q[ 0 ] ) &&
+                  water_tree_ge( r[ 3 ], q[ 1 ] ) )
+            : ( water_tree_ge( q[ 2 ], r[ 0 ] ) && water_tree_ge( r[ 2 ], q[ 0 ] ) && water_tree_ge( q[ 3 ], r[ 1 ] ) &&
+                  water_tree_ge( r[ 3 ], q[ 1 ] ) );
+        if ( !hit )
+            continue;
+        if ( t.nodes[ n ].second >= 0 )
+        {
+            stack.push_back( t.nodes[ n ].first );
+            stack.push_back( t.nodes[ n ].second );
+        }
+        else
+        {
+            water_hold_test( w, wave, t.nodes[ n ].first );
+        }
+    }
+}
+
+// 0x529b90 (water, wave): until its list is empty, remove the head entry's
+// leaf from its tagged surface's tree, free the leaf, unlink the FIRST entry
+// holding that leaf and pool it. (Retail would loop forever if no entry held
+// it; the head always does.)
+inline void water_hold_remove( water_hold_t& w, int wave )
+{
+    water_held_wave_t& v = w.waves[ wave ];
+    while ( v.entries >= 0 )
+    {
+        const int leaf = w.pool[ v.entries ].leaf;
+        const int surface = w.pool[ v.entries ].surface;
+        water_tree_t& tree = w.surfaces[ surface ].waves;
+        water_tree_remove( tree, leaf );
+        water_tree_release_leaf( tree, leaf );
+        int prev = -1;
+        int e = v.entries;
+        while ( e >= 0 && !( w.pool[ e ].leaf == leaf && w.pool[ e ].surface == surface ) )
+        {
+            prev = e;
+            e = w.pool[ e ].next;
+        }
+        if ( prev >= 0 )
+            w.pool[ prev ].next = w.pool[ e ].next;
+        else
+            v.entries = w.pool[ e ].next;
+        w.pool[ e ].next = w.pool_free;
+        ++w.pool_count;
+        w.pool_free = e;
+    }
+}
