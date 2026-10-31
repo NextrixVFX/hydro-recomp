@@ -117,6 +117,7 @@
     <ClInclude Include="workspace\core\boat\entity.hxx" />
     <ClInclude Include="workspace\core\boat\fluid.hxx" />
     <ClInclude Include="workspace\core\boat\hull.hxx" />
+    <ClInclude Include="workspace\core\boat\load.hxx" />
     <ClInclude Include="workspace\core\boat\math.hxx" />
     <ClInclude Include="workspace\core\boat\parts.hxx" />
     <ClInclude Include="workspace\core\boat\sections.hxx" />
