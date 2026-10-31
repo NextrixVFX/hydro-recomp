@@ -27,20 +27,20 @@ Measured, not estimated: see **[docs/INVENTORY.md](docs/INVENTORY.md)** (summary
 
 | retail functions | 8,638 |
 |---|---:|
-| **verified** - retail executed in an oracle case and recreated here | **323** |
-| callee - executed inside a checked case, not recreated on its own (CRT / STL / engine helpers) | 61 |
+| **verified** - retail executed in an oracle case and recreated here | **330** |
+| callee - executed inside a checked case, not recreated on its own (CRT / STL / engine helpers) | 88 |
 | cited - recreated or referenced here, but no oracle case runs it yet | 189 |
-| absent | 8,065 |
+| absent | 8,031 |
 
 Verified so far, by area: Bullet physics (collision, broadphase, the constraint solver, integration - 154
 functions), the boat's tick path and fluid / buoyancy forces, the water wave kernels, the VUJB asset document
-reader, VuTransformComponent, the VuEntity constructor's object graph, and fifteen pieces of the boat constructor.
+reader, VuTransformComponent, the VuEntity constructor's object graph, and the whole VuBoatEntity construction (0x41B850: 43 objects, every byte and pointer, and its event registrations).
 
 **What runs today:** the Hydroelectric track loads and renders - terrain, lights, fog, props, skinned props,
 coronas, particle effects, triggers, the event graph, and the ocean with point waves.
 
 **Not there yet** (a visible-feature summary, not the full scope - the inventory is the full scope): the boat
-itself (its tick path, registration and teardown are done; it needs the rest of its constructor), handling,
+itself (its tick path, construction, registration and teardown are done and checked; it is not yet placed in the world), handling,
 AI, wakes, water surfaces, sky, audio, menus, HUD, race rules / checkpoints / laps / timing / modes / boost,
 damage debris, the boat camera, input, save / unlocks / settings, multiplayer and leaderboards, the real
 shaders (the retail DXBC), the UWP / Xbox 360 look toggle, and retail's full entity framework (the world loader

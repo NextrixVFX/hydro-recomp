@@ -112,6 +112,7 @@
     <ClInclude Include="workspace\core\assets\model.hxx" />
     <ClInclude Include="workspace\core\assets\skin.hxx" />
     <ClInclude Include="workspace\core\assets\texture.hxx" />
+    <ClInclude Include="workspace\core\boat\construct.hxx" />
     <ClInclude Include="workspace\core\boat\entity.hxx" />
     <ClInclude Include="workspace\core\boat\fluid.hxx" />
     <ClInclude Include="workspace\core\boat\hull.hxx" />

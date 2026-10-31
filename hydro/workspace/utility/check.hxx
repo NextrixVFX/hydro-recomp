@@ -5,6 +5,7 @@
 #include <workspace/core/world/wave.hxx>
 #include <workspace/core/world/transform.hxx>
 #include <workspace/core/boat/parts.hxx>
+#include <workspace/core/boat/construct.hxx>
 #include <workspace/utility/golden.hxx>
 #include <workspace/utility/logger.hxx>
 
@@ -801,10 +802,109 @@ inline bool verify_boat_parts( )
     return failed == 0;
 }
 
+// boat_construct (boat/construct.hxx) against the object graph retail's
+// VuBoatEntity construction builds (oracle case boat_ctor): every written byte
+// of all 43 objects (outside the stack-residue words listed below), every
+// pointer by what it points at, and the two method registrations.
+inline bool verify_boat_ctor( )
+{
+    const unsigned* cdb = g_golden_vujb_words + g_golden_vujb_offsets[ 0 ];
+    const unsigned char* cdb_raw = reinterpret_cast< const unsigned char* >( cdb + 2 );
+    const value_t constant_db = c_reader( std::vector< std::uint8_t >( cdb_raw, cdb_raw + cdb[ 1 ] ) ).parse( );
+    const boat_graph_t g = boat_construct( constant_db );
+    // Words retail fills from stack slots its code never sets (indeterminate):
+    // object -> [first, end) byte ranges.
+    const std::vector< std::pair< int, std::pair< int, int > > > residue = {
+        { 0, { 0x27C, 0x280 } }, { 0, { 0x28C, 0x290 } }, { 0, { 0x3C0, 0x3C4 } }, { 0, { 0x3D0, 0x3D4 } },
+        { 8, { 36, 40 } }, { 8, { 52, 56 } }, { 9, { 48, 52 } }, { 9, { 64, 68 } },
+        { 31, { 164, 168 } }, { 31, { 180, 184 } }, { 36, { 180, 184 } }, { 36, { 196, 200 } },
+        { 38, { 56, 60 } }, { 38, { 72, 76 } }, { 39, { 56, 60 } }, { 39, { 72, 76 } } };
+    const unsigned* s = g_golden_boat_ctor_words;
+    const unsigned count = *s++;
+    int failed = 0;
+    auto fail = [ &failed ]( const char* what, int object, int at )
+    {
+        if ( ++failed <= 12 )
+            LOG_ERROR( "boat ctor graph: %s at object %d, byte %d", what, object, at );
+    };
+    if ( count != g.objects.size( ) )
+    {
+        LOG_ERROR( "boat ctor graph: retail built %u objects, ours %d", count, static_cast< int >( g.objects.size( ) ) );
+        return false;
+    }
+    for ( unsigned k = 0; k < count; ++k )
+    {
+        const unsigned size = *s++;
+        const unsigned char* bytes = reinterpret_cast< const unsigned char* >( s );
+        s += ( size + 3 ) / 4;
+        const unsigned char* mask = reinterpret_cast< const unsigned char* >( s );
+        s += ( size + 3 ) / 4;
+        std::vector< image_ref_t > refs( *s++ );
+        for ( auto& r : refs )
+        {
+            const int kind = static_cast< int >( s[ 1 ] );
+            const int target = kind == 0 ? static_cast< int >( s[ 2 ] ) : kind == 1 ? BOAT_REF_ASSET_BOATDB
+                : kind == 2 ? BOAT_REF_ASSET_SKINDB : kind == 3 ? BOAT_REF_STL : -999;
+            r = { static_cast< int >( s[ 0 ] ), target, static_cast< int >( s[ 3 ] ) };
+            s += 4;
+        }
+        const image_object_t& o = g.objects[ k ];
+        if ( size != o.image.size( ) )
+        {
+            fail( "size", static_cast< int >( k ), static_cast< int >( o.image.size( ) ) );
+            continue;
+        }
+        if ( refs != o.refs )
+        {
+            int at = -1;
+            for ( std::size_t r = 0; r < refs.size( ) && r < o.refs.size( ); ++r )
+                if ( !( refs[ r ] == o.refs[ r ] ) && at < 0 )
+                    at = refs[ r ].slot;
+            fail( "pointers", static_cast< int >( k ), at );
+        }
+        for ( unsigned at = 0; at < size; ++at )
+        {
+            bool skipped = false;
+            for ( const auto& r : residue )
+                skipped = skipped || ( r.first == static_cast< int >( k ) && static_cast< int >( at ) >= r.second.first &&
+                                       static_cast< int >( at ) < r.second.second );
+            if ( mask[ at ] && !skipped && bytes[ at ] != o.image[ at ] )
+            {
+                fail( "bytes", static_cast< int >( k ), static_cast< int >( at ) );
+                break;
+            }
+        }
+    }
+    std::vector< std::pair< std::uint32_t, int > > methods( *s++ );
+    for ( auto& m : methods )
+    {
+        m = { s[ 0 ], static_cast< int >( s[ 1 ] ) };
+        s += 2;
+    }
+    std::vector< std::pair< std::uint32_t, int > > events;
+    for ( unsigned n = *s++; n; --n )
+    {
+        const std::uint32_t hash = *s++;
+        for ( unsigned c = *s++; c; --c )
+            events.push_back( { hash, static_cast< int >( *s++ ) } );
+    }
+    if ( methods != g.methods )
+        fail( "the entity's method map", -1, -1 );
+    if ( events != g.events )
+        fail( "the event manager's registrations", -1, -1 );
+    if ( failed == 0 )
+        LOG_SUCCESS( "boat_construct matches retail's VuBoatEntity construction 0x41B850: %u objects, every written byte and "
+                     "pointer, and the OnCameraShake / OnRumble registrations", count );
+    else
+        LOG_ERROR( "boat_construct FAILED %d checks against 0x41B850", failed );
+    return failed == 0;
+}
+
 // Every oracle-backed check on game code.
 inline bool verify_game( )
 {
     bool ok = true;
+    ok = verify_boat_ctor( ) && ok;
     ok = verify_boat_parts( ) && ok;
     ok = verify_transform_load( ) && ok;
     ok = verify_advance( ) && ok;

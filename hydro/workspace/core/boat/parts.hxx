@@ -587,6 +587,7 @@ inline void boat_splash( boat_splash_t& o, std::uint32_t owner, const value_t& c
     image_zero( b, 91, 92 );
     b[ 372 ] = 0;
     image_put32( b, 376, 0 );
+    image_empty_string( b, 380 );
     o.pfx.clear( );
     image_zero( b, 101, 108 );
     image_zero( b, 110, 115 );
