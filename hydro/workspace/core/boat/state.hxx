@@ -146,3 +146,70 @@ inline bool boat_jump( std::uint8_t* boat, std::uint8_t* body, const std::uint8_
     state_put_f( boat, 0x498, 1.0f );
     return true;   // HOOK: 0x41E100, the jump sound
 }
+// What 0x41F740 hands its two outside callees: VuWater's surface lookup
+// 0x5296C0 (on g 0x759058; the WATER side, not recreated - its answer is an
+// INPUT here, UNKNOWN until the water agent recreates it) gets the probe
+// point and a callback {vtable 0x738424, point x, y, direction x, y} whose
+// +0x14 it fills; g 0x758FEC's vt+0x1C(boat, "Drafting") is a platform
+// service call (HOOK).
+struct boat_probe_io_t
+{
+    bool asked = false;
+    float point[ 3 ] = {};
+    std::uint32_t callback[ 5 ] = {};
+    bool event = false;
+};
+
+// 0x41F740 (__usercall: ecx the boat, xmm1 dt). +0x30C = 0; in the water
+// (the hull solver's +0x54 > 0) with a horizontal speed (vy^2 + vx^2 > 0):
+// the nose point = the transform component's world (`world` = its +0x50)
+// applied to (0, boat +0x284, 0), the direction v / |v|, and +0x30C = the
+// lookup's answer. Then, above 0.2 (0x6F7620) and with |v| (vx^2 + vy^2)
+// over boat +0x470 x (engine +0xC x engine +4) x 0.44704 x 0.5, the timer
+// +0x480 += dt, the event firing when it crosses 4.0 (0x6F7754); every
+// other way out zeroes the timer.
+inline void boat_nose_probe( std::uint8_t* boat, const std::uint8_t* body, const std::uint8_t* solver, const std::uint8_t* world,
+    const std::uint8_t* engine, float dt, float water_answer, boat_probe_io_t& io )
+{
+    state_put_f( boat, 0x30C, 0.0f );
+    const float vx = state_f( body, 0x140 ), vy = state_f( body, 0x144 );
+    if ( state_f( solver, 0x54 ) > 0.0f && vy * vy + vx * vx > 0.0f )
+    {
+        const float inverse = 1.0f / hull_sqrt( vy * vy + vx * vx );
+        const float reach = state_f( boat, 0x284 );
+        const float zero = 0.0f;
+        auto t = [ & ]( int k ) { return state_f( world, 4 * k ); };
+        const float dx = inverse * vx, dy = inverse * vy;
+        const float px = ( ( t( 4 ) * reach + t( 0 ) * zero ) + t( 8 ) * zero ) + t( 12 );
+        const float py = ( ( t( 5 ) * reach + t( 1 ) * zero ) + t( 9 ) * zero ) + t( 13 );
+        const float pz = ( ( t( 6 ) * reach + t( 2 ) * zero ) + t( 10 ) * zero ) + t( 14 );
+        io.asked = true;
+        io.point[ 0 ] = px;
+        io.point[ 1 ] = py;
+        io.point[ 2 ] = pz;
+        io.callback[ 0 ] = 0x00738424u;
+        std::memcpy( &io.callback[ 1 ], &px, 4 );
+        std::memcpy( &io.callback[ 2 ], &py, 4 );
+        std::memcpy( &io.callback[ 3 ], &dx, 4 );
+        std::memcpy( &io.callback[ 4 ], &dy, 4 );
+        state_put_f( boat, 0x30C, water_answer );   // UNKNOWN: VuWater 0x5296C0's answer
+    }
+    if ( state_f( boat, 0x30C ) > 0.2f )
+    {
+        const float speed = hull_sqrt( vx * vx + vy * vy );
+        const std::uint32_t mph_bits = 0x3EE4E26Du;
+        float mph;
+        std::memcpy( &mph, &mph_bits, 4 );
+        const float limit = ( ( state_f( boat, 0x470 ) * ( state_f( engine, 0xC ) * state_f( engine, 4 ) ) ) * mph ) * 0.5f;
+        if ( speed > limit )
+        {
+            const float before = state_f( boat, 0x480 );
+            const float after = before + dt;
+            state_put_f( boat, 0x480, after );
+            if ( 4.0f > before && after >= 4.0f )
+                io.event = true;   // HOOK: g 0x758FEC vt+0x1C(boat, "Drafting")
+            return;
+        }
+    }
+    state_put_f( boat, 0x480, 0.0f );
+}
