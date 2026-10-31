@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/collision/box.hxx>
+#include <workspace/core/collision/cylinder.hxx>
 #include <workspace/core/boat/driver.hxx>
 #include <workspace/core/boat/sections.hxx>
 #include <workspace/core/boat/state.hxx>
@@ -458,6 +459,64 @@ inline bool verify_box_shape( )
     return failed == 0;
 }
 
+// The cylinders' virtuals (engine collision/cylinder.hxx) against retail's
+// (oracle case cylinder_shape): the shape's 0x50 bytes after and every output
+// word, except the w lanes 0x5AE950 and the batched forms copy from an
+// unwritten stack word.
+inline bool verify_cylinder_shape( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_cylinder_shape_count; ++index )
+    {
+        const unsigned* s = g_golden_cylinder_shape_words + g_golden_cylinder_shape_offsets[ index ];
+        const unsigned function = *s++;
+        std::uint8_t shape[ 0x50 ];
+        std::memcpy( shape, s, 0x50 );
+        s += 0x14;
+        const unsigned in_bytes = *s++;
+        std::vector< float > in( in_bytes / 4 );
+        std::memcpy( in.data( ), s, in_bytes );
+        s += in_bytes / 4;
+        const unsigned char* want_shape = reinterpret_cast< const unsigned char* >( s );
+        s += 0x14;
+        const unsigned out_bytes = *s++;
+        const unsigned char* want_out = reinterpret_cast< const unsigned char* >( s );
+        std::vector< float > out( out_bytes / 4 + 4, 0.0f );
+        std::memset( out.data( ), 0xCD, out.size( ) * 4 );
+        std::int32_t up;
+        std::memcpy( &up, shape + 0x40, 4 );
+        const cylinder_axes_t axes = cylinder_axes( up );
+        bool w_residue = false;
+        switch ( function )
+        {
+        case 0x5AE2D0u: cylinder_local_inertia( shape, in[ 0 ], out.data( ) ); break;
+        case 0x5AE950u: cylinder_support( shape, axes, in.data( ), out.data( ) ); w_residue = true; break;
+        case 0x5AE560u: case 0x5AE430u: case 0x5AE4C0u: cylinder_support_without_margin( shape, axes, in.data( ), out.data( ) ); break;
+        default:
+            cylinder_support_batched( shape, axes, in.data( ), out.data( ), static_cast< int >( in.size( ) / 4 ) );
+            w_residue = true;
+            break;
+        }
+        int bad = -1;
+        for ( int at = 0; at < 0x50 && bad < 0; ++at )
+            if ( shape[ at ] != want_shape[ at ] )
+                bad = at;
+        const unsigned char* ours = reinterpret_cast< const unsigned char* >( out.data( ) );
+        for ( unsigned at = 0; at < out_bytes && bad < 0; ++at )
+            if ( !( w_residue && at % 16 >= 12 ) && ours[ at ] != want_out[ at ] )
+                bad = 0x100 + static_cast< int >( at );
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "cylinder 0x%X vector %d differs from retail at 0x%X (0x1xx: output byte)", function,
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "btCylinderShape / X / Z virtuals (0x5AE2D0, 0x5AE950, 0x5AE560 / 430 / 4C0, 0x5AE600 / 7A0 / 6D0) match retail: %d vectors",
+                     static_cast< int >( g_golden_cylinder_shape_count ) );
+    else
+        LOG_ERROR( "cylinder virtuals FAILED %d of %d vectors", failed, static_cast< int >( g_golden_cylinder_shape_count ) );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
@@ -468,5 +527,6 @@ inline bool verify_boat_all( )
     ok = verify_boat_tick_state( ) && ok;
     ok = verify_boat_jump( ) && ok;
     ok = verify_box_shape( ) && ok;
+    ok = verify_cylinder_shape( ) && ok;
     return ok;
 }
