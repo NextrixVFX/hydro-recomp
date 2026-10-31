@@ -216,7 +216,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x407800,85,sub_407800,,,entity / component / script framework (by address),callee,,False,False
 0x407860,20,sub_407860,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/object.hxx,False,False
 0x407880,56,sub_407880,,,entity / component / script framework (by address),absent,,False,False
-0x4078C0,1254,VuMatrix_multiply,,,entity / component / script framework (by address),verified,hydro/workspace/core/boat/fluid.hxx; hydro/workspace/core/boat/hull.hxx; hydro/workspace/core/world/transform.hxx,False,False
+0x4078C0,1254,VuMatrix_multiply,,,entity / component / script framework (by address),verified,hydro/workspace/core/boat/fluid.hxx; hydro/workspace/core/boat/hull.hxx; hydro/workspace/core/game/types.hxx; hydro/workspace/core/world/transform.hxx,False,False
 0x407DB0,110,VuMatrix_fromScale,,,unattributed,cited,hydro/workspace/core/trigger/volume.hxx,False,False
 0x407E20,6,sub_407E20,,,unattributed,absent,,False,False
 0x407E30,6,sub_407E30,VuSayVoiceOverEntity,VuSayVoiceOverEntity+1,audio,absent,,False,False
@@ -4655,7 +4655,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x501E00,167,sub_501E00,,,unattributed,callee,,False,False
 0x501EB0,155,sub_501EB0,,,unattributed,absent,,False,False
 0x501F70,97,loader_00501F70_load_Properties,,,unattributed,verified,engine/workspace/core/entity/node.hxx; hydro/workspace/utility/check.hxx,False,False
-0x501FE0,47,sub_501FE0,,,unattributed,verified,engine/workspace/core/entity/node.hxx,False,False
+0x501FE0,47,sub_501FE0,,,unattributed,verified,engine/workspace/core/entity/node.hxx; hydro/workspace/core/game/types.hxx,False,False
 0x502010,97,loader_00502010_load_Properties,,,unattributed,verified,engine/workspace/core/entity/node.hxx,False,False
 0x502080,242,VuScriptOutputPlug_init,,,unattributed,verified,hydro/workspace/core/world/world.hxx,False,False
 0x502180,219,sub_502180,,,unattributed,absent,,False,False
@@ -5307,10 +5307,10 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5343F0,167,sub_5343F0,VuTransformComponent,VuTransformComponent+11,entity / component / script framework,cited,hydro/workspace/core/game/types.hxx; hydro/workspace/core/world/transform.hxx,False,False
 0x5344A0,279,sub_5344A0,,,entity / component / script framework (by address),absent,,False,False
 0x5345C0,187,sub_5345C0,,,entity / component / script framework (by address),absent,,False,False
-0x534680,422,sub_534680,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/object.hxx; hydro/workspace/core/world/transform.hxx,False,False
+0x534680,422,sub_534680,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/object.hxx; hydro/workspace/core/game/types.hxx; hydro/workspace/core/world/transform.hxx,False,False
 0x534830,623,sub_534830,,,entity / component / script framework (by address),absent,,False,False
 0x534AA0,338,sub_534AA0,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/transform.hxx; hydro/workspace/utility/check.hxx,False,False
-0x534C00,416,sub_534C00,,,unattributed,verified,engine/workspace/core/entity/node.hxx; hydro/workspace/core/game/types.hxx; hydro/workspace/core/world/transform.hxx,False,False
+0x534C00,416,sub_534C00,,,unattributed,verified,engine/workspace/core/entity/node.hxx; hydro/workspace/core/game/types.hxx; hydro/workspace/core/world/transform.hxx; hydro/workspace/utility/check.hxx,False,False
 0x534DA0,1144,sub_534DA0,,,unattributed,absent,,False,False
 0x535220,650,sub_535220,,,unattributed,absent,,False,False
 0x5354B0,650,sub_5354B0,,,unattributed,absent,,False,False

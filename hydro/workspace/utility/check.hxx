@@ -1057,6 +1057,9 @@ inline bool verify_load_templates( )
         const auto found = documents.find( "VuTemplateAsset/" + name );
         return found == documents.end( ) ? nullptr : &found->second;
     };
+    world.m_components_for = entity_components_constructed;
+    world.m_component_load = entity_load_component;
+    world.m_component_mark = entity_mark_component;
     int failed = 0;
     int compared = 0;
     for ( std::size_t s = 0; s < g_golden_load_templates_subtrees_count; ++s )
@@ -1109,12 +1112,38 @@ inline bool verify_load_templates( )
                 if ( ++failed <= 8 )
                     LOG_ERROR( "load templates: entity %d is '%s' flags %u template '%s', retail '%s' flags %u template '%s'", k,
                         have.m_name.c_str( ), have.m_flags, have.m_template.c_str( ), want.m_name, want.m_flags, want_template.c_str( ) );
+                continue;
             }
+            // The transform after the whole create + override load (the template's own load, the mark's new
+            // defaults, the override, 0x534C00's child walk): every word, the world euler skipped under a
+            // parent and the fourth lanes skipped (as verify_transform_load).
+            const golden_transform_words_t& tw = g_golden_load_templates_transforms[ subtree.m_first + k ];
+            transform_component_t* t = entity_transform( const_cast< entity_t& >( have ) );
+            int bad = ( t != nullptr ) != ( tw.m_has != 0 ) || have.m_world_unknown ? 0 : -1;
+            if ( bad < 0 && t )
+            {
+                unsigned words[ 44 ];
+                std::memcpy( words, t->local, 64 );
+                std::memcpy( words + 16, t->world, 64 );
+                std::memcpy( words + 32, t->rotation, 16 );
+                std::memcpy( words + 36, t->world_rotation, 16 );
+                std::memcpy( words + 40, t->scale, 16 );
+                for ( int w = 0; w < 44 && bad < 0; ++w )
+                {
+                    if ( ( w % 4 == 3 && w >= 32 ) || ( w >= 36 && w < 40 && have.m_parent ) )
+                        continue;
+                    if ( words[ w ] != tw.m_words[ w ] )
+                        bad = w;
+                }
+            }
+            if ( bad >= 0 && ++failed <= 8 )
+                LOG_ERROR( "load templates: '%s' transform differs at word %d", want.m_name, bad );
         }
     }
     if ( failed == 0 )
         LOG_SUCCESS( "the template path matches retail's 0x556E70 / 0x5016A0 / 0x5015D0 on %d real instance(s): %d entities - "
-                     "names, parents, order, vtables, flags (bit 2 on template descendants), template owner",
+                     "names, parents, order, vtables, flags (bit 2 on template descendants), template owner, and every "
+                     "transform word after the override (the mark's defaults, 0x534C00's child walk)",
             static_cast< int >( g_golden_load_templates_subtrees_count ), compared );
     else
         LOG_ERROR( "the template path FAILED %d checks against 0x556E70", failed );

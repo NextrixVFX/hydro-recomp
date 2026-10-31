@@ -81,6 +81,9 @@ struct entity_world_t
     // a component it does not know: a hook.
     std::function< void( entity_t& owner, entity_component_t& component, const value_t& properties, bool override ) >
         m_component_load;
+    // The template mark's component step (0x501FE0: each property node's
+    // vt+0x1C, then the component's vt+0x20). Null or unknown: a hook.
+    std::function< void( entity_t& owner, entity_component_t& component ) > m_component_mark;
 };
 
 // 0x500690, the child order (std::sort's comparator in 0x501810): a child with
@@ -135,15 +138,20 @@ inline void entity_load_components( entity_t& entity, const value_t& components,
     }
 }
 
-// 0x5016A0, run on a fresh template instance: every entity in the subtree whose
-// +0x4C is empty - all of the instance's descendants, not the instance - gets
-// +0x14 |= 2; each property's vt+0x1C and the components' 0x501FE0 are hooks.
-inline void entity_mark_template( entity_t& entity )
+// 0x5016A0, run on a fresh template instance, over the whole subtree (the
+// instance too): an entity whose +0x4C is empty - every descendant, not the
+// instance - gets +0x14 |= 2; then each of its property nodes' vt+0x1C (its
+// default becomes the current value - a hook for the entity's own properties
+// until they are modelled per entity) and 0x501FE0 over its components.
+inline void entity_mark_template( entity_t& entity, const entity_world_t& world )
 {
     if ( entity.m_template.empty( ) )
         entity.m_flags |= 2;
+    for ( entity_component_t& component : entity.m_components )
+        if ( world.m_component_mark )
+            world.m_component_mark( entity, component );
     for ( auto& child : entity.m_children )
-        entity_mark_template( *child );
+        entity_mark_template( *child, world );
 }
 
 // The registry's create fn for `type`, as far as it is recreated: a captured
@@ -180,7 +188,7 @@ inline std::unique_ptr< entity_t > entity_create( const std::string& type, const
     // The root type's own vt+0x2C load on the template's data, while +0x4C is still empty.
     entity_load( *entity, &member( root, "data" ), world );
     entity->m_template = name;
-    entity_mark_template( *entity );
+    entity_mark_template( *entity, world );
     return entity;
 }
 

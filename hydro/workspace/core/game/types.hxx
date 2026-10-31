@@ -642,55 +642,106 @@ inline std::vector< entity_component_t > entity_components_for( const std::strin
 
 constexpr std::uint32_t k_transform_component_vtable = 0x74D324u;
 
-inline transform_component_t* entity_transform( entity_t& e )
+// A VuTransformComponent and its three property nodes' defaults (+0x14 of each
+// node): the ctor's values until a template mark makes the loaded ones the
+// defaults (every property class's vt+0x1C copies the target into it).
+struct transform_state_t
+{
+    transform_component_t c;
+    float position[ 3 ];
+    float rotation[ 3 ];
+    float scale[ 3 ];
+};
+
+inline transform_state_t* entity_transform_state( entity_t& e )
 {
     for ( entity_component_t& c : e.m_components )
         if ( c.m_vtable == k_transform_component_vtable && c.m_state )
-            return static_cast< transform_component_t* >( c.m_state.get( ) );
+            return static_cast< transform_state_t* >( c.m_state.get( ) );
     return nullptr;
+}
+
+inline transform_component_t* entity_transform( entity_t& e )
+{
+    transform_state_t* s = entity_transform_state( e );
+    return s ? &s->c : nullptr;
 }
 
 inline void entity_mark_world_unknown( entity_t& e )
 {
+    e.m_world_unknown = true;
     for ( auto& child : e.m_children )
-    {
-        child->m_world_unknown = true;
         entity_mark_world_unknown( *child );
+}
+
+// 0x534C00, the recalc's last step: every child of the owner gets world =
+// its local x this world (0x4078C0) and its world euler (CRT atan2 / asin -
+// not recreated, so unknown under a parent), the child's watcher (+0xC0, only
+// when notified) is a hook, and the walk recurses into it. A child whose
+// transform is not modelled (an UNKNOWN entity) cannot be updated: its world,
+// and its subtree's, is unknown.
+inline void transform_walk_children( entity_t& owner, const float* world )
+{
+    for ( auto& child : owner.m_children )
+    {
+        transform_component_t* t = entity_transform( *child );
+        if ( !t )
+        {
+            entity_mark_world_unknown( *child );
+            continue;
+        }
+        transform_world( *t, world );
+        transform_walk_children( *child, t->world );
     }
 }
 
 // The world's component load for the components recreated so far - only
 // VuTransformComponent (constructed by its ctor 0x534180 when the owner is,
-// so its state exists from creation): its Position / Rotation / Scale loads,
-// then its post-load (vt+0xC 0x534340, vt+0x10 0x5343F0 - the same body), the
-// recalc against the owner's parent's transform world as it stands NOW. The
-// recalc's last step 0x534C00(1) walks the owner's children to update their
-// worlds and is not recreated: children recalced against this entity's
-// earlier world, so when the recalc changes it, their worlds are marked
-// unknown. Every other component is a hook.
+// so its state exists from creation): its Position / Rotation / Scale loads
+// (each reset to its node's default first), then its post-load (vt+0xC
+// 0x534340, vt+0x10 0x5343F0 - the same body): the recalc against the owner's
+// parent's transform world as it stands now, then 0x534C00's child walk.
+// Every other component is a hook.
 inline void entity_load_component( entity_t& owner, entity_component_t& component, const value_t& properties, bool )
 {
     if ( component.m_vtable != k_transform_component_vtable )
         return;
-    transform_component_t* c = static_cast< transform_component_t* >( component.m_state.get( ) );
-    float before[ 16 ];
-    std::memcpy( before, c->world, sizeof( before ) );
-    transform_load( *c, properties );
+    transform_state_t* s = static_cast< transform_state_t* >( component.m_state.get( ) );
+    transform_property( properties, "Position", s->c.local + 12, s->position, false );
+    transform_property( properties, "Rotation", s->c.rotation, s->rotation, true );
+    transform_property( properties, "Scale", s->c.scale, s->scale, false );
     transform_component_t* parent = owner.m_parent ? entity_transform( *owner.m_parent ) : nullptr;
-    transform_recalc( *c, parent ? parent->world : nullptr );
-    if ( std::memcmp( c->world, before, sizeof( before ) ) != 0 )
-        entity_mark_world_unknown( owner );
+    transform_recalc( s->c, parent ? parent->world : nullptr );
+    transform_walk_children( owner, s->c.world );
 }
 
-// entity_components_for with each recreated component's state constructed.
+// The template mark's component step 0x501FE0: each property node's vt+0x1C -
+// its default becomes the target's current value; the component's vt+0x20 is
+// a hook.
+inline void entity_mark_component( entity_t&, entity_component_t& component )
+{
+    if ( component.m_vtable != k_transform_component_vtable )
+        return;
+    transform_state_t* s = static_cast< transform_state_t* >( component.m_state.get( ) );
+    std::memcpy( s->position, s->c.local + 12, sizeof( s->position ) );
+    std::memcpy( s->rotation, s->c.rotation, sizeof( s->rotation ) );
+    std::memcpy( s->scale, s->c.scale, sizeof( s->scale ) );
+}
+
+// entity_components_for with each recreated component's state constructed:
+// the transform's ctor 0x534180, whose 0x534680 registers Position, Rotation
+// and Scale with their targets' values as the defaults.
 inline std::vector< entity_component_t > entity_components_constructed( const std::string& cls )
 {
     std::vector< entity_component_t > out = entity_components_for( cls );
     for ( entity_component_t& c : out )
         if ( c.m_vtable == k_transform_component_vtable )
         {
-            auto state = std::make_shared< transform_component_t >( );
-            transform_construct( *state );
+            auto state = std::make_shared< transform_state_t >( );
+            transform_construct( state->c );
+            std::memcpy( state->position, state->c.local + 12, sizeof( state->position ) );
+            std::memcpy( state->rotation, state->c.rotation, sizeof( state->rotation ) );
+            std::memcpy( state->scale, state->c.scale, sizeof( state->scale ) );
             c.m_state = state;
         }
     return out;
