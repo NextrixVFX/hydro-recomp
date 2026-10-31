@@ -71,9 +71,88 @@ inline bool verify_ocean_kernels( )
     return failed == 0;
 }
 
+inline wake_record_t wake_record( const float* f )
+{
+    wake_record_t r{};
+    std::memcpy( &r, f, sizeof( r ) );
+    return r;
+}
+
+// wake_vertex against VuWaterWakeWave's base kernel @0x52ca60 and its ctx+100 variant @0x52ce20, the flat
+// wake's slot 3 @0x52ca30 with ctx+96 clear (it must leave every vertex alone), and wake_tick against the
+// shared tick @0x52c210 (al and both ages). Bit exact; the sine is fsincos under Unicorn (see wave.hxx).
+inline bool verify_wake_kernels( )
+{
+    int checked = 0;
+    int failed = 0;
+    int live = 0;
+    for ( std::size_t index = 0; index < g_golden_wake_kernels_count; ++index )
+    {
+        const golden_wake_kernel_t& g = g_golden_wake_kernels[ index ];
+        wake_wave_t wave{};
+        wave.inner_ratio = g.m_head[ 0 ];
+        wave.outer_ratio = g.m_head[ 1 ];
+        wave.scale = g.m_head[ 2 ];
+        wave.a = wake_record( g.m_a );
+        wave.b = wake_record( g.m_b );
+        for ( int i = 0; i < g.m_point_count; ++i )
+        {
+            float displacement[ 3 ] = { 0.25f, -0.5f, 1.5f };
+            float height = 2.0f;
+            if ( !g.m_flat && ( !g.m_variant || g_golden_wake_tags[ g.m_tags + i ] == 1u ) )
+            {
+                wake_vertex( wave, g_golden_wake_points[ g.m_points + 2 * i ],
+                    g_golden_wake_points[ g.m_points + 2 * i + 1 ], displacement, height );
+            }
+            const float ours[ 4 ] = { displacement[ 0 ], displacement[ 1 ], displacement[ 2 ], height };
+            const float* want = g_golden_wake_out + g.m_out + 4 * i;
+            ++checked;
+            if ( want[ 3 ] != 2.0f )
+                ++live;
+            if ( std::memcmp( ours, want, sizeof( ours ) ) != 0 )
+            {
+                ++failed;
+                if ( failed <= 6 )
+                {
+                    LOG_ERROR( "wake_vertex flat %d variant %d point %.6g %.6g: ours %.9g retail %.9g", g.m_flat,
+                        g.m_variant, g_golden_wake_points[ g.m_points + 2 * i ],
+                        g_golden_wake_points[ g.m_points + 2 * i + 1 ], ours[ 3 ], want[ 3 ] );
+                }
+            }
+        }
+    }
+    int ticks_failed = 0;
+    for ( std::size_t index = 0; index < g_golden_wake_ticks_count; ++index )
+    {
+        const golden_wake_tick_t& g = g_golden_wake_ticks[ index ];
+        wake_wave_t wave{};
+        wave.a = wake_record( g.m_a );
+        wave.b = wake_record( g.m_b );
+        const bool alive = wake_tick( wave, g.m_mode, g.m_dt );
+        const float ages[ 2 ] = { wave.a.age, wave.b.age };
+        if ( alive != ( g.m_alive != 0 ) || std::memcmp( ages, g.m_ages, sizeof( ages ) ) != 0 )
+        {
+            ++ticks_failed;
+            LOG_ERROR( "wake_tick mode %d dt %.6g: ours %d %.9g %.9g retail %d %.9g %.9g", g.m_mode, g.m_dt, alive,
+                ages[ 0 ], ages[ 1 ], g.m_alive, g.m_ages[ 0 ], g.m_ages[ 1 ] );
+        }
+    }
+    if ( failed == 0 && ticks_failed == 0 )
+    {
+        LOG_SUCCESS( "wake_vertex matches VuWaterWakeWave's kernels @0x52ca60 / +100 @0x52ce20 and the flat wake's @0x52ca30 bit for bit on %d vertices (%d producing output); wake_tick matches @0x52c210 on %d ticks",
+            checked, live, static_cast< int >( g_golden_wake_ticks_count ) );
+    }
+    else
+    {
+        LOG_ERROR( "wake kernels FAILED %d of %d vertices, %d ticks", failed, checked, ticks_failed );
+    }
+    return failed == 0 && ticks_failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
     ok = verify_ocean_kernels( ) && ok;
+    ok = verify_wake_kernels( ) && ok;
     return ok;
 }

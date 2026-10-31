@@ -678,6 +678,117 @@ inline void ocean_patch_vertex( const ocean_patch_t& wave, bool circle, float x,
     displacement[ 2 ] = static_cast< float >( rate ) + displacement[ 2 ];
 }
 
+// VuWaterWakeWave's base kernel @0x52ca60 (slot 3 @0x52c260, both flags
+// clear) and its ctx+100 variant @0x52ce20. A wake wave is the stretch of a
+// boat's wake between TWO SEGMENT RECORDS, each 13 floats, copied in by the
+// constructor @0x52beb0 from the same 0x34-byte source into +88 and +140 (the
+// second is overwritten as the wake moves on). Each record, named for what
+// this kernel does with the slot (the authoring side is the boat's, not read):
+//
+//   +0 / +4  a point on the cross-section    +16 / +20  its forward direction
+//   +24  the life                            +28  the fade time
+//   +32  the amplitude                       +36  the radius
+//   +40  the speed                           +44  the frequency
+//   +48  the age, advanced by the shared tick @0x52c210
+//
+// and on the wave itself +76 / +80 the inner / outer radius ratios and +84
+// the height scale. A vertex counts only BETWEEN the two cross-sections (its
+// signed distances to them have opposite signs); every record field is then
+// blended at t = dB / (dB - dA), the vertex must lie inside the blended
+// radius, and the ring that has had time to travel out to it contributes a
+// sine. HEIGHT ONLY.
+//
+// THE SINE IS x87 `fsincos` on the folded phase, stored to a float. The
+// oracle measures it under Unicorn, whose fsincos is a host double sine; the
+// form below - the CRT double sine narrowed - matches those vectors. Real
+// hardware's fsincos is NOT measured here, and its float rounding could
+// differ in a rare last bit.
+struct wake_record_t
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float w = 0.0f;
+    float direction_x = 0.0f;
+    float direction_y = 0.0f;
+    float life = 0.0f;
+    float fade_time = 0.0f;
+    float amplitude = 0.0f;
+    float radius = 0.0f;
+    float speed = 0.0f;
+    float frequency = 0.0f;
+    float age = 0.0f;
+};
+static_assert( sizeof( wake_record_t ) == 0x34, "the constructor's 0x34-byte copy" );
+
+struct wake_wave_t
+{
+    float inner_ratio = 0.0f;   // +76
+    float outer_ratio = 0.0f;   // +80
+    float scale = 0.0f;         // +84
+    wake_record_t a{};          // +88
+    wake_record_t b{};          // +140
+};
+
+inline void wake_vertex( const wake_wave_t& wave, float x, float y, float* displacement, float& height )
+{
+    ( void )displacement;
+    const wake_record_t& a = wave.a;
+    const wake_record_t& b = wave.b;
+    const float da = ( a.direction_x * ( x - a.x ) ) + ( a.direction_y * ( y - a.y ) );
+    const float db = ( b.direction_y * ( y - b.y ) ) + ( b.direction_x * ( x - b.x ) );
+    if ( !ocean_gt( 0.0f, db * da ) )
+        return;
+    const float t = db / ( db - da );
+    const float s = 1.0f - t;
+    const float px = ( a.x * t ) + ( b.x * s );
+    const float py = ( a.y * t ) + ( b.y * s );
+    const float radius = ( b.radius * s ) + ( a.radius * t );
+    const float ey = y - py;
+    const float ex = x - px;
+    const float d2 = ( ey * ey ) + ( ex * ex );
+    if ( !ocean_gt( radius * radius, d2 ) )
+        return;
+    const float age = ( b.age * s ) + ( a.age * t );
+    const float speed = ( b.speed * s ) + ( a.speed * t );
+    const float d = _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( d2 ) ) );
+    // maxss( 0, q ): q when 0 is not greater, so a NaN q passes through.
+    const float travelled = _mm_cvtss_f32( _mm_max_ss( _mm_setzero_ps( ),
+        _mm_set_ss( d - ( wave.inner_ratio * radius ) ) ) );
+    const float local = age - ( travelled / speed );
+    if ( !ocean_gt( local, 0.0f ) )
+        return;
+    const float life = ( b.life * s ) + ( a.life * t );
+    if ( !ocean_gt( life, age ) )
+        return;
+    float amplitude = ( b.amplitude * s ) + ( a.amplitude * t );
+    const float k = d / radius;
+    const float frequency = ( b.frequency * s ) + ( a.frequency * t );
+    const float fade_time = ( b.fade_time * s ) + ( a.fade_time * t );
+    if ( ocean_gt( wave.inner_ratio, k ) )
+        amplitude = ( k / wave.inner_ratio ) * amplitude;
+    if ( ocean_gt( k, wave.outer_ratio ) )
+        amplitude = ( ( 1.0f - k ) / ( 1.0f - wave.outer_ratio ) ) * amplitude;
+    const float ratio = ( life - age ) / fade_time;
+    const float phase = ( frequency * local ) + 3.1415927f;
+    // minss( ratio, 1 ): 1 when ratio is not less, so a NaN ratio gives 1.
+    const float weight = _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( ratio ), _mm_set_ss( 1.0f ) ) ) * amplitude;
+    const float sine = static_cast< float >( std::sin( static_cast< double >( wave_fold( phase ) ) ) );
+    height = ( ( sine * weight ) * wave.scale ) + height;
+}
+
+// The tick both wake waves share @0x52c210 (thiscall, float dt; al): both
+// records age by dt, and the wave stays alive unless its mode (+4) is 1 AND
+// both records are past their life.
+inline bool wake_tick( wake_wave_t& wave, int mode, float dt )
+{
+    wave.a.age = dt + wave.a.age;
+    wave.b.age = dt + wave.b.age;
+    if ( mode != 1 )
+        return true;
+    return !( ocean_gt( wave.a.age, wave.a.life ) && ocean_gt( wave.b.age, wave.b.life ) );
+}
+
 // The walk retail performs around that body: count vertices from the context's
 // base pointer, advancing by a stride given in BYTES.
 inline void whirlpool_apply( const whirlpool_t& wave, unsigned char* vertices,
