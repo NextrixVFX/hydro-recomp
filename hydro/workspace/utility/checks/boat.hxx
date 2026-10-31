@@ -1000,6 +1000,57 @@ inline bool verify_boat_transform( )
     return failed == 0;
 }
 
+// boat_boost (boat/state.hxx) against retail's 0x41F9D0 (oracle case
+// boat_boost; the FMOD imports and the stats event intercepted): the boat and
+// animation blocks after, and the platform calls by kind and name.
+inline bool verify_boat_boost( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_boost_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_boost_words + g_golden_boat_boost_offsets[ index ];
+        float dt;
+        std::memcpy( &dt, s++, 4 );
+        const boat_driver_t driver = boat_driver_of( *s++ );
+        const unsigned players = *s++;
+        std::vector< std::string > want( *s++ );
+        for ( auto& w : want )
+        {
+            const unsigned kind = *s++;
+            const unsigned length = *s++;
+            w = ( kind ? "stats " : "sound " ) + std::string( reinterpret_cast< const char* >( s ), length );
+            s += ( length + 3 ) / 4;
+        }
+        std::vector< std::uint8_t > boat( reinterpret_cast< const std::uint8_t* >( s ), reinterpret_cast< const std::uint8_t* >( s ) + 0x520 );
+        s += 0x520 / 4;
+        std::vector< std::uint8_t > anim( reinterpret_cast< const std::uint8_t* >( s ), reinterpret_cast< const std::uint8_t* >( s ) + 0xDC );
+        s += 0xDC / 4;
+        std::vector< std::string > got;
+        boat_boost_hooks_t hooks;
+        hooks.user = &got;
+        hooks.sound = []( void* u, const std::string& e ) { static_cast< std::vector< std::string >* >( u )->push_back( "sound " + e ); };
+        hooks.stats = []( void* u, const char* n ) { static_cast< std::vector< std::string >* >( u )->push_back( std::string( "stats " ) + n ); };
+        boat_boost( boat.data( ), anim.data( ), driver.slot[ 0 ], driver.slot[ 2 ], players, dt, hooks );
+        int bad = got != want ? 0x7000 : -1;
+        for ( int at = 0; at < 0x520 && bad < 0; ++at )
+            if ( boat[ at ] != reinterpret_cast< const std::uint8_t* >( s )[ at ] )
+                bad = at;
+        s += 0x520 / 4;
+        for ( int at = 0; at < 0xDC && bad < 0; ++at )
+            if ( anim[ at ] != reinterpret_cast< const std::uint8_t* >( s )[ at ] )
+                bad = 0x1000 + at;
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "boat boost vector %d differs from retail at 0x%X (0x1xxx the animation; 0x7000 the platform calls)",
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the Decision sub-tick 0x41F9D0 (boost; FMOD / stats hooked) matches retail: %d vectors",
+                     static_cast< int >( g_golden_boat_boost_count ) );
+    else
+        LOG_ERROR( "boat boost FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_boost_count ) );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
@@ -1016,5 +1067,6 @@ inline bool verify_boat_all( )
     ok = verify_boat_nose_probe( ) && ok;
     ok = verify_boat_load_sections( ) && ok;
     ok = verify_boat_transform( ) && ok;
+    ok = verify_boat_boost( ) && ok;
     return ok;
 }
