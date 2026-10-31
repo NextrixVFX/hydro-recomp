@@ -248,9 +248,9 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x409220,23,sub_409220,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+7; VuRotation3dProperty+7; VuBasicProperty<...>+7,entity / component / script framework,callee,,False,False
 0x409240,23,sub_409240,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+8; VuRotation3dProperty+8; VuBasicProperty<...>+8,entity / component / script framework,absent,,False,False
 0x409260,31,sub_409260,VuBasicProperty<...>,VuBasicProperty<...>+9; VuBasicProperty<...>+10; VuBasicProperty<...>+9; VuBasicProperty<...>+10,entity / component / script framework,callee,,False,False
-0x409280,81,sub_409280,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+2; VuRotation3dProperty+2; VuBasicProperty<...>+2,entity / component / script framework,verified,hydro/workspace/core/world/transform.hxx,False,False
+0x409280,81,sub_409280,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+2; VuRotation3dProperty+2; VuBasicProperty<...>+2,entity / component / script framework,verified,engine/workspace/core/entity/property.hxx; hydro/workspace/core/world/transform.hxx,False,False
 0x4092E0,79,sub_4092E0,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+3; VuRotation3dProperty+3,entity / component / script framework,absent,,False,False
-0x409330,189,sub_409330,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+4; VuRotation3dProperty+4,entity / component / script framework,verified,hydro/workspace/core/world/transform.hxx,False,False
+0x409330,189,sub_409330,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+4; VuRotation3dProperty+4,entity / component / script framework,verified,engine/workspace/core/entity/property.hxx; hydro/workspace/core/world/transform.hxx,False,False
 0x4093F0,185,sub_4093F0,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+5; VuRotation3dProperty+5,entity / component / script framework,absent,,False,False
 0x4094B0,186,sub_4094B0,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+6; VuRotation3dProperty+6,entity / component / script framework,absent,,False,False
 0x409570,153,sub_409570,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/world.hxx,False,False
@@ -4584,7 +4584,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4FDB80,11,sub_4FDB80,VuDevStat,VuDevStat+4,engine core / math / containers,absent,,False,False
 0x4FDB90,38,sub_4FDB90,,,engine core / math / containers (by address),absent,,False,False
 0x4FDBC0,151,sub_4FDBC0,,,engine core / math / containers (by address),verified,engine/workspace/core/assets/tree.hxx,False,False
-0x4FDC60,195,sub_4FDC60,,,engine core / math / containers (by address),verified,engine/workspace/core/assets/tree.hxx; engine/workspace/utility/verify.hxx; hydro/workspace/core/boat/construct.hxx; hydro/workspace/core/world/transform.hxx,False,False
+0x4FDC60,195,sub_4FDC60,,,engine core / math / containers (by address),verified,engine/workspace/core/assets/tree.hxx; engine/workspace/core/entity/property.hxx; engine/workspace/utility/verify.hxx; hydro/workspace/core/boat/construct.hxx; hydro/workspace/core/world/transform.hxx,False,False
 0x4FDD30,257,sub_4FDD30,,,engine core / math / containers (by address),cited,engine/workspace/core/assets/tree.hxx,False,False
 0x4FDE40,120,sub_4FDE40,,,engine core / math / containers (by address),absent,,False,False
 0x4FDEC0,279,sub_4FDEC0,,,engine core / math / containers (by address),verified,engine/workspace/core/entity/property.hxx,False,False
@@ -7711,24 +7711,24 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5E8BD0,6,sub_5E8BD0,VuCoronaEntity,VuCoronaEntity+1,rendering / gfx,absent,,False,False
 0x5E8BE0,72,sub_5E8BE0,,,rendering / gfx (by address),cited,engine/workspace/core/entity/light.hxx; hydro/workspace/core/world/world.hxx,False,False
 0x5E8C30,72,sub_5E8C30,,,rendering / gfx (by address),cited,engine/workspace/core/entity/light.hxx; hydro/workspace/core/world/world.hxx,False,False
-0x5E8C80,117,VuCoronaEntity_create,,,rendering / gfx (by address),cited,engine/workspace/core/entity/light.hxx,False,False
-0x5E8D00,125,sub_5E8D00,,,rendering / gfx (by address),cited,engine/workspace/core/entity/light.hxx; hydro/workspace/core/world/world.hxx,False,False
-0x5E8D80,2875,VuCoronaEntity_ctor,,,rendering / gfx (by address),cited,engine/workspace/core/entity/light.hxx; hydro/workspace/core/world/world.hxx,False,False
+0x5E8C80,117,VuCoronaEntity_create,,,rendering / gfx (by address),verified,engine/workspace/core/entity/corona.hxx; engine/workspace/core/entity/light.hxx,False,False
+0x5E8D00,125,sub_5E8D00,,,rendering / gfx (by address),verified,engine/workspace/core/entity/light.hxx; hydro/workspace/core/world/world.hxx,False,False
+0x5E8D80,2875,VuCoronaEntity_ctor,,,rendering / gfx (by address),verified,engine/workspace/core/entity/corona.hxx; engine/workspace/core/entity/light.hxx; hydro/workspace/core/world/world.hxx; hydro/workspace/utility/check.hxx,False,False
 0x5E98C0,34,sub_5E98C0,VuCoronaEntity,VuCoronaEntity+0,rendering / gfx,absent,,False,False
 0x5E98F0,140,sub_5E98F0,,,rendering / gfx (by address),absent,,False,False
-0x5E9980,139,VuCoronaEntity_refreshBounds,VuCoronaEntity,VuCoronaEntity+2; VuCoronaEntity+3,rendering / gfx,cited,engine/workspace/core/entity/light.hxx,False,False
+0x5E9980,139,VuCoronaEntity_refreshBounds,VuCoronaEntity,VuCoronaEntity+2; VuCoronaEntity+3,rendering / gfx,verified,engine/workspace/core/entity/light.hxx,False,False
 0x5E9A10,271,VuCoronaEntity_onLoad,VuCoronaEntity,VuCoronaEntity+6,rendering / gfx,cited,engine/workspace/core/entity/light.hxx,False,False
 0x5E9B20,60,VuCoronaEntity_onUnload,VuCoronaEntity,VuCoronaEntity+7,rendering / gfx,cited,engine/workspace/core/entity/light.hxx,False,False
 0x5E9B60,99,sub_5E9B60,,,rendering / gfx (by address),cited,engine/workspace/core/entity/light.hxx,False,False
 0x5E9BD0,109,sub_5E9BD0,,,rendering / gfx (by address),absent,,False,False
 0x5E9C40,16,sub_5E9C40,,,rendering / gfx (by address),absent,,False,False
-0x5E9C50,293,sub_5E9C50,,,rendering / gfx (by address),cited,engine/workspace/core/entity/light.hxx,False,False
+0x5E9C50,293,sub_5E9C50,,,rendering / gfx (by address),verified,engine/workspace/core/entity/light.hxx,False,False
 0x5E9D80,93,sub_5E9D80,,,rendering / gfx (by address),absent,,False,False
 0x5E9DE0,151,sub_5E9DE0,,,rendering / gfx (by address),cited,engine/workspace/core/entity/light.hxx,False,False
-0x5E9E80,88,sub_5E9E80,,,rendering / gfx (by address),absent,,False,False
-0x5E9EE0,73,sub_5E9EE0,,,rendering / gfx (by address),absent,,False,False
-0x5E9F30,73,sub_5E9F30,,,rendering / gfx (by address),absent,,False,False
-0x5E9F80,156,sub_5E9F80,,,rendering / gfx (by address),absent,,False,False
+0x5E9E80,88,sub_5E9E80,,,rendering / gfx (by address),callee,,False,False
+0x5E9EE0,73,sub_5E9EE0,,,rendering / gfx (by address),callee,,False,False
+0x5E9F30,73,sub_5E9F30,,,rendering / gfx (by address),callee,,False,False
+0x5E9F80,156,sub_5E9F80,,,rendering / gfx (by address),callee,,False,False
 0x5EA020,6,sub_5EA020,VuOneShotPfxEntity,VuOneShotPfxEntity+1,entity / component / script framework,absent,,False,False
 0x5EA030,117,sub_5EA030,,,entity / component / script framework (by address),absent,,False,False
 0x5EA0B0,1168,sub_5EA0B0,,,entity / component / script framework (by address),absent,,False,False
@@ -8240,8 +8240,8 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x61CD20,98,VuTriggerEntity_onDeactivate,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/world.hxx,False,False
 0x61CD90,150,VuScriptInputPlug_create,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/world.hxx,False,False
 0x61CE30,38,sub_61CE30,VuCoronaRayTestResult,VuCoronaRayTestResult+0,rendering / gfx,absent,,False,False
-0x61CE60,129,sub_61CE60,,,rendering / gfx (by address),cited,engine/workspace/core/entity/light.hxx; hydro/workspace/core/world/world.hxx,False,False
-0x61CF00,249,sub_61CF00,,,rendering / gfx (by address),cited,engine/workspace/core/entity/light.hxx,False,False
+0x61CE60,129,sub_61CE60,,,rendering / gfx (by address),verified,engine/workspace/core/entity/corona.hxx; engine/workspace/core/entity/light.hxx; hydro/workspace/core/world/world.hxx,False,False
+0x61CF00,249,sub_61CF00,,,rendering / gfx (by address),cited,engine/workspace/core/entity/corona.hxx; engine/workspace/core/entity/light.hxx,False,False
 0x61D000,406,sub_61D000,,,rendering / gfx (by address),cited,engine/workspace/core/entity/light.hxx,False,False
 0x61D1A0,868,sub_61D1A0,,,rendering / gfx (by address),cited,engine/workspace/core/entity/light.hxx,False,False
 0x61D510,6,sub_61D510,Vu3dDrawAnimatedModelComponent,Vu3dDrawAnimatedModelComponent+1,rendering / gfx,absent,,False,False

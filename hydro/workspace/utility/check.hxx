@@ -8,6 +8,7 @@
 #include <workspace/core/boat/construct.hxx>
 #include <workspace/core/game/types.hxx>
 #include <workspace/core/entity/dynamic.hxx>
+#include <workspace/core/entity/corona.hxx>
 #include <workspace/utility/golden.hxx>
 #include <workspace/utility/logger.hxx>
 
@@ -1348,10 +1349,68 @@ inline bool verify_load_components( )
     return failed == 0;
 }
 
+// corona_load (engine entity/corona.hxx) against VuCoronaEntity's property
+// loads as retail's VuEntity::load runs them (oracle case load_coronas): every
+// corona in the Hydroelectric level, each target compared bit for bit (the
+// rotation axis's fourth lane, parse-stack residue, skipped). "Texture Name"
+// is not compared: its class's load is unread and its change is the
+// rendering layer's texture load, a hook in the case.
+inline bool verify_coronas( )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_coronas_document );
+    const value_t document = c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_coronas_document_bytes ) ).parse( );
+    int failed = 0;
+    int compared = 0;
+    const auto word = []( float f )
+    {
+        std::uint32_t b;
+        std::memcpy( &b, &f, sizeof( b ) );
+        return b;
+    };
+    for ( std::size_t k = 0; k < g_golden_coronas_count; ++k )
+    {
+        const golden_corona_t& want = g_golden_coronas[ k ];
+        const value_t* node = &member( member( document, "VuProject" ), "RootEntity" );
+        for ( int d = 0; d < want.m_depth && node; ++d )
+        {
+            const value_t& children = member( member( *node, "data" ), "ChildEntities" );
+            node = want.m_index[ d ] < static_cast< int >( children.list.size( ) ) ? &children.list[ want.m_index[ d ] ] : nullptr;
+        }
+        if ( !node )
+        {
+            LOG_ERROR( "coronas: '%s' not found", want.m_name );
+            ++failed;
+            continue;
+        }
+        corona_properties_t c;
+        corona_construct( c );
+        corona_load( c, member( member( *node, "data" ), "Properties" ) );
+        const std::uint32_t ours[ 17 ] = { c.initially_visible, word( c.rotation_speed ), word( c.rotation_axis[ 0 ] ),
+            word( c.rotation_axis[ 1 ] ), word( c.rotation_axis[ 2 ] ), 0u, word( c.draw_distance ), word( c.fade_distance ),
+            word( c.query_radius ), word( c.cone ), word( c.penumbra ), c.back_light, c.texture_color, c.screen_space,
+            word( c.texture_size ), word( c.rotation_offset ), word( c.rotation_amount ) };
+        for ( int p = 0; p < 17; ++p )
+        {
+            if ( p == 5 )
+                continue;   // the rotation axis's fourth lane
+            ++compared;
+            if ( ours[ p ] != want.m_values[ p ] && ++failed <= 8 )
+                LOG_ERROR( "coronas: '%s' value %d is 0x%08X, retail 0x%08X", want.m_name, p, ours[ p ], want.m_values[ p ] );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "corona_load matches VuCoronaEntity's property loads (ctor 0x5E8D80) on %d level coronas: %d values, bit "
+                     "for bit", static_cast< int >( g_golden_coronas_count ), compared );
+    else
+        LOG_ERROR( "corona_load FAILED %d checks against 0x5E8D80's properties", failed );
+    return failed == 0;
+}
+
 // Every oracle-backed check on game code.
 inline bool verify_game( )
 {
     bool ok = true;
+    ok = verify_coronas( ) && ok;
     ok = verify_load_components( ) && ok;
     ok = verify_dynamic_lights( ) && ok;
     ok = verify_entity_registry( ) && ok;

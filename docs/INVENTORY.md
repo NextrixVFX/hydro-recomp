@@ -18,10 +18,10 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 383 | 218536 |
-| callee | 191 | 29748 |
-| cited | 187 | 110661 |
-| absent | 7877 | 1867315 |
+| verified | 389 | 222214 |
+| callee | 195 | 30138 |
+| cited | 181 | 106983 |
+| absent | 7873 | 1866925 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -35,7 +35,7 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 | entity / component / script framework | 1094 | 38 | 55 | 59 | 942 | 12333 of 207438 |
 | HUD / UI / fonts | 648 | 2 | 0 | 3 | 643 | 2305 of 184315 |
 | game modes / race | 766 | 1 | 7 | 0 | 758 | 81 of 179957 |
-| rendering / gfx | 552 | 13 | 9 | 16 | 514 | 4372 of 126915 |
+| rendering / gfx | 552 | 19 | 13 | 10 | 510 | 8050 of 126915 |
 | water | 325 | 11 | 2 | 19 | 293 | 7154 of 96416 |
 | boat | 264 | 11 | 5 | 10 | 238 | 7924 of 87400 |
 | engine core / math / containers | 391 | 8 | 1 | 5 | 377 | 2293 of 76072 |

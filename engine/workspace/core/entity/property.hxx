@@ -60,6 +60,23 @@ inline void property_float( const value_t& properties, const char* name, float& 
         target = parsed;
 }
 
+// VuBasicProperty<VuVector3,8>: load 0x409280, value read 0x409330 through the
+// vec3 parse 0x4FDC60 (false: nothing stored, the lanes it wrote before failing
+// stay in its own temporary); the filter copies; stored only if a lane differs
+// (ucomiss per lane). The target's fourth lane is not touched by the parse and
+// is not modelled.
+inline void property_vector3( const value_t& properties, const char* name, float* target, const float* fallback )
+{
+    for ( int lane = 0; lane < 3; ++lane )
+        target[ lane ] = fallback[ lane ];
+    float parsed[ 3 ];
+    if ( !vec3( member( properties, name ), parsed ) )
+        return;
+    if ( target[ 0 ] != parsed[ 0 ] || target[ 1 ] != parsed[ 1 ] || target[ 2 ] != parsed[ 2 ] )
+        for ( int lane = 0; lane < 3; ++lane )
+            target[ lane ] = parsed[ lane ];
+}
+
 // One channel of the colour parse 0x4FDEC0: an int, a float truncated
 // (cvttss2si), or an int64's low dword; false for any other tag.
 inline bool property_channel( const value_t& value, std::int32_t& out )
