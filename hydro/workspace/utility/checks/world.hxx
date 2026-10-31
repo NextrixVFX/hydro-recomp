@@ -191,6 +191,70 @@ inline bool verify_triggers( )
     return failed == 0;
 }
 
+// VuStaticPfxEntity's four property loads (engine entity/pfx.hxx through the
+// tree's entity_load_properties) and its onGameInitialize 0x5EB060 hand-off to
+// the particle system (oracle case load_static_pfx: the template entities plus
+// three hand-built): the targets bit for bit, then what hydro hands c_pfx -
+// setScale = Pfx Scale, setColor = static_pfx_color, setMatrix = the transform
+// world (scale kept out), start iff Initially Active.
+inline bool verify_static_pfx( )
+{
+    std::map< std::string, entity_t* > by_name;
+    const std::unique_ptr< entity_t > tree = world_check_tree( g_golden_static_pfx_document, g_golden_static_pfx_document_bytes, by_name );
+    int failed = 0;
+    int compared = 0;
+    const auto word = []( float f )
+    {
+        std::uint32_t b;
+        std::memcpy( &b, &f, sizeof( b ) );
+        return b;
+    };
+    for ( std::size_t k = 0; k < g_golden_static_pfx_count; ++k )
+    {
+        const golden_entity_targets_t& want = g_golden_static_pfx[ k ];
+        const golden_pfx_handoff_t& hand = g_golden_static_pfx_handoff[ k ];
+        const auto found = by_name.find( want.m_child );
+        const transform_component_t* t = found != by_name.end( ) ? entity_transform( *found->second ) : nullptr;
+        if ( found == by_name.end( ) || !found->second->m_state || found->second->m_type != want.m_type || !t )
+        {
+            LOG_ERROR( "static pfx: '%s' (%s) missing, without state or without a transform", want.m_source, want.m_child );
+            ++failed;
+            continue;
+        }
+        const static_pfx_t& p = static_cast< const static_pfx_state_t* >( found->second->m_state.get( ) )->value;
+        world_check_words( "static pfx", want, { p.initially_active, word( p.pfx_scale ), p.pfx_color }, failed, compared );
+        ++compared;
+        if ( p.effect_name != want.m_text && ++failed <= 8 )
+            LOG_ERROR( "static pfx: '%s' Effect Name is '%s', retail '%s'", want.m_source, p.effect_name.c_str( ), want.m_text );
+        float color[ 4 ];
+        static_pfx_color( p, color );
+        std::vector< std::uint32_t > ours = { static_cast< std::uint32_t >( p.initially_active != 0 ), word( p.pfx_scale ) };
+        std::vector< std::uint32_t > theirs = { static_cast< std::uint32_t >( hand.m_started ), hand.m_scale };
+        for ( int c = 0; c < 4; ++c )
+        {
+            ours.push_back( word( color[ c ] ) );
+            theirs.push_back( hand.m_color[ c ] );
+        }
+        for ( int w = 0; w < 16; ++w )
+        {
+            ours.push_back( word( t->world[ w ] ) );
+            theirs.push_back( hand.m_matrix[ w ] );
+        }
+        for ( std::size_t w = 0; w < ours.size( ); ++w )
+        {
+            ++compared;
+            if ( ours[ w ] != theirs[ w ] && ++failed <= 8 )
+                LOG_ERROR( "static pfx: '%s' hand-off word %d is 0x%08X, retail 0x%08X", want.m_source, static_cast< int >( w ), ours[ w ], theirs[ w ] );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "static_pfx_load and the hand-off to the particle system match VuStaticPfxEntity (ctor 0x5EAA40, onGameInitialize "
+                     "0x5EB060) on %d entities: %d values, bit for bit", static_cast< int >( g_golden_static_pfx_count ), compared );
+    else
+        LOG_ERROR( "the static pfx loads / hand-off FAILED %d checks", failed );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
@@ -198,5 +262,6 @@ inline bool verify_world_all( )
     ok = verify_light_rig( ) && ok;
     ok = verify_gfx_settings( ) && ok;
     ok = verify_triggers( ) && ok;
+    ok = verify_static_pfx( ) && ok;
     return ok;
 }

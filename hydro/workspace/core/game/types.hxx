@@ -8,6 +8,7 @@
 #include <workspace/core/entity/rig.hxx>
 #include <workspace/core/entity/gfx.hxx>
 #include <workspace/core/entity/trigger.hxx>
+#include <workspace/core/entity/pfx.hxx>
 
 #include <cstring>
 
@@ -924,6 +925,13 @@ struct trigger_state_t
     trigger_properties_t defaults;
 };
 
+// VuStaticPfxEntity (engine entity/pfx.hxx).
+struct static_pfx_state_t
+{
+    static_pfx_t value;
+    static_pfx_t defaults;
+};
+
 inline bool entity_is_trigger( const std::string& cls )
 {
     return cls == "VuTriggerPlaneEntity" || cls == "VuTriggerBoxEntity";
@@ -966,6 +974,13 @@ inline std::shared_ptr< void > entity_state_for( const std::string& cls )
         trigger_construct( s->defaults );
         return s;
     }
+    if ( cls == "VuStaticPfxEntity" )
+    {
+        auto s = std::make_shared< static_pfx_state_t >( );
+        static_pfx_construct( s->value );
+        static_pfx_construct( s->defaults );
+        return s;
+    }
     return nullptr;
 }
 
@@ -998,6 +1013,11 @@ inline void entity_load_properties( entity_t& entity, const value_t& properties 
         trigger_state_t* s = static_cast< trigger_state_t* >( entity.m_state.get( ) );
         trigger_load( s->value, properties, s->defaults );
     }
+    else if ( entity.m_type == "VuStaticPfxEntity" && entity.m_state )
+    {
+        static_pfx_state_t* s = static_cast< static_pfx_state_t* >( entity.m_state.get( ) );
+        static_pfx_load( s->value, properties, s->defaults );
+    }
 }
 
 // The template mark's property step (each node's vt+0x1C): default = value.
@@ -1026,6 +1046,11 @@ inline void entity_mark_properties( entity_t& entity )
     else if ( entity_is_trigger( entity.m_type ) && entity.m_state )
     {
         trigger_state_t* s = static_cast< trigger_state_t* >( entity.m_state.get( ) );
+        s->defaults = s->value;
+    }
+    else if ( entity.m_type == "VuStaticPfxEntity" && entity.m_state )
+    {
+        static_pfx_state_t* s = static_cast< static_pfx_state_t* >( entity.m_state.get( ) );
         s->defaults = s->value;
     }
 }

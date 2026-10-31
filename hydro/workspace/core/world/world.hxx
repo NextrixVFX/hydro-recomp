@@ -785,29 +785,7 @@ private:
             // retail entity tree (load_entity_tree).
             // VuFoliageEntity drew a hand-built billboard quad from an invented
             // vertex layout. Deleted; build it from the entity's own draw path.
-            if ( type->text == "VuStaticPfxEntity" )
-            {
-                // VuStaticPfxEntity_ctor @0x5EAA40, emulated. Note its
-                // "Initially Active" defaults TRUE, where
-                // VuRigidBodyComponent's defaults FALSE - a default belongs to
-                // its own class and never carries across.
-                const c_entity_binder bind( type->text, overlay, properties );
-                const std::string effect = bind.text( "Effect Name" );
-                if ( !effect.empty( ) )
-                {
-                    // Pfx Color is a VuColor, which the binder has no typed
-                    // accessor for yet, so the four bytes are read here.
-                    const value_t* tint = bind.authored( "Pfx Color" );
-                    const float color[ 4 ] = {
-                        number( tint != nullptr ? find( *tint, "R" ) : nullptr, 255.0f ) / 255.0f,
-                        number( tint != nullptr ? find( *tint, "G" ) : nullptr, 255.0f ) / 255.0f,
-                        number( tint != nullptr ? find( *tint, "B" ) : nullptr, 255.0f ) / 255.0f,
-                        number( tint != nullptr ? find( *tint, "A" ) : nullptr, 255.0f ) / 255.0f
-                    };
-                    m_pfx.add( m_archive, effect, world, bind.real( "Pfx Scale", 1.0f ),
-                        color, bind.boolean( "Initially Active", true ) );
-                }
-            }
+            // VuStaticPfxEntity is built from the retail entity tree (load_entity_tree).
             if ( type->text == "VuSkyBoxEntity" && properties != nullptr )
             {
                 const c_entity_binder bind( type->text, overlay, properties );
@@ -2938,6 +2916,8 @@ private:
         // Every static placement, by owner, for the rotators (adopt_rotators).
         std::vector< collected_t > collected;
         std::vector< trigger_t > fresh_triggers;
+        int pfx_placed = 0;
+        int pfx_unplaced = 0;
         int triggers_unplaced = 0;
         // The event graph addresses an entity by its names below the project
         // root, '/'-joined.
@@ -2968,6 +2948,28 @@ private:
                     gate.kind = p.trigger_type;
                     gate.active = p.initially_active != 0;
                     fresh_triggers.push_back( std::move( gate ) );
+                }
+            }
+            // VuStaticPfxEntity (engine entity/pfx.hxx): what its onGameInitialize
+            // 0x5EB060 hands the VuPfxSystem the pfx manager (0x75904C vt+0x28)
+            // creates from its Effect Name - setScale(Pfx Scale), setColor
+            // (static_pfx_color), setMatrix(the transform WORLD: scale kept out,
+            // as its transform watcher 0x5EB4A0 hands it too) and start() iff
+            // Initially Active. The manager's lookup is the platform side: an
+            // empty name is skipped here (what retail's manager returns for it
+            // is unread), and c_pfx stands in for the system.
+            if ( e.m_type == "VuStaticPfxEntity" && e.m_state )
+            {
+                const static_pfx_t& p = static_cast< const static_pfx_state_t* >( e.m_state.get( ) )->value;
+                const transform_component_t* t = entity_transform( e );
+                if ( !t || e.m_world_unknown )
+                    ++pfx_unplaced;
+                else if ( !p.effect_name.empty( ) )
+                {
+                    float color[ 4 ];
+                    static_pfx_color( p, color );
+                    m_pfx.add( m_archive, p.effect_name, t->world, p.pfx_scale, color, p.initially_active != 0 );
+                    ++pfx_placed;
                 }
             }
             // VuGlobalGfxSettingsEntity (engine entity/gfx.hxx): the far plane is
@@ -3095,8 +3097,9 @@ private:
         for ( trigger_t& gate : fresh_triggers )
             m_triggers.add( std::move( gate ) );
         LOG_INFO( "entity tree: %s (%s) - %d entities, %d UNKNOWN (nothing below one is loaded); %d coronas placed, %d with an "
-                  "unknown world; %d models placed, %d with an unknown world; %d triggers, %d with an unknown world", asset, path.c_str( ),
-            entities, unknown, placed, unplaced, models, models_unplaced, static_cast< int >( m_triggers.size( ) ), triggers_unplaced );
+                  "unknown world; %d models placed, %d with an unknown world; %d triggers, %d with an unknown world; %d static pfx placed, %d "
+                  "with an unknown world", asset, path.c_str( ), entities, unknown, placed, unplaced, models, models_unplaced,
+            static_cast< int >( m_triggers.size( ) ), triggers_unplaced, pfx_placed, pfx_unplaced );
         // Which types' construction is not captured - what to recreate next.
         for ( const auto& pair : unknown_types )
             LOG_VERBOSE( "entity tree: UNKNOWN %-40s x%d", pair.first.c_str( ), pair.second );
