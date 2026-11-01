@@ -5,6 +5,7 @@
 #include <workspace/core/boat/anim.hxx>
 #include <workspace/core/boat/human.hxx>
 #include <workspace/core/boat/pilots.hxx>
+#include <workspace/core/boat/manager.hxx>
 
 #include <algorithm>
 #include <array>
@@ -1065,6 +1066,69 @@ inline bool verify_driver_slots( )
     return false;
 }
 
+// VuBoatManager's add 0x4AAF60 / remove 0x4AB040 against retail (oracle case boat_manager): the driver's kind
+// from its vtable (boat_driver_kind), every operation replayed, then +0x58 and the five lists - sizes, the
+// capacities retail's growth keeps, the entries in order.
+inline bool verify_boat_manager( )
+{
+    const unsigned* g = g_golden_boat_manager_words;
+    const unsigned ns = *g++;
+    int failed = 0, compared = 0, ops = 0;
+    for ( unsigned s = 0; s < ns; ++s )
+    {
+        const unsigned nb = *g++;
+        std::vector< boat_driver_kind_t > kinds( nb );
+        std::vector< int > ids( nb );
+        for ( unsigned i = 0; i < nb; ++i, ++g )
+        {
+            ids[ i ] = static_cast< int >( i );
+            if ( !boat_driver_kind( *g, kinds[ i ] ) && ++failed <= 8 )
+                LOG_ERROR( "boat_manager sequence %u: no kind for the vtable 0x%X", s, *g );
+        }
+        boat_manager_t m;
+        const unsigned no = *g++;
+        for ( unsigned o = 0; o < no; ++o, ++ops )
+        {
+            const unsigned op = *g++, b = *g++, has_pre = *g++;
+            const std::int32_t pre = static_cast< std::int32_t >( *g++ );
+            if ( has_pre )
+                m.viewport = pre;
+            if ( op == 0 )
+                boat_manager_add( m, &ids[ b ], kinds[ b ] );
+            else
+                boat_manager_remove( m, &ids[ b ] );
+            ++compared;
+            if ( static_cast< unsigned >( m.viewport ) != *g && ++failed <= 8 )
+                LOG_ERROR( "boat_manager sequence %u op %u: viewport %d, retail %d", s, o, m.viewport, static_cast< int >( *g ) );
+            ++g;
+            const boat_manager_list_t* lists[ 5 ] = { &m.all, &m.racers, &m.humans, &m.ais, &m.ghosts };
+            for ( int k = 0; k < 5; ++k )
+            {
+                const unsigned size = *g++, cap = *g++;
+                compared += 2;
+                if ( lists[ k ]->boats.size( ) != size && ++failed <= 8 )
+                    LOG_ERROR( "boat_manager sequence %u op %u list %d: size %zu, retail %u", s, o, k, lists[ k ]->boats.size( ), size );
+                if ( static_cast< unsigned >( lists[ k ]->capacity ) != cap && ++failed <= 8 )
+                    LOG_ERROR( "boat_manager sequence %u op %u list %d: capacity %d, retail %u", s, o, k, lists[ k ]->capacity, cap );
+                for ( unsigned j = 0; j < size; ++j, ++g )
+                {
+                    ++compared;
+                    const void* want = *g < nb ? &ids[ *g ] : nullptr;
+                    if ( ( j >= lists[ k ]->boats.size( ) || lists[ k ]->boats[ j ] != want ) && ++failed <= 8 )
+                        LOG_ERROR( "boat_manager sequence %u op %u list %d entry %u differs (retail boat %u)", s, o, k, j, *g );
+                }
+            }
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuBoatManager add 0x4AAF60 / remove 0x4AB040 (+0x415690, 0x4AB7D0) match retail: %d operations, %d values", ops, compared );
+        return true;
+    }
+    LOG_ERROR( "boat_manager FAILED %d of %d values", failed, compared );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -1077,5 +1141,6 @@ inline bool verify_race_all( )
     ok = verify_boat_drivers( ) && ok;
     ok = verify_nuisance_tick( ) && ok;
     ok = verify_driver_slots( ) && ok;
+    ok = verify_boat_manager( ) && ok;
     return ok;
 }
