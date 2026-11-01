@@ -7,6 +7,7 @@
 #include <workspace/core/ui/leaves.hxx>
 #include <workspace/core/ui/navigate.hxx>
 #include <workspace/core/ui/results.hxx>
+#include <workspace/core/ui/board.hxx>
 #include <workspace/core/ui/screen.hxx>
 #include <workspace/core/ui/slider.hxx>
 #include <workspace/core/ui/ticker.hxx>
@@ -344,6 +345,10 @@ struct ui_bound_t
     ui_combo_box_hooks_t m_combo_hooks;
     std::unique_ptr< c_ui_combo_box > m_combo;              // VuUISubtitlesSettingEntity (chooser.hxx)
     std::unique_ptr< ui_boat_stat_t > m_stat;               // VuBoatStatEntity +0xB0
+    // batch 22: VuUIMiniLeaderboardEntity (board.hxx; bound when m_leaderboard is set)
+    ui_mini_board_hooks_t m_board_hooks;
+    std::unique_ptr< c_ui_mini_board > m_board;
+    bool m_board_ticking = false;                           // "Decision" registered (slot 6) and not yet unregistered (slot 7)
 };
 
 struct ui_bind_hooks_t
@@ -398,6 +403,10 @@ struct ui_bind_hooks_t
     const value_t* m_boat_db = nullptr;
     const value_t* m_skin_db = nullptr;
     const value_t* m_champ_db = nullptr;
+    // Batch 22: the platform leaderboard manager g 0x758FA8 (HOOKS, an online service: m_read / m_status /
+    // m_count / m_row of board.hxx's hooks; the binding supplies the tick manager's register (traced
+    // "board_tick|register|Decision"), m_delta and m_root itself). Null: VuUIMiniLeaderboardEntity not bound.
+    const ui_mini_board_hooks_t* m_leaderboard = nullptr;
 };
 
 // An entity's own property slot (its loaded ui_state_t), or null.
@@ -1044,6 +1053,32 @@ private:
             bind_config( b );
         else if ( b.m_vtable == k_ui_boat_stat_vtable )
             b.m_stat = std::make_unique< ui_boat_stat_t >( );
+        else if ( b.m_vtable == k_ui_mini_board_vtable && m_hooks.m_leaderboard )
+        {
+            // ctor 0x47CC40 registers no event handlers; its draw / slot 6 / slot 7 / "Decision" are board.hxx's
+            ui_mini_board_hooks_t& h = b.m_board_hooks;
+            h = *m_hooks.m_leaderboard;
+            ui_bound_t* bp = &b;
+            const auto read = h.m_read;
+            h.m_read = [ this, bp, read ]( const std::string& key, int a, int rows )
+            {
+                trace( ui_trace_kind_t::hook, bp->m_index, "board_read|" + key + "|" + std::to_string( a ) + "|" + std::to_string( rows ), 0u,
+                       ui_params_t( ), true );
+                if ( read )
+                    read( key, a, rows );
+            };
+            h.m_tick_register = [ this, bp ]( bool on )
+            {
+                // the tick manager g 0x759008 vt+0x20 / +0x24 (the binding's "Decision" list: decision( ))
+                trace( ui_trace_kind_t::hook, bp->m_index, on ? "board_tick|register|Decision" : "board_tick|unregister|Decision", 0u,
+                       ui_params_t( ), true );
+                bp->m_board_ticking = on;
+            };
+            h.m_delta = [ this ] { return m_hooks.m_delta ? m_hooks.m_delta( ) : 0.0f; };
+            if ( m_hooks.m_root )
+                h.m_root = m_hooks.m_root;   // gameutil +80 (else the leaderboard hooks' own)
+            b.m_board = std::make_unique< c_ui_mini_board >( ui_mini_board_of( e ), h );
+        }
         else if ( b.m_vtable == k_ui_subtitles_vtable )
         {
             ui_combo_box_hooks_t& h = b.m_combo_hooks;
@@ -1314,6 +1349,8 @@ private:
             known = true;
         else if ( vt == k_ui_subtitles_vtable && b && b->m_combo && m_hooks.m_touch_device && ( !init || m_hooks.m_settings ) )
             known = true;
+        else if ( vt == k_ui_mini_board_vtable && b && b->m_board )
+            known = true;
         trace( ui_trace_kind_t::game, index, std::string( ), address, ui_params_t( ), known );
         if ( !known )
         {
@@ -1339,6 +1376,14 @@ private:
             }
             else
                 ui_touch_remove( *m_hooks.m_touch_device, b->m_button.get( ) );
+        }
+        else if ( vt == k_ui_mini_board_vtable )
+        {
+            // slot 6 0x47DAB0 / slot 7 0x47DB10 (board.hxx)
+            if ( init )
+                b->m_board->initialize( );
+            else
+                b->m_board->release( );
         }
         else if ( init )
             b->m_combo->initialize( *m_hooks.m_touch_device, m_hooks.m_settings->m_subtitles ? 1u : 0u );
@@ -1390,6 +1435,21 @@ public:
     void project_initialize( ) { hud_initialize( ); }
     void project_release( ) { hud_release( ); }
     int m_unknown_slots = 0;   // slot 6 / 7 rows entered that are not recreated
+    // Batch 22: the tick manager's "Decision" phase (g 0x759008) for the bound mini
+    // leaderboards whose slot 6 registered 0x47E170 (in binding order; the caller
+    // runs this where the game runs that phase).
+    void decision( )
+    {
+        for ( auto& b : m_bound )
+            if ( b->m_board && b->m_board_ticking )
+                b->m_board->decision( );
+    }
+    // A bound mini leaderboard (its FSM / key; draw( ) for the frame's m_board), or null.
+    c_ui_mini_board* mini_board( const entity_t& e )
+    {
+        const int index = index_of( e );
+        return index >= 0 ? m_bound[ static_cast< std::size_t >( index ) ]->m_board.get( ) : nullptr;
+    }
     // VuHUDEntity slot 12 0x423A20: VuParams { float dt } -> "OnUITick" to the
     // DIRECT children (0x5011A0).
     void hud_tick( float dt )

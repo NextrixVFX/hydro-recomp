@@ -56,7 +56,9 @@ enum class ui_frame_kind_t
     stat,       // VuBoatStatEntity 0x44FB60 (leaves.hxx ui_boat_stat_draw; needs m_stat)
     bar,        // VuLoadingProgressBarEntity 0x4632E0 (leaves.hxx ui_progress_bar_draw; needs m_bar)
     difficulty_image,  // VuDifficultyImageEntity: 0x4077E3 -> slot 12 0x45AF40 (difficulty.hxx; needs m_difficulty)
-    difficulty_text    // VuDifficultyTextEntity: 0x4077E3 -> slot 12 0x45AA30 (difficulty.hxx; needs m_difficulty)
+    difficulty_text,   // VuDifficultyTextEntity: 0x4077E3 -> slot 12 0x45AA30 (difficulty.hxx; needs m_difficulty)
+    board,             // VuUIMiniLeaderboardEntity: 0x47DB40 (board.hxx c_ui_mini_board::draw over its runtime FSM; needs m_board)
+    leaderboard        // VuUILeaderboardEntity: 0x47A360 (ladder.hxx ui_leaderboard_draw over its runtime state; needs m_leaderboard)
 };
 
 struct ui_draw_target_t
@@ -132,8 +134,8 @@ inline const ui_draw_target_t k_ui_draw_targets[ ] = {
     { 0x0073E10Cu, 0x004700E0u, 0x004700E0u, ui_frame_kind_t::other, 0x00000000u },   // Screens/ControlsTiltTouch (1 loaded)
     { 0x0073E15Cu, 0x004390BEu, 0x00475B10u, ui_frame_kind_t::combo_box, 0x00000000u },   // Screens/ControlsTiltTouch (1 loaded)
     { 0x0073F110u, 0x00477240u, 0x00477240u, ui_frame_kind_t::other, 0x00000000u },   // HUDs/GhostPreGameHUD (1 loaded)
-    { 0x0073F2C8u, 0x0047A360u, 0x0047A360u, ui_frame_kind_t::other, 0x00000000u },   // Screens/Leaderboard (1 loaded)
-    { 0x0073F408u, 0x0047DB40u, 0x0047DB40u, ui_frame_kind_t::other, 0x00000000u },   // Screens/GameConfigGhost (4 loaded)
+    { 0x0073F2C8u, 0x0047A360u, 0x0047A360u, ui_frame_kind_t::leaderboard, 0x00000000u },   // Screens/Leaderboard (1 loaded)
+    { 0x0073F408u, 0x0047DB40u, 0x0047DB40u, ui_frame_kind_t::board, 0x00000000u },   // Screens/GameConfigGhost (4 loaded)
 };
 
 inline const ui_draw_target_t* ui_draw_target_of( const entity_t& e )
@@ -227,6 +229,11 @@ struct ui_frame_inputs_t
     // (which 0) / Pressed Texture Asset (which 1) texture (+0xCC / +0xD0 -> +0x4C -> +0x58; null: no asset or
     // no texture). Set: those leaves emit through controls.hxx over the binding's runtime state.
     std::function< const ui_texture_t*( const entity_t&, int which ) > m_control_texture;
+    // Batch 22: the leaderboards' draws over their runtime objects (the FSM, the records, the platform
+    // leaderboard manager's rows - the owner's, e.g. c_ui_binding::mini_board( )): run the draw into `sort`
+    // with the leaf's environment; false = it reached a path not recreated. Null: unrecreated.
+    std::function< bool( const entity_t&, ui_gfx_sort_t&, const ui_font_draw_env_t& ) > m_board;
+    std::function< bool( const entity_t&, ui_gfx_sort_t&, const ui_font_draw_env_t& ) > m_leaderboard;
 };
 
 // A loaded entity's own / its first UI draw component's property bits.
@@ -478,6 +485,10 @@ inline bool ui_frame_emit( ui_gfx_sort_t& sort, const ui_impl_t& impl, const ui_
     }
     if ( d.m_kind == ui_frame_kind_t::difficulty_image || d.m_kind == ui_frame_kind_t::difficulty_text )
         return ui_frame_emit_difficulty( sort, env, e, d.m_kind == ui_frame_kind_t::difficulty_text, in );
+    if ( d.m_kind == ui_frame_kind_t::board )
+        return in.m_board( e, sort, env );
+    if ( d.m_kind == ui_frame_kind_t::leaderboard )
+        return in.m_leaderboard( e, sort, env );
     return true;
 }
 
@@ -502,6 +513,10 @@ inline bool ui_frame_ready( ui_frame_kind_t kind, const ui_frame_inputs_t* in )
     case ui_frame_kind_t::difficulty_image:
     case ui_frame_kind_t::difficulty_text:
         return in && in->m_difficulty;
+    case ui_frame_kind_t::board:
+        return in && in->m_board;
+    case ui_frame_kind_t::leaderboard:
+        return in && in->m_leaderboard;
     default:
         return true;
     }

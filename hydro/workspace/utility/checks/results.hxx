@@ -386,6 +386,16 @@ inline bool verify_ui_screen_game_init( )
         ui_bind_hooks_t hooks;
         hooks.m_touch_device = &device;
         hooks.m_settings = &settings;
+        // batch 22: a project the case gave a game-data root holds a mini leaderboard - its slot 6 / 7 run live
+        // (the leaderboard manager's read and the tick manager's register come out as the binding's traces)
+        ui_mini_board_hooks_t leaderboard;
+        value_t board_root;
+        if ( gp.m_root[ 0 ] )
+        {
+            board_root = c_reader( ui_unhex( gp.m_root ) ).parse( );
+            leaderboard.m_root = &board_root;
+            hooks.m_leaderboard = &leaderboard;
+        }
         c_ui_binding bind( *root, hooks );
         if ( static_cast< int >( bind.m_bound.size( ) ) != gp.m_count )
         {
@@ -440,6 +450,15 @@ inline bool verify_ui_screen_game_init( )
             t += "|F";
             for ( const auto& b : bind.m_bound )
                 t += ( b->m_entity->m_flags & 4u ) ? "1" : "0";
+            std::string boards;
+            for ( const auto& b : bind.m_bound )
+                if ( b->m_board )
+                {
+                    std::snprintf( word, sizeof word, "%d,%d,", b->m_index, b->m_board->m_fsm.m_current );
+                    boards += word + b->m_board->m_key + ";";
+                }
+            if ( !boards.empty( ) )
+                t += "|B" + boards;
             return t;
         };
         // the trace from `first` as retail's log lines (init / release: repository, slots, 0x5EFA60; trigger: broadcasts)
@@ -460,6 +479,8 @@ inline bool verify_ui_screen_game_init( )
                     std::snprintf( line, sizeof line, "%s|%d", t.m_name == "repository_add" ? "repo_add" : "repo_remove", t.m_index );
                 else if ( t.m_kind == ui_trace_kind_t::game )
                     std::snprintf( line, sizeof line, "slot|%d|0x%06X", t.m_index, t.m_word );
+                else if ( t.m_kind == ui_trace_kind_t::hook && t.m_name.compare( 0, 6, "board_" ) == 0 )
+                    std::snprintf( line, sizeof line, "%s", t.m_name.c_str( ) );
                 else if ( t.m_kind == ui_trace_kind_t::event && t.m_word == 0x5EFA60u )
                     std::snprintf( line, sizeof line, "event|%d|0x%06X", t.m_index, t.m_word );
                 if ( line[ 0 ] )
@@ -532,7 +553,7 @@ inline bool verify_ui_screen_game_init( )
     }
     if ( failed == 0 )
         LOG_SUCCESS( "c_ui_binding project_initialize / project_release (+ VuUserNextUIAction's Trigger) match retail's 0x500B10 / 0x501260 / "
-                     "0x500B80 (button 0x4426E0 + 0x53FAE0, subtitles 0x46D7A0, 0x4253D0; 0x470E50) on %d Screens projects: %d phases, %d log "
+                     "0x500B80 (button 0x4426E0 + 0x53FAE0, subtitles 0x46D7A0, 0x4253D0, mini leaderboard 0x47DAB0 / 0x47DB10; 0x470E50) on %d Screens projects: %d phases, %d log "
                      "lines in order (%d slot 6 / 7 entries), %d triggers, the touch device / combos / flags after each",
             static_cast< int >( g_golden_sgi_projects_count ), phases, logs, slots, triggers );
     else
