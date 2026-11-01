@@ -2819,8 +2819,31 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     // slots 13 / 5 in race_begin (start.hxx), its Game exit's TrackDB and the human's boat class (+0x160).
     s.start.timetrial = mode == "TimeTrial";
     s.start.slalom = mode == "Slalom";
+    s.start.ghost = mode == "Ghost";
     if ( s.start.slalom )
         race_session_slalom( s, tree, db );
+    else if ( s.start.ghost )
+    {
+        // VuGhostGame 0x484A20: VuGame's base machines (verified), then ITS machine +0x700 from the ctor's table (game_mode_defs,
+        // case game_ctors) - its state handlers are not recreated yet: each logs UNKNOWN (rules.hxx game_mode_construct), so the
+        // machine sits in GetLeaderboard (no "Success"). Retail's own slots that ARE read: 5 0x485340 (race_rules_start), 13
+        // 0x487570 (start.hxx race_place_timetrial "Ghost"), 7 0x485380 (race_rules_tick, then the ghosts' matrix copy below),
+        // 12 = nullsub 0x4021A0 (no results written). Slot 15 0x487640 is not read (drive.hxx: UNKNOWN).
+        vugame_fsms_construct( s.rules );
+        s.rules.buoys = 0;
+        game_mode_construct( s.rules.fsm, game_mode_defs( )[ 2 ], [ &s ]( std::uint32_t address, const char* what ) {
+            if ( s.rules.unrecreated )
+                s.rules.unrecreated( address, what );
+        } );
+        // 0x485380 past the time: for i < the +0x75C list's count, the ghost manager g 0x758FC8's +0x64 record whose [0] == i:
+        // its +0x58 entity's +0x4DC = its transform's world (+0x50 +0x50, 16 words). The list is LoadGhosts' / PreGame's
+        // (0x485B50 / 0x486060, not recreated): empty here, so the loop runs over none - logged.
+        s.rules.hooks.gates = [ &s ] {
+            race_unwired( s, "VuGhostGame slot 7 0x485380: the +0x75C ghost list is empty (LoadGhosts 0x485B50 / PreGame 0x486060 not recreated) - "
+                             "the per-ghost +0x4DC copy ran over none (UNKNOWN)" );
+        };
+        LOG_WARNING( "race: VuGhostGame - its states' handlers are not recreated (UNKNOWN); only VuGame's machines and slots 5 / 7 / 13 run" );
+    }
     else if ( s.start.timetrial )
     {
         timetrial_rules_construct( s.rules );
@@ -2900,6 +2923,8 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
             }
             return e;
         };
+        if ( s.start.ghost )
+            return;   // VuGhostGame slot 12 = nullsub 0x4021A0: nothing written
         if ( s.start.timetrial || s.start.slalom )
         {
             // VuSlalomGame slot 12 0x48CAF0 is the same writer (in.slalom: case slalom_results).

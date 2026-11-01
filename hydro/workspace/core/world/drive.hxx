@@ -1492,6 +1492,12 @@ inline void race_session_game_mode( void* user, float dt )
         // VuTimeTrialGame's slot 15 0x490D70 is the same code (its split vector at +0x720; case timetrial_split), and so is
         // VuSlalomGame's 0x48E500 (its split vector at +0x750: byte-compared with 0x490D70 - 16 bytes differ, all offsets /
         // string addresses; not oracle-run).
+        if ( s.start.ghost )
+        {
+            // VuGhostGame's slot 15 0x487640 is its own (the +0x6C4 / +0x6D0 ghost split times, +0x728) - not recreated.
+            race_unwired( s, "VuGhostGame slot 15 0x487640 (the ghost split) - not recreated, not run (UNKNOWN)" );
+            return;
+        }
         const race_rules_boat_t& rb = s.rules_boats[ static_cast< std::size_t >( boat ) ];
         ui_race_split_boat_t sb;
         sb.m_human = rb.human;

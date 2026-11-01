@@ -924,8 +924,9 @@ public:
     // else "Games/" + its last path part + GameType [+ Course for Slalom]) from the GameData the front end left,
     // loaded; then the game object by GameType (race_game_kind) - "Race" -> the VuRaceGame ctor 0x489030 and the
     // race session (world/session.hxx: 0x481CE0, postLoad, begin 0x4829A0); "TimeTrial" -> the same session with
-    // VuTimeTrialGame's machine (0x48ED30; its slots 12 / 15 not recreated - logged); Slalom / Ghost -> their ctors
-    // 0x48BEC0 / 0x484A20, NOT recreated (logged, no game); anything else -> no game.
+    // VuTimeTrialGame's machine (0x48ED30); "Slalom" -> VuSlalomGame's (0x48BEC0); "Ghost" -> VuGhostGame 0x484A20's machine
+    // table with its state handlers UNKNOWN (session.hxx: only VuGame's machines and its read slots 5 / 7 / 13 run); anything
+    // else -> no game.
     // THE GAMEDATA: with --front-end-defaults, the test profile's front end (world/front.hxx: the GameConfig<Mode> /
     // BoatConfig* screens through ui_front_end_root, --boat / --skin overriding the boat screen's picks, then 0x4BF9B0's
     // data step). Else with --boat / --skin, the front end's (race_session_game_data from --mode / --race / --course /
@@ -1027,7 +1028,7 @@ public:
         m_logic_game.unrecreated = &m_logic_unrecreated;
         const race_game_kind_t game_kind = race_game_kind( race_game_data_text( util, nullptr, "GameType" ) );
         m_defer_project_initialized = race && front_end && ( game_kind == race_game_kind_t::race || game_kind == race_game_kind_t::time_trial ||
-                                                              game_kind == race_game_kind_t::slalom );
+                                                              game_kind == race_game_kind_t::slalom || game_kind == race_game_kind_t::ghost );
         m_project_initialized = false;
         load_project( path.c_str( ) );
         m_loaded = true;
@@ -1038,6 +1039,7 @@ public:
         case race_game_kind_t::race:
         case race_game_kind_t::time_trial:   // VuTimeTrialGame 0x48ED30: its machine (rules.hxx), slots 13 / 5 (start.hxx)
         case race_game_kind_t::slalom:       // VuSlalomGame 0x48BEC0: its machine (rules.hxx), its course (slalom.hxx), slots 13 / 5
+        case race_game_kind_t::ghost:        // VuGhostGame 0x484A20: its machine's table; its handlers UNKNOWN (session.hxx)
             if ( front_end )
                 race_switch_on( game_data, dbs, type );
             break;
@@ -1097,7 +1099,8 @@ public:
         m_race.world.prop_moved = [ this ]( const entity_t& owner ) { prop_moved( owner ); };
         // VuRaceGame's ctor 0x489030 loads its three HUD projects (0x4B4360) - before the boat load; VuTimeTrialGame's 0x48ED30
         // its own three (game_mode_defs: HUDs/TimeTrial*).
-        load_huds( mode == "TimeTrial" ? game_mode_defs( )[ 1 ].huds : mode == "Slalom" ? game_mode_defs( )[ 0 ].huds : k_race_hud_projects );
+        load_huds( mode == "TimeTrial" ? game_mode_defs( )[ 1 ].huds : mode == "Slalom" ? game_mode_defs( )[ 0 ].huds
+                   : mode == "Ghost" ? game_mode_defs( )[ 2 ].huds : k_race_hud_projects );
         m_race.world.hud = [ this ]( int project, race_hud_verb_t verb, float step ) { hud( project, verb, step ); };
         m_race.world.broadcast = [ this ]( const char* name, const ui_params_t* params ) { race_broadcast( name, params ); };
         // The VuPfx runtime / manager before the boats' postLoad (its Pfx fill creates systems - session.hxx
