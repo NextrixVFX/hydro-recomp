@@ -418,6 +418,9 @@ struct race_boat_init_hooks_t
     boat_manager_t* manager = nullptr;
     const void* entry = nullptr;
     boat_driver_kind_t kind{};
+    // The boat's slot 17 0x421980 (boat_enable on the race's dynamics world - world/session.hxx race_session_enable);
+    // null: the row only.
+    std::function< void( ) > slot17;
 };
 
 inline void race_boat_game_initialize( const void* boat, tick_manager_t& tm, const tick_handler_t& decision, const tick_handler_t& build,
@@ -436,6 +439,8 @@ inline void race_boat_game_initialize( const void* boat, tick_manager_t& tm, con
         draw_added = 1;
     }
     call( "slot17 boat" );
+    if ( hooks.slot17 )
+        hooks.slot17( );
     call( "driver slot6 driver" );
     call( "0x4191F0 hull" );
     call( "0x50FBF0 engine+0xC4 Engine/Ev" );

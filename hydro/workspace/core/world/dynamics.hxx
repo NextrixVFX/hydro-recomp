@@ -1,11 +1,16 @@
 #pragma once
 
+#include <workspace/core/collision/world.hxx>
+#include <workspace/core/dynamics/manager.hxx>
 #include <workspace/core/dynamics/step.hxx>
 #include <workspace/core/dynamics/writeback.hxx>
 #include <workspace/core/world/transform.hxx>
 
 #include <cstdint>
 #include <cstring>
+#include <functional>
+#include <map>
+#include <string>
 
 // The race's dynamics world, the frame side: what VuDynamicsImpl (vtable
 // 0x74C044, g_vudynamicsimpl 0x75900C) and its VuDynamicsWorldImpl (0x74F9BC)
@@ -104,4 +109,158 @@ inline bool boat_motion_set( const std::uint8_t* boat, std::uint8_t* transform, 
     std::memcpy( transform + 0x90, t.rotation, 12 );
     std::memcpy( transform + 0xA0, t.world_rotation, 12 );
     return true;
+}
+// ---- VuDynamicsImpl's frame: DynamicsKick 0x4F8A90 / the thread 0x4F8950 /
+//      DynamicsSync 0x4F8A20 / the per-substep callback 0x4F8BC0 / 0x4F8C00 ----
+//
+// READ from the disassembly (world batch 15; transliterated, NOT oracle-run -
+// they are control flow over hooks). Init slot 5 0x4F8050 (from the engine
+// init 0x566230) builds the collision configuration, dispatcher, btDbvt
+// broadphase, solver, the btGhostPairCallback, the VuDynamicsWorldImpl world
+// (+0x34; its +0x110 = this +4, the substep callback interface), the contact
+// manager (+0x38, 0x574EC0) and the debug drawer (+0x3C); it registers
+// "DynamicsSync" -> 0x4F8A20 and "DynamicsKick" -> 0x4F8A90 with the tick
+// manager (g 0x759008 vt+0x20), +0x50 = maxSubSteps, +0x54 = fixedTimeStep,
+// and starts the thread 0x4F7CA0 (g 0x759098 vt+0x20). Its arguments come
+// from the config block 0x4D9900 builds on its stack: the ctor 0x4D9480's
+// defaults (+0xEC = 6, +0xF0 = 0x3C888889 = 1/60) and ONE later write in
+// 0x4D9900 (0x4DA484: word 0x101 at +0xE8 - dynamics on, +0xE9 async = 1);
+// nothing else in it touches +0xEA .. +0xF3. So: async, 6 substeps, 1/60.
+//   Kick(dt): +0x14 = clock - +0x14 (the frame interval: g_vumetrosys vt+0x28,
+//     platform; read only by the dev profiler g 0x7590A0), +0x10 = dt, +0xD =
+//     1, signal the thread (+0x18); not async -> own slot 25 (the wait).
+//   The thread, per signal: the profiler hook (g 0x7590A0 vt+0x2C, dev); if
+//     +0x10 > 0: world slot 11 stepSimulation(+0x10, +0x50, +0x54) - the
+//     engine's world_step_simulation 0x574C30; the profiler's vt+0x30; signal
+//     +0x1C.
+//   Sync(dt): own slot 25 (wait on +0x1C while +0xD, then +0xD = 0); +0x14 =
+//     the clock; the profiler's vt+0x34; if dt > 0: world slot 18
+//     synchronizeMotionStates (above), then the debug drawer's mode (the OR of
+//     its enabled +8 entries - dev, nothing enables one: 0) via its vt+0x28.
+//   Substep slot 0 0x4F8BC0 (dt, bool) / slot 1 0x4F8C00 (dt): every step
+//     callback on +0x48 (list order), its vt+0 (dt, bool) / vt+4 (dt).
+// SUBSTITUTION (flagged): retail's step runs on a thread between the Kick and
+// the next frame's Sync, concurrently with the phases after DynamicsKick
+// (Build, Final, Audio - Build reads the body); here it runs AT the Kick, as
+// the non-async configuration orders it. The clock and the profiler are not
+// modelled (platform / dev).
+//
+// A step callback this composition cannot run (the boat's tickThunk 0x41E5E0
+// has no context in the race yet) STOPS the frame: no step and no sync run
+// (UNKNOWN, logged by the caller) - Bullet without the hull's forces is not
+// retail's world.
+struct race_step_callback_t
+{
+    std::function< void( float, bool ) > slot0;
+    std::function< void( float ) > slot1;
+    std::string unwired;   // non-empty: not runnable here, and why
+};
+
+struct race_dynamics_t
+{
+    vu_dynamics_t impl{};                        // +0xD pending, +0x40 listeners, +0x48 step callbacks
+    world_t world;                               // +0x34 (VuDynamicsWorldImpl)
+    collision_world_t collision;
+    simplex_solver_t simplex{};                  // the collision configuration's (value-initialised here - its ctor is not read)
+    std::uint8_t async = 1;                      // +0xC
+    float dt = 0.0f;                             // +0x10
+    std::int32_t max_sub_steps = 6;              // +0x50
+    float fixed_time_step = 0.0166666675f;       // +0x54 (0x3C888889)
+    std::map< void*, race_step_callback_t > callbacks;   // by the +0x48 entries' identity
+    std::map< const vu_rigid_body_t*, collision_object_t* > objects;   // the bodies' collision objects
+    std::map< const solver_rigid_t*, std::function< void( const float*, const float* ) > > motion;   // +0x1F4's setWorldTransform
+    std::string stopped;                         // non-empty: the frame is STOPPED (UNKNOWN)
+    int steps = 0, syncs = 0;
+};
+
+// The world 0x4F8050 builds, then the game's start-up 0x4024E0's setGravity
+// (VuDynamicsImpl slot 6 0x4F8610 -> world slot 16 0x601010) with (0, 0,
+// 0xC19CE560 = -19.612) - before any body is added, so only the world's +0xE0
+// changes. The contact-added callback (0x574EC0's gContactAddedCallback) is
+// the caller's `contact`.
+inline void race_dynamics_init( race_dynamics_t& d, const contact_callbacks_t* contact )
+{
+    collision_world_init( d.collision );
+    d.collision.dispatcher.simplex = &d.simplex;
+    d.collision.dispatcher.callbacks = contact;
+    world_attach_collision( d.world, d.collision );
+    std::uint32_t gz = 0xC19CE560u;
+    float z;
+    std::memcpy( &z, &gz, 4 );
+    d.world.gravity[ 0 ] = 0.0f;
+    d.world.gravity[ 1 ] = 0.0f;
+    d.world.gravity[ 2 ] = z;
+    d.world.gravity[ 3 ] = 0.0f;
+    d.world.hooks.user = &d;
+    d.world.hooks.has_substep_callback = true;   // world +0x110 = this +4 (0x4F82A6)
+    d.world.hooks.substep_begin = []( void* u, float dt, bool stepping ) {
+        race_dynamics_t& r = *static_cast< race_dynamics_t* >( u );
+        for ( void* c : r.impl.step_callbacks )
+            if ( r.callbacks[ c ].slot0 )
+                r.callbacks[ c ].slot0( dt, stepping );
+    };
+    d.world.hooks.substep = []( void* u, float dt ) {
+        race_dynamics_t& r = *static_cast< race_dynamics_t* >( u );
+        for ( void* c : r.impl.step_callbacks )
+            if ( r.callbacks[ c ].slot1 )
+                r.callbacks[ c ].slot1( dt );
+    };
+    d.impl.hooks.user = &d;
+    d.impl.hooks.sync = []( void*, vu_dynamics_t& v ) { return vu_dynamics_sync( v ); };
+    d.impl.hooks.wait = []( void*, std::uint32_t, std::int32_t ) { return true; };   // the step ran at the Kick
+    d.impl.hooks.world_add = []( void* u, vu_rigid_body_t& b, std::int32_t group, std::int32_t mask ) {
+        race_dynamics_t& r = *static_cast< race_dynamics_t* >( u );
+        const auto it = r.objects.find( &b );
+        return it != r.objects.end( ) &&
+               world_add_rigid_body( r.world, r.collision, *it->second, true, static_cast< short >( group ), static_cast< short >( mask ) ) == 1;
+    };
+    d.impl.hooks.manifold_count = []( void* u ) { return static_cast< int >( static_cast< race_dynamics_t* >( u )->collision.dispatcher.manifolds.size( ) ); };
+    d.impl.hooks.manifold_bodies = []( void* u, int i, vu_rigid_body_t*& b0, vu_rigid_body_t*& b1 ) {
+        const solver_manifold_t* m = static_cast< race_dynamics_t* >( u )->collision.dispatcher.manifolds[ static_cast< std::size_t >( i ) ];
+        b0 = reinterpret_cast< vu_rigid_body_t* >( m->body0 );   // solver_rigid_t is the image's first 672 bytes
+        b1 = reinterpret_cast< vu_rigid_body_t* >( m->body1 );
+        return true;
+    };
+    d.impl.hooks.world_remove = []( void* u, vu_rigid_body_t& b ) {
+        race_dynamics_t& r = *static_cast< race_dynamics_t* >( u );
+        const auto it = r.objects.find( &b );
+        return it != r.objects.end( ) && world_remove_rigid_body( r.world, r.collision, *it->second ) == 1;
+    };
+}
+
+// DynamicsKick 0x4F8A90 + the thread's step.
+inline void race_dynamics_kick( race_dynamics_t& d, float dt )
+{
+    if ( !d.stopped.empty( ) )
+        return;
+    for ( void* c : d.impl.step_callbacks )
+        if ( !d.callbacks[ c ].unwired.empty( ) )
+        {
+            d.stopped = d.callbacks[ c ].unwired;
+            return;
+        }
+    d.dt = dt;
+    d.impl.pending = 1;
+    if ( d.dt > 0.0f )
+    {
+        world_step_simulation( d.world, d.dt, d.max_sub_steps, d.fixed_time_step );
+        ++d.steps;
+        if ( d.world.refused )
+            d.stopped = "the world step reached a Bullet path not recreated (world_t::refused)";
+    }
+    d.impl.pending = 0;   // the thread's signal +0x1C (here: done)
+}
+
+// DynamicsSync 0x4F8A20.
+inline void race_dynamics_sync( race_dynamics_t& d, float dt )
+{
+    if ( !d.stopped.empty( ) || !vu_dynamics_sync( d.impl ) )
+        return;
+    if ( !( dt > 0.0f ) )   // comiss dt, 0; jbe
+        return;
+    world_synchronize_motion_states( d.world, false,
+        []( void* u, const solver_rigid_t& b ) { return static_cast< race_dynamics_t* >( u )->motion.count( &b ) != 0; },
+        []( void* u, solver_rigid_t& b, const float* basis, const float* origin ) { static_cast< race_dynamics_t* >( u )->motion[ &b ]( basis, origin ); },
+        &d );
+    ++d.syncs;
 }

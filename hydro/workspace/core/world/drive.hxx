@@ -39,9 +39,7 @@
 //   stand-in): the animation tick 0x40FFF0 (recreated as boat_anim_tick, but
 //   its three controls at anim +0x08 / +0x0C / +0x10 come from the asset
 //   loads 0x410610 gameInitialize hands to the animation system - a hook here
-//   - so its inputs are UNKNOWN and it does not run); slots 17 / 18 0x421980 /
-//   0x421940 (boat_enable / boat_disable need the dynamics world
-//   g_vudynamicsimpl, not instantiated in the race); 0x410FF0, 0x41E240, the
+//   - so its inputs are UNKNOWN and it does not run); 0x410FF0, 0x41E240, the
 //   debris pieces' follow / removal; the driver tick of a UI / nuisance /
 //   ghost driver (none in a Race roster - their ticks are the boat agent's);
 //   the hull's splash pfx 0x52BCD0, the lens-water manager g 0x759048, the
@@ -55,6 +53,11 @@
 //   read_input: Throttle = the right trigger / W, Brake = the left trigger /
 //   S, Steering = the left stick / A-D, Boost = the right shoulder / shift;
 //   Jump and Recover have no binding: 0), the display size.
+//   RUN ON THE RACE'S DYNAMICS WORLD (world/dynamics.hxx, world/session.hxx
+//   race_session_enable): slots 17 / 18 0x421980 / 0x421940 (boat_enable /
+//   boat_disable) - the body into the world, the +0x60 interface onto its step
+//   callbacks; the world's frame is STOPPED while tickThunk 0x41E5E0 has no
+//   context (dynamics.hxx).
 //   NOT WIRED, ANSWERING "NO HIT" (UNKNOWN - flagged, logged once): the
 //   dynamics world's ray test (g_vudynamicsimpl vt+0x6C's collision world
 //   vt+0x18) the camera's collision 0x40B090 and the AI's avoidance 0x40C750
@@ -370,7 +373,7 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         r->respawn_hooks.water = race_drive_water;
         r->respawn_hooks.transform_children = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the respawn's 0x534C00(0) on the boat's transform (not wired)" ); };
         r->respawn_hooks.instigator = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the trigger manager's 0x536350 (instigator update, not wired)" ); };
-        r->respawn_hooks.enable = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the boat's slot 17 0x421980 (boat_enable: no dynamics world in the race)" ); };
+        r->respawn_hooks.enable = []( void* u ) { race_session_enable( *race_drive_of( u ).session, race_drive_boat( race_drive_of( u ) ), true ); };
         r->respawn_hooks.driver_50 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the driver's vt+0x50 after a respawn (not recreated)" ); };
         r->respawn_hooks.recovered = []( void* u, std::uint32_t ) { race_unwired( *race_drive_of( u ).session, "the OnBoatRecovered broadcast (VuEventManager, not wired)" ); };
         // The Decision tick's hooks.
@@ -385,8 +388,8 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         };
         h.camera_tick = race_drive_camera;
         h.respawn = race_drive_respawn;
-        h.enable = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the boat's slot 17 0x421980 (boat_enable: no dynamics world in the race)" ); };
-        h.disable = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the boat's slot 18 0x421940 (boat_disable: no dynamics world in the race)" ); };
+        h.enable = []( void* u ) { race_session_enable( *race_drive_of( u ).session, race_drive_boat( race_drive_of( u ) ), true ); };
+        h.disable = []( void* u ) { race_session_enable( *race_drive_of( u ).session, race_drive_boat( race_drive_of( u ) ), false ); };
         h.debris_410FF0 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the debris 0x410FF0 (not recreated)" ); };
         h.boat_41E240 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the boat's 0x41E240 (not recreated)" ); };
         h.piece_follow = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the debris pieces' follow 0x5344A0 / 0x50E660 (not recreated)" ); };
