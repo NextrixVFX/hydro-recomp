@@ -1396,3 +1396,142 @@ inline bool verify_needs_collision( )
     LOG_ERROR( "needs_collision FAILED %d of %u", failed, n );
     return false;
 }
+// verify_debris_follow (boat batch 18): boat/effects.hxx boat_debris_follow
+// behind state.hxx boat_decision_tick's gate (+0x46B, then a signed piece
+// count > 0 - reproduced here, not called) against cases/boat.py
+// debris_follow: retail's segment 0x41F103 .. 0x41F1A3 run on its own.
+inline bool verify_debris_follow( )
+{
+    const unsigned* g = g_golden_debris_follow_words;
+    const unsigned n = *g++;
+    int failed = 0, follows = 0;
+    struct log_t { std::vector< unsigned > words; };
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const bool destroyed = *g++ != 0;
+        const std::int32_t count = static_cast< std::int32_t >( *g++ );
+        float matrix[ 16 ];
+        std::memcpy( matrix, g, 64 );
+        g += 16;
+        vu_rigid_body_t body, piece;
+        std::memcpy( &body, g, 0x2D4 );
+        g += 0x2D4 / 4;
+        std::memcpy( &piece, g, 0x2D4 );
+        g += 0x2D4 / 4;
+        const unsigned exit = *g++, nlog = *g++;
+        const std::vector< unsigned > want( g, g + 18 * nlog );
+        g += 18 * nlog;
+        log_t log;
+        unsigned got_exit = 2;
+        if ( destroyed )
+        {
+            got_exit = 1;
+            if ( count > 0 )
+            {
+                ++follows;
+                boat_debris_follow( body.body, piece.body, matrix, []( void* u, const float* m ) {
+                    std::vector< unsigned >& w = static_cast< log_t* >( u )->words;
+                    w.push_back( 0 );
+                    w.push_back( 1 );
+                    const unsigned* x = reinterpret_cast< const unsigned* >( m );
+                    w.insert( w.end( ), x, x + 16 );
+                }, &log );
+            }
+        }
+        const bool same = got_exit == exit && log.words == want && std::memcmp( &body, g, 0x2D4 ) == 0 &&
+                          std::memcmp( &piece, g + 0x2D4 / 4, 0x2D4 ) == 0;
+        g += 2 * ( 0x2D4 / 4 );
+        if ( !same && ++failed <= 4 )
+            LOG_ERROR( "debris_follow %u: exit %u (retail %u), %u calls (retail %u)", v, got_exit, exit,
+                       static_cast< unsigned >( log.words.size( ) / 18 ), nlog );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the destroyed branch 0x41F103 .. 0x41F1A3 (boat_debris_follow behind boat_decision_tick's gate) matches retail: %u vectors, "
+                     "%d follows (setWorldTransform's matrix, both bodies)", n, follows );
+        return true;
+    }
+    LOG_ERROR( "debris_follow FAILED %d of %u", failed, n );
+    return false;
+}
+// verify_destroyed_event (boat batch 18): boat/effects.hxx boat_destroyed_event
+// against cases/boat.py destroyed_event - 0x41E240 run whole, FMOD logged. The
+// hooks stand for the platform's FMOD; what retail hands them beyond the name
+// (g_vuaudio +8 the system, mode 1, null velocity / orientation) is checked
+// as constants of the golden calls. The get hook answers as the case did
+// (false for a name holding "bad", the handle the case wrote either way).
+inline bool verify_destroyed_event( )
+{
+    const unsigned* g = g_golden_destroyed_event_words;
+    const unsigned n = *g++;
+    int failed = 0, started = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned length = *g++;
+        const std::string name( reinterpret_cast< const char* >( g ), length );
+        g += ( length + 3 ) / 4;
+        float position[ 3 ];
+        std::memcpy( position, g, 12 );
+        g += 3;
+        const unsigned ncalls = *g++;
+        std::vector< unsigned > want;
+        bool constants = true;
+        for ( unsigned c = 0; c < ncalls; ++c )
+        {
+            const unsigned kind = *g++;
+            want.push_back( kind );
+            if ( kind == 1 )
+            {
+                constants = constants && g[ 0 ] == 0x5150u && g[ 1 ] == 1u;
+                want.push_back( g[ 2 ] );
+                g += 3;
+            }
+            else if ( kind == 2 )
+            {
+                want.insert( want.end( ), g, g + 4 );
+                constants = constants && g[ 4 ] == 0u && g[ 5 ] == 0u;
+                g += 6;
+            }
+            else
+                want.push_back( *g++ );
+        }
+        struct ctx_t
+        {
+            std::vector< unsigned > got;
+            unsigned handle;
+        } c{ { }, 0xE001u + v };
+        boat_event_hooks_t h;
+        h.user = &c;
+        h.get = []( void* u, const std::string& s, std::uint32_t& ev ) {
+            ctx_t& x = *static_cast< ctx_t* >( u );
+            x.got.push_back( 1 );
+            x.got.push_back( x.handle );
+            ev = x.handle;
+            return s.find( "bad" ) == std::string::npos;
+        };
+        h.attributes = []( void* u, std::uint32_t ev, const float* p ) {
+            ctx_t& x = *static_cast< ctx_t* >( u );
+            x.got.push_back( 2 );
+            x.got.push_back( ev );
+            const unsigned* w = reinterpret_cast< const unsigned* >( p );
+            x.got.insert( x.got.end( ), w, w + 3 );
+        };
+        h.start = []( void* u, std::uint32_t ev ) {
+            ctx_t& x = *static_cast< ctx_t* >( u );
+            x.got.push_back( 3 );
+            x.got.push_back( ev );
+        };
+        boat_destroyed_event( name, position, h );
+        started += ncalls == 3 ? 1 : 0;
+        if ( ( c.got != want || !constants ) && ++failed <= 4 )
+            LOG_ERROR( "destroyed_event %u (%s): %u words (retail %u)%s", v, name.c_str( ), static_cast< unsigned >( c.got.size( ) ),
+                       static_cast< unsigned >( want.size( ) ), constants ? "" : ", a constant differs" );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "0x41E240 (boat_destroyed_event) matches retail: %u events, %d started", n, started );
+        return true;
+    }
+    LOG_ERROR( "destroyed_event FAILED %d of %u", failed, n );
+    return false;
+}
