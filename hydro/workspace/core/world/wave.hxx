@@ -1701,3 +1701,155 @@ inline void directional_vertex96( const directional_t& wave, float x, float y, f
     flow[ 0 ] = ( ( x1 * fade_b ) + ( gbx * h ) ) + flow[ 0 ];
     flow[ 1 ] = ( ( y1 * fade_b ) + ( gby * h ) ) + flow[ 1 ];
 }
+
+// The ocean patch evaluator 0x5a0f70 (usercall patch @ecx, u @xmm1, w @xmm2;
+// float* du, float* dw; retn 8; the value in xmm0) the ocean +96 kernels call:
+// the bicubic value and both partials. The value's terms and order are
+// ocean_patch_eval's (its first sum commuted, the same bits); the partials use
+// retail's derivative weights - -3a*a, (1 - 3t)(3a), (2 - 3t)(3t), 3t*t.
+inline float ocean_patch_eval_d( const float* p, float u, float w, float& du, float& dw )
+{
+    const float a = 1.0f - u;
+    const float bw = 1.0f - w;
+    const float a3 = ( a * a ) * a;
+    const float b3 = ( bw * bw ) * bw;
+    const float u3 = u * 3.0f;
+    const float uu1 = ( u3 * a ) * a;
+    const float u3u = u3 * u;
+    const float uu2 = u3u * a;
+    const float uu3 = ( u * u ) * u;
+    const float w3 = w * 3.0f;
+    const float w3w = w3 * w;
+    const float ww2 = w3w * bw;
+    const float ww1 = ( w3 * bw ) * bw;
+    const float ww3 = ( w * w ) * w;
+    const float da0 = ( a * -3.0f ) * a;
+    const float du1 = ( 1.0f - u3 ) * ( a * 3.0f );
+    const float du2 = ( 2.0f - u3 ) * u3;
+    const float r0 = ( ( ( p[ 0 ] * b3 ) + ( p[ 11 ] * ww1 ) ) + ( p[ 10 ] * ww2 ) ) + ( p[ 3 ] * ww3 );
+    float d = ( ( p[ 4 ] * b3 ) * du1 ) + ( r0 * da0 );
+    d = d + ( p[ 12 ] * ww1 ) * du1;
+    d = d + ( p[ 15 ] * ww2 ) * du1;
+    d = d + ( p[ 9 ] * ww3 ) * du1;
+    d = d + ( p[ 5 ] * b3 ) * du2;
+    d = d + ( p[ 13 ] * ww1 ) * du2;
+    d = d + ( p[ 14 ] * ww2 ) * du2;
+    d = d + ( p[ 8 ] * ww3 ) * du2;
+    d = d + ( p[ 1 ] * b3 ) * u3u;
+    d = d + ( p[ 6 ] * ww1 ) * u3u;
+    d = d + ( p[ 7 ] * ww2 ) * u3u;
+    d = d + ( p[ 2 ] * ww3 ) * u3u;
+    du = d;
+    const float db0 = ( bw * -3.0f ) * bw;
+    const float dw1 = ( 1.0f - w3 ) * ( bw * 3.0f );
+    const float dw2 = ( 2.0f - w3 ) * w3;
+    float e = ( ( ( ( p[ 0 ] * db0 ) + ( p[ 11 ] * dw1 ) ) + ( p[ 10 ] * dw2 ) ) + ( p[ 3 ] * w3w ) ) * a3;
+    e = e + ( p[ 4 ] * db0 ) * uu1;
+    e = e + ( p[ 12 ] * dw1 ) * uu1;
+    e = e + ( p[ 15 ] * dw2 ) * uu1;
+    e = e + ( p[ 9 ] * w3w ) * uu1;
+    e = e + ( p[ 5 ] * db0 ) * uu2;
+    e = e + ( p[ 13 ] * dw1 ) * uu2;
+    e = e + ( p[ 14 ] * dw2 ) * uu2;
+    e = e + ( p[ 8 ] * w3w ) * uu2;
+    e = e + ( p[ 1 ] * db0 ) * uu3;
+    e = e + ( p[ 6 ] * dw1 ) * uu3;
+    e = e + ( p[ 7 ] * dw2 ) * uu3;
+    e = e + ( p[ 2 ] * w3w ) * uu3;
+    dw = e;
+    const float bu[ 4 ] = { a3, uu1, uu2, uu3 };
+    const float bv[ 4 ] = { b3, ww1, ww2, ww3 };
+    return ocean_patch_eval( p, bu, bv );
+}
+
+// VuWaterRectangularOceanWave_accumulate @0x59f840 (tag @0x59fb80) and the
+// circular @0x5a0920 (tag @0x5a0c40): the base kernels' footprint and fades on
+// ONE buffer (+164's), the patch's value as height, and its partials turned
+// back through the rotation as the in-plane gradient; past a decay edge the
+// gradient is faded and gains the fade's own derivative times the height term.
+// No time derivative (the base's z rate). The circle divides by its radius as
+// a multiply by 1 / +224 (the base divides).
+inline void ocean_patch_vertex96( const ocean_patch_t& wave, bool circle, float x, float y, float& height, float* flow )
+{
+    const float dx = x - wave.centre_x;
+    const float dy = y - wave.centre_y;
+    const float a = ( wave.cosine * dx ) - ( wave.sine * dy );
+    const float b = ( wave.sine * dx ) + ( wave.cosine * dy );
+    const float va = a * wave.scale;
+    const float vb = b * wave.scale;
+    const int ia = ocean_cell( va );
+    const int ib = ocean_cell( vb );
+    const float u = va - static_cast< float >( ia );
+    const float w = vb - static_cast< float >( ib );
+    const int cell = ( ( ib & wave.mask ) << wave.shift ) + ( ia & wave.mask );
+    const float* patch = wave.patches[ wave.current ] + 16 * cell;
+    if ( !circle )
+    {
+        const float ka = 2.0f / wave.shape[ 0 ];
+        const float sa = ka * dx;
+        const float ua = std::fabs( sa );
+        if ( !ocean_gt( 1.0f, ua ) )
+            return;
+        const float kb = 2.0f / wave.shape[ 1 ];
+        const float sb = kb * dy;
+        const float ub = std::fabs( sb );
+        if ( !ocean_gt( 1.0f, ub ) )
+            return;
+        float fa = 1.0f;
+        if ( ocean_gt( ua, wave.shape[ 2 ] ) )
+            fa = ( ua - 1.0f ) / ( wave.shape[ 2 ] - 1.0f );
+        float fb = 1.0f;
+        if ( ocean_gt( ub, wave.shape[ 3 ] ) )
+            fb = ( ub - 1.0f ) / ( wave.shape[ 3 ] - 1.0f );
+        float du;
+        float dw;
+        const float value = ocean_patch_eval_d( patch, u, w, du, dw );
+        const float sdu = wave.scale * du;
+        const float sdw = wave.scale * dw;
+        float gx = ( wave.sine * sdw ) + ( wave.cosine * sdu );
+        float gy = ( wave.cosine * sdw ) - ( wave.sine * sdu );
+        const float h = ( value * fa ) * fb;
+        if ( ocean_gt( ua, wave.shape[ 2 ] ) )
+        {
+            const float k = ocean_gt( 0.0f, sa ) ? -ka : ka;
+            gx = ( gx * fa ) + ( ( k / ( wave.shape[ 2 ] - 1.0f ) ) * h );
+        }
+        if ( ocean_gt( ub, wave.shape[ 3 ] ) )
+        {
+            const float k = ocean_gt( 0.0f, sb ) ? -kb : kb;
+            gy = ( gy * fb ) + ( ( k / ( wave.shape[ 3 ] - 1.0f ) ) * h );
+        }
+        flow[ 0 ] = flow[ 0 ] + gx;
+        flow[ 1 ] = flow[ 1 ] + gy;
+        height = height + h;
+        return;
+    }
+    const float rr = _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( b * b ) + ( a * a ) ) ) );
+    const float inv_r = 1.0f / wave.shape[ 0 ];
+    const float rn = inv_r * rr;
+    if ( !ocean_gt( 1.0f, rn ) )
+        return;
+    float fade = 1.0f;
+    if ( ocean_gt( rn, wave.shape[ 1 ] ) )
+        fade = ( rn - 1.0f ) / ( wave.shape[ 1 ] - 1.0f );
+    float du;
+    float dw;
+    const float value = ocean_patch_eval_d( patch, u, w, du, dw );
+    const float sdu = wave.scale * du;
+    const float sdw = wave.scale * dw;
+    float gx = ( wave.sine * sdw ) + ( wave.cosine * sdu );
+    float gy = ( wave.cosine * sdw ) - ( wave.sine * sdu );
+    const float h = value * fade;
+    if ( ocean_gt( rn, wave.shape[ 1 ] ) )
+    {
+        const float a2 = a * 2.0f;
+        const float b2 = b * 2.0f;
+        const float inv_rr2 = 1.0f / ( rr * 2.0f );
+        const float inv_d = 1.0f / ( wave.shape[ 1 ] - 1.0f );
+        gx = ( gx * fade ) + ( ( ( ( ( ( b2 * wave.sine ) + ( a2 * wave.cosine ) ) * inv_rr2 ) * inv_r ) * inv_d ) * h );
+        gy = ( gy * fade ) + ( ( ( ( ( ( -wave.sine * a2 ) + ( b2 * wave.cosine ) ) * inv_rr2 ) * inv_r ) * inv_d ) * h );
+    }
+    flow[ 0 ] = flow[ 0 ] + gx;
+    flow[ 1 ] = flow[ 1 ] + gy;
+    height = h + height;
+}

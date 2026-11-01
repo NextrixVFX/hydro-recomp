@@ -1515,9 +1515,63 @@ inline bool verify_water_built_tick( )
     return false;
 }
 
+// The ocean +96 kernels (case ocean_kernels96): ocean_patch_vertex96 (and the evaluator 0x5A0F70 inside it) against
+// 0x59F840 / 0x59FB80 / 0x5A0920 / 0x5A0C40 on the hand-built fields - flow x, flow y, foam (untouched) and height of
+// every vertex, bit for bit; the tag variants run the same body only where the vertex's tag equals ctx+0x5C (1).
+inline bool verify_ocean_kernels96( )
+{
+    int checked = 0, failed = 0, live = 0;
+    for ( std::size_t index = 0; index < g_golden_ok96_kernels_count; ++index )
+    {
+        const golden_ocean_kernel_t& g = g_golden_ok96_kernels[ index ];
+        ocean_patch_t wave{};
+        wave.shift = g.m_shift;
+        wave.mask = ( 1 << g.m_shift ) - 1;
+        wave.scale = g.m_scale;
+        wave.sine = g.m_sine;
+        wave.cosine = g.m_cosine;
+        wave.now = g.m_now;
+        wave.current = g.m_current;
+        wave.previous = g.m_previous;
+        wave.time[ 0 ] = g.m_times[ 0 ];
+        wave.time[ 1 ] = g.m_times[ 1 ];
+        wave.patches[ 0 ] = g_golden_ok96_patches + g.m_patches;
+        wave.patches[ 1 ] = g_golden_ok96_patches + g.m_patches + g.m_patch_count;
+        wave.centre_x = g.m_centre[ 0 ];
+        wave.centre_y = g.m_centre[ 1 ];
+        for ( int k = 0; k < 4; ++k )
+            wave.shape[ k ] = g.m_shape[ k ];
+        for ( int i = 0; i < g.m_point_count; ++i )
+        {
+            float flow[ 2 ] = { 0.25f, -0.5f };
+            const float foam = 1.5f;
+            float height = 2.0f;
+            if ( !g.m_variant || g_golden_ok96_tags[ g.m_tags + i ] == 1u )
+                ocean_patch_vertex96( wave, g.m_kind == 1, g_golden_ok96_points[ g.m_points + 2 * i ], g_golden_ok96_points[ g.m_points + 2 * i + 1 ],
+                    height, flow );
+            const float ours[ 4 ] = { flow[ 0 ], flow[ 1 ], foam, height };
+            const float* want = g_golden_ok96_out + g.m_out + 4 * i;
+            ++checked;
+            if ( want[ 3 ] != 2.0f )
+                ++live;
+            if ( std::memcmp( ours, want, sizeof( ours ) ) != 0 && ++failed <= 6 )
+                LOG_ERROR( "ocean_patch_vertex96 %s variant %d point %d: ours %.9g %.9g %.9g retail %.9g %.9g %.9g", g.m_kind ? "circular" : "rectangular",
+                    g.m_variant, i, ours[ 0 ], ours[ 1 ], ours[ 3 ], want[ 0 ], want[ 1 ], want[ 3 ] );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ocean_patch_vertex96 + ocean_patch_eval_d match the ocean +96 kernels 0x59F840 / 0x5A0920 (tag 0x59FB80 / 0x5A0C40, "
+                     "evaluator 0x5A0F70) bit for bit on %d vertices (%d producing output)",
+            checked, live );
+    else
+        LOG_ERROR( "ocean_patch_vertex96 FAILED %d of %d vertices", failed, checked );
+    return failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
+    ok = verify_ocean_kernels96( ) && ok;
     ok = verify_water_built_tick( ) && ok;
     ok = verify_water_query96( ) && ok;
     ok = verify_water_build( ) && ok;
