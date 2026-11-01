@@ -471,6 +471,9 @@
     <ClInclude Include="workspace\core\world\wave.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\world\wavemap.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\world\world.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
