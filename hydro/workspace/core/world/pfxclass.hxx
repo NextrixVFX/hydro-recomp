@@ -1,6 +1,8 @@
 #pragma once
 
 #include <workspace/core/boat/math.hxx>
+#include <workspace/core/boat/hull.hxx>
+#include <workspace/core/world/pfx.hxx>
 #include <workspace/core/world/surface.hxx>
 
 #include <cstddef>
@@ -305,6 +307,135 @@ inline void pfx_system_draw( bool enabled, int patterns, void ( *pass )( void* u
         return;
     for ( int k = 0; k < patterns; ++k )
         pass( user, k );
+}
+
+// THE FOUNTAIN INSTANCES' SLOT 2 - the particle init VuPfxEmitFountain_emit
+// 0x55D030 runs on every particle it fills (pfx_fountain_hooks_t::init). Each
+// draw is the global VuRand's VuRandom_draw 0x50FD20 (world/pfx.hxx pfx_rand_t:
+// the same Park-Miller / Bays-Durham body the emit inlines), each pair blended
+// as (1 - r) * params[ lo ] + params[ hi ] * r. `params` is the node's +0x10.
+inline float pfx_init_blend( pfx_rand_t& rand, const std::uint8_t* params, int lo, int hi )
+{
+    float a, b;
+    std::memcpy( &a, params + lo, 4 );
+    std::memcpy( &b, params + hi, 4 );
+    const float r = rand.next( );
+    return ( ( 1.0f - r ) * a ) + ( b * r );
+}
+
+// 0x55E100 VuPfxEmitQuadFountainInstance (and the boat thrust fountain's) slot 2:
+// six draws in order, +0x44 .. +0x58 from the pairs (+0x98, +0x9C) .. (+0xC0, +0xC4).
+inline void pfx_quad_fountain_init( pfx_rand_t& rand, const std::uint8_t* params, pfx_quad_particle_t& p )
+{
+    for ( int k = 0; k < 6; ++k )
+        p.set( 0x44 + 4 * k, pfx_init_blend( rand, params, 0x98 + 8 * k, 0x9C + 8 * k ) );
+}
+
+// 0x55E9B0 VuPfxEmitDirectionalQuadFountainInstance's slot 2: 0x55E100 first;
+// then, the system instance s = node +0xC -> +0xC and its velocity v = s +0x5C,
+// dv = particle velocity (+0x18) - v BEFORE the matrix is fetched (the pattern's
+// slot 5: `matrix`), dp = particle position (+0x08) - the matrix translation
+// (+0x30 .. +0x38); velocity = v + (dp * (1 / |dp|)) * |dv| with |dv| =
+// sqrt((dy*dy + dx*dx) + dz*dz) and |dp| likewise (VuMath_sqrt 0x40B5A0 =
+// sqrtss). The fourth word +0x24 takes a stack word retail never writes (the
+// movq pair at 0x55EB06): UNKNOWN, not written here.
+inline void pfx_directional_fountain_init( pfx_rand_t& rand, const std::uint8_t* params, const float* system_velocity,
+    const float* matrix, pfx_quad_particle_t& p )
+{
+    pfx_quad_fountain_init( rand, params, p );
+    const float dvx = p.f( 0x18 ) - system_velocity[ 0 ];
+    const float dvy = p.f( 0x1C ) - system_velocity[ 1 ];
+    const float dvz = p.f( 0x20 ) - system_velocity[ 2 ];
+    const float dpx = p.f( 0x08 ) - matrix[ 12 ];
+    const float dpy = p.f( 0x0C ) - matrix[ 13 ];
+    const float dpz = p.f( 0x10 ) - matrix[ 14 ];
+    const float speed = _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( ( dvy * dvy ) + ( dvx * dvx ) ) + ( dvz * dvz ) ) ) );
+    const float d = _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( ( dpy * dpy ) + ( dpx * dpx ) ) + ( dpz * dpz ) ) ) );
+    const float inv = 1.0f / d;
+    p.set( 0x18, ( ( inv * dpx ) * speed ) + system_velocity[ 0 ] );
+    p.set( 0x1C, system_velocity[ 1 ] + ( ( inv * dpy ) * speed ) );
+    p.set( 0x20, system_velocity[ 2 ] + ( ( inv * dpz ) * speed ) );
+}
+
+// 0x55E640 VuPfxEmitGeomFountainInstance's slot 2: the angles +0x44 .. +0x4C
+// from (+0x98, +0xA8), (+0x9C, +0xAC), (+0xA0, +0xB0), the angular velocity
+// +0x54 .. +0x5C from (+0xB8, +0xC8), (+0xBC, +0xCC), (+0xC0, +0xD0); then the
+// pattern's slot 5 matrix m, M = identity (0x410A40) x fromEuler( angles )
+// (0x435640) x m (VuMatrix_multiply 0x4078C0 twice: boat/hull.hxx
+// hull_multiply), and the angles become M's euler - 0x534AA0's three (world/
+// surface.hxx water_world_euler, its CRT atan2 / asinf SUBSTITUTION). +0x50
+// takes a stack word retail never writes (the movq at 0x55E8D0): UNKNOWN, not
+// written here.
+inline void pfx_geom_fountain_init( pfx_rand_t& rand, const std::uint8_t* params, const float* matrix, pfx_quad_particle_t& p )
+{
+    p.set( 0x44, pfx_init_blend( rand, params, 0x98, 0xA8 ) );
+    p.set( 0x48, pfx_init_blend( rand, params, 0x9C, 0xAC ) );
+    p.set( 0x4C, pfx_init_blend( rand, params, 0xA0, 0xB0 ) );
+    p.set( 0x54, pfx_init_blend( rand, params, 0xB8, 0xC8 ) );
+    p.set( 0x58, pfx_init_blend( rand, params, 0xBC, 0xCC ) );
+    p.set( 0x5C, pfx_init_blend( rand, params, 0xC0, 0xD0 ) );
+    static const float identity[ 16 ] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+    float angles[ 4 ] = { p.f( 0x44 ), p.f( 0x48 ), p.f( 0x4C ), p.f( 0x50 ) };
+    float e[ 16 ], a[ 16 ], b[ 16 ], euler[ 3 ];
+    vu_matrix_from_euler( e, angles );
+    hull_multiply( identity, a, e );
+    hull_multiply( a, b, matrix );
+    water_world_euler( b, euler );
+    p.set( 0x44, euler[ 0 ] );
+    p.set( 0x48, euler[ 1 ] );
+    p.set( 0x4C, euler[ 2 ] );
+}
+
+// THE PATTERN INSTANCES' DRAW SLOTS, CPU side. VuPfxSystemInstance's slots 14 /
+// 15 run every pattern's slot 2 / 3 with the pass argument (pfx_system_draw).
+//   quad 0x5920B0 / trail 0x58F9C0 (slot 2; slot 3 nullsub 0x4021A0): when the
+//     pattern's count +0x28 is not 0, g_vupfximpl (0x75904C) +0xC (quad) / +0x10
+//     (trail) renderer's 0x58BD60 / 0x58D030 ( argument +0x10, pattern ) - the
+//     renderers build GPU batches: a hook (`pfx_pattern_submits`).
+//   geom 0x5903A0 (slot 2) / 0x5906A0 (slot 3): per particle, the list +0x20 in
+//     order (next at +0), a model matrix - pfx_geom_draw_matrix - and for slot 2
+//     its colour; the model instance at params +0x5C draws it (0x520130 / per
+//     mesh 0x520670: hooks).
+inline bool pfx_pattern_submits( std::uint32_t count )
+{
+    return count != 0u;
+}
+
+// The model matrix of one geom particle q: D = params Space (+0x34) == 1 ? the
+// system matrix (+0x1C) : the static identity 0x7593B0; T = 0x410AB0's
+// translation of q's position (+0x08); E = fromEuler( q's angles +0x44 );
+// S = diag( s, s, s, 1 ), s = q's scale (+0x38) x the instance scale (+0xA8);
+// matrix = S x ( E x ( T x D ) ) - three VuMatrix_multiply 0x4078C0, in that
+// order (boat/hull.hxx hull_multiply, a = the left).
+inline void pfx_geom_draw_matrix( const pfx_quad_particle_t& q, const float* draw_matrix, float instance_scale, float* out )
+{
+    const float position[ 3 ] = { q.f( 0x08 ), q.f( 0x0C ), q.f( 0x10 ) };
+    const float angles[ 3 ] = { q.f( 0x44 ), q.f( 0x48 ), q.f( 0x4C ) };
+    float t[ 16 ], a[ 16 ], e[ 16 ], b[ 16 ];
+    hull_translation( t, position );
+    hull_multiply( t, a, draw_matrix );
+    vu_matrix_from_euler( e, angles );
+    hull_multiply( e, b, a );
+    const float s = q.f( 0x38 ) * instance_scale;
+    const float scale[ 16 ] = { s, 0, 0, 0, 0, s, 0, 0, 0, 0, s, 0, 0, 0, 0, 1 };
+    hull_multiply( scale, out, b );
+}
+
+// Slot 2's colour: per channel c the system tint (+0xAC .. +0xB8) x the
+// particle's colour (+0x28 .. +0x34) x 255.0 (0x6F7808), fld / fistp (round to
+// nearest even; out of range -> 0x80000000) and its low byte; r g b a from the
+// low byte up. Slot 2 stores it at params +0x74 and params +0x58's byte at
+// +0x78 (the model instance's colour / flag) before each draw.
+inline std::uint32_t pfx_geom_draw_colour( const pfx_quad_particle_t& q, const float* tint )
+{
+    std::uint32_t c = 0u;
+    for ( int k = 0; k < 4; ++k )
+    {
+        const float v = ( tint[ k ] * q.f( 0x28 + 4 * k ) ) * 255.0f;
+        const std::int32_t i = _mm_cvtsd_si32( _mm_set_sd( static_cast< double >( v ) ) );
+        c |= ( static_cast< std::uint32_t >( i ) & 0xFFu ) << ( 8 * k );
+    }
+    return c;
 }
 
 inline const pfx_class_t* pfx_class_find( const char* name )

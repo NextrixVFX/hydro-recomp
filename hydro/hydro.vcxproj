@@ -122,9 +122,11 @@
     <ClInclude Include="workspace\core\boat\fleet.hxx" />
     <ClInclude Include="workspace\core\boat\fluid.hxx" />
     <ClInclude Include="workspace\core\boat\hull.hxx" />
+    <ClInclude Include="workspace\core\boat\human.hxx" />
     <ClInclude Include="workspace\core\boat\load.hxx" />
     <ClInclude Include="workspace\core\boat\math.hxx" />
     <ClInclude Include="workspace\core\boat\parts.hxx" />
+    <ClInclude Include="workspace\core\boat\pilots.hxx" />
     <ClInclude Include="workspace\core\boat\respawn.hxx" />
     <ClInclude Include="workspace\core\boat\sections.hxx" />
     <ClInclude Include="workspace\core\boat\state.hxx" />
@@ -164,6 +166,7 @@
     <ClInclude Include="workspace\core\world\motion.hxx" />
     <ClInclude Include="workspace\core\world\pfx.hxx" />
     <ClInclude Include="workspace\core\world\pfxclass.hxx" />
+    <ClInclude Include="workspace\core\world\pfxsim.hxx" />
     <ClInclude Include="workspace\core\world\query.hxx" />
     <ClInclude Include="workspace\core\world\race.hxx" />
     <ClInclude Include="workspace\core\world\spray.hxx" />
@@ -175,6 +178,7 @@
     <ClInclude Include="workspace\core\world\wave.hxx" />
     <ClInclude Include="workspace\core\world\world.hxx" />
     <ClInclude Include="workspace\utility\checks\boat.hxx" />
+    <ClInclude Include="workspace\utility\checks\pfx.hxx" />
     <ClInclude Include="workspace\utility\checks\race.hxx" />
     <ClInclude Include="workspace\utility\checks\ui.hxx" />
     <ClInclude Include="workspace\utility\checks\water.hxx" />
