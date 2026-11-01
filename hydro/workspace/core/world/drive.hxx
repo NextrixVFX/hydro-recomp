@@ -665,8 +665,10 @@ inline void race_drive_decision( race_session_t& s, std::size_t boat, float dt )
 inline void race_drive_build( race_session_t& s, std::size_t boat, float dt )
 {
     race_drive_t& r = *s.drives[ boat ];
-    race_unwired( s, "the Build tick 0x41F330's steps 3 - 6 (the driver's vt+0x4C, the animation / model instances, the pfx 0x419700, the "
-                     "debris 0x411A50, the draw aabb) - NOT recreated" );
+    // Step 3, the driver's vt+0x4C(dt): 0x4021A0 (ret 4) in every driver vtable - VuHumanDriver 0x737F44, VuAiDriver
+    // 0x737B5C, VuAiNuisanceDriver 0x737C4C, the UI driver 0x737CDC, VuGhostDriver 0x737DDC (read from the image): nothing.
+    race_unwired( s, "the Build tick 0x41F330's steps 4 - 6 (the animation 0x5169E0 / 0x516CF0 and model instances 0x532720 / 0x532990, the "
+                     "pfx 0x419700, the debris 0x411A50, the draw aabb + g_vu3ddrawmanager vt+0x30) - NOT recreated" );
     // Step 1: 0x52F690 on the blender g 0x759430 (world/blend.hxx) with the position (transform +0x80, copied first)
     // into boat +0x408 (the 22-word record: +0x408 the far plane the race camera reads, +0x454 / +0x458 the pfx
     // colours step 2 lerps).

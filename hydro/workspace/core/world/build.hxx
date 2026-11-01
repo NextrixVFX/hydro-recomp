@@ -32,8 +32,8 @@
 //      manager g 0x7590B8 vt+0x30(draw);
 //   7. 0x4200E0(dt) - boat_build_audio below, RECREATED + VERIFIED.
 // Step 1 is world/blend.hxx gfx_blend (verified: case gfx_blend; run by drive.hxx race_drive_build). Step 2 is recreated below (boat_build_water, verified through 0x52ACB0);
-// steps 3 - 6 are NOT yet (the driver's
-// vt+0x4C, the model instances / animation system, 0x419700, 0x411A50).
+// step 3 is every driver vtable's 0x4021A0 (ret 4: nothing); steps 4 - 6 are NOT yet (the
+// model instances / animation system, 0x419700, 0x411A50).
 
 // 0x4200E0's outside calls: 0x50FBF0 on the event slot +0x488 (the engine's
 // event create: true leaves the FMOD event at +0x48C) and the FMOD imports
