@@ -904,3 +904,73 @@ inline bool verify_key_motion( )
         LOG_ERROR( "key_motion FAILED %d (unrecreated %d)", bad, unrecreated );
     return bad == 0;
 }
+
+// The settings entities' Trigger handlers (world/settings.hxx) against retail (case settings_triggers): g_vulightmanager's
+// +0xCC .. +0xF8 after each call (prefilled 0xA5A5A5A5; +0xEC, a stack word retail never wrote, excepted), the VuRetVal
+// word, the substitute calls; the ctor defaults against engine entity/rig.hxx's constructs.
+#include <workspace/core/entity/rig.hxx>
+#include <workspace/core/world/settings.hxx>
+
+inline bool verify_settings_triggers( )
+{
+    logic_check_t c{ g_golden_stt_words };
+    int bad = 0;
+    {
+        ambient_light_t a;
+        directional_light_t d;
+        ambient_light_construct( a );
+        directional_light_construct( d );
+        const std::uint32_t want[ 4 ] = { a.color, d.front_color, d.back_color, d.specular_color };
+        for ( std::uint32_t x : want )
+            bad += c.next( ) == x ? 0 : 1;
+    }
+    const unsigned n = c.next( );
+    int calls = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = c.next( );
+        std::vector< std::uint32_t > in( c.next( ) );
+        for ( auto& x : in )
+            x = c.next( );
+        std::uint32_t want_lm[ 12 ];
+        for ( auto& x : want_lm )
+            x = c.next( );
+        const std::uint32_t want_ret = c.next( );
+        std::vector< std::uint32_t > want_log( 2 * c.next( ) );
+        for ( auto& x : want_log )
+            x = c.next( );
+        light_manager_t m;
+        std::memset( &m, 0xA5, sizeof( m ) );
+        std::uint32_t ret = 0xFFFFFFFFu;
+        std::vector< std::uint32_t > got_log;
+        static const int a_tag = 1, b_tag = 2;   // distinct values: identical constants may be folded
+        const void* pick[ 3 ] = { nullptr, &a_tag, &b_tag };
+        if ( kind == 0 )
+            ret = ambient_light_trigger( in[ 0 ], m );
+        else if ( kind == 1 )
+            ret = directional_light_trigger( in.data( ), in[ 16 ], in[ 17 ], in[ 18 ], m );
+        else
+            ret = substitute_asset_trigger( pick[ in[ 0 ] ], pick[ in[ 1 ] ], &got_log, []( void* u, const void* x, const void* y )
+                                            {
+                                                auto code = []( const void* p ) { return p == nullptr ? 0u : ( p == &a_tag ? 1u : 2u ); };
+                                                static_cast< std::vector< std::uint32_t >* >( u )->push_back( code( x ) );
+                                                static_cast< std::vector< std::uint32_t >* >( u )->push_back( code( y ) );
+                                            } );
+        std::uint32_t got[ 12 ];
+        std::memcpy( got, &m, 48 );
+        int diff = ret == want_ret ? 0 : 1;
+        for ( int k = 0; k < 12; ++k )
+            diff += ( kind == 1 && k == 8 ) || got[ k ] == want_lm[ k ] ? 0 : 1;
+        diff += got_log == want_log ? 0 : 1;
+        calls += static_cast< int >( want_log.size( ) / 2 );
+        if ( diff && bad < 6 )
+            LOG_ERROR( "settings_triggers vector %u (kind %u): %d words differ", v, kind, diff );
+        bad += diff;
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "the settings Trigger handlers match retail (VuAmbientLightEntity 0x5EF780, VuDirectionalLightEntity 0x5EEEC0 / 0x5EEEE0, "
+                     "VuSubstituteAssetEntity 0x5F4BD0): %u calls, the light manager's words, %d substitutions, the ctor defaults", n, calls );
+    else
+        LOG_ERROR( "settings_triggers FAILED %d", bad );
+    return bad == 0;
+}
