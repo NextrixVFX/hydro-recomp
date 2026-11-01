@@ -6,6 +6,7 @@
 #include <workspace/core/entity/property.hxx>
 #include <workspace/core/ui/fsm.hxx>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -648,6 +649,106 @@ inline void race_rules_construct( race_rules_t& r )
     r.fsm.add_transition( "Game", "PostGame", "HumanFinished" );
     r.fsm.add_transition( "Game", "PostGame", "EveryoneFinished" );
     r.fsm.add_transition( "", "Exit", "Exit" );
+}
+
+// ---- The other game modes' ctors: VuSlalomGame 0x48BEC0, VuTimeTrialGame
+//      0x48ED30, VuGhostGame 0x484A20 (world batch 21) ---------------------
+//
+// Created by 0x4BA060 by the mode's name (operator new 0x770 / 0x740 /
+// 0x778; VuRaceGame's 0x748), each thiscall(game, project) retn 4 and built
+// as VuRaceGame's 0x489030 is: VuGame's base 0x480BA0 first (its +0x0C /
+// +0x67C machines and its events OnUserNext 0x483170 / OnCheatFinish 0x483190,
+// VuMethod1 vtable 0x73F65C), the game's own events (0x5156E0), its FSM's
+// states (addState 0x555850) and transitions (addTransition 0x555920, "" =
+// every state), then its three HUD projects (0x4B4360) into three words.
+// VuGhostGame's FSM is at +0x700 (its +0x6F8 / +0x6FC hold two more vtables,
+// 0x73F7D0 / 0x73F7C8). VuSlalomGame also makes a Vu3dDrawComponent (0x531A40)
+// into +0x744 (its +0x24 .. +0x40 = (-1e9 x3, 1e9 x3) as an aabb; the draw
+// manager's add only when its +0x1E is set - not after the ctor). The tables
+// are verified against the three ctors run whole (case game_ctors). The
+// STATE HANDLERS ARE NOT READ: each is a hook (`unrecreated`, UNKNOWN) - the
+// rules of these modes are not recreated yet.
+struct game_mode_state_def_t
+{
+    const char* name;
+    std::uint32_t address[ 4 ];   // enter / exit / tick / draw (0: none)
+};
+
+struct game_mode_def_t
+{
+    const char* ctor;
+    const char* rtti;
+    std::uint32_t vtable, size, fsm_at;
+    std::uint32_t method0_vtable, method1_vtable, event_vtable;   // VuMethod0 / VuMethod1<float> / VuMethod1<VuParams const&>
+    const char* huds[ 3 ];
+    std::uint32_t hud_at[ 3 ];
+    std::vector< game_mode_state_def_t > states;
+    std::vector< std::array< const char*, 3 > > transitions;     // from ("" = every state), to, condition
+    std::vector< race_rules_event_t > events;                    // the game's own, after VuGame's two
+};
+
+inline constexpr race_rules_event_t k_vugame_events[ 2 ] = { { "OnUserNext", 0x483170u }, { "OnCheatFinish", 0x483190u } };
+inline constexpr std::uint32_t k_vugame_event_vtable = 0x73F65Cu;
+
+inline const std::vector< game_mode_def_t >& game_mode_defs( )
+{
+    static const std::vector< game_mode_def_t > defs = {
+        { "0x48BEC0", ".?AVVuSlalomGame@@", 0x73FA6Cu, 0x770u, 0x6F8u, 0x73FA3Cu, 0x73FA2Cu, 0x73FA5Cu,
+          { "HUDs/SlalomPreGameHUD", "HUDs/SlalomGameHUD", "HUDs/SlalomPostGameHUD" }, { 0x75Cu, 0x760u, 0x764u },
+          { { "PreGame", { 0x48DC30u, 0x48DCA0u, 0x48DCF0u, 0x48DD50u } }, { "Game", { 0x48DDB0u, 0x48DE10u, 0x48DF90u, 0x48E030u } },
+            { "PostGame", { 0x48E090u, 0x48E300u, 0x48E330u, 0x48E3D0u } }, { "Exit", { 0, 0, 0, 0 } } },
+          { { "PreGame", "Game", "StartLightsOut" }, { "Game", "PostGame", "Finished" }, { "", "Exit", "Exit" } },
+          { { "OnStartLightsOut", 0x48DB40u }, { "OnBoatRecovered", 0x48DB70u } } },
+        { "0x48ED30", ".?AVVuTimeTrialGame@@", 0x73FB9Cu, 0x740u, 0x6F8u, 0x73FB7Cu, 0x73FB6Cu, 0x73FB8Cu,
+          { "HUDs/TimeTrialPreGameHUD", "HUDs/TimeTrialGameHUD", "HUDs/TimeTrialPostGameHUD" }, { 0x72Cu, 0x730u, 0x734u },
+          { { "PreGame", { 0x490570u, 0x4905E0u, 0x490630u, 0x490690u } }, { "Game", { 0x4906F0u, 0x490750u, 0x4908B0u, 0x490950u } },
+            { "PostGame", { 0x4909B0u, 0x490BD0u, 0x490C00u, 0x486720u } }, { "Exit", { 0, 0, 0, 0 } } },
+          { { "PreGame", "Game", "StartLightsOut" }, { "Game", "PostGame", "Finished" }, { "", "Exit", "Exit" } },
+          { { "OnStartLightsOut", 0x490540u } } },
+        { "0x484A20", ".?AVVuGhostGame@@", 0x73F7DCu, 0x778u, 0x700u, 0x73F7A0u, 0x73F790u, 0x73F7B0u,
+          { "HUDs/GhostPreGameHUD", "HUDs/GhostGameHUD", "HUDs/GhostPostGameHUD" }, { 0x734u, 0x738u, 0x73Cu },
+          { { "GetLeaderboard", { 0x485890u, 0x485AA0u, 0x485AF0u, 0 } }, { "LoadGhosts", { 0x485B50u, 0x485AA0u, 0, 0 } },
+            { "PreGame", { 0x486060u, 0x486660u, 0x4866C0u, 0x486720u } }, { "Game", { 0x486780u, 0x486880u, 0x486A70u, 0x486C00u } },
+            { "PostGame", { 0x486EC0u, 0x4872A0u, 0x4872D0u, 0x487370u } }, { "ShowError", { 0x4873D0u, 0x487560u, 0, 0 } },
+            { "Exit", { 0, 0, 0, 0 } } },
+          { { "GetLeaderboard", "LoadGhosts", "Success" }, { "GetLeaderboard", "ShowError", "Failure" }, { "LoadGhosts", "PreGame", "Success" },
+            { "LoadGhosts", "ShowError", "Failure" }, { "PreGame", "Game", "StartLightsOut" }, { "Game", "PostGame", "Finished" },
+            { "ShowError", "Exit", "MessageBoxClosed" }, { "", "Exit", "Exit" } },
+          { { "OnStartLightsOut", 0x485860u } } } };
+    return defs;
+}
+
+// The ctor's FSM: the states in order (each handler a hook calling
+// `unrecreated` - not read), then the transitions in the ctor's order.
+inline void game_mode_construct( c_fsm& f, const game_mode_def_t& d, const std::function< void( std::uint32_t, const char* ) >& unrecreated )
+{
+    f = c_fsm{ };
+    for ( const game_mode_state_def_t& s : d.states )
+    {
+        fsm_state_t& st = f.add_state( s.name );
+        for ( int k = 0; k < 4; ++k )
+            st.m_address[ k ] = s.address[ k ];
+        const std::string what = std::string( d.rtti ) + " " + s.name;
+        const auto hook = [ unrecreated, what ]( std::uint32_t a, const char* verb ) {
+            return [ unrecreated, what, a, verb ] {
+                if ( unrecreated )
+                    unrecreated( a, ( what + " " + verb ).c_str( ) );
+            };
+        };
+        if ( s.address[ 0 ] )
+            st.m_enter = hook( s.address[ 0 ], "enter" );
+        if ( s.address[ 1 ] )
+            st.m_exit = hook( s.address[ 1 ], "exit" );
+        if ( s.address[ 2 ] )
+        {
+            auto h = hook( s.address[ 2 ], "tick" );
+            st.m_tick = [ h ]( float ) { h( ); };
+        }
+        if ( s.address[ 3 ] )
+            st.m_draw = hook( s.address[ 3 ], "draw" );
+    }
+    for ( const auto& t : d.transitions )
+        f.add_transition( t[ 0 ], t[ 1 ], t[ 2 ] );
 }
 
 // VuRaceGame slot 5 0x4896A0's "the state machine enters its first state":

@@ -359,3 +359,96 @@ inline bool verify_tick_same_pass( )
         LOG_ERROR( "tick same pass FAILED %d ticks", failed );
     return failed == 0;
 }
+// game_mode_defs / game_mode_construct (core/world rules.hxx) against the
+// Slalom / TimeTrial / Ghost ctors 0x48BEC0 / 0x48ED30 / 0x484A20 run whole
+// (oracle case game_ctors): per game the vtable, RTTI name, size, the FSM's
+// offset, the three HUD loads and their words; the FSM's states (name, flag,
+// FNV hash, the four methods and their VuMethod vtables), transitions,
+// conditions, current state and time; the events (VuGame's two, then the
+// game's: name, VuMethod1 vtable, method); VuGame's +0x0C / +0x67C machines'
+// state counts and current state - one failure per differing item.
+inline bool verify_game_ctors( )
+{
+    int failed = 0, states = 0, events = 0;
+    const auto fail = [ & ]( const std::string& what ) {
+        if ( ++failed <= 10 )
+            LOG_ERROR( "game ctors: %s", what.c_str( ) );
+    };
+    const std::vector< game_mode_def_t >& defs = game_mode_defs( );
+    if ( defs.size( ) != g_golden_gc_games_count )
+        fail( "game count differs" );
+    for ( std::size_t k = 0; k < g_golden_gc_games_count && k < defs.size( ); ++k )
+    {
+        const golden_gc_game_t& g = g_golden_gc_games[ k ];
+        const game_mode_def_t& d = defs[ k ];
+        const std::string who = g.m_ctor;
+        if ( who != d.ctor || std::string( g.m_rtti ) != d.rtti || g.m_vtable != d.vtable || g.m_size != d.size || g.m_fsm_at != d.fsm_at )
+            fail( who + ": the class / vtable / size / FSM offset differ" );
+        for ( int h = 0; h < 3; ++h )
+            if ( std::string( g.m_loaded[ h ] ) != d.huds[ h ] || g.m_load_at[ h ] != d.hud_at[ h ] )
+                fail( who + ": HUD load " + std::to_string( h ) + " differs" );
+        c_fsm f;
+        game_mode_construct( f, d, nullptr );
+        if ( f.m_states.size( ) != static_cast< std::size_t >( g.m_states ) )
+            fail( who + ": state count differs" );
+        for ( int s = 0; s < g.m_states && static_cast< std::size_t >( s ) < f.m_states.size( ); ++s )
+        {
+            const golden_rgf_state_t& gs = g_golden_gc_states[ g.m_state + s ];
+            const fsm_state_t& st = *f.m_states[ static_cast< std::size_t >( s ) ];
+            bool same = st.m_name == gs.m_name && static_cast< int >( st.m_flag ) == gs.m_flag && st.m_hash == gs.m_hash &&
+                        st.m_transitions.size( ) == static_cast< std::size_t >( gs.m_trs );
+            for ( int m = 0; m < 4; ++m )
+            {
+                const std::uint32_t vt = st.m_address[ m ] == 0 ? 0u : m == 2 ? d.method1_vtable : d.method0_vtable;
+                same = same && st.m_address[ m ] == gs.m_method[ m ] && gs.m_vtable[ m ] == vt;
+            }
+            for ( int t = 0; same && t < gs.m_trs; ++t )
+                same = st.m_transitions[ static_cast< std::size_t >( t ) ].first == g_golden_gc_transitions[ gs.m_tr + t ][ 0 ] &&
+                       st.m_transitions[ static_cast< std::size_t >( t ) ].second == g_golden_gc_transitions[ gs.m_tr + t ][ 1 ];
+            if ( !same )
+                fail( who + ": state " + gs.m_name + " differs" );
+            ++states;
+        }
+        if ( f.m_conditions.size( ) != static_cast< std::size_t >( g.m_conditions ) )
+            fail( who + ": condition count differs" );
+        for ( int c = 0; c < g.m_conditions && static_cast< std::size_t >( c ) < f.m_conditions.size( ); ++c )
+        {
+            const golden_rgf_condition_t& gc = g_golden_gc_conditions[ g.m_condition + c ];
+            const auto& fc = f.m_conditions[ static_cast< std::size_t >( c ) ];
+            if ( fc.m_name != gc.m_name || fc.m_hash != gc.m_hash || fc.m_value != gc.m_value || fc.m_pulse != gc.m_pulse )
+                fail( who + ": condition " + gc.m_name + " differs" );
+        }
+        unsigned time;
+        std::memcpy( &time, &f.m_time, 4 );
+        if ( f.m_current != g.m_current || time != g.m_time )
+            fail( who + ": the current state / time after the ctor differ" );
+        std::vector< std::pair< race_rules_event_t, std::uint32_t > > ev;
+        for ( const race_rules_event_t& e : k_vugame_events )
+            ev.push_back( { e, k_vugame_event_vtable } );
+        for ( const race_rules_event_t& e : d.events )
+            ev.push_back( { e, d.event_vtable } );
+        if ( ev.size( ) != static_cast< std::size_t >( g.m_events ) )
+            fail( who + ": event count differs" );
+        for ( int e = 0; e < g.m_events && static_cast< std::size_t >( e ) < ev.size( ); ++e )
+        {
+            const golden_gc_event_t& ge = g_golden_gc_events[ g.m_event + e ];
+            if ( std::strcmp( ev[ static_cast< std::size_t >( e ) ].first.name, ge.m_name ) != 0 || ev[ static_cast< std::size_t >( e ) ].first.method != ge.m_method ||
+                 ev[ static_cast< std::size_t >( e ) ].second != ge.m_vtable )
+                fail( who + ": event " + ge.m_name + " differs" );
+            ++events;
+        }
+        race_rules_t probe;
+        vugame_fsms_construct( probe );
+        vugame_fsm_begin( probe.event );
+        vugame_fsm_begin( probe.split );
+        if ( probe.event.m_states.size( ) != static_cast< std::size_t >( g.m_states_0c ) || probe.split.m_states.size( ) != static_cast< std::size_t >( g.m_states_67c ) ||
+             g.m_current_0c != 0 || g.m_current_67c != 0 )
+            fail( who + ": VuGame's +0x0C / +0x67C machines differ" );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "game_mode_defs match the Slalom / TimeTrial / Ghost ctors 0x48BEC0 / 0x48ED30 / 0x484A20 run whole: %d games, %d states, %d events, "
+                     "9 HUD loads", static_cast< int >( g_golden_gc_games_count ), states, events );
+    else
+        LOG_ERROR( "game ctors FAILED %d checks", failed );
+    return failed == 0;
+}
