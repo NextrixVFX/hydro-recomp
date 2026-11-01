@@ -8,6 +8,8 @@
 #include <workspace/core/boat/load.hxx>
 #include <workspace/core/boat/sections.hxx>
 #include <workspace/core/boat/state.hxx>
+#include <workspace/core/boat/track.hxx>
+#include <workspace/core/boat/fleet.hxx>
 
 #include <array>
 #include <cstdio>
@@ -1774,6 +1776,392 @@ inline bool verify_ai_tick( )
     return failed == 0;
 }
 
+// track_build_from_tree (boat/track.hxx) against retail's VuTrackManagerImpl on
+// Hydroelectric's AI waypoints (oracle case track_build): the level's child 0
+// ("AI") under a bare scene root, loaded by hydro's tree (entity_load_project
+// with the verified callbacks plus the waypoint's property state) and by
+// retail's VuEntity::load, every waypoint's slot 6 0x432400 in gameInitialize
+// order, then slot 7 0x4CFFD0. Compared: each waypoint's words +0x5C..+0xA4
+// (its postLoad 0x432170's edge points, properties, sector ids, normalised
+// probabilities; the stale lanes +0x68 / +0x78, the component pointers +0x7C /
+// +0x80 and +0x8D..+0x8F skipped), every sector's 0x4D0F90 image (but its
+// stale lanes and pointer words), its waypoint and next / prev lists, the
+// checkpoint list, the start / end, length, state, and the queries.
+inline std::unique_ptr< entity_t > track_document_tree( )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_track_document );
+    static const value_t document = c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_track_document_bytes ) ).parse( );
+    static const entity_registry_t registry = build_entity_registry( { } );
+    entity_world_t world;
+    world.m_registry = &registry;
+    world.m_ctor_for = entity_ctor_for;
+    world.m_template = []( const std::string& ) -> const value_t* { return nullptr; };
+    world.m_components_for = entity_components_scripted;
+    world.m_component_load = entity_load_component;
+    world.m_component_post = entity_post_load_component;
+    world.m_component_mark = entity_mark_component;
+    world.m_state_for = []( const std::string& cls ) { auto s = waypoint_state_for( cls ); return s ? s : entity_state_for( cls ); };
+    world.m_properties_load = []( entity_t& e, const value_t& p ) { waypoint_load_properties( e, p ); entity_load_properties( e, p ); };
+    world.m_properties_mark = []( entity_t& e ) { waypoint_mark_properties( e ); entity_mark_properties( e ); };
+    return entity_load_project( member( document, "VuProject" ), "Data/Projects/Track.vuprj", world );
+}
+
+inline bool verify_track_build( )
+{
+    const std::unique_ptr< entity_t > tree = track_document_tree( );
+    track_manager_t tm;
+    if ( !tree || !track_build_from_tree( *tree, tm ) )
+    {
+        LOG_ERROR( "track_build: the document did not load or the build was refused" );
+        return false;
+    }
+    int failed = 0, compared = 0;
+    auto cmp = [ & ]( const char* what, int a, int b, std::uint32_t ours, std::uint32_t theirs ) {
+        ++compared;
+        if ( ours != theirs && ++failed <= 12 )
+            LOG_ERROR( "track_build %s %d +0x%X: ours 0x%08X retail 0x%08X", what, a, b, ours, theirs );
+    };
+    if ( tm.waypoints.size( ) != g_golden_track_waypoint_count || tm.sectors.size( ) != g_golden_track_sector_count )
+    {
+        LOG_ERROR( "track_build: %d waypoints / %d sectors, retail %d / %d", static_cast< int >( tm.waypoints.size( ) ),
+            static_cast< int >( tm.sectors.size( ) ), static_cast< int >( g_golden_track_waypoint_count ), static_cast< int >( g_golden_track_sector_count ) );
+        return false;
+    }
+    const auto bits = []( float f ) { std::uint32_t u; std::memcpy( &u, &f, 4 ); return u; };
+    for ( std::size_t i = 0; i < tm.waypoints.size( ); ++i )
+    {
+        const track_waypoint_t& w = tm.waypoints[ i ];
+        const unsigned* g = g_golden_track_waypoints + 20 * i;
+        const int id = static_cast< int >( i );
+        if ( w.entity->m_name != g_golden_track_waypoint_names[ i ] && ++failed <= 12 )
+            LOG_ERROR( "track_build waypoint %d is '%s', retail '%s'", id, w.entity->m_name.c_str( ), g_golden_track_waypoint_names[ i ] );
+        for ( int k = 0; k < 3; ++k )
+        {
+            cmp( "waypoint", id, 0x5C + 4 * k, bits( w.right[ k ] ), g[ k ] );
+            cmp( "waypoint", id, 0x6C + 4 * k, bits( w.left[ k ] ), g[ 4 + k ] );
+        }
+        cmp( "waypoint", id, 0x84, bits( w.p.speed_hint ), g[ 10 ] );
+        cmp( "waypoint", id, 0x88, static_cast< std::uint32_t >( w.p.start | ( w.p.checkpoint << 8 ) | ( w.p.finish << 16 ) | ( w.p.allow_recovery << 24 ) ),
+            g[ 11 ] );
+        cmp( "waypoint", id, 0x8C, w.p.show_wrong_way, g[ 12 ] & 0xFF );
+        cmp( "waypoint", id, 0x90, bits( w.p.width ), g[ 13 ] );
+        cmp( "waypoint", id, 0x94, bits( w.p.height ), g[ 14 ] );
+        cmp( "waypoint", id, 0x98, static_cast< std::uint32_t >( w.sector_a ), g[ 15 ] );
+        cmp( "waypoint", id, 0x9C, static_cast< std::uint32_t >( w.sector_b ), g[ 16 ] );
+        cmp( "waypoint", id, 0xA0, bits( w.p.branch_a ), g[ 17 ] );
+        cmp( "waypoint", id, 0xA4, bits( w.p.branch_b ), g[ 18 ] );
+    }
+    const unsigned* g = g_golden_track_sectors;
+    for ( std::size_t i = 0; i < tm.sectors.size( ); ++i )
+    {
+        const track_sector_t& s = tm.sectors[ i ];
+        const int id = static_cast< int >( i );
+        const std::uint64_t stale = g[ 60 ] | ( static_cast< std::uint64_t >( g[ 61 ] ) << 32 );
+        for ( int k = 0; k < 60; ++k )
+        {
+            const int at = 4 * k;
+            if ( at == 0x0C || at == 0x1C || at == 0x2C || at == 0x3C || at == 0xD4 || at == 0xD8 || at == 0xE0 || at == 0xE4 || at == 0xEC ||
+                 ( stale >> k & 1 ) )
+                continue;
+            cmp( "sector", id, at, track_u32( s.image, at ), g[ k ] );
+        }
+        cmp( "sector waypoint", id, 0xD4, static_cast< std::uint32_t >( s.waypoint ), g[ 62 ] );
+        const unsigned nn = g[ 63 ], np = g[ 64 ];
+        cmp( "sector next count", id, 0xDC, static_cast< std::uint32_t >( s.next.size( ) ), nn );
+        cmp( "sector prev count", id, 0xE8, static_cast< std::uint32_t >( s.prev.size( ) ), np );
+        for ( unsigned k = 0; k < nn && k < s.next.size( ); ++k )
+            cmp( "sector next", id, static_cast< int >( k ), static_cast< std::uint32_t >( s.next[ k ] ), g[ 65 + k ] );
+        for ( unsigned k = 0; k < np && k < s.prev.size( ); ++k )
+            cmp( "sector prev", id, static_cast< int >( k ), static_cast< std::uint32_t >( s.prev[ k ] ), g[ 65 + nn + k ] );
+        g += 65 + nn + np;
+    }
+    cmp( "checkpoint count", 0, 0, static_cast< std::uint32_t >( tm.checkpoints.size( ) ), static_cast< std::uint32_t >( g_golden_track_checkpoint_count ) );
+    for ( std::size_t k = 0; k < g_golden_track_checkpoint_count && k < tm.checkpoints.size( ); ++k )
+        cmp( "checkpoint", static_cast< int >( k ), 0, static_cast< std::uint32_t >( tm.checkpoints[ k ] ), static_cast< std::uint32_t >( g_golden_track_checkpoints[ k ] ) );
+    cmp( "start", 0, 0x14, static_cast< std::uint32_t >( tm.start ), static_cast< std::uint32_t >( g_golden_track_summary[ 0 ] ) );
+    cmp( "end", 0, 0x18, static_cast< std::uint32_t >( tm.end ), static_cast< std::uint32_t >( g_golden_track_summary[ 1 ] ) );
+    cmp( "length", 0, 0x1C, bits( tm.length ), g_golden_track_manager[ 7 ] );
+    cmp( "checkpoint list count", 0, 0x20, static_cast< std::uint32_t >( tm.checkpoints.size( ) ), g_golden_track_manager[ 8 ] );
+    cmp( "state", 0, 0x30, static_cast< std::uint32_t >( tm.state ), g_golden_track_manager[ 12 ] );
+    cmp( "sector count", 0, 0x4, static_cast< std::uint32_t >( tm.sectors.size( ) ), g_golden_track_manager[ 1 ] );
+    cmp( "slot 7", 0, 0, 1u, static_cast< std::uint32_t >( g_golden_track_summary[ 2 ] ) );
+    cmp( "slot 8", 0, 0, track_is_built( tm ) ? 1u : 0u, static_cast< std::uint32_t >( g_golden_track_summary[ 3 ] ) );
+    cmp( "slot 9", 0, 0, track_is_circuit( tm ) ? 1u : 0u, static_cast< std::uint32_t >( g_golden_track_summary[ 4 ] ) );
+    cmp( "slot 11", 0, 0, static_cast< std::uint32_t >( track_start_sector( tm ) ), static_cast< std::uint32_t >( g_golden_track_summary[ 5 ] ) );
+    cmp( "slot 12", 0, 0, static_cast< std::uint32_t >( track_end_sector( tm ) ), static_cast< std::uint32_t >( g_golden_track_summary[ 6 ] ) );
+    cmp( "slot 14", 0, 0, static_cast< std::uint32_t >( track_first_checkpoint( tm ) ), static_cast< std::uint32_t >( g_golden_track_summary[ 7 ] ) );
+    // The nearest-sector queries (slots 21 / 22) and the distance 0x4D17E0.
+    int inside = 0;
+    for ( std::size_t q = 0; q < g_golden_track_query_count; ++q )
+    {
+        const unsigned* x = g_golden_track_queries + 13 * q;
+        float p[ 4 ];
+        std::memcpy( p, x, 16 );
+        const std::int32_t cp = static_cast< std::int32_t >( x[ 4 ] );
+        const int id = static_cast< int >( q );
+        cmp( "slot 21", id, 0, static_cast< std::uint32_t >( track_nearest( tm, p, cp, false ) ), x[ 5 ] );
+        cmp( "slot 22", id, 0, static_cast< std::uint32_t >( track_nearest( tm, p, cp, true ) ), x[ 6 ] );
+        for ( int k = 0; k < 3; ++k )
+        {
+            const float d = track_distance( tm.sectors[ x[ 7 + 2 * k ] ].image, p );
+            inside += d == 0.0f ? 1 : 0;
+            cmp( "distance", id, k, bits( d ), x[ 8 + 2 * k ] );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "track_nearest (slots 21 / 22) and track_distance 0x4D17E0 match retail on %d points (%d of %d distances inside a sector)",
+            static_cast< int >( g_golden_track_query_count ), inside, static_cast< int >( 3 * g_golden_track_query_count ) );
+        LOG_SUCCESS( "VuTrackManagerImpl (waypoint postLoad 0x432170 / slot 6 0x432400 -> 0x4CFAF0 / 0x4D0F90 / 0x4D0940 / 0x4CFD60, build "
+                     "0x4CFFD0, queries) matches retail on Hydroelectric: %d waypoints, %d sectors, %d checkpoints, %d values, bit for bit",
+            static_cast< int >( tm.waypoints.size( ) ), static_cast< int >( tm.sectors.size( ) ), static_cast< int >( tm.checkpoints.size( ) ), compared );
+        return true;
+    }
+    LOG_ERROR( "track_build FAILED %d of %d values", failed, compared );
+    return false;
+}
+
+// fleet.hxx's VuAiManagerImpl and VuRandomTrackPlan against retail on
+// Hydroelectric's track (oracle case ai_manager; the track is
+// verify_track_build's): 7 boats (6 the manager's drivers, modes 0 / 1 / 2),
+// addDriver 0x403590 x6, the start 0x4034B0 / 0x404590, slot 7 0x4034E0, then
+// 240 ticks of 0x403930 (+ 0x403800) on scripted boat motion, VuRandom
+// (0x50FD20) carried across. Compared after the adds, the start and every
+// tick: the time, state, start / end, VuRandom's state, every entry's words
+// (the matrices once written, the ring's written slots), and every driver's
+// +0x78 / +0x9C / +0xBC and plan.
+inline bool fleet_check( const unsigned* g, std::size_t frames, bool drive, const char* name )
+{
+    const std::unique_ptr< entity_t > tree = track_document_tree( );
+    track_manager_t tm;
+    if ( !tree || !track_build_from_tree( *tree, tm ) )
+    {
+        LOG_ERROR( "%s: the track did not build", name );
+        return false;
+    }
+    const int nb = static_cast< int >( *g++ );
+    // Each boat's transform component image (0xC0: +0x50 the world, +0x60 its forward row, +0x80 its position).
+    std::vector< std::array< float, 48 > > worlds( nb );
+    std::vector< fleet_boat_t > boats( nb );
+    std::vector< std::array< std::uint8_t, 0xD4 > > images( nb );
+    for ( int k = 0; k < nb; ++k )
+    {
+        std::memcpy( &boats[ k ].engine_4, g++, 4 );
+        std::memcpy( &boats[ k ].engine_c, g++, 4 );
+        worlds[ k ].fill( 0.0f );
+        boats[ k ].world = worlds[ k ].data( ) + 20;
+    }
+    std::vector< fleet_pilot_t > pilots( nb );
+    for ( int k = 0; k < nb; ++k )
+    {
+        images[ k ].fill( 0 );
+        track_put_u32( images[ k ].data( ), 0x78, 0xFFFFFFFFu );
+        track_put_u32( images[ k ].data( ), 0x80, *g++ );
+        pilots[ k ].driver = images[ k ].data( );
+        pilots[ k ].boat = k;
+    }
+    for ( int k = 0; k < nb; ++k, g += 16 )
+        std::memcpy( worlds[ k ].data( ) + 20, g, 64 );
+    fleet_manager_t m;
+    m.state = 0;   // the case's image: slot 5 0x4042E0 (state 1) is not run there - it reads VuDevConfig
+    const int adds = static_cast< int >( *g++ );
+    for ( int k = 0; k < adds; ++k, g += 3 )
+    {
+        fleet_add_driver( m, boats, k, k, fleet_bits( g[ 0 ] ), fleet_bits( g[ 1 ] ) );
+        pilots[ k ].sector = static_cast< int >( g[ 2 ] );
+    }
+    const float dt = fleet_bits( *g++ );
+    fleet_random_t rng;
+    std::memcpy( &rng, g, 136 );
+    g += 34;
+    // The driver ticks' images (ai_race): boat 0x520, body 0x300, engine 0x40, animation 0x80, solver 0x104.
+    std::vector< std::array< std::uint8_t, 0x520 > > boat_images( drive ? nb : 0 );
+    std::vector< std::array< std::uint8_t, 0x300 > > bodies( drive ? nb : 0 );
+    std::vector< std::array< std::uint8_t, 0x40 > > engines( drive ? nb : 0 );
+    std::vector< std::array< std::uint8_t, 0x80 > > anims( drive ? nb : 0 );
+    std::vector< std::array< std::uint8_t, 0x104 > > solvers( drive ? nb : 0 );
+    std::vector< const std::uint8_t* > boat_list, transforms;
+    for ( int k = 0; k < nb; ++k )
+        transforms.push_back( reinterpret_cast< const std::uint8_t* >( worlds[ k ].data( ) ) );
+    for ( int k = 0; drive && k < nb; ++k, g += 6 )
+    {
+        boat_images[ k ].fill( 0 );
+        bodies[ k ].fill( 0 );
+        engines[ k ].fill( 0 );
+        anims[ k ].fill( 0 );
+        solvers[ k ].fill( 0 );
+        std::uint8_t* b = boat_images[ k ].data( );
+        track_put_u32( b, 0x4CC, g[ 0 ] );
+        track_put_u32( b, 0x310, g[ 1 ] );
+        track_put_u32( b, 0x33C, g[ 2 ] );
+        state_put_f( b, 0x4B4, 0.5f );
+        track_put_u32( b, 0x470, g[ 3 ] );
+        state_put_f( engines[ k ].data( ), 4, boats[ k ].engine_4 );
+        state_put_f( engines[ k ].data( ), 0xC, boats[ k ].engine_c );
+        track_put_u32( engines[ k ].data( ), 0x28, g[ 4 ] );
+        track_put_u32( images[ k ].data( ), 0x98, g[ 5 ] );
+        track_put_u32( anims[ k ].data( ), 0x78, 2u );
+        state_put_f( solvers[ k ].data( ), 0x54, 0.5f );
+        track_put_u32( bodies[ k ].data( ), 0xF4, 2u );
+        boat_list.push_back( b );
+    }
+    std::vector< int > hook_calls;
+    ai_tick_hooks_t hooks;
+    hooks.avoid.user = nullptr;
+    hooks.avoid.ray = []( void*, const float*, const float*, const ai_ray_hit_t** hits ) { *hits = nullptr; return 0; };
+    hooks.controls.user = &hook_calls;
+    hooks.controls.misfire = []( void* u ) { static_cast< std::vector< int >* >( u )->push_back( 1 ); };
+    hooks.controls.voice = []( void* u, const char* line ) {
+        static_cast< std::vector< int >* >( u )->push_back( std::strcmp( line, "NeedPickUpPowerBoost" ) == 0 ? 2 : 99 );
+    };
+    int failed = 0, compared = 0, snapshots = 0;
+    auto cmp = [ & ]( const char* what, int at, int a, std::uint32_t ours, std::uint32_t theirs ) {
+        ++compared;
+        if ( ours != theirs && ++failed <= 12 )
+            LOG_ERROR( "%s snapshot %d %s %d: ours 0x%08X retail 0x%08X", name, at, what, a, ours, theirs );
+    };
+    const auto u = []( float f ) { std::uint32_t v; std::memcpy( &v, &f, 4 ); return v; };
+    const auto snapshot = [ & ]( int at ) {
+        ++snapshots;
+        cmp( "time", at, 0, u( m.time ), *g++ );
+        cmp( "state", at, 0, static_cast< std::uint32_t >( m.state ), *g++ );
+        cmp( "start", at, 0, static_cast< std::uint32_t >( m.start ), *g++ );
+        cmp( "end", at, 0, static_cast< std::uint32_t >( m.end ), *g++ );
+        std::uint32_t r[ 34 ];
+        std::memcpy( r, &rng, 136 );
+        for ( int k = 0; k < 34; ++k )
+            cmp( "random", at, k, r[ k ], *g++ );
+        const unsigned ne = *g++;
+        cmp( "entries", at, 0, static_cast< std::uint32_t >( m.entries.size( ) ), ne );
+        for ( unsigned k = 0; k < ne; ++k, g += 55 )
+        {
+            if ( k >= m.entries.size( ) )
+                continue;
+            const fleet_entry_t& e = m.entries[ k ];
+            const int id = static_cast< int >( k );
+            if ( e.matrices_known )
+                for ( int j = 0; j < 16; ++j )
+                {
+                    cmp( "entry prev", at, id * 100 + j, u( e.prev[ j ] ), g[ j ] );
+                    cmp( "entry cur", at, id * 100 + j, u( e.cur[ j ] ), g[ 16 + j ] );
+                }
+            const std::uint32_t mine[ 11 ] = { static_cast< std::uint32_t >( e.pilot ), static_cast< std::uint32_t >( e.boat ),
+                static_cast< std::uint32_t >( e.target ), static_cast< std::uint32_t >( e.sector ), e.w90, e.w94, u( e.cap ), u( e.arrival ), e.wa0,
+                e.wa4, u( e.wanted ) };
+            for ( int j = 0; j < 11; ++j )
+                cmp( "entry word", at, id * 100 + 32 + j, mine[ j ], g[ 32 + j ] );
+            for ( int j = 0; j < 10 && j < e.samples; ++j )
+                cmp( "entry ring", at, id * 100 + j, u( e.ring[ j ] ), g[ 43 + j ] );
+            cmp( "entry samples", at, id, static_cast< std::uint32_t >( e.samples ), g[ 53 ] );
+            cmp( "entry timer", at, id, u( e.timer ), g[ 54 ] );
+        }
+        const unsigned nd = *g++;
+        for ( unsigned k = 0; k < nd; ++k )
+        {
+            const fleet_pilot_t& p = pilots[ k ];
+            const int id = static_cast< int >( k );
+            cmp( "driver +0x78", at, id, track_u32( p.driver, 0x78 ), *g++ );
+            cmp( "driver +0x9C", at, id, track_u32( p.driver, 0x9C ), *g++ );
+            cmp( "driver +0xBC", at, id, static_cast< std::uint32_t >( p.other ), *g++ );
+            cmp( "plan depth", at, id, static_cast< std::uint32_t >( p.plan.depth ), *g++ );
+            const unsigned np = *g++;
+            cmp( "plan count", at, id, static_cast< std::uint32_t >( p.plan.sectors.size( ) ), np );
+            for ( unsigned j = 0; j < np; ++j, ++g )
+                if ( j < p.plan.sectors.size( ) )
+                    cmp( "plan sector", at, id * 100 + static_cast< int >( j ), static_cast< std::uint32_t >( p.plan.sectors[ j ] ), *g );
+        }
+    };
+    snapshot( 0 );
+    fleet_start( m, tm, pilots, boats, rng );
+    fleet_run( m );
+    snapshot( 1 );
+    int transitions = 0;
+    int driver_ticks = 0;
+    for ( std::size_t frame = 0; frame < frames; ++frame )
+    {
+        for ( int k = 0; k < nb; ++k, g += 16 )
+            std::memcpy( worlds[ k ].data( ) + 20, g, 64 );
+        for ( int k = 0; k < nb; ++k )
+            if ( drive )
+            {
+                std::memcpy( bodies[ k ].data( ) + 0x140, g, 32 );
+                g += 8;
+            }
+            else
+                track_put_u32( images[ k ].data( ), 0xA0, *g++ );
+        std::vector< int > before;
+        for ( const fleet_entry_t& e : m.entries )
+            before.push_back( e.sector );
+        fleet_tick( m, tm, pilots, boats, rng, dt );
+        for ( std::size_t k = 0; k < m.entries.size( ); ++k )
+            transitions += m.entries[ k ].sector != before[ k ] ? 1 : 0;
+        snapshot( 2 + static_cast< int >( frame ) );
+        for ( int k = 0; drive && k < adds; ++k )
+        {
+            ai_tick_t t;
+            t.boat = boat_images[ k ].data( );
+            t.body = bodies[ k ].data( );
+            t.solver = solvers[ k ].data( );
+            t.transform = transforms[ k ];
+            t.engine = engines[ k ].data( );
+            t.owner = boat_images[ k ].data( );
+            t.animation = anims[ k ].data( );
+            t.boats = boat_list.data( );
+            t.boat_count = nb;
+            hook_calls.clear( );
+            fleet_driver_tick( tm, pilots[ k ], t, transforms.data( ), dt, hooks );
+            ++driver_ticks;
+            const int at = 2 + static_cast< int >( frame );
+            const std::uint64_t stale = g[ 53 ] | ( static_cast< std::uint64_t >( g[ 54 ] ) << 32 );
+            for ( int w = 0; w < 53; ++w )
+            {
+                const int off = 4 * w;
+                if ( ( stale >> w & 1 ) || off == 0x5C || off == 0x7C || ( off >= 0x84 && off <= 0x94 ) || off == 0xBC )
+                    continue;
+                cmp( "driver tick word", at, k * 1000 + off, track_u32( images[ k ].data( ), off ), g[ w ] );
+            }
+            g += 55;
+            cmp( "boat +0x2FC", at, k, track_u32( t.boat, 0x2FC ), *g++ );
+            cmp( "boat +0x300", at, k, track_u32( t.boat, 0x300 ), *g++ );
+            cmp( "boat +0x304", at, k, track_u32( t.boat, 0x304 ), *g++ );
+            const unsigned nc = *g++;
+            cmp( "hook calls", at, k, static_cast< std::uint32_t >( hook_calls.size( ) ), nc );
+            for ( unsigned j = 0; j < nc; ++j, ++g )
+                if ( j < hook_calls.size( ) )
+                    cmp( "hook call", at, k, static_cast< std::uint32_t >( hook_calls[ j ] ), *g );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuAiManagerImpl (addDriver 0x403590, start 0x4034B0 / 0x404590, tick 0x403930 / 0x403800) and VuRandomTrackPlan "
+                     "(0x4D0D50 / 0x4D0DD0 / 0x4D0E30 / 0x4D0F10, VuRandom 0x50FD20) match retail on Hydroelectric's track: %d snapshots, "
+                     "%d sector changes%s, %d values, bit for bit",
+            snapshots, transitions, drive ? ( ", then every AI driver's tick 0x40B940 on its plan's sectors (" + std::to_string( driver_ticks ) + " ticks)" ).c_str( ) : "",
+            compared );
+        return true;
+    }
+    LOG_ERROR( "%s FAILED %d of %d values", name, failed, compared );
+    return false;
+}
+
+inline bool verify_ai_manager( )
+{
+    return fleet_check( g_golden_ai_manager_words, g_golden_ai_manager_frames, false, "ai_manager" );
+}
+
+// The AI race frame composed (oracle case ai_race): fleet_check as above, then
+// per tick every AI driver's fleet_driver_tick - ai_tick (boat/ai.hxx, the
+// driver step boat_decision_tick hooks) on the path points the manager's plan
+// holds and the boat it set at +0xBC; the manager reads the +0xA0 those ticks
+// wrote. The world's rays return no hit (a hook); the misfire / voice hooks
+// recorded. Compared besides: each driver's words after its tick (but its
+// pointers, its plan's storage and the stale words), the boat's +0x2FC /
+// +0x300 / +0x304, the hooks' calls.
+inline bool verify_ai_race( )
+{
+    return fleet_check( g_golden_ai_race_words, g_golden_ai_race_frames, true, "ai_race" );
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
@@ -1799,5 +2187,8 @@ inline bool verify_boat_all( )
     ok = verify_ai_path_follow( ) && ok;
     ok = verify_ai_avoid( ) && ok;
     ok = verify_ai_tick( ) && ok;
+    ok = verify_track_build( ) && ok;
+    ok = verify_ai_manager( ) && ok;
+    ok = verify_ai_race( ) && ok;
     return ok;
 }
