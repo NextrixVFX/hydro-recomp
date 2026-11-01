@@ -3,7 +3,9 @@
 #include <workspace/core/assets/archive.hxx>
 #include <workspace/core/assets/reader.hxx>
 #include <workspace/core/assets/tree.hxx>
+#include <workspace/core/boat/driver.hxx>
 #include <workspace/core/boat/hull.hxx>
+#include <workspace/core/boat/manager.hxx>
 #include <workspace/core/boat/track.hxx>
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/entity/property.hxx>
@@ -287,6 +289,13 @@ struct race_boat_init_hooks_t
 {
     std::function< void( const std::string& row ) > call;
     std::function< bool( ) > engine_ready;
+    // The boat manager g 0x758FB8 and this boat's entry (its 0x520 image) and
+    // driver kind: when set, 0x4AAF60 / 0x4AB040 run as boat manager.hxx's
+    // boat_manager_add / _remove (the row is still recorded - the case
+    // intercepts the call to see it).
+    boat_manager_t* manager = nullptr;
+    const void* entry = nullptr;
+    boat_driver_kind_t kind{};
 };
 
 inline void race_boat_game_initialize( const void* boat, tick_manager_t& tm, const tick_handler_t& decision, const tick_handler_t& build,
@@ -313,6 +322,8 @@ inline void race_boat_game_initialize( const void* boat, tick_manager_t& tm, con
     call( "0x410610 anim" );
     call( "0x419FF0 part234" );
     call( "0x4AAF60 boatm boat" );
+    if ( hooks.manager )
+        boat_manager_add( *hooks.manager, hooks.entry, hooks.kind );
     call( "0x531F50 inst" );
 }
 
@@ -324,6 +335,8 @@ inline void race_boat_game_release( const void* boat, tick_manager_t& tm, std::u
         call( "0x5362A0 instm inst" );
     instigator_registered = 0;
     call( "0x4AB040 boatm boat" );
+    if ( hooks.manager )
+        boat_manager_remove( *hooks.manager, hooks.entry );
     tick_unregister_all( tm, boat );
     call( "tick unregister tick boat" );
     if ( draw_added )
@@ -339,6 +352,108 @@ inline void race_boat_game_release( const void* boat, tick_manager_t& tm, std::u
     call( "0x411950 damage" );
 }
 
+// ---- VuBoatEntity postLoad 0x41CFF0 -----------------------------------------
+//
+// The boat's vt+8 (VuEntity::load's trailing call; thiscall boat, the boat's
+// data container; retn 4). The Driver Type text (+0x74) is compared EXACTLY
+// (0x404990 / the 5-byte "Human" compare: same length, same bytes) with, in
+// order: "Human" -> operator new(0xD0), 0x41D2E0, +0x84 = 0, the Human ctor
+// 0x40ED50(boat); "AI" -> new(0xD4), 0x41D2E0, +0x8C = +0xBC = 0, VuAiDriver's
+// ctor 0x40B690(boat); "UI" -> the same then vtable 0x737CDC (VuAiUiDriver);
+// "Nuisance" -> new(0x104), 0x41D280, the ctor 0x40D880(boat); "Ghost" ->
+// new(0x84), 0x41D2E0, +0x80 = 0, the ctor 0x40EB50(boat). The block goes to
+// +0x220 (operator new's null too). ANY OTHER TEXT LEAVES +0x220 AS IT IS
+// (the oracle shows the previous driver kept and loaded). Then, with +0x220
+// set, the driver's vt+8 load on data["Driver"] (0x4FBDF0), then 0x420A70
+// (boat_load_sections, boat load.hxx) and 0x421670 (boat_transform_changed).
+// The four ctors are boat driver.hxx's (human_driver_construct -
+// ConstantDB's - ui / nuisance / ghost_driver_construct, ai_driver_construct);
+// the loads are VuAiDriver's 0x40B8A0 (AI / UI / Nuisance: ai_driver_load) and
+// VuDriverEntity's 0x40EAC0 (Human / Ghost: driver_entity_load). UNKNOWN:
+// operator new's failure (never under the oracle), and a kept driver of a class
+// not modelled here (unknown_load).
+enum class race_driver_class_t { ai, ui, human, nuisance, ghost };
+
+struct race_boat_driver_t
+{
+    race_driver_class_t cls = race_driver_class_t::ai;
+    std::uint32_t size = 0;                 // operator new's request
+    bool known = false;                     // false: an object of no modelled class (UNKNOWN)
+    std::vector< image_object_t > graph;    // the ctor's objects (boat driver.hxx)
+    std::vector< std::pair< std::uint32_t, int > > methods;   // the human's method registrations
+    boat_strings_t strings;                 // +0x60, the Name
+};
+
+struct race_post_load_hooks_t
+{
+    // vt+8 on a kept driver of no modelled class, with data["Driver"].
+    std::function< void( race_boat_driver_t& driver, const value_t& container ) > unknown_load;
+    // 0x420A70 and 0x421670, the composed units (the running game passes
+    // boat_load_sections / boat_transform_changed on the boat's objects).
+    std::function< void( ) > load_sections;
+    std::function< void( ) > transform_changed;
+};
+
+// `boat` the boat's 0x520 image (the AI loads read its +0x270 / +0x280 aabb,
+// still the ctor's zeros on a fresh boat); `constant_db` ConstantDB's root
+// (the human ctor reads it). True when the driver at +0x220 is a modelled
+// object; false when it is null or UNKNOWN - every step still runs, in
+// retail's order.
+inline bool race_boat_post_load( std::uint8_t* boat, const std::string& driver_type, const value_t& data, const value_t& constant_db,
+                                 std::unique_ptr< race_boat_driver_t >& driver, const race_post_load_hooks_t& hooks )
+{
+    auto make = [ & ]( race_driver_class_t cls, std::uint32_t size )
+    {
+        driver = std::make_unique< race_boat_driver_t >( );
+        driver->cls = cls;
+        driver->size = size;
+        driver->known = true;
+        switch ( cls )
+        {
+        case race_driver_class_t::human:
+        {
+            human_driver_graph_t h = human_driver_construct( constant_db );   // 0x40ED50
+            driver->graph = std::move( h.objects );
+            driver->methods = std::move( h.methods );
+            break;
+        }
+        case race_driver_class_t::ai: driver->graph = ai_driver_construct( ); break;              // 0x40B690
+        case race_driver_class_t::ui: driver->graph = ui_driver_construct( ); break;              // 0x40B690 + 0x737CDC
+        case race_driver_class_t::nuisance: driver->graph = nuisance_driver_construct( ); break;  // 0x41D280 + 0x40D880
+        case race_driver_class_t::ghost: driver->graph = ghost_driver_construct( ); break;        // 0x40EB50
+        }
+    };
+    if ( driver_type == "Human" )
+        make( race_driver_class_t::human, 0xD0 );
+    else if ( driver_type == "AI" )
+        make( race_driver_class_t::ai, 0xD4 );
+    else if ( driver_type == "UI" )
+        make( race_driver_class_t::ui, 0xD4 );
+    else if ( driver_type == "Nuisance" )
+        make( race_driver_class_t::nuisance, 0x104 );
+    else if ( driver_type == "Ghost" )
+        make( race_driver_class_t::ghost, 0x84 );
+    bool known = driver != nullptr;
+    if ( driver )
+    {
+        const value_t& container = member( data, "Driver" );
+        if ( !driver->known )
+        {
+            known = false;
+            if ( hooks.unknown_load )
+                hooks.unknown_load( *driver, container );
+        }
+        else if ( driver->cls == race_driver_class_t::human || driver->cls == race_driver_class_t::ghost )
+            driver_entity_load( driver->strings, container );   // 0x40EAC0
+        else
+            ai_driver_load( driver->graph[ 0 ].image.data( ), driver->strings, container, boat );   // 0x40B8A0
+    }
+    if ( hooks.load_sections )
+        hooks.load_sections( );
+    if ( hooks.transform_changed )
+        hooks.transform_changed( );
+    return known;
+}
 // The project asset's AssetData "File" path (0x55FBE0), or empty.
 inline std::string race_project_file( c_archive& archive, const char* asset )
 {
