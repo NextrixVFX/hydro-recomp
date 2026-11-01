@@ -174,3 +174,101 @@ inline bool verify_water_wake( )
         LOG_ERROR( "water_wake FAILED %d of %d values", failed, compared );
     return failed == 0;
 }
+
+// water_built_t::wake_reuse (our index bookkeeping, world/wake.hxx water_create_wake) against the append-only build: case
+// water_wake's two hulls and records, replayed three times over (so segments die and their indices are taken again), on two
+// builds in lockstep - reuse off and on. Compared every frame: the wave list node by node (pool node, wave kind, every
+// known word of the wave), the pool count / free node, the four slots' waves (words), the update's answers. Equal = the
+// reuse changes only which index a wave lives at. Also counted: the records each build holds at the end.
+inline bool verify_wake_reuse( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "wake_reuse: the document did not load" );
+        return false;
+    }
+    water_built_t b[ 2 ]{};
+    for ( int r = 0; r < 2; ++r )
+    {
+        water_build_world( *tree, b[ r ], []( entity_t& e ) { return entity_transform( e ); } );
+        b[ r ].wake_reuse = r == 1;
+    }
+    const unsigned* s0 = g_golden_wwk_words;
+    const unsigned frames = s0[ 0 ];
+    const unsigned n0 = s0[ 2 ], n1 = s0[ 3 ];
+    const unsigned* records = s0 + 4 + n0 + n1;
+    std::vector< const unsigned* > frame_records;
+    {
+        const unsigned* s = records;
+        for ( unsigned f = 0; f < frames; ++f )
+        {
+            frame_records.push_back( s );
+            // skip this frame's golden block exactly as verify_water_wake reads it
+            s += 26 + 8 + 6;
+            const unsigned nd = *s++;
+            s += nd;
+            const unsigned nl = *s++;
+            s += nl * 49;
+            const unsigned n_list = *s++;
+            s += 2 * n_list + 2;
+            for ( unsigned k = 0; k < nl; ++k )
+            {
+                const unsigned ne = *s++;
+                s += 2 * ne;
+            }
+        }
+    }
+    const std::uint32_t desc[ 2 ][ 3 ] = { { water_bits_of( 0.35f ), water_bits_of( 0.8f ), water_bits_of( 1.25f ) },
+        { water_bits_of( 0.2f ), water_bits_of( 0.6f ), water_bits_of( 0.9f ) } };
+    water_wake_slots_t slots[ 2 ][ 2 ];
+    water_built_hooks_t hooks{};
+    hooks.render = []( void* ) {};
+    int bad = 0, steps = 0, reused = 0;
+    auto same_wave = [ & ]( int a, int c ) {
+        if ( ( a < 0 ) != ( c < 0 ) )
+            return false;
+        if ( a < 0 )
+            return true;
+        const water_words_t& x = b[ 0 ].waves[ static_cast< std::size_t >( a ) ];
+        const water_words_t& y = b[ 1 ].waves[ static_cast< std::size_t >( c ) ];
+        if ( b[ 0 ].wave_kind[ static_cast< std::size_t >( a ) ] != b[ 1 ].wave_kind[ static_cast< std::size_t >( c ) ] )
+            return false;
+        for ( int k = 0; k < 64; ++k )
+            if ( x.known[ k ] != y.known[ k ] || ( x.known[ k ] && x.word[ k ] != y.word[ k ] ) )
+                return false;
+        return true;
+    };
+    for ( int loop = 0; loop < 3; ++loop )
+        for ( unsigned f = 0; f < frames; ++f, ++steps )
+        {
+            for ( int k = 0; k < 2; ++k )
+            {
+                int answer[ 2 ];
+                for ( int r = 0; r < 2; ++r )
+                    answer[ r ] = water_wake_update( b[ r ], desc[ k ], frame_records[ f ] + 13 * k, k == 1, slots[ r ][ k ] );
+                bad += answer[ 0 ] != answer[ 1 ];
+            }
+            for ( int r = 0; r < 2; ++r )
+                water_built_tick( b[ r ], 1.0f / 30.0f, hooks );
+            int x = b[ 0 ].hold.list, y = b[ 1 ].hold.list;
+            while ( x >= 0 && y >= 0 )
+            {
+                bad += x != y || !same_wave( b[ 0 ].hold.pool[ x ].leaf, b[ 1 ].hold.pool[ y ].leaf );
+                x = b[ 0 ].hold.pool[ x ].next;
+                y = b[ 1 ].hold.pool[ y ].next;
+            }
+            bad += x != y;
+            bad += b[ 0 ].hold.pool_count != b[ 1 ].hold.pool_count || b[ 0 ].hold.pool_free != b[ 1 ].hold.pool_free;
+            for ( int k = 0; k < 2; ++k )
+                bad += !same_wave( slots[ 0 ][ k ].current, slots[ 1 ][ k ].current ) || !same_wave( slots[ 0 ][ k ].previous, slots[ 1 ][ k ].previous );
+        }
+    reused = static_cast< int >( b[ 0 ].waves.size( ) ) - static_cast< int >( b[ 1 ].waves.size( ) );
+    if ( bad == 0 && reused > 0 )
+        LOG_SUCCESS( "wake_reuse: %d frames of two hulls, the reusing build identical to the append-only one (list, pool, every listed "
+                     "wave's words, the slots); %d vs %d wave records held at the end",
+            steps, static_cast< int >( b[ 1 ].waves.size( ) ), static_cast< int >( b[ 0 ].waves.size( ) ) );
+    else
+        LOG_ERROR( "wake_reuse FAILED: %d differences, %d indices reused", bad, reused );
+    return bad == 0 && reused > 0;
+}
