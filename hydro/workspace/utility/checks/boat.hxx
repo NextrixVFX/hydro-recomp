@@ -1910,25 +1910,26 @@ inline bool verify_track_build( )
 // tick: the time, state, start / end, VuRandom's state, every entry's words
 // (the matrices once written, the ring's written slots), and every driver's
 // +0x78 / +0x9C / +0xBC and plan.
-inline bool verify_ai_manager( )
+inline bool fleet_check( const unsigned* g, std::size_t frames, bool drive, const char* name )
 {
     const std::unique_ptr< entity_t > tree = track_document_tree( );
     track_manager_t tm;
     if ( !tree || !track_build_from_tree( *tree, tm ) )
     {
-        LOG_ERROR( "ai_manager: the track did not build" );
+        LOG_ERROR( "%s: the track did not build", name );
         return false;
     }
-    const unsigned* g = g_golden_ai_manager_words;
     const int nb = static_cast< int >( *g++ );
-    std::vector< std::array< float, 16 > > worlds( nb );
+    // Each boat's transform component image (0xC0: +0x50 the world, +0x60 its forward row, +0x80 its position).
+    std::vector< std::array< float, 48 > > worlds( nb );
     std::vector< fleet_boat_t > boats( nb );
     std::vector< std::array< std::uint8_t, 0xD4 > > images( nb );
     for ( int k = 0; k < nb; ++k )
     {
         std::memcpy( &boats[ k ].engine_4, g++, 4 );
         std::memcpy( &boats[ k ].engine_c, g++, 4 );
-        boats[ k ].world = worlds[ k ].data( );
+        worlds[ k ].fill( 0.0f );
+        boats[ k ].world = worlds[ k ].data( ) + 20;
     }
     std::vector< fleet_pilot_t > pilots( nb );
     for ( int k = 0; k < nb; ++k )
@@ -1940,7 +1941,7 @@ inline bool verify_ai_manager( )
         pilots[ k ].boat = k;
     }
     for ( int k = 0; k < nb; ++k, g += 16 )
-        std::memcpy( worlds[ k ].data( ), g, 64 );
+        std::memcpy( worlds[ k ].data( ) + 20, g, 64 );
     fleet_manager_t m;
     m.state = 0;   // the case's image: slot 5 0x4042E0 (state 1) is not run there - it reads VuDevConfig
     const int adds = static_cast< int >( *g++ );
@@ -1953,11 +1954,51 @@ inline bool verify_ai_manager( )
     fleet_random_t rng;
     std::memcpy( &rng, g, 136 );
     g += 34;
+    // The driver ticks' images (ai_race): boat 0x520, body 0x300, engine 0x40, animation 0x80, solver 0x104.
+    std::vector< std::array< std::uint8_t, 0x520 > > boat_images( drive ? nb : 0 );
+    std::vector< std::array< std::uint8_t, 0x300 > > bodies( drive ? nb : 0 );
+    std::vector< std::array< std::uint8_t, 0x40 > > engines( drive ? nb : 0 );
+    std::vector< std::array< std::uint8_t, 0x80 > > anims( drive ? nb : 0 );
+    std::vector< std::array< std::uint8_t, 0x104 > > solvers( drive ? nb : 0 );
+    std::vector< const std::uint8_t* > boat_list, transforms;
+    for ( int k = 0; k < nb; ++k )
+        transforms.push_back( reinterpret_cast< const std::uint8_t* >( worlds[ k ].data( ) ) );
+    for ( int k = 0; drive && k < nb; ++k, g += 6 )
+    {
+        boat_images[ k ].fill( 0 );
+        bodies[ k ].fill( 0 );
+        engines[ k ].fill( 0 );
+        anims[ k ].fill( 0 );
+        solvers[ k ].fill( 0 );
+        std::uint8_t* b = boat_images[ k ].data( );
+        track_put_u32( b, 0x4CC, g[ 0 ] );
+        track_put_u32( b, 0x310, g[ 1 ] );
+        track_put_u32( b, 0x33C, g[ 2 ] );
+        state_put_f( b, 0x4B4, 0.5f );
+        track_put_u32( b, 0x470, g[ 3 ] );
+        state_put_f( engines[ k ].data( ), 4, boats[ k ].engine_4 );
+        state_put_f( engines[ k ].data( ), 0xC, boats[ k ].engine_c );
+        track_put_u32( engines[ k ].data( ), 0x28, g[ 4 ] );
+        track_put_u32( images[ k ].data( ), 0x98, g[ 5 ] );
+        track_put_u32( anims[ k ].data( ), 0x78, 2u );
+        state_put_f( solvers[ k ].data( ), 0x54, 0.5f );
+        track_put_u32( bodies[ k ].data( ), 0xF4, 2u );
+        boat_list.push_back( b );
+    }
+    std::vector< int > hook_calls;
+    ai_tick_hooks_t hooks;
+    hooks.avoid.user = nullptr;
+    hooks.avoid.ray = []( void*, const float*, const float*, const ai_ray_hit_t** hits ) { *hits = nullptr; return 0; };
+    hooks.controls.user = &hook_calls;
+    hooks.controls.misfire = []( void* u ) { static_cast< std::vector< int >* >( u )->push_back( 1 ); };
+    hooks.controls.voice = []( void* u, const char* line ) {
+        static_cast< std::vector< int >* >( u )->push_back( std::strcmp( line, "NeedPickUpPowerBoost" ) == 0 ? 2 : 99 );
+    };
     int failed = 0, compared = 0, snapshots = 0;
     auto cmp = [ & ]( const char* what, int at, int a, std::uint32_t ours, std::uint32_t theirs ) {
         ++compared;
         if ( ours != theirs && ++failed <= 12 )
-            LOG_ERROR( "ai_manager snapshot %d %s %d: ours 0x%08X retail 0x%08X", at, what, a, ours, theirs );
+            LOG_ERROR( "%s snapshot %d %s %d: ours 0x%08X retail 0x%08X", name, at, what, a, ours, theirs );
     };
     const auto u = []( float f ) { std::uint32_t v; std::memcpy( &v, &f, 4 ); return v; };
     const auto snapshot = [ & ]( int at ) {
@@ -2015,12 +2056,19 @@ inline bool verify_ai_manager( )
     fleet_run( m );
     snapshot( 1 );
     int transitions = 0;
-    for ( std::size_t frame = 0; frame < g_golden_ai_manager_frames; ++frame )
+    int driver_ticks = 0;
+    for ( std::size_t frame = 0; frame < frames; ++frame )
     {
         for ( int k = 0; k < nb; ++k, g += 16 )
-            std::memcpy( worlds[ k ].data( ), g, 64 );
+            std::memcpy( worlds[ k ].data( ) + 20, g, 64 );
         for ( int k = 0; k < nb; ++k )
-            track_put_u32( images[ k ].data( ), 0xA0, *g++ );
+            if ( drive )
+            {
+                std::memcpy( bodies[ k ].data( ) + 0x140, g, 32 );
+                g += 8;
+            }
+            else
+                track_put_u32( images[ k ].data( ), 0xA0, *g++ );
         std::vector< int > before;
         for ( const fleet_entry_t& e : m.entries )
             before.push_back( e.sector );
@@ -2028,17 +2076,70 @@ inline bool verify_ai_manager( )
         for ( std::size_t k = 0; k < m.entries.size( ); ++k )
             transitions += m.entries[ k ].sector != before[ k ] ? 1 : 0;
         snapshot( 2 + static_cast< int >( frame ) );
+        for ( int k = 0; drive && k < adds; ++k )
+        {
+            ai_tick_t t;
+            t.boat = boat_images[ k ].data( );
+            t.body = bodies[ k ].data( );
+            t.solver = solvers[ k ].data( );
+            t.transform = transforms[ k ];
+            t.engine = engines[ k ].data( );
+            t.owner = boat_images[ k ].data( );
+            t.animation = anims[ k ].data( );
+            t.boats = boat_list.data( );
+            t.boat_count = nb;
+            hook_calls.clear( );
+            fleet_driver_tick( tm, pilots[ k ], t, transforms.data( ), dt, hooks );
+            ++driver_ticks;
+            const int at = 2 + static_cast< int >( frame );
+            const std::uint64_t stale = g[ 53 ] | ( static_cast< std::uint64_t >( g[ 54 ] ) << 32 );
+            for ( int w = 0; w < 53; ++w )
+            {
+                const int off = 4 * w;
+                if ( ( stale >> w & 1 ) || off == 0x5C || off == 0x7C || ( off >= 0x84 && off <= 0x94 ) || off == 0xBC )
+                    continue;
+                cmp( "driver tick word", at, k * 1000 + off, track_u32( images[ k ].data( ), off ), g[ w ] );
+            }
+            g += 55;
+            cmp( "boat +0x2FC", at, k, track_u32( t.boat, 0x2FC ), *g++ );
+            cmp( "boat +0x300", at, k, track_u32( t.boat, 0x300 ), *g++ );
+            cmp( "boat +0x304", at, k, track_u32( t.boat, 0x304 ), *g++ );
+            const unsigned nc = *g++;
+            cmp( "hook calls", at, k, static_cast< std::uint32_t >( hook_calls.size( ) ), nc );
+            for ( unsigned j = 0; j < nc; ++j, ++g )
+                if ( j < hook_calls.size( ) )
+                    cmp( "hook call", at, k, static_cast< std::uint32_t >( hook_calls[ j ] ), *g );
+        }
     }
     if ( failed == 0 )
     {
         LOG_SUCCESS( "VuAiManagerImpl (addDriver 0x403590, start 0x4034B0 / 0x404590, tick 0x403930 / 0x403800) and VuRandomTrackPlan "
                      "(0x4D0D50 / 0x4D0DD0 / 0x4D0E30 / 0x4D0F10, VuRandom 0x50FD20) match retail on Hydroelectric's track: %d snapshots, "
-                     "%d sector changes, %d values, bit for bit",
-            snapshots, transitions, compared );
+                     "%d sector changes%s, %d values, bit for bit",
+            snapshots, transitions, drive ? ( ", then every AI driver's tick 0x40B940 on its plan's sectors (" + std::to_string( driver_ticks ) + " ticks)" ).c_str( ) : "",
+            compared );
         return true;
     }
-    LOG_ERROR( "ai_manager FAILED %d of %d values", failed, compared );
+    LOG_ERROR( "%s FAILED %d of %d values", name, failed, compared );
     return false;
+}
+
+inline bool verify_ai_manager( )
+{
+    return fleet_check( g_golden_ai_manager_words, g_golden_ai_manager_frames, false, "ai_manager" );
+}
+
+// The AI race frame composed (oracle case ai_race): fleet_check as above, then
+// per tick every AI driver's fleet_driver_tick - ai_tick (boat/ai.hxx, the
+// driver step boat_decision_tick hooks) on the path points the manager's plan
+// holds and the boat it set at +0xBC; the manager reads the +0xA0 those ticks
+// wrote. The world's rays return no hit (a hook); the misfire / voice hooks
+// recorded. Compared besides: each driver's words after its tick (but its
+// pointers, its plan's storage and the stale words), the boat's +0x2FC /
+// +0x300 / +0x304, the hooks' calls.
+inline bool verify_ai_race( )
+{
+    return fleet_check( g_golden_ai_race_words, g_golden_ai_race_frames, true, "ai_race" );
 }
 
 inline bool verify_boat_all( )
@@ -2068,5 +2169,6 @@ inline bool verify_boat_all( )
     ok = verify_ai_tick( ) && ok;
     ok = verify_track_build( ) && ok;
     ok = verify_ai_manager( ) && ok;
+    ok = verify_ai_race( ) && ok;
     return ok;
 }

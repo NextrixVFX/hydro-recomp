@@ -1,5 +1,6 @@
 #pragma once
 
+#include <workspace/core/boat/ai.hxx>
 #include <workspace/core/boat/track.hxx>
 
 #include <cstdint>
@@ -428,4 +429,41 @@ inline void fleet_tick( fleet_manager_t& m, const track_manager_t& tm, std::vect
 {
     if ( m.state == 3 )
         fleet_tick_running( m, tm, pilots, boats, rng, dt );
+}
+
+// The driver step of an AI boat's Decision tick (0x41EFF0 calls the driver's
+// vt+0x48; VuAiDriver's is 0x40B940 = boat/ai.hxx's ai_tick): ai_tick on the
+// pilot's driver image with the path points its plan holds (driver +0x8C /
+// +0x90: the plan's sectors' images, in plan order) and the boat the
+// manager set at +0xBC (its transform image; none when -1). `t` carries the
+// boat's own images; `transforms` every boat's transform image by index.
+inline void fleet_driver_tick( const track_manager_t& tm, const fleet_pilot_t& p, ai_tick_t t, const std::uint8_t* const* transforms, float dt,
+    const ai_tick_hooks_t& hooks )
+{
+    std::vector< const std::uint8_t* > points;
+    for ( int s : p.plan.sectors )
+        points.push_back( s >= 0 ? tm.sectors[ s ].image : nullptr );
+    t.driver = p.driver;
+    t.points = points.empty( ) ? nullptr : points.data( );
+    t.count = static_cast< std::int32_t >( points.size( ) );
+    t.other = p.other >= 0 ? transforms[ p.other ] : nullptr;
+    ai_tick( t, dt, hooks );
+}
+
+// boat_decision_tick's driver_tick hook for an AI boat (state.hxx's
+// boat_decision_hooks_t: driver_tick = fleet_decision_driver, user = one of
+// these - or call fleet_driver_tick from the caller's own driver_tick).
+struct fleet_decision_driver_t
+{
+    const track_manager_t* track = nullptr;
+    const fleet_pilot_t* pilot = nullptr;
+    ai_tick_t tick;
+    const std::uint8_t* const* transforms = nullptr;
+    ai_tick_hooks_t hooks;
+};
+
+inline void fleet_decision_driver( void* user, float dt )
+{
+    const fleet_decision_driver_t* d = static_cast< const fleet_decision_driver_t* >( user );
+    fleet_driver_tick( *d->track, *d->pilot, d->tick, d->transforms, dt, d->hooks );
 }
