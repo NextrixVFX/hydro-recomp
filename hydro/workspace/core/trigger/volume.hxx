@@ -166,6 +166,39 @@ inline int trigger_plane_crossing( const float* world, const float* scale, std::
     return enter ? 1 : 0;
 }
 
+// VuTriggerBoxEntity_testCrossings 0x5D1AB0 (vt+0x30) for one instigator,
+// from the disassembly: the same inputs as the plane's. For a point p the
+// box's signed distance is maxss(maxss(e0, e1), e2) - radius with e_i =
+// |(row_i.y dy + row_i.x dx) + row_i.z dz| - Scale_i, d = p - the centre (rows
+// 0 / 1 / 2 the world's +0x50 / +0x60 / +0x70, Scale +0xB0..+0xB8): `a` at the
+// previous position less the previous radius (+0x1C), `b` at the current one
+// less the current radius (+0x30). comiss 0, b x a / jb: a positive product (or
+// a NaN) is no crossing; then (0 > b) == (0 > a) is none either; else
+// fireCrossing(owner +8, 0 > b) - 1 = "OnEnter" (the current distance is
+// inside), 0 = "OnExit". -1: no crossing.
+inline int trigger_box_crossing( const float* world, const float* scale, std::uint32_t mask, const trigger_instigator_t& who )
+{
+    if ( ( who.mask & mask ) == 0 )
+        return -1;
+    const auto distance = [ & ]( const float* p, float radius )
+    {
+        const float dx = p[ 0 ] - world[ 12 ], dy = p[ 1 ] - world[ 13 ], dz = p[ 2 ] - world[ 14 ];
+        float e[ 3 ];
+        for ( int i = 0; i < 3; ++i )
+            e[ i ] = std::fabs( ( world[ 4 * i + 1 ] * dy + world[ 4 * i ] * dx ) + world[ 4 * i + 2 ] * dz ) - scale[ i ];
+        const float m = e[ 0 ] > e[ 1 ] ? e[ 0 ] : e[ 1 ];   // maxss e0, e1
+        return ( m > e[ 2 ] ? m : e[ 2 ] ) - radius;          // maxss m, e2
+    };
+    const float a = distance( who.prev, who.radius );
+    const float b = distance( who.cur, who.rate );
+    if ( !( 0.0f >= b * a ) )
+        return -1;
+    const bool inside = 0.0f > b;
+    if ( ( 0.0f > a ) == inside )
+        return -1;
+    return inside ? 1 : 0;
+}
+
 // A VuTriggerPlaneEntity or VuTriggerBoxEntity. Its volume IS its transform:
 // a unit plane one unit thick in local Y, or a unit box, scaled and rotated
 // into place.

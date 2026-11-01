@@ -123,6 +123,49 @@ inline void water_directional_refresh( water_built_t& b, const water_entity_stat
     }
 }
 
+// VuDirectionalFlowWaveEntity's 0x5D6740 (thiscall entity) - its slot 2
+// 0x5D66C0 (a call, retn 4) and the transform's watcher (the ctor 0x5D6410
+// installs it): with a wave (+0x78) a zeroed 0x34-byte descriptor from 0x5D6810
+// (wave.hxx flow_desc), 0x59C3C0 (flow_set), the bounds 0x59C4C0, out of the
+// trees 0x529B90 and back 0x529A90; then, wave or not, its Vu3dLayoutComponent
+// (entity +0x5C) box +0x18 .. +0x37 = (-0.5, -0.5, 0, w) (0.5, 0.5, 0, w), both
+// w lanes stack words never written (UNKNOWN). Verified: case flow_wave.
+inline void water_flow_refresh( water_built_t& b, const water_entity_state_t& s, int wave, const std::uint32_t* transform,
+                                water_layout_box_t& layout )
+{
+    if ( wave >= 0 )
+    {
+        water_input_t in{};
+        in.entity = s.value.word;
+        in.transform = transform;
+        std::uint32_t d[ 13 ] = {};
+        flow_desc( in.source( ), d );
+        water_words_t& w = b.waves[ static_cast< std::size_t >( wave ) ];
+        wave_image_t image{};
+        for ( int k = 0; k < 64; ++k )
+        {
+            image.word[ k ] = w.word[ k ];
+            image.known[ k ] = w.known[ k ];
+        }
+        flow_set( image, d );
+        wave_rect_bounds( image, true );
+        for ( int k = 0; k < 64; ++k )
+        {
+            w.word[ k ] = image.word[ k ];
+            w.known[ k ] = image.known[ k ];
+        }
+        water_hold_remove( b.hold, wave );
+        water_hold_resync( b, wave );
+        water_hold_add( b.hold, wave );
+    }
+    const std::uint32_t box[ 8 ] = { 0xBF000000u, 0xBF000000u, 0u, 0u, 0x3F000000u, 0x3F000000u, 0u, 0u };
+    for ( int k = 0; k < 8; ++k )
+    {
+        layout.word[ k ] = box[ k ];
+        layout.known[ k ] = k != 3 && k != 7;
+    }
+}
+
 // The control handler 0x5D9D90 (thiscall on entity +0x5C): records 0..4's +8
 // (control component +0x68 -> +0x18) to the entity's Max Height +0x6C, Speed
 // +0x70, Period +0x74, Longitudinal +0x78 and Lateral Decay Ratio +0x7C (plain
