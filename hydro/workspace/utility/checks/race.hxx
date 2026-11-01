@@ -2548,6 +2548,104 @@ inline bool verify_boat_set_world( )
     LOG_ERROR( "boat_set_world FAILED %d of %u vectors", failed, nv );
     return false;
 }
+// The drivers' scalar-deleting dtors 0x40EA30 / 0x40B7E0 / 0x40E530 / 0x40D920 against retail (oracle case
+// driver_dtors): the hook log and the words left (the reference's only for the nuisance driver, +0x84 not for the
+// entity class - random image words there).
+inline bool verify_driver_dtors( )
+{
+    const unsigned* g = g_golden_driver_dtors_words;
+    auto text = [ & ]( ) {
+        const unsigned n = *g++;
+        std::string s( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        return s;
+    };
+    const std::uint32_t drv = 0x100, txt = 0x800, plan = 0x880, ev = 0x900, old = 0x940, r0 = 0x980, r1 = 0x9C0, ref = drv + 0xE4;
+    auto sym = [ & ]( std::uint32_t x ) -> unsigned {
+        if ( x == 0 ) return 0;
+        if ( x == drv ) return 1;
+        if ( x == txt ) return 2;
+        if ( x == plan ) return 3;
+        if ( x == ev ) return 4;
+        if ( x == old ) return 5;
+        if ( x == r0 ) return 6;
+        if ( x == r1 ) return 7;
+        if ( x == ref ) return 8;
+        return 0x100 + ( x & 0xFF );
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned kind = *g++, flags = *g++;
+        const std::string s = text( );
+        const unsigned b8 = *g++, event = *g++, state = *g++, untouched = *g++;
+        std::vector< std::vector< unsigned > > glog( *g++ ), log;
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        const unsigned* after = g;
+        g += 16;
+        std::map< std::uint32_t, std::uint32_t > mem;
+        vu_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0u : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        mem[ drv + 0x8C ] = plan;
+        mem[ drv + 0xF8 ] = b8;
+        mem[ drv + 0xFC ] = event ? ev : 0u;
+        mem[ drv + 0x60 ] = s.size( ) < 16 ? 0x41414141u : txt;
+        mem[ drv + 0x70 ] = static_cast< std::uint32_t >( s.size( ) );
+        mem[ drv + 0x74 ] = s.size( ) < 16 ? 15u : static_cast< std::uint32_t >( s.size( ) | 15u );
+        if ( state == 1 )
+        {
+            mem[ old + 8 ] = ref;
+            mem[ ref + 8 ] = r1; mem[ ref + 0xC ] = old;
+            mem[ r1 + 4 ] = ref; mem[ r1 + 0xC ] = old;
+        }
+        else if ( state == 2 || state == 3 )
+        {
+            mem[ old + 8 ] = r0;
+            mem[ r0 + 8 ] = ref; mem[ r0 + 0xC ] = old;
+            mem[ ref + 4 ] = r0; mem[ ref + 8 ] = state == 2 ? r1 : 0; mem[ ref + 0xC ] = old;
+            if ( state == 2 )
+            {
+                mem[ r1 + 4 ] = ref; mem[ r1 + 0xC ] = old;
+            }
+        }
+        driver_dtor_hooks_t h;
+        h.free_block = [ & ]( std::uint32_t a ) { log.push_back( { 1u, sym( a ) } ); };
+        h.aligned_free = [ & ]( std::uint32_t a ) { log.push_back( { 2u, sym( a ) } ); };
+        h.entity_dtor = [ & ]( ) { log.push_back( { 3u, 1u, w.get( drv ) } ); };
+        h.event_clear_callback = [ & ]( std::uint32_t e ) { log.push_back( { 4u, sym( e ), 0u, 0u } ); };
+        h.event_stop = [ & ]( std::uint32_t e, bool immediate ) { log.push_back( { 5u, sym( e ), immediate ? 1u : 0u } ); };
+        const driver_dtor_kind_t k = kind == 1 ? driver_dtor_kind_t::entity : kind == 2 ? driver_dtor_kind_t::ai : kind == 3 ? driver_dtor_kind_t::ui
+                                                                                                                    : driver_dtor_kind_t::nuisance;
+        const std::uint32_t r = driver_destroy( k, w, drv, flags, h );
+        const unsigned mine[ 16 ] = { w.get( drv ), w.get( drv + 0x60 ) & 0xFFu, w.get( drv + 0x70 ), w.get( drv + 0x74 ), w.get( drv + 0x84 ),
+                                      sym( w.get( drv + 0xFC ) ), sym( w.get( ref ) ), sym( w.get( ref + 4 ) ), sym( w.get( ref + 8 ) ),
+                                      sym( w.get( ref + 0xC ) ), sym( w.get( old + 8 ) ), sym( w.get( r0 + 4 ) ), sym( w.get( r0 + 8 ) ),
+                                      sym( w.get( r1 + 4 ) ), sym( w.get( r1 + 8 ) ), r == drv ? 1u : 0u };
+        bool same = log == glog && untouched == 1;
+        for ( int j = 0; j < 16 && same; ++j )
+        {
+            if ( j == 4 && kind == 1 ) continue;
+            if ( j >= 6 && j <= 9 && kind != 4 ) continue;
+            same = mine[ j ] == after[ j ];
+        }
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "driver_dtors vector %u (class %u, flags %u): %zu calls (%zu), +0 0x%X (0x%X), +0xFC %u (%u)", v, kind, flags, log.size( ),
+                       glog.size( ), mine[ 0 ], after[ 0 ], mine[ 5 ], after[ 5 ] );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the drivers' dtors 0x40EA30 / 0x40B7E0 / 0x40E530 / 0x40D920 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "driver_dtors FAILED %d of %u vectors", failed, nv );
+    return false;
+}
 // The contact-added callback 0x574E90 -> 0x5751F0 -> 0x519720 against retail (oracle case contact_added): the manifold
 // point after (every word, bit for bit), the return, and each listener / callback call's record (but its stale-stack
 // words) with the case's scripted write-backs replayed.
@@ -2916,6 +3014,7 @@ inline bool verify_race_all( )
     ok = verify_body_impulse( ) && ok;
     ok = verify_piece_motion( ) && ok;
     ok = verify_boat_set_world( ) && ok;
+    ok = verify_driver_dtors( ) && ok;
     ok = verify_contact_added( ) && ok;
     ok = verify_boat_rtti( ) && ok;
     ok = verify_human_explosion( ) && ok;
