@@ -1,0 +1,159 @@
+#pragma once
+
+#include <workspace/core/assets/archive.hxx>
+#include <workspace/core/assets/reader.hxx>
+#include <workspace/core/assets/tree.hxx>
+#include <workspace/core/boat/hull.hxx>
+#include <workspace/core/boat/track.hxx>
+#include <workspace/core/entity/node.hxx>
+#include <workspace/core/game/types.hxx>
+
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
+#include <xmmintrin.h>
+
+// The race game's start, as far as it is recreated. Retail's chain (read from
+// the disassembly / Hex-Rays, world agent batch 7):
+//
+//   VuActionGameMode's load 0x4BA060: GameData = gameutil +80 ["GameData"]
+//     (the dev config's "ActionGameData" when absent - compiled out), the race
+//     project loaded, VuRaceGame ctor 0x489030 (VuGame ctor 0x480BA0), then
+//   VuGame's boat load 0x481CE0: for each GameData["Boats"][k] a boat made by
+//     0x484940 (the entity factory, by name), named "Boat%02d", its vt+0x2C
+//     load 0x5009D0 on that entry (Properties: Boat / Skin / Driver Type ...,
+//     Driver: Name), 0x500A60, pushed onto the game's +0x38 list; then the
+//     project's gameInitialize (every VuAiWaypointEntity's slot 6: the track
+//     manager's sectors) and "OnProjectInitialized"; then
+//   VuGame's begin 0x4829A0: the track manager's slot 7 (the build) / 8 / 9 /
+//     13, the game's slot 13 (VuRaceGame 0x48AF90: a HUMAN-driven boat -
+//     driver slot 12 - takes the next VuGridPositionEntity's world (the boat
+//     manager's +0x50 list, filled by the grid entities' gameInitialize
+//     0x43A740 and sorted by 0x4AAA40); every other boat goes AiSpacing x k
+//     metres down the track - race_track_start below - with +0x4AC = 1,
+//     +0x4B0 = that distance / (top speed x 0.44704), driver +0x7C the
+//     sector), each boat's driver +0x78 = track slot 19 (slot 14) and its
+//     gameInitialize, then +0x4D4 = the lap count, +0x4D8, +0x4DC = its world.
+//   VuRaceGame slot 5 0x4896A0 then hands every boat to the AI manager
+//     (vt+0x2C addDriver, top speed lerp over the boat list from
+//     Race.TopSpeed) and runs its slots 6 / 7 (fleet_start / fleet_run).
+//
+// THE GAP (UNKNOWN - nothing is stood in): GameData["Boats"] is written by the
+// front end - VuFrontEndGameMode's GameConfig step 0x4BF9B0 -> 0x4C0A50 (race;
+// 0x4C18D0 slalom, 0x4C1E30 time trial, 0x4C2C50 ghost), from GameConfig.Track
+// and BoatConfig.PlayerBoats[0] (the player's chosen boat / skin, written by
+// the boat-select screens' VuSetBoatConfigPlayerEntity / VuBoatConfigEntity)
+// plus an AI roster picked by class (0x4560F0, 0x455700, 0x455820, 0x4C3380,
+// 0x455BC0) and the player entry 0x4C3120 - none recreated. With no GameData
+// there are no boats, so the AI fleet (fleet_add_driver / fleet_start /
+// fleet_run), the per-frame race and the hull draw are not composed.
+
+// The callbacks the race project's tree is loaded with: the verified entity
+// loads (engine entity/node.hxx, hydro game/types.hxx) plus the AI waypoint's
+// property set (boat track.hxx, ctor 0x431770) - the track manager reads it.
+inline entity_world_t race_entity_world( const entity_registry_t& registry, std::function< const value_t*( const std::string& ) > templates )
+{
+    entity_world_t world;
+    world.m_registry = &registry;
+    world.m_ctor_for = entity_ctor_for;
+    world.m_template = std::move( templates );
+    world.m_components_for = entity_components_scripted;
+    world.m_component_load = entity_load_component;
+    world.m_component_post = entity_post_load_component;
+    world.m_component_mark = entity_mark_component;
+    world.m_state_for = []( const std::string& cls ) { auto s = waypoint_state_for( cls ); return s ? s : entity_state_for( cls ); };
+    world.m_properties_load = []( entity_t& e, const value_t& p ) { waypoint_load_properties( e, p ); entity_load_properties( e, p ); };
+    world.m_properties_mark = []( entity_t& e ) { waypoint_mark_properties( e ); entity_mark_properties( e ); };
+    return world;
+}
+
+// The project asset's AssetData "File" path (0x55FBE0), or empty.
+inline std::string race_project_file( c_archive& archive, const char* asset )
+{
+    std::vector< std::uint8_t > bytes;
+    const std::string prefix = "VuProjectAsset/";
+    if ( std::strncmp( asset, prefix.c_str( ), prefix.size( ) ) != 0 || !archive.read( "Assets/AssetData", bytes ) )
+        return {};
+    const value_t database = c_reader( bytes ).parse( );
+    const value_t& file = member( member( member( database, "VuProjectAsset" ), asset + prefix.size( ) ), "File" );
+    return file.tag == 4 ? file.text : std::string( );
+}
+
+// VuProject::load 0x556390 on the race project: the registry as start-up
+// leaves it and the tree through race_entity_world. Null when not loadable.
+inline std::unique_ptr< entity_t > race_load_tree( c_archive& archive, const char* asset, const value_t& project,
+                                                   std::function< const value_t*( const std::string& ) > templates )
+{
+    const std::string path = race_project_file( archive, asset );
+    if ( path.empty( ) )
+        return nullptr;
+    const entity_registry_t registry = build_entity_registry( archive.names( "VuTemplateAsset/" ) );
+    entity_world_t world = race_entity_world( registry, std::move( templates ) );
+    return entity_load_project( project, path, world );
+}
+
+// 0x4D1E10 (__usercall: ecx the 64-byte matrix out, xmm0 the distance; the
+// sector out on the stack, may be null; ret), VuRaceGame 0x48AF90's start
+// position for a boat not driven by a human: from the track's start sector
+// (slot 11) along next[0] to the end sector (slot 12) inclusive, sectors whose
+// waypoint Allows Recovery (+0x8B) use up their length (+0xB0) until one is
+// longer than what is left (ordered compare, `ja`); there f = left / length,
+// the point lerps +0x80 -> +0x90 (a x (1 - f) + b x f per lane) and the matrix
+// is the identity with row 1 = the direction's xy over VuMath_sqrt(y y + x x)
+// (z = that inverse x 0), row 0 = (fy - fz 0, fz 0 - fx, fx 0 - fy 0), row 2
+// (0, 0, 1), row 3 the point. False (nothing written) when no sector is long
+// enough or the track has no start.
+inline bool race_track_start( const track_manager_t& tm, float distance, float* out, int* sector )
+{
+    const int end = track_end_sector( tm );
+    int s = track_start_sector( tm );
+    float left = distance;
+    while ( s >= 0 )
+    {
+        const track_sector_t& t = tm.sectors[ static_cast< std::size_t >( s ) ];
+        if ( tm.waypoints[ static_cast< std::size_t >( t.waypoint ) ].p.allow_recovery )
+        {
+            const float length = state_f( t.image, 0xB0 );
+            if ( _mm_comigt_ss( _mm_set_ss( length ), _mm_set_ss( left ) ) )
+            {
+                const float f = left / length;
+                const float g = 1.0f - f;
+                const float x = state_f( t.image, 0x80 ) * g + state_f( t.image, 0x90 ) * f;
+                const float y = state_f( t.image, 0x84 ) * g + state_f( t.image, 0x94 ) * f;
+                const float z = state_f( t.image, 0x88 ) * g + state_f( t.image, 0x98 ) * f;
+                const float dx = state_f( t.image, 0xA0 ), dy = state_f( t.image, 0xA4 );
+                const float inv = 1.0f / hull_sqrt( dy * dy + dx * dx );
+                const float zero = 0.0f;
+                const float fx = inv * dx, fy = inv * dy, fz = inv * zero;
+                const float fz0 = fz * zero;
+                for ( int k = 0; k < 16; ++k )
+                    out[ k ] = k % 5 == 0 ? 1.0f : 0.0f;   // VuMatrix_identity
+                out[ 0 ] = fy - fz0;
+                out[ 1 ] = fz0 - fx;
+                out[ 2 ] = fx * zero - fy * zero;
+                out[ 4 ] = fx;
+                out[ 5 ] = fy;
+                out[ 6 ] = fz;
+                out[ 12 ] = x;
+                out[ 13 ] = y;
+                out[ 8 ] = 0.0f;
+                out[ 9 ] = 0.0f;
+                out[ 10 ] = 1.0f;
+                out[ 14 ] = z;
+                if ( sector )
+                    *sector = s;
+                return true;
+            }
+            left = left - length;
+        }
+        if ( s == end )
+            break;
+        // Retail reads the next list's first word whatever its count; an empty
+        // list before the end sector (not on a built track) is UNKNOWN - stop.
+        s = t.next.empty( ) ? -1 : t.next[ 0 ];
+    }
+    return false;
+}

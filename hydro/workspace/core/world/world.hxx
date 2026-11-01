@@ -18,6 +18,7 @@
 #include <workspace/core/game/types.hxx>
 #include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/grid.hxx>
+#include <workspace/core/world/race.hxx>
 #include <workspace/core/world/water.hxx>
 #include <workspace/core/assets/texture.hxx>
 #include <workspace/utility/logger.hxx>
@@ -925,6 +926,10 @@ public:
         if ( m_grid_overflow == 1 )
             LOG_WARNING( "water draw: more than %d expanded vertices in a frame - the tail is not drawn (our capacity)", count );
     }
+    const track_manager_t* track( ) const
+    {
+        return m_track_built ? &m_track : nullptr;
+    }
     void scene_frame( float dt )
     {
         if ( !m_loaded )
@@ -1069,6 +1074,10 @@ private:
     // is the water kernel the boat's tick takes (boat tick.hxx / fluid.hxx). Not consumed yet: the boat tick is
     // not wired into c_world.
     water_view_t m_water_view;
+    // VuTrackManagerImpl as the race builds it from m_tree's AI waypoints (race.hxx / boat track.hxx); the AI
+    // fleet and the boats are not composed (race.hxx: GameData's "Boats" is the front end's, not recreated).
+    track_manager_t m_track{};
+    bool m_track_built = false;
     // The water renderer (world/grid.hxx): its templates, this frame's records, and OUR draw of them - one
     // geometry holding the records expanded per index (a triangle list, capacity k_water_draw_vertices,
     // unused tail degenerate) drawn through the engine's class-7 blended pass. m_water_ambient / _diffuse:

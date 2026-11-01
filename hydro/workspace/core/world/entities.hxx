@@ -25,39 +25,33 @@ inline const value_t* c_world::template_document( const std::string& name )
 // old walk) and adopt the tree's placements here.
 inline void c_world::load_entity_tree( const char* asset, const value_t& project )
 {
-    std::vector< std::uint8_t > bytes;
-    const std::string prefix = "VuProjectAsset/";
-    std::string path;
-    if ( std::strncmp( asset, prefix.c_str( ), prefix.size( ) ) == 0 && m_archive.read( "Assets/AssetData", bytes ) )
-    {
-        const value_t database = c_reader( bytes ).parse( );
-        const value_t& file = member( member( member( database, "VuProjectAsset" ), asset + prefix.size( ) ), "File" );
-        if ( file.tag == 4 )
-            path = file.text;
-    }
+    // race.hxx: the AssetData path, the registry and the callbacks (with the AI
+    // waypoint's property set the track manager reads).
+    m_track_built = false;
+    m_track = track_manager_t{ };
+    const std::string path = race_project_file( m_archive, asset );
     if ( path.empty( ) )
     {
         LOG_ERROR( "entity tree: %s has no AssetData \"File\" - the project is not loaded the retail way", asset );
         return;
     }
-    const entity_registry_t registry = build_entity_registry( m_archive.names( "VuTemplateAsset/" ) );
-    entity_world_t world;
-    world.m_registry = &registry;
-    world.m_ctor_for = entity_ctor_for;
-    world.m_template = [ this ]( const std::string& name ) { return template_document( name ); };
-    world.m_components_for = entity_components_scripted;
-    world.m_component_load = entity_load_component;
-    world.m_component_post = entity_post_load_component;
-    world.m_component_mark = entity_mark_component;
-    world.m_state_for = entity_state_for;
-    world.m_properties_load = entity_load_properties;
-    world.m_properties_mark = entity_mark_properties;
-    m_tree = entity_load_project( project, path, world );
+    m_tree = race_load_tree( m_archive, asset, project, [ this ]( const std::string& name ) { return template_document( name ); } );
     if ( !m_tree )
     {
         LOG_ERROR( "entity tree: VuProject::load failed on %s (%s)", asset, path.c_str( ) );
         return;
     }
+    // VuTrackManagerImpl from the tree's AI waypoints (boat track.hxx): retail's
+    // project gameInitialize runs every waypoint's slot 6, then the race's begin
+    // 0x4829A0 the manager's slot 7. A project without waypoints (or one the
+    // build refuses) has no track.
+    m_track_built = track_build_from_tree( *m_tree, m_track );
+    if ( m_track_built )
+        LOG_INFO( "track: %d waypoints, %d sectors, %d checkpoints, start %d end %d, length %.1f",
+            static_cast< int >( m_track.waypoints.size( ) ), static_cast< int >( m_track.sectors.size( ) ),
+            static_cast< int >( m_track.checkpoints.size( ) ), m_track.start, m_track.end, m_track.length );
+    else
+        LOG_INFO( "track: none (no AI waypoints, or the build refused)" );
     int entities = 0;
     int unknown = 0;
     int unplaced = 0;
