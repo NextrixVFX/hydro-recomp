@@ -529,3 +529,56 @@ inline bool verify_vugame_handlers( )
         LOG_ERROR( "vugame handlers FAILED %d calls", failed );
     return failed == 0;
 }
+// vugame_split_expire / vugame_personal_best_enter (core/world rules.hxx)
+// against the +0x67C machine's Intro / Split / Result ticks 0x483CB0 /
+// 0x483D00 / 0x483E00 and PersonalBestConfig's enter 0x483C40 run real (oracle
+// case split_handlers): per call the hooks reached, the five named conditions'
+// value / pulse after, +0x6A4 and +0x6AC after - one failure per differing call.
+inline bool verify_split_handlers( )
+{
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_split_handlers_count; ++k )
+    {
+        const golden_split_handler_t& g = g_golden_split_handlers[ k ];
+        race_rules_t r;
+        vugame_fsms_construct( r );
+        bool shape = true;
+        for ( int c = 0; c < 5; ++c )
+        {
+            const int i = r.split.condition_index( g_golden_split_handler_names[ c ] );
+            shape = shape && i >= 0;
+            if ( i >= 0 )
+            {
+                r.split.m_conditions[ static_cast< std::size_t >( i ) ].m_value = static_cast< std::uint8_t >( g.m_before[ 2 * c ] );
+                r.split.m_conditions[ static_cast< std::size_t >( i ) ].m_pulse = static_cast< std::uint8_t >( g.m_before[ 2 * c + 1 ] );
+            }
+        }
+        std::memcpy( &r.split.m_time, &g.m_time, 4 );
+        std::memcpy( &r.split_duration, &g.m_duration, 4 );
+        r.split_kind = g.m_kind_before;
+        std::vector< std::string > got;
+        r.screen_hooks.personal_best = [ & ] { got.push_back( "game 0x38" ); return g.m_pb != 0; };
+        r.screen_hooks.string_db = [ & ]( const char* key ) { got.push_back( std::string( "string " ) + key ); return std::string( g.m_text ); };
+        if ( g.m_fn == 3 )
+            vugame_personal_best_enter( r );
+        else
+            vugame_split_expire( r );
+        bool same = shape && got.size( ) == static_cast< std::size_t >( g.m_calls ) && r.split_kind == g.m_kind && r.opponent == g.m_name;
+        for ( std::size_t c = 0; same && c < got.size( ); ++c )
+            same = got[ c ] == g_golden_split_handler_calls[ g.m_call + static_cast< int >( c ) ];
+        for ( int c = 0; same && c < 5; ++c )
+        {
+            const auto& fc = r.split.m_conditions[ static_cast< std::size_t >( r.split.condition_index( g_golden_split_handler_names[ c ] ) ) ];
+            same = fc.m_value == g.m_after[ 2 * c ] && fc.m_pulse == g.m_after[ 2 * c + 1 ];
+        }
+        if ( !same && ++failed <= 10 )
+            LOG_ERROR( "split handlers: call %d (fn %d time 0x%08X duration 0x%08X pb %d): %d calls, kind %d '%s'; retail %d, %d '%s'", static_cast< int >( k ), g.m_fn,
+                       g.m_time, g.m_duration, g.m_pb, static_cast< int >( got.size( ) ), r.split_kind, r.opponent.c_str( ), g.m_calls, g.m_kind, g.m_name );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuGame's +0x67C Intro / Split / Result ticks and PersonalBestConfig enter match retail's 0x483CB0 / 0x483D00 / 0x483E00 / 0x483C40: %d calls",
+                     static_cast< int >( g_golden_split_handlers_count ) );
+    else
+        LOG_ERROR( "split handlers FAILED %d calls", failed );
+    return failed == 0;
+}

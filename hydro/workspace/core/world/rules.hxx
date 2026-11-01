@@ -416,6 +416,8 @@ struct vugame_screen_hooks_t
     std::function< bool( ) > paused;
     std::function< void( float dt ) > game_results_tick;
     std::function< bool( ) > award_done;
+    std::function< bool( ) > personal_best;                       // the game's vt+0x38(&+0x6C4, &+0x6C8) (saves: a platform hook)
+    std::function< std::string( const char* key ) > string_db;     // g 0x759078 vt+0x18 (the localised text)
 };
 
 struct race_rules_t
@@ -428,6 +430,9 @@ struct race_rules_t
     vugame_screen_hooks_t screen_hooks;   // what the Results / Awards handlers call that is not theirs
     bool results_screen = false;     // +0x84 non-null (Results' enter 0x484110 - not recreated: never set here)
     bool award_screen = false;       // +0x88 non-null (Awards' enter 0x484320 - not recreated: never set here)
+    float split_duration = 0.0f;     // +0x674: ConstantDB VuDBAsset / HUD / ChallengeTextDuration (the ctor 0x481630)
+    std::int32_t split_kind = 0;     // +0x6A4
+    std::string opponent;            // +0x6AC
     c_fsm fsm;                       // +0x6F8
     std::uint32_t buoys = 0;         // +0x744
     std::string track;               // the game's +0x68 (VuGame's track name)
@@ -661,6 +666,35 @@ inline void vugame_awards_draw( race_rules_t& r )
         r.screen_hooks.screen( 1, 3, 0.0f );
 }
 
+// The +0x67C machine's Intro / Split / Result ticks 0x483CB0 / 0x483D00 /
+// 0x483E00: comiss +0x6A0 (the machine's time), +0x674 / jb - unless the time
+// is below the duration (or either is NaN) "Expired" is PULSED. Their draws
+// (0x483CF0 / 0x483D40 -> 0x484590, the split display) are the HUD's - hooks.
+inline void vugame_split_expire( race_rules_t& r )
+{
+    const float t = r.split.m_time, d = r.split_duration;
+    if ( _mm_comilt_ss( _mm_set_ss( t ), _mm_set_ss( d ) ) || t != t || d != d )
+        return;
+    vugame_condition_byte( r.split, "Expired", true );
+}
+
+// PersonalBestConfig's enter 0x483C40: the game's vt+0x38(&+0x6C4, &+0x6C8)
+// true -> +0x6A4 = 0 and +0x6AC = the string DB's "HUD_PersonalBestOpponentName"
+// (0x401DB0's assign); false -> "NoPersonalBestTime"'s VALUE = 1.
+inline void vugame_personal_best_enter( race_rules_t& r )
+{
+    if ( !vugame_screen_need( r, r.screen_hooks.personal_best && r.screen_hooks.string_db, 0x483C40u,
+                              "VuGame PersonalBestConfig enter: the game's vt+0x38 / the string DB (platform)" ) )
+        return;
+    if ( r.screen_hooks.personal_best( ) )
+    {
+        r.split_kind = 0;
+        r.opponent = r.screen_hooks.string_db( "HUD_PersonalBestOpponentName" );
+    }
+    else
+        vugame_condition_byte( r.split, "NoPersonalBestTime", false );
+}
+
 inline void vugame_fsms_construct( race_rules_t& r )
 {
     r.event = c_fsm{ };
@@ -683,11 +717,19 @@ inline void vugame_fsms_construct( race_rules_t& r )
     r.split = c_fsm{ };
     vugame_fsm_handlers( r, r.split.add_state( "GetFriendScores" ), 0x483B90u, 0, 0x483BE0u, 0 );
     vugame_fsm_handlers( r, r.split.add_state( "DownloadBlob" ), 0x401560u, 0, 0x483C10u, 0 );
-    vugame_fsm_handlers( r, r.split.add_state( "PersonalBestConfig" ), 0x483C40u, 0, 0, 0 );
-    vugame_fsm_handlers( r, r.split.add_state( "Intro" ), 0, 0, 0x483CB0u, 0x483CF0u );
+    fsm_state_t& pb = r.split.add_state( "PersonalBestConfig" );
+    vugame_fsm_handlers( r, pb, 0x483C40u, 0, 0, 0 );
+    pb.m_enter = [ &r ] { vugame_personal_best_enter( r ); };
+    fsm_state_t& intro = r.split.add_state( "Intro" );
+    vugame_fsm_handlers( r, intro, 0, 0, 0x483CB0u, 0x483CF0u );
+    intro.m_tick = [ &r ]( float ) { vugame_split_expire( r ); };
     r.split.add_state( "Racing" );
-    vugame_fsm_handlers( r, r.split.add_state( "Split" ), 0, 0, 0x483D00u, 0x483D40u );
-    vugame_fsm_handlers( r, r.split.add_state( "Result" ), 0x483D50u, 0, 0x483E00u, 0x483E40u );
+    fsm_state_t& split = r.split.add_state( "Split" );
+    vugame_fsm_handlers( r, split, 0, 0, 0x483D00u, 0x483D40u );
+    split.m_tick = [ &r ]( float ) { vugame_split_expire( r ); };
+    fsm_state_t& result = r.split.add_state( "Result" );
+    vugame_fsm_handlers( r, result, 0x483D50u, 0, 0x483E00u, 0x483E40u );
+    result.m_tick = [ &r ]( float ) { vugame_split_expire( r ); };
     r.split.add_state( "Done" );
     static const char* const k_split_transitions[ 15 ][ 3 ] = {
         { "GetFriendScores", "Done", "NoHumansPlaying" },          { "GetFriendScores", "PersonalBestConfig", "UserNotLoggedIn" },

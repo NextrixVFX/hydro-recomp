@@ -1116,6 +1116,12 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     };
     s.rules.hooks.platform = [ &s ]( const std::string& call ) { race_unwired( s, "platform services: " + call + " (saves / online / achievements / audio - hooks)" ); };
     s.rules.track = s.game.track;
+    {
+        // VuGame's ctor 0x481630: +0x674 = ConstantDB VuDBAsset / HUD / ChallengeTextDuration - an int (1, cvtdq2ps), a float (2), an int64
+        // (7, fild / fstp), else 0.
+        const value_t& v = member( member( member( *db.constant_db, "VuDBAsset" ), "HUD" ), "ChallengeTextDuration" );
+        s.rules.split_duration = v.tag == 1 ? static_cast< float >( v.integer ) : v.tag == 2 ? v.real : v.tag == 7 ? static_cast< float >( v.int64 ) : 0.0f;
+    }
     s.rules.unrecreated = [ &s ]( std::uint32_t address, const char* what )
     {
         char text[ 160 ];
