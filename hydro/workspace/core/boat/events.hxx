@@ -1,7 +1,10 @@
 #pragma once
 
 #include <workspace/core/boat/human.hxx>
+#include <workspace/core/boat/respawn.hxx>
 #include <workspace/core/boat/rtti.hxx>
+
+#include <functional>
 
 #include <cstdint>
 #include <cstring>
@@ -147,4 +150,37 @@ inline void body_apply_impulse( std::uint8_t* b, const float* impulse, const flo
     const float torque[ 3 ] = { sse_sub( sse_mul( rel[ 1 ], sz ), sse_mul( rel[ 2 ], sy ) ), sse_sub( sse_mul( rel[ 2 ], sx ), sse_mul( rel[ 0 ], sz ) ),
                                 sse_sub( sse_mul( rel[ 0 ], sy ), sse_mul( rel[ 1 ], sx ) ) };
     body_apply_torque_impulse( b, torque );
+}
+// ---- VuBoatEntity's btMotionState::setWorldTransform 0x41E460 (vtable
+// 0x7383C4 slot 2; thiscall(boat + 0x5C, btTransform const*), retn 4; the
+// get is construct.hxx's boat_motion_get) ----
+//
+// On the transform component (boat +0x50; `tr` its image): +0x50 =
+// translation(-(boat +0x290)) (0x410AB0, the sign flips xorps) .
+// 0x410B40(in) (VuMatrix_multiply 0x4078C0); its world euler +0xA0 .. +0xA8 =
+// respawn_euler of it (SUBSTITUTION: the CRT's atan2 / asinf, as there);
+// +0xAC = a stack word never written (UNKNOWN: left); then 0x534830 and
+// 0x534C00(0) on the component - the transform machinery: hooks, in order.
+struct boat_set_world_hooks_t
+{
+    std::function< void( ) > recalc;              // 0x534830
+    std::function< void( bool ) > child_walk;     // 0x534C00(notify)
+};
+
+inline void boat_motion_set( const std::uint8_t* boat, std::uint8_t* tr, const float* bt, const boat_set_world_hooks_t& h )
+{
+    float m[ 16 ], t[ 16 ], w[ 16 ], e[ 3 ];
+    hull_vu_from_bt( m, bt );
+    float v[ 3 ];
+    std::memcpy( v, boat + 0x290, 12 );
+    v[ 0 ] = support_negate( v[ 0 ] );
+    v[ 1 ] = support_negate( v[ 1 ] );
+    v[ 2 ] = support_negate( v[ 2 ] );
+    hull_translation( t, v );
+    hull_multiply( t, w, m );
+    std::memcpy( tr + 0x50, w, 64 );
+    respawn_euler( w, e );
+    std::memcpy( tr + 0xA0, e, 12 );
+    if ( h.recalc ) h.recalc( );
+    if ( h.child_walk ) h.child_walk( false );
 }

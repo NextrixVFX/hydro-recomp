@@ -2503,6 +2503,51 @@ inline bool verify_piece_motion( )
     LOG_ERROR( "piece_motion FAILED %d of %u vectors", failed, nv );
     return false;
 }
+// VuBoatEntity's setWorldTransform 0x41E460 against retail (oracle case boat_set_world): the component's world and
+// world euler (+0xAC, a stack word, not compared) and the 0x534830 / 0x534C00(0) hook order.
+inline bool verify_boat_set_world( )
+{
+    const unsigned* g = g_golden_boat_set_world_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        float bt[ 16 ];
+        std::memcpy( bt, g, 64 ); g += 16;
+        std::uint8_t boat[ 0x520 ] = {}, tr[ 0xC8 ] = {};
+        std::memcpy( boat + 0x290, g, 12 ); g += 3;
+        const unsigned* after = g;
+        g += 19;
+        const unsigned rest = *g++;
+        std::vector< std::vector< unsigned > > glog( *g++ ), log;
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        boat_set_world_hooks_t h;
+        h.recalc = [ & ]( ) { log.push_back( { 1u, 1u } ); };
+        h.child_walk = [ & ]( bool notify ) { log.push_back( { 2u, 1u, notify ? 1u : 0u } ); };
+        boat_motion_set( boat, tr, bt, h );
+        unsigned mine[ 19 ];
+        std::memcpy( mine, tr + 0x50, 64 );
+        std::memcpy( mine + 16, tr + 0xA0, 12 );
+        if ( !( std::equal( mine, mine + 19, after ) && rest == 1 && log == glog ) && ++failed <= 8 )
+        {
+            int k = 0;
+            while ( k < 18 && mine[ k ] == after[ k ] )
+                ++k;
+            LOG_ERROR( "boat_set_world vector %u: word %d 0x%08X (retail 0x%08X), %zu hooks (%zu)", v, k, mine[ k ], after[ k ], log.size( ), glog.size( ) );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuBoatEntity setWorldTransform 0x41E460 matches retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "boat_set_world FAILED %d of %u vectors", failed, nv );
+    return false;
+}
 // The contact-added callback 0x574E90 -> 0x5751F0 -> 0x519720 against retail (oracle case contact_added): the manifold
 // point after (every word, bit for bit), the return, and each listener / callback call's record (but its stale-stack
 // words) with the case's scripted write-backs replayed.
@@ -2870,6 +2915,7 @@ inline bool verify_race_all( )
     ok = verify_boat_events( ) && ok;
     ok = verify_body_impulse( ) && ok;
     ok = verify_piece_motion( ) && ok;
+    ok = verify_boat_set_world( ) && ok;
     ok = verify_contact_added( ) && ok;
     ok = verify_boat_rtti( ) && ok;
     ok = verify_human_explosion( ) && ok;
