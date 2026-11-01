@@ -501,3 +501,161 @@ inline std::uint32_t water_texture_settings_apply( bool water, const std::uint32
         std::memcpy( settings, entity_words, 32 );
     return 0u;
 }
+// ---------------------------------------------------------------------------
+// THE GAME-TIER WATER ENTITIES' CREATION - the registry's create (operator new
+// of the size, a pre-init zeroing VuEntity's words, the ctor). VuEntity's own
+// ctor 0x500710 (words +0 .. +0x5C, the VuTransformComponent 0x74D324 first in
+// the component list) is the engine's: not here. What each ctor adds:
+//   VuWakeWaveEntity 0x5D4F10: new 0x9C, pre-init 0x5D4F90 (+8, +0xC,
+//     +0x34 .. +0x58, +0x60, +0x64, +0x98 = 0), ctor 0x5D5000.
+//   VuStaticWakeWaveEntity 0x5D58A0: new 0x84, pre-init 0x5D5920 (+8, +0xC,
+//     +0x34 .. +0x5C, +0x80 = 0), ctor 0x5D5990.
+//   VuDirectionalFlowWaveEntity 0x5D6390: new 0x7C, VuEntity's pre-init
+//     0x408250 (+8, +0xC, +0x34 .. +0x5C = 0), ctor 0x5D6410.
+// Every property is new 0x20 (VuFloatProperty: vtable 0x737484, +4 the name,
+// +8 the u16 1, +0xC 0, +0x10 the next, +0x14 / +0x18 the target's value at
+// that moment, +0x1C the target) - a percentage gets vtable 0x73B2DC after
+// it - or new 0x38 (the VuVector3 property, vtable 0x737A84: 16 bytes copied
+// twice, +0x34 the target), appended to the entity's list +0x44 (next +0x10)
+// in the ctor's order. Components append to +0x48 (next +0xC).
+struct water_ctor_property_t
+{
+    const char* name;
+    std::uint32_t vtable;
+    std::uint32_t offset;
+};
+
+struct water_entity_ctor_t
+{
+    std::uint32_t vtable = 0u;
+    std::uint32_t size = 0u;
+    // the class words +0x60 .. size; a component pointer is 1 (non-null)
+    std::uint32_t word[ 16 ]{};
+    bool known[ 16 ]{};
+    int words = 0;
+    const water_ctor_property_t* properties = nullptr;
+    int property_count = 0;
+    // the component list after VuEntity's transform component
+    std::uint32_t components[ 2 ]{};
+    int component_count = 0;
+    // the transform's +0xC0 watcher delegate {vtable, the transform's +8, method}; 0 = none
+    std::uint32_t watcher_vtable = 0u, watcher_method = 0u;
+    // the transform's +0xC4 (0xFFFFFFFF as the transform component's ctor leaves it, or the ctor's)
+    std::uint32_t transform_flags = 0xFFFFFFFFu;
+    // the Vu3dLayoutComponent (entity +0x5C; ctor 0x50B8D0): its +0x10 delegate
+    // {vtable, the entity, method} and its box +0x18 .. +0x37
+    bool layout = false;
+    std::uint32_t layout_vtable = 0u, layout_method = 0u;
+    water_layout_box_t box{};
+    // VuWakeWaveEntity's VuMotionComponentIF (+0x5C) and its motion component's vtable (+0x64)
+    std::uint32_t iface = 0u, motion = 0u;
+};
+
+inline const water_ctor_property_t k_wake_entity_ctor_props[] = {
+    { "Emission Rate", 0x737484u, 0x68 }, { "Min Emission Speed", 0x737484u, 0x6C }, { "Max Emission Speed", 0x737484u, 0x70 },
+    { "Range Start Ratio %", 0x73B2DCu, 0x8C }, { "Range End Ratio %", 0x73B2DCu, 0x90 }, { "Magnitude", 0x737484u, 0x74 },
+    { "Falloff Time", 0x737484u, 0x78 }, { "DecayTime", 0x737484u, 0x7C }, { "Range", 0x737484u, 0x80 }, { "Speed", 0x737484u, 0x84 },
+    { "Frequency", 0x737484u, 0x88 } };
+inline const water_ctor_property_t k_static_wake_ctor_props[] = {
+    { "Range Start Ratio %", 0x73B2DCu, 0x60 }, { "Range End Ratio %", 0x73B2DCu, 0x64 }, { "Falloff Time", 0x737484u, 0x6C },
+    { "Decay Time", 0x737484u, 0x70 }, { "Magnitude", 0x737484u, 0x74 }, { "Speed", 0x737484u, 0x78 }, { "Frequency", 0x737484u, 0x7C } };
+inline const water_ctor_property_t k_flow_ctor_props[] = {
+    { "Flow Velocity", 0x737A84u, 0x60 }, { "Longitudinal Decay Ratio %", 0x73B2DCu, 0x70 }, { "Lateral Decay Ratio %", 0x73B2DCu, 0x74 } };
+
+// The create of `cls` (false: not one of the three). Words no code writes are
+// known false: the flow entity's +0x6C (the Flow Velocity's fourth lane - so
+// also that property's two copies of it) and the layout boxes' stack lanes.
+inline bool water_game_entity_construct( const char* cls, water_entity_ctor_t& c )
+{
+    c = water_entity_ctor_t{};
+    auto set = [ & ]( std::uint32_t offset, std::uint32_t value ) {
+        const int k = static_cast< int >( ( offset - 0x60u ) / 4u );
+        c.word[ k ] = value;
+        c.known[ k ] = true;
+    };
+    auto box = [ & ]( const std::uint32_t ( &w )[ 8 ], const bool ( &known )[ 8 ] ) {
+        for ( int k = 0; k < 8; ++k )
+        {
+            c.box.word[ k ] = w[ k ];
+            c.box.known[ k ] = known[ k ];
+        }
+    };
+    if ( std::strcmp( cls, "VuWakeWaveEntity" ) == 0 )
+    {
+        // 0x5D5000: vtable 0x7534A8, the IF at +0x5C (0x73AE2C, then 0x7534DC); the
+        // words; the eleven properties; the VuScriptComponent (new 0x58, 0x405030 +
+        // 0x503A20( entity, 0x96, 1 )) at +0x60, the VuMotionComponent (new 0x78,
+        // 0x552CD0( entity, entity + 0x5C )) at +0x64. No transform watcher.
+        c.vtable = 0x7534A8u;
+        c.size = 0x9Cu;
+        const std::uint32_t w[] = { 1u, 1u, 0x3F800000u, 0u, 0x3F800000u, 0x3E800000u, 0x40000000u, 0x3F800000u, 0x41200000u, 0x41200000u,
+                                    0x41000000u, 0x3E4CCCCDu, 0x3F4CCCCDu, 0x3F800000u, 0u };
+        for ( int k = 0; k < 15; ++k )
+            set( 0x60u + 4u * k, w[ k ] );
+        c.properties = k_wake_entity_ctor_props;
+        c.property_count = 11;
+        c.components[ 0 ] = 0x74C3F0u;
+        c.components[ 1 ] = 0x74E984u;
+        c.component_count = 2;
+        c.iface = 0x7534DCu;
+        c.motion = 0x74E984u;
+    }
+    else if ( std::strcmp( cls, "VuStaticWakeWaveEntity" ) == 0 )
+    {
+        // 0x5D5990: vtable 0x7535BC; +0x60 .. +0x80 (the +0x68 1.0 no property binds);
+        // seven properties; the layout component (new 0x38) at +0x5C, its +0x10 =
+        // {0x7535AC, entity, 0x5D6100}; the transform's +0xC0 = {0x75359C, +8,
+        // 0x5D5ED0 (water_static_wake_refresh's body)}, +0xC4 = 0xE7; the box
+        // (-1, 0, 0, w) (1, 1, 0, w) through movq of stack pairs - +0x24 and +0x34
+        // the never-written halves (UNKNOWN).
+        c.vtable = 0x7535BCu;
+        c.size = 0x84u;
+        const std::uint32_t w[] = { 0x3E4CCCCDu, 0x3F4CCCCDu, 0x3F800000u, 0x40000000u, 0x3F800000u, 0x3F800000u, 0x41200000u, 0x41000000u, 0u };
+        for ( int k = 0; k < 9; ++k )
+            set( 0x60u + 4u * k, w[ k ] );
+        c.properties = k_static_wake_ctor_props;
+        c.property_count = 7;
+        c.components[ 0 ] = 0x74C550u;
+        c.component_count = 1;
+        c.watcher_vtable = 0x75359Cu;
+        c.watcher_method = 0x5D5ED0u;
+        c.transform_flags = 0xE7u;
+        c.layout = true;
+        c.layout_vtable = 0x7535ACu;
+        c.layout_method = 0x5D6100u;
+        box( { 0xBF800000u, 0u, 0u, 0u, 0x3F800000u, 0x3F800000u, 0u, 0u }, { true, true, true, false, true, true, true, false } );
+    }
+    else if ( std::strcmp( cls, "VuDirectionalFlowWaveEntity" ) == 0 )
+    {
+        // 0x5D6410: vtable 0x7536D0; +0x60 / +0x64 / +0x68 = (0, 5, 0) - +0x6C NOT
+        // written -, +0x70 / +0x74 0.5, +0x78 0; three properties; the layout
+        // component at +0x5C, +0x10 = {0x7536C0, entity, 0x5D6880 (its debug draw)};
+        // the transform's +0xC0 = {0x7536B0, +8, 0x5D6740 (water_flow_refresh)},
+        // +0xC4 = 0xE7. The ctor writes no box: the layout ctor's (-1, -1, -1)
+        // (1, 1, 1) - its w lanes not known here.
+        c.vtable = 0x7536D0u;
+        c.size = 0x7Cu;
+        set( 0x60u, 0u );
+        set( 0x64u, 0x40A00000u );
+        set( 0x68u, 0u );
+        set( 0x70u, 0x3F000000u );
+        set( 0x74u, 0x3F000000u );
+        set( 0x78u, 0u );
+        c.properties = k_flow_ctor_props;
+        c.property_count = 3;
+        c.components[ 0 ] = 0x74C550u;
+        c.component_count = 1;
+        c.watcher_vtable = 0x7536B0u;
+        c.watcher_method = 0x5D6740u;
+        c.transform_flags = 0xE7u;
+        c.layout = true;
+        c.layout_vtable = 0x7536C0u;
+        c.layout_method = 0x5D6880u;
+        box( { 0xBF800000u, 0xBF800000u, 0xBF800000u, 0u, 0x3F800000u, 0x3F800000u, 0x3F800000u, 0u },
+             { true, true, true, false, true, true, true, false } );
+    }
+    else
+        return false;
+    c.words = static_cast< int >( ( c.size - 0x60u ) / 4u );
+    return true;
+}

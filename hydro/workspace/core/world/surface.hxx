@@ -141,9 +141,10 @@ inline const water_prop_row_t k_water_bump_props[] = {
     { nullptr, 0, water_prop_t::real, 0, nullptr } };
 
 // VuDirectionalFlowWaveEntity's ctor 0x5D6410 (engine schema.hxx's capture):
-// Flow Velocity (a VuVector3 at +0x60, (0, 5, 0); its fourth word +0x6C the
-// ctor's 0, after a load the vector load's stack word - UNKNOWN), the two decay
-// ratios (percentages, 0.5).
+// Flow Velocity (a VuVector3 at +0x60, (0, 5, 0); its fourth word +0x6C is
+// written by no ctor - heap garbage, case water_ctors_game - and after a load
+// the vector load's stack word: UNKNOWN), the two decay ratios (percentages,
+// 0.5). The whole creation: world/watchers.hxx water_game_entity_construct.
 inline const water_prop_row_t k_water_flow_props[] = {
     { "Flow Velocity", 0x60, water_prop_t::vec3, 0, nullptr, 0x40A00000u, 0 },
     { "Longitudinal Decay Ratio %", 0x70, water_prop_t::percent, 0x3F000000u, nullptr },

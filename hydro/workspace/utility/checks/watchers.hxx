@@ -344,17 +344,20 @@ inline bool verify_flow_wave( )
 // +0x28 the bounds' stack words, +0x40 the entry pointer excepted), entries, the wave list, the pool, every surface's wave
 // tree, the waves destroyed; slot 2 0x5D5E30 with +0x14 bit 2 set (released and made again) or clear (nothing) - the
 // same; after all six, slot 7 0x5D5E90 on every other (surface.hxx water_entity_release).
-inline bool verify_static_wake( )
+// `watcher` (case static_wake_watcher): the transform's watcher 0x5D5ED0 ran in place of slot 2 - the same body
+// (water_static_wake_refresh) without the argument.
+inline bool static_wake_check( const unsigned* golden, bool watcher )
 {
+    const char* const label = watcher ? "static_wake_watcher" : "static_wake";
     const std::unique_ptr< entity_t > tree = water_build_document_tree( );
     if ( !tree )
     {
-        LOG_ERROR( "static_wake: the document did not load" );
+        LOG_ERROR( "%s: the document did not load", label );
         return false;
     }
     water_built_t b{};
     water_build_world( *tree, b, []( entity_t& e ) { return entity_transform( e ); } );
-    const unsigned* s = g_golden_swk_words;
+    const unsigned* s = golden;
     const unsigned n = *s++;
     int failed = 0, compared = 0, remade = 0, releases = 0;
     std::vector< std::pair< int, const unsigned* > > released;
@@ -411,7 +414,7 @@ inline bool verify_static_wake( )
         if ( bad )
         {
             ++failed;
-            LOG_ERROR( "static_wake: entity %u (wave %d): %d differences", c, index, bad );
+            LOG_ERROR( "%s: entity %u (wave %d): %d differences", label, c, index, bad );
         }
     }
     for ( const auto& r : released )
@@ -427,16 +430,26 @@ inline bool verify_static_wake( )
         if ( bad )
         {
             ++failed;
-            LOG_ERROR( "static_wake: the release of wave %d: %d differences", r.first, bad );
+            LOG_ERROR( "%s: the release of wave %d: %d differences", label, r.first, bad );
         }
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "VuStaticWakeWaveEntity (slot 6 0x5D5E80 = 0x5D6060: 0x5D5F20, 0x5287D0, 0x52C720; slot 2 0x5D5E30; slot 7 0x5D5E90) "
+        LOG_SUCCESS( "VuStaticWakeWaveEntity (slot 6 0x5D5E80 = 0x5D6060: 0x5D5F20, 0x5287D0, 0x52C720; %s; slot 7 0x5D5E90) "
                      "matches retail on Hydroelectric's built water: %u entities, %d remade, %d releases, %d values plus every wave tree",
-            n, remade, releases, compared );
+            watcher ? "the transform's watcher 0x5D5ED0" : "slot 2 0x5D5E30", n, remade, releases, compared );
     else
-        LOG_ERROR( "static_wake FAILED %d", failed );
+        LOG_ERROR( "%s FAILED %d", label, failed );
     return failed == 0;
+}
+
+inline bool verify_static_wake( )
+{
+    return static_wake_check( g_golden_swk_words, false );
+}
+
+inline bool verify_static_wake_watcher( )
+{
+    return static_wake_check( g_golden_swkw_words, true );
 }
 
 // VuWakeWaveEntity's motion IF (world/wake.hxx water_wake_entity_motion_water / water_wake_entity_detach) against 0x5D5660
@@ -942,12 +955,143 @@ inline bool verify_water_types_game( )
     return bad == 0;
 }
 
+// The game-tier water entities' creation (world/watchers.hxx water_game_entity_construct) against retail's creates
+// 0x5D4F10 / 0x5D58A0 / 0x5D6390 (case water_ctors_game; the heap filled with 0xA5 first, so a word no code writes shows):
+// per class the vtable, the size, every known class word, the property list in order (name, vtable, +8 / +0xC, the
+// default copies of each known target word, the target offset), the components, the transform's watcher and +0xC4, the
+// layout delegate and box (its known lanes), the wake's IF / motion vtables. Then each property against engine
+// schema.hxx's capture (offset, type, unit, the default's known lanes).
+inline bool verify_water_ctors_game( )
+{
+    const unsigned* s = g_golden_wcg_words;
+    const char* const* names = g_golden_wcg_names;
+    const unsigned n = *s++;
+    int failed = 0, compared = 0, properties = 0;
+    for ( unsigned c = 0; c < n; ++c )
+    {
+        int bad = 0;
+        const char* cls = *names++;
+        water_entity_ctor_t k{};
+        if ( !water_game_entity_construct( cls, k ) )
+        {
+            LOG_ERROR( "water_ctors_game: %s not constructed", cls );
+            return false;
+        }
+        const entity_schema_t* schema = entity_schema_find( cls );
+        bad += schema == nullptr;
+        bad += *s++ != k.vtable;
+        bad += *s++ != k.size;
+        const unsigned nw = *s++;
+        bad += static_cast< int >( nw ) != k.words;
+        for ( unsigned i = 0; i < nw; ++i, ++s )
+            if ( i < 16u && k.known[ i ] )
+            {
+                ++compared;
+                bad += *s != k.word[ i ];
+            }
+        const unsigned np = *s++;
+        bad += static_cast< int >( np ) != k.property_count;
+        for ( unsigned i = 0; i < np; ++i )
+        {
+            ++properties;
+            const char* name = *names++;
+            const water_ctor_property_t* p = i < static_cast< unsigned >( k.property_count ) ? &k.properties[ i ] : nullptr;
+            const unsigned vt = *s++, flags = *s++, zero = *s++, nd = *s++;
+            const unsigned* d = s;
+            s += nd;
+            const unsigned offset = *s++;
+            if ( !p )
+            {
+                ++bad;
+                continue;
+            }
+            bad += std::strcmp( name, p->name ) != 0;
+            bad += vt != p->vtable || flags != 1u || zero != 0u || offset != p->offset;
+            const unsigned lanes = p->vtable == 0x737A84u ? 4u : 1u;
+            bad += nd != 2u * lanes;
+            for ( unsigned j = 0; j < nd && j < 8u; ++j )
+            {
+                const unsigned at = ( p->offset - 0x60u ) / 4u + j % lanes;
+                if ( at < 16u && k.known[ at ] )
+                {
+                    ++compared;
+                    bad += d[ j ] != k.word[ at ];
+                }
+            }
+            // engine schema.hxx's capture of the same ctor
+            const entity_property_t* row = nullptr;
+            for ( int r = 0; schema && r < schema->m_count; ++r )
+                if ( std::strcmp( schema->m_properties[ r ].m_name, p->name ) == 0 )
+                    row = &schema->m_properties[ r ];
+            if ( !row )
+            {
+                ++bad;
+                continue;
+            }
+            bad += row->m_retail_offset != p->offset;
+            bad += row->m_type != ( lanes == 4u ? prop_type_t::vector3 : prop_type_t::real );
+            bad += row->m_unit != ( p->vtable == 0x73B2DCu ? prop_unit_t::percent : prop_unit_t::none );
+            for ( unsigned j = 0; j < lanes; ++j )
+            {
+                const unsigned at = ( p->offset - 0x60u ) / 4u + j;
+                if ( k.known[ at ] )
+                {
+                    ++compared;
+                    bad += row->m_default[ j ] != k.word[ at ];
+                }
+            }
+        }
+        if ( schema )
+            bad += schema->m_count != k.property_count;
+        const unsigned nc = *s++;
+        bad += nc != 1u + static_cast< unsigned >( k.component_count );   // VuEntity's transform component first
+        for ( unsigned i = 0; i < nc; ++i, ++s )
+            bad += i == 0 ? *s != 0x74D324u : ( i - 1 < 2u && *s != k.components[ i - 1 ] );
+        bad += s[ 0 ] != k.watcher_vtable || s[ 1 ] != ( k.watcher_vtable ? 1u : 0u ) || s[ 2 ] != k.watcher_method || s[ 3 ] != k.transform_flags;
+        s += 4;
+        compared += 4;
+        if ( *s++ )
+        {
+            bad += s[ 0 ] != k.iface || s[ 1 ] != k.motion;
+            s += 2;
+        }
+        else
+            bad += k.iface != 0u;
+        if ( *s++ )
+        {
+            bad += !k.layout || s[ 0 ] != k.layout_vtable || s[ 1 ] != 1u || s[ 2 ] != k.layout_method;
+            s += 3;
+            for ( int i = 0; i < 8; ++i, ++s )
+                if ( k.box.known[ i ] )
+                {
+                    ++compared;
+                    bad += *s != k.box.word[ i ];
+                }
+        }
+        else
+            bad += k.layout;
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "water_ctors_game: %s: %d differences", cls, bad );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the game-tier water creates (0x5D4F10 / 0x5D58A0 / 0x5D6390: pre-inits 0x5D4F90 / 0x5D5920 / 0x408250, ctors 0x5D5000 / "
+                     "0x5D5990 / 0x5D6410) match retail and schema.hxx: %u classes, %d properties, %d values",
+            n, properties, compared );
+    else
+        LOG_ERROR( "water_ctors_game FAILED %d of %u", failed, n );
+    return failed == 0;
+}
 inline bool verify_watchers_all( )
 {
     bool ok = true;
     ok = verify_water_types_game( ) && ok;
+    ok = verify_water_ctors_game( ) && ok;
     ok = verify_flow_wave( ) && ok;
     ok = verify_static_wake( ) && ok;
+    ok = verify_static_wake_watcher( ) && ok;
     ok = verify_wake_entity( ) && ok;
     ok = verify_wave_refresh( ) && ok;
     ok = verify_water_controls( ) && ok;
