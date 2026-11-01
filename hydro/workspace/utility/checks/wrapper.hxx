@@ -284,3 +284,25 @@ inline bool verify_rigid_collide( )
         LOG_ERROR( "rigid_collide FAILED %d", bad );
     return bad == 0;
 }
+// VuSimpleStridingMesh's lock 0x527CD0 / slot 6 0x527D40 (engine dynamics/wrapper.hxx) against retail (case simple_mesh).
+inline bool verify_simple_mesh( )
+{
+    const unsigned* s = g_golden_smh_words;
+    const unsigned n = *s++;
+    int bad = 0;
+    const int vdata = 0, idata = 0;
+    for ( unsigned c = 0; c < n; ++c, s += 11 )
+    {
+        const simple_mesh_lock_t l = simple_striding_mesh_lock( &vdata, static_cast< std::int32_t >( s[ 0 ] ), &idata, static_cast< std::int32_t >( s[ 1 ] ) );
+        const unsigned got[ 8 ] = { l.vertices == &vdata ? 1u : 0u, static_cast< unsigned >( l.vertex_count ), static_cast< unsigned >( l.vertex_type ),
+                                    static_cast< unsigned >( l.vertex_stride ), l.indices == &idata ? 1u : 0u, static_cast< unsigned >( l.index_stride ),
+                                    static_cast< unsigned >( l.faces ), static_cast< unsigned >( l.index_type ) };
+        bad += std::memcmp( got, s + 2, sizeof( got ) ) != 0;
+        bad += ( simple_striding_mesh_parts( static_cast< std::int32_t >( s[ 1 ] ) ) ? 1u : 0u ) != s[ 10 ];
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "simple_striding_mesh_lock / _parts match VuSimpleStridingMesh 0x527CD0 / 0x527D40 on %u meshes", n );
+    else
+        LOG_ERROR( "simple_mesh FAILED %d", bad );
+    return bad == 0;
+}

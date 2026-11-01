@@ -2554,6 +2554,7 @@ inline bool verify_water_all( )
     ok = verify_watchers_all( ) && ok;
     ok = verify_dynamics_impl( ) && ok;
     ok = verify_rigid_collide( ) && ok;
+    ok = verify_simple_mesh( ) && ok;
     ok = verify_ocean_kernels96( ) && ok;
     ok = verify_water_built_tick( ) && ok;
     ok = verify_water_query96( ) && ok;

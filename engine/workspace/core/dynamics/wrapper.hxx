@@ -359,3 +359,34 @@ inline void vu_collision_manager_clear_global( T*& global )
 {
     global = nullptr;
 }
+// ---------------------------------------------------------------------------
+// VuSimpleStridingMesh (vtable slot 3 0x527CD0, slot 6 0x527D40; slot 0
+// 0x410D50 sets the base vtable 0x738128 and deletes on bit 0; slot 2 0x410D40
+// is `retn 0x24`). Its +0x20 / +0x24 point at two {data, count} arrays - the
+// vertices and the 16-bit indices. The lock 0x527CD0
+// (getLockedReadOnlyVertexIndexBase; the subpart ignored) is VuStridingMesh's
+// 0x527C50 (collision/bvh.hxx) on these arrays (census vdiff: only the source
+// words differ): PHY_FLOAT (0) vertices, stride 16; PHY_SHORT (3) indices,
+// stride 6; faces = the index count / 3 (signed, toward zero). Slot 6
+// (getNumSubParts here) = the index count != 0. Verified: case simple_mesh.
+struct simple_mesh_lock_t
+{
+    const void* vertices;
+    std::int32_t vertex_count;
+    std::int32_t vertex_type;
+    std::int32_t vertex_stride;
+    const void* indices;
+    std::int32_t index_stride;
+    std::int32_t faces;
+    std::int32_t index_type;
+};
+
+inline simple_mesh_lock_t simple_striding_mesh_lock( const void* vertices, std::int32_t vertex_count, const void* indices, std::int32_t index_count )
+{
+    return { vertices, vertex_count, 0, 16, indices, 6, index_count / 3, 3 };
+}
+
+inline bool simple_striding_mesh_parts( std::int32_t index_count )
+{
+    return index_count != 0;
+}
