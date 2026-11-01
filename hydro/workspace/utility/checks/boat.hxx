@@ -1051,6 +1051,328 @@ inline bool verify_boat_boost( )
     return failed == 0;
 }
 
+// boat_engine_audio (boat/state.hxx) against retail's 0x413830 (oracle case
+// boat_engine_audio; the FMOD imports intercepted and normalised): the six
+// blocks after and the FMOD calls word for word, the events answered with
+// retail's recorded results and handles.
+struct boat_engine_audio_log_t
+{
+    std::vector< unsigned > got;
+    std::vector< std::pair< unsigned, unsigned > > answers;   // (ok, handle) per event, in order
+    std::size_t next = 0;
+    void text( const char* s, std::size_t n )
+    {
+        got.push_back( static_cast< unsigned >( n ) );
+        for ( std::size_t k = 0; k < n; k += 4 )
+        {
+            unsigned w = 0;
+            std::memcpy( &w, s + k, n - k < 4 ? n - k : 4 );
+            got.push_back( w );
+        }
+    }
+};
+
+// The golden call list at `s` (count, then per call its kind and fields, as
+// the emitter writes them): the words, the events' recorded answers into
+// log.answers, `s` advanced past it. Kinds 5 (splash: text), 6 (lens: one
+// word) and 7 (wake) are the hull tick's; 8 .. 19 the Decision tick's (8 / 9
+// text, 10 eight words, 12 / 13 / 14 one, the rest none).
+inline std::vector< unsigned > boat_audio_calls( const unsigned*& s, boat_engine_audio_log_t& log )
+{
+    const unsigned count = *s++;
+    const unsigned* calls = s;
+    for ( unsigned k = 0; k < count; ++k )
+    {
+        const unsigned kind = *s++;
+        if ( kind == 0 )
+        {
+            s += 1;
+            s += 1 + ( *s + 3 ) / 4;
+            log.answers.push_back( { s[ 0 ], s[ 1 ] } );
+            s += 2;
+        }
+        else if ( kind == 3 )
+            s += 7;
+        else if ( kind == 4 )
+        {
+            s += 1;
+            s += 1 + ( *s + 3 ) / 4;
+            s += 1;
+        }
+        else if ( kind == 5 || kind == 8 || kind == 9 )
+            s += 1 + ( *s + 3 ) / 4;
+        else if ( kind == 10 )
+            s += 8;
+        else if ( kind == 1 || kind == 2 || kind == 6 || kind == 12 || kind == 13 || kind == 14 )
+            s += 1;
+    }
+    return std::vector< unsigned >( calls, s );
+}
+
+inline boat_engine_audio_hooks_t boat_audio_log_hooks( boat_engine_audio_log_t& log )
+{
+    boat_engine_audio_hooks_t hooks;
+    hooks.user = &log;
+    hooks.release = []( void* u, std::uint32_t h ) { auto& l = *static_cast< boat_engine_audio_log_t* >( u ); l.got.push_back( 1 ); l.got.push_back( h ); };
+    hooks.get_event = []( void* u, int slot, const std::string& name, std::uint32_t* h )
+    {
+        auto& l = *static_cast< boat_engine_audio_log_t* >( u );
+        const auto a = l.next < l.answers.size( ) ? l.answers[ l.next++ ] : std::pair< unsigned, unsigned >( 0, 0 );
+        *h = a.second;
+        l.got.push_back( 0 );
+        l.got.push_back( static_cast< unsigned >( slot ) );
+        l.text( name.data( ), name.size( ) );
+        l.got.push_back( a.first );
+        l.got.push_back( a.second );
+        return a.first != 0;
+    };
+    hooks.start = []( void* u, std::uint32_t h ) { auto& l = *static_cast< boat_engine_audio_log_t* >( u ); l.got.push_back( 2 ); l.got.push_back( h ); };
+    hooks.attributes = []( void* u, std::uint32_t h, const float* p, const float* v )
+    {
+        auto& l = *static_cast< boat_engine_audio_log_t* >( u );
+        l.got.push_back( 3 );
+        l.got.push_back( h );
+        for ( int k = 0; k < 6; ++k )
+        {
+            unsigned w;
+            std::memcpy( &w, k < 3 ? p + k : v + k - 3, 4 );
+            l.got.push_back( w );
+        }
+    };
+    hooks.parameter = []( void* u, std::uint32_t h, const char* name, float value )
+    {
+        auto& l = *static_cast< boat_engine_audio_log_t* >( u );
+        l.got.push_back( 4 );
+        l.got.push_back( h );
+        l.text( name, std::strlen( name ) );
+        unsigned w;
+        std::memcpy( &w, &value, 4 );
+        l.got.push_back( w );
+    };
+    return hooks;
+}
+
+inline bool verify_boat_engine_audio( )
+{
+    const int sizes[ 6 ] = { 0x520, 0x2D4, 0xC8, 0x104, 0x104, 0x40 };
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_engine_audio_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_engine_audio_words + g_golden_boat_engine_audio_offsets[ index ];
+        float dt;
+        std::memcpy( &dt, s++, 4 );
+        boat_strings_t names;
+        for ( int at : { 0x64, 0x7C, 0x94, 0xAC } )
+        {
+            const unsigned n = *s++;
+            names[ at ] = std::string( reinterpret_cast< const char* >( s ), n );
+            s += ( n + 3 ) / 4;
+        }
+        boat_engine_audio_log_t log;
+        const std::vector< unsigned > want = boat_audio_calls( s, log );
+        std::vector< std::uint8_t > b[ 6 ];
+        for ( int k = 0; k < 6; ++k )
+        {
+            b[ k ].assign( reinterpret_cast< const std::uint8_t* >( s ), reinterpret_cast< const std::uint8_t* >( s ) + sizes[ k ] );
+            s += sizes[ k ] / 4;
+        }
+        solver_rigid_t body{ };
+        std::memcpy( &body, b[ 1 ].data( ), sizeof( body ) < 0x2D4 ? sizeof( body ) : 0x2D4 );
+        const boat_engine_audio_hooks_t hooks = boat_audio_log_hooks( log );
+        boat_engine_audio( b[ 4 ].data( ), names, b[ 0 ].data( ), body, b[ 2 ].data( ), b[ 3 ].data( ), b[ 5 ].data( ), dt, hooks );
+        std::memcpy( b[ 1 ].data( ), &body, sizeof( body ) < 0x2D4 ? sizeof( body ) : 0x2D4 );
+        int bad = log.got != want ? 0x7000 : -1;
+        for ( int k = 0; k < 6; ++k )
+        {
+            for ( int at = 0; at < sizes[ k ] && bad < 0; ++at )
+                if ( b[ k ][ at ] != reinterpret_cast< const std::uint8_t* >( s )[ at ] )
+                    bad = 0x1000 * k + at;
+            s += sizes[ k ] / 4;
+        }
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "boat engine audio vector %d differs from retail at 0x%X (block x 0x1000 + byte; 0x7000 the FMOD calls)",
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the engine's audio tick 0x413830 (FMOD hooked) matches retail: %d vectors",
+                     static_cast< int >( g_golden_boat_engine_audio_count ) );
+    else
+        LOG_ERROR( "boat engine audio FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_engine_audio_count ) );
+    return failed == 0;
+}
+
+// boat_hull_tick (boat/state.hxx) against retail's 0x416630 (oracle case
+// boat_hull_tick; FMOD, the splash effect, the lens water and the wake update
+// intercepted): the eight blocks after and the calls word for word. The
+// driver IS-A VuHumanDriver test is the vtable (0x737F44) - retail walks the
+// type chain, the vectors use all five driver classes.
+inline bool verify_boat_hull_tick( )
+{
+    const int sizes[ 8 ] = { 0x520, 0x2D4, 0xC8, 0x104, 0x104, 0x1F0, 0xD0, 0x308 };
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_hull_tick_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_hull_tick_words + g_golden_boat_hull_tick_offsets[ index ];
+        float dt;
+        std::memcpy( &dt, s++, 4 );
+        const bool human = *s++ == 0x737F44u;
+        boat_strings_t names;
+        for ( int at : { 0xEC, 0x17C } )
+        {
+            const unsigned n = *s++;
+            names[ at ] = std::string( reinterpret_cast< const char* >( s ), n );
+            s += ( n + 3 ) / 4;
+        }
+        boat_engine_audio_log_t log;
+        const std::vector< unsigned > want = boat_audio_calls( s, log );
+        std::vector< std::uint8_t > b[ 8 ];
+        for ( int k = 0; k < 8; ++k )
+        {
+            b[ k ].assign( reinterpret_cast< const std::uint8_t* >( s ), reinterpret_cast< const std::uint8_t* >( s ) + sizes[ k ] );
+            s += sizes[ k ] / 4;
+        }
+        solver_rigid_t body{ };
+        std::memcpy( &body, b[ 1 ].data( ), sizeof( body ) < 0x2D4 ? sizeof( body ) : 0x2D4 );
+        boat_hull_tick_hooks_t hooks;
+        hooks.fmod = boat_audio_log_hooks( log );
+        hooks.user = &log;
+        hooks.splash = []( void* u, const std::string& name )
+        {
+            auto& l = *static_cast< boat_engine_audio_log_t* >( u );
+            l.got.push_back( 5 );
+            l.text( name.data( ), name.size( ) );
+        };
+        hooks.lens = []( void* u, float amount )
+        {
+            auto& l = *static_cast< boat_engine_audio_log_t* >( u );
+            unsigned w;
+            std::memcpy( &w, &amount, 4 );
+            l.got.push_back( 6 );
+            l.got.push_back( w );
+        };
+        hooks.wake = []( void* u ) { static_cast< boat_engine_audio_log_t* >( u )->got.push_back( 7 ); };
+        boat_hull_tick( b[ 5 ].data( ), names, b[ 0 ].data( ), body, b[ 2 ].data( ), b[ 3 ].data( ), b[ 4 ].data( ), b[ 6 ].data( ),
+                        human, b[ 7 ].data( ), dt, hooks );
+        std::memcpy( b[ 1 ].data( ), &body, sizeof( body ) < 0x2D4 ? sizeof( body ) : 0x2D4 );
+        int bad = log.got != want ? 0x9000 : -1;
+        for ( int k = 0; k < 8; ++k )
+        {
+            for ( int at = 0; at < sizes[ k ] && bad < 0; ++at )
+                if ( b[ k ][ at ] != reinterpret_cast< const std::uint8_t* >( s )[ at ] )
+                    bad = 0x1000 * k + at;
+            s += sizes[ k ] / 4;
+        }
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "boat hull tick vector %d differs from retail at 0x%X (block x 0x1000 + byte; 0x9000 the calls)",
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the hull's Decision tick 0x416630 (FMOD / splash pfx / lens water / wake update hooked) matches retail: %d vectors",
+                     static_cast< int >( g_golden_boat_hull_tick_count ) );
+    else
+        LOG_ERROR( "boat hull tick FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_hull_tick_count ) );
+    return failed == 0;
+}
+
+// boat_decision_tick (boat/state.hxx) against retail's whole Decision tick
+// 0x41EFF0 (oracle case boat_decision: every recreated sub-tick ran for real
+// in retail, the rest intercepted): the twelve blocks after and every call
+// word for word, the wake lookup answered with the vector's chosen value.
+struct boat_decision_log_t
+{
+    boat_engine_audio_log_t log;
+    float answer = 0.0f;
+};
+
+inline bool verify_boat_decision( )
+{
+    const int sizes[ 12 ] = { 0x520, 0x2D4, 0xC8, 0x104, 0x104, 0x40, 0x1F0, 0xD0, 0x308, 0xDC, 0xD0, 0x10 };
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_decision_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_decision_words + g_golden_boat_decision_offsets[ index ];
+        float dt;
+        std::memcpy( &dt, s++, 4 );
+        const unsigned vtable = *s++;
+        const unsigned players = *s++;
+        const bool has_floor = *s++ != 0;
+        float floor, answer;
+        std::memcpy( &floor, s++, 4 );
+        std::memcpy( &answer, s++, 4 );
+        boat_strings_t hull_names, engine_names;
+        for ( int at : { 0xEC, 0x17C, 0x64, 0x7C, 0x94, 0xAC } )
+        {
+            const unsigned n = *s++;
+            ( at == 0xEC || at == 0x17C ? hull_names : engine_names )[ at ] = std::string( reinterpret_cast< const char* >( s ), n );
+            s += ( n + 3 ) / 4;
+        }
+        boat_decision_log_t dl;
+        dl.answer = answer;
+        auto& log = dl.log;
+        const std::vector< unsigned > want = boat_audio_calls( s, log );
+        std::vector< std::uint8_t > b[ 12 ];
+        for ( int k = 0; k < 12; ++k )
+        {
+            b[ k ].assign( reinterpret_cast< const std::uint8_t* >( s ), reinterpret_cast< const std::uint8_t* >( s ) + sizes[ k ] );
+            s += sizes[ k ] / 4;
+        }
+        std::uint32_t proxy_word;
+        std::memcpy( &proxy_word, b[ 1 ].data( ) + 0xC8, 4 );
+        boat_decision_t d{ b[ 0 ].data( ), b[ 1 ].data( ), proxy_word ? b[ 11 ].data( ) : nullptr, b[ 7 ].data( ), boat_driver_of( vtable ),
+                           vtable == 0x737F44u, b[ 8 ].data( ), b[ 6 ].data( ), &hull_names, b[ 4 ].data( ), &engine_names, b[ 5 ].data( ),
+                           b[ 9 ].data( ), b[ 10 ].data( ), b[ 2 ].data( ), b[ 3 ].data( ), players, has_floor ? &floor : nullptr };
+        boat_decision_hooks_t hooks;
+        hooks.hull.fmod = boat_audio_log_hooks( log );
+        hooks.user = hooks.hull.user = hooks.boost.user = &dl;
+        hooks.wake_lookup = []( void* u, const boat_probe_io_t& io )
+        {
+            auto& l = static_cast< boat_decision_log_t* >( u )->log;
+            l.got.push_back( 10 );
+            for ( int k = 0; k < 3; ++k )
+            {
+                unsigned w;
+                std::memcpy( &w, &io.point[ k ], 4 );
+                l.got.push_back( w );
+            }
+            for ( int k = 0; k < 5; ++k )
+                l.got.push_back( io.callback[ k ] );
+            return static_cast< boat_decision_log_t* >( u )->answer;
+        };
+        hooks.hull.splash = []( void* u, const std::string& name ) { auto& l = static_cast< boat_decision_log_t* >( u )->log; l.got.push_back( 5 ); l.text( name.data( ), name.size( ) ); };
+        hooks.hull.lens = []( void* u, float v ) { auto& l = static_cast< boat_decision_log_t* >( u )->log; unsigned w; std::memcpy( &w, &v, 4 ); l.got.push_back( 6 ); l.got.push_back( w ); };
+        hooks.hull.wake = []( void* u ) { static_cast< boat_decision_log_t* >( u )->log.got.push_back( 7 ); };
+        hooks.boost.sound = []( void* u, const std::string& e ) { auto& l = static_cast< boat_decision_log_t* >( u )->log; l.got.push_back( 8 ); l.text( e.data( ), e.size( ) ); };
+        hooks.boost.stats = []( void* u, const char* n ) { auto& l = static_cast< boat_decision_log_t* >( u )->log; l.got.push_back( 9 ); l.text( n, std::strlen( n ) ); };
+        hooks.jump_sound = []( void* u ) { static_cast< boat_decision_log_t* >( u )->log.got.push_back( 11 ); };
+        hooks.driver_tick = []( void* u, float v ) { auto& l = static_cast< boat_decision_log_t* >( u )->log; unsigned w; std::memcpy( &w, &v, 4 ); l.got.push_back( 12 ); l.got.push_back( w ); };
+        hooks.animation_tick = []( void* u, float v ) { auto& l = static_cast< boat_decision_log_t* >( u )->log; unsigned w; std::memcpy( &w, &v, 4 ); l.got.push_back( 13 ); l.got.push_back( w ); };
+        hooks.camera_tick = []( void* u, float v ) { auto& l = static_cast< boat_decision_log_t* >( u )->log; unsigned w; std::memcpy( &w, &v, 4 ); l.got.push_back( 14 ); l.got.push_back( w ); };
+        hooks.respawn = []( void* u ) { static_cast< boat_decision_log_t* >( u )->log.got.push_back( 15 ); };
+        hooks.enable = []( void* u ) { static_cast< boat_decision_log_t* >( u )->log.got.push_back( 16 ); };
+        hooks.disable = []( void* u ) { static_cast< boat_decision_log_t* >( u )->log.got.push_back( 17 ); };
+        hooks.debris_410FF0 = []( void* u ) { static_cast< boat_decision_log_t* >( u )->log.got.push_back( 18 ); };
+        hooks.boat_41E240 = []( void* u ) { static_cast< boat_decision_log_t* >( u )->log.got.push_back( 19 ); };
+        boat_decision_tick( d, dt, hooks );
+        int bad = log.got != want ? 0xD000 : -1;
+        for ( int k = 0; k < 12; ++k )
+        {
+            for ( int at = 0; at < sizes[ k ] && bad < 0; ++at )
+                if ( b[ k ][ at ] != reinterpret_cast< const std::uint8_t* >( s )[ at ] )
+                    bad = 0x1000 * k + at;
+            s += sizes[ k ] / 4;
+        }
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "boat decision vector %d differs from retail at 0x%X (block x 0x1000 + byte; 0xD000 the calls)",
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the Decision tick 0x41EFF0 (its recreated sub-ticks composed; the rest hooked) matches retail: %d vectors",
+                     static_cast< int >( g_golden_boat_decision_count ) );
+    else
+        LOG_ERROR( "boat decision FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_decision_count ) );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
@@ -1068,5 +1390,8 @@ inline bool verify_boat_all( )
     ok = verify_boat_load_sections( ) && ok;
     ok = verify_boat_transform( ) && ok;
     ok = verify_boat_boost( ) && ok;
+    ok = verify_boat_engine_audio( ) && ok;
+    ok = verify_boat_hull_tick( ) && ok;
+    ok = verify_boat_decision( ) && ok;
     return ok;
 }
