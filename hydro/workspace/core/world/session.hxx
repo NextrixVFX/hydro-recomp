@@ -42,9 +42,9 @@
 //   transform-changed delegate (it reads the +0x290 centre), each boat's
 //   Decision 0x41EFF0 and Build 0x41F330 ticks, the race camera (the Camera
 //   section) and the Viewports tick. Each is counted and logged once.
-// - The skin pass 0x421490 (the Skin property's watcher) is not read: the hull
-//   draw takes SkinDB's Boat.Textures.DiffuseTexture for the skin (our model
-//   path's lookup, flagged in c_world).
+// - The skin pass 0x421490 (world/livery.hxx, 1:1) is 0x420A70's last step:
+//   with the sections load stopped it is not reached, and the hulls draw their
+//   models' own materials (c_world race_switch_on applies it once b.sections).
 // - The signed-in player's name (the human entry's Driver Name) is a platform
 //   service: empty here.
 

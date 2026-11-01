@@ -1,5 +1,6 @@
 #pragma once
 
+#include <workspace/core/world/livery.hxx>
 #include <workspace/core/world/race.hxx>
 #include <workspace/core/world/start.hxx>
 #include <workspace/core/world/tick.hxx>
@@ -1801,9 +1802,121 @@ inline bool verify_boat_draw( )
     return failed == 0;
 }
 
+// livery_pass (world/livery.hxx) against retail's skin pass 0x421490 run whole (oracle case boat_skin: the Skin
+// property's SkinDB document read by retail's 0x55B560 from hand-built VUJB holding real SkinDB entries and
+// synthetic ones; three instance scenes and 0-2 damage pieces over a pool of 24 material descs; the material
+// cache's create 0x53A440 / release 0x53A710 intercepted): per pass, every create in order - the program and
+// layout words and the FNV-1a 32 of the 0x6C8-byte desc it was handed - and each skin array's count (the creates
+// land in the arrays in order). Some vectors run a second pass on the same boat (the rebuild). The releases are the
+// platform cache's (not compared). `rewritten` counts the creates whose desc is not a pool desc as it was.
+inline bool verify_boat_skin( )
+{
+    const auto fnv = [ ]( const std::uint8_t* p, std::size_t n )
+    {
+        std::uint32_t h = 0x811C9DC5u;
+        for ( std::size_t i = 0; i < n; ++i )
+            h = ( h ^ p[ i ] ) * 0x01000193u;
+        return h;
+    };
+    std::vector< value_t > docs;
+    for ( std::size_t k = 0; k < sizeof( g_golden_boat_skin_doc_sizes ) / sizeof( g_golden_boat_skin_doc_sizes[ 0 ] ); ++k )
+    {
+        const std::vector< std::uint8_t > bytes( g_golden_boat_skin_docs[ k ], g_golden_boat_skin_docs[ k ] + g_golden_boat_skin_doc_sizes[ k ] );
+        docs.push_back( c_reader( bytes ).parse( ) );
+    }
+    std::vector< livery_material_t > pool( g_golden_boat_skin_pool_count );
+    std::vector< std::uint32_t > own;
+    for ( std::size_t k = 0; k < pool.size( ); ++k )
+    {
+        std::memcpy( pool[ k ].desc.data( ), g_golden_boat_skin_pool + k_livery_desc_size * k, k_livery_desc_size );
+        pool[ k ].program = g_golden_boat_skin_pool_words[ 2 * k ];
+        pool[ k ].layout = g_golden_boat_skin_pool_words[ 2 * k + 1 ];
+        own.push_back( fnv( pool[ k ].desc.data( ), k_livery_desc_size ) );
+    }
+    const unsigned* w = g_golden_boat_skin_words;
+    int failed = 0, passes = 0, creates = 0, rewritten = 0;
+    for ( std::size_t v = 0; v < g_golden_boat_skin_vectors; ++v )
+    {
+        const value_t* doc = &docs[ *w++ ];
+        const bool asset = *w++ != 0;
+        const unsigned scene_count = *w++;
+        std::vector< livery_scene_t > scenes( scene_count );
+        std::vector< bool > present( scene_count, false );
+        for ( unsigned s = 0; s < scene_count; ++s )
+        {
+            const unsigned n = *w++;
+            if ( n == 0xFFFFFFFFu )
+                continue;
+            present[ s ] = true;
+            for ( unsigned i = 0; i < n; ++i )
+                scenes[ s ].push_back( pool[ *w++ ] );
+        }
+        const livery_scene_t* three[ 3 ];
+        for ( int i = 0; i < 3; ++i )
+            three[ i ] = present[ static_cast< std::size_t >( i ) ] ? &scenes[ static_cast< std::size_t >( i ) ] : nullptr;
+        std::vector< const livery_scene_t* > pieces;
+        for ( unsigned s = 3; s < scene_count; ++s )
+            pieces.push_back( present[ s ] ? &scenes[ s ] : nullptr );
+        const unsigned pass_count = *w++;
+        for ( unsigned p = 0; p < pass_count; ++p )
+        {
+            ++passes;
+            const std::string name = g_golden_boat_skin_texts[ *w++ ];
+            std::vector< std::vector< livery_material_t > > skins;
+            const bool ok = livery_pass( asset ? doc : nullptr, name, three, pieces, skins );
+            std::vector< const livery_material_t* > made;
+            for ( const auto& skin : skins )
+                for ( const livery_material_t& m : skin )
+                    made.push_back( &m );
+            const unsigned n = *w++;
+            int bad = ok ? 0 : 1;
+            if ( !bad && made.size( ) != n )
+                bad = 2;
+            for ( unsigned i = 0; i < n; ++i, w += 3 )
+            {
+                ++creates;
+                bool pooled = false;
+                for ( std::uint32_t h : own )
+                    pooled = pooled || h == w[ 2 ];
+                rewritten += pooled ? 0 : 1;
+                if ( bad || i >= made.size( ) )
+                    continue;
+                const std::uint32_t h = fnv( made[ i ]->desc.data( ), k_livery_desc_size );
+                if ( made[ i ]->program != w[ 0 ] || made[ i ]->layout != w[ 1 ] || h != w[ 2 ] )
+                    bad = 3;
+            }
+            const unsigned arrays = *w++;
+            if ( !bad && arrays != skins.size( ) )
+                bad = 4;
+            unsigned ordinal = 0;
+            for ( unsigned a = 0; a < arrays; ++a )
+            {
+                const unsigned count = *w++;
+                if ( !bad && ( a >= skins.size( ) || skins[ a ].size( ) != count ) )
+                    bad = 5;
+                for ( unsigned i = 0; i < count; ++i, ++ordinal )
+                    if ( *w++ != ordinal && !bad )
+                        bad = 6;
+            }
+            if ( bad && ++failed <= 6 )
+                LOG_ERROR( "boat skin vector %d pass %u ('%s') differs from retail: %d (1 failed, 2 create count ours %d retail %u, "
+                           "3 a desc / program / layout, 4 / 5 arrays, 6 order)", static_cast< int >( v ), p, name.c_str( ), bad,
+                           static_cast< int >( made.size( ) ), n );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "livery_pass matches retail's skin pass 0x421490 (0x521F20 x3 + 0x4119F0): %d vectors, %d passes, %d material "
+                     "creates (program, layout, desc FNV; %d rewritten) and every skin array's count",
+                     static_cast< int >( g_golden_boat_skin_vectors ), passes, creates, rewritten );
+    else
+        LOG_ERROR( "boat skin FAILED %d passes", failed );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_boat_skin( ) && ok;
     ok = verify_boat_draw( ) && ok;
     ok = verify_race_begin( ) && ok;
     ok = verify_boat_post_load( ) && ok;

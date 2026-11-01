@@ -18,6 +18,7 @@
 #include <workspace/core/game/types.hxx>
 #include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/grid.hxx>
+#include <workspace/core/world/livery.hxx>
 #include <workspace/core/world/race.hxx>
 #include <workspace/core/world/session.hxx>
 #include <workspace/core/world/water.hxx>
@@ -104,7 +105,7 @@ private:
         int index_start = 0;
         int index_count = 0;
         int alpha_test = 0;
-        bool paint = false;
+        int shader = -1;   // the part's material (model_part_t::shader) - a skin's index
         float node[ 16 ]{};
         // The authored shading constants, carried from the model's material
         // table through to c_engine::shade(). The cube is kept as a NAME and
@@ -152,7 +153,8 @@ private:
     const std::vector< cached_part_t >& model_for( const std::string& asset );
 
     // place_model: models.hxx
-    void place_model( const std::string& asset, const float* world, int bob = 0, int alpha_override = -1, const float* tint = nullptr, const char* skin = nullptr, int geometry_override = -1, std::vector< int >* out_placements = nullptr );
+    // `skin`: per shader, what a skin pass (world/livery.hxx) changed for the draw (livery_draw_of).
+    void place_model( const std::string& asset, const float* world, int bob = 0, int alpha_override = -1, const float* tint = nullptr, const std::vector< livery_draw_t >* skin = nullptr, int geometry_override = -1, std::vector< int >* out_placements = nullptr );
 
     const value_t* template_root( const std::string& name )
     {
@@ -629,17 +631,39 @@ private:
     // load_project: entities.hxx
     void load_project( const char* asset );
 
-    std::string skin_texture( const value_t* skins, const char* name ) const
+    // A model's scene materials for the skin pass (world/livery.hxx): its shaders' table 0 - the program's, the one
+    // 0x5929B0 hands the material create - as descs, in shader order. A VuStaticModelAsset through 0x560C70's first
+    // step, a VuAnimatedModelAsset through its load 0x5A83E0's (the same VuGfxScene load 0x5C1560, flag 1, from
+    // the blob's start). The program / layout words are the platform's (0 here). False: no such asset, or a scene
+    // or table that does not read.
+    bool livery_scene_for( const std::string& asset, livery_scene_t& out )
     {
-        if ( skins == nullptr || name == nullptr || name[ 0 ] == '\0' )
-            return {};
-        const value_t* skin = find( *skins, name );
-        const value_t* boat_node = skin != nullptr ? find( *skin, "Boat" ) : nullptr;
-        const value_t* textures = boat_node != nullptr ? find( *boat_node, "Textures" ) : nullptr;
-        const value_t* diffuse = textures != nullptr ? find( *textures, "DiffuseTexture" ) : nullptr;
-        if ( diffuse != nullptr && diffuse->kind == value_t::kind_t::text )
-            return diffuse->text;
-        return {};
+        out.clear( );
+        std::vector< std::uint8_t > bytes;
+        scene_t scene;
+        if ( m_archive.read( ( "VuStaticModelAsset/" + asset ).c_str( ), bytes ) )
+        {
+            if ( !scene_load_static( bytes.data( ), bytes.size( ), scene ) )
+                return false;
+        }
+        else if ( m_archive.read( ( "VuAnimatedModelAsset/" + asset ).c_str( ), bytes ) )
+        {
+            scene_reader_t r{ };
+            r.data = bytes.data( );
+            r.size = bytes.size( );
+            if ( !scene_load_gfx( r, scene, 1, false ) )
+                return false;
+        }
+        else
+            return false;
+        for ( const scene_shader_t& shader : scene.shaders )
+        {
+            livery_material_t m;
+            if ( !livery_desc_of( shader.tables[ 0 ], m ) )
+                return false;
+            out.push_back( m );
+        }
+        return true;
     }
 
     void load( )
@@ -891,11 +915,14 @@ public:
             return;
         // The hulls: each boat's three model instances (+0x2A4 / +0x2A8 / +0x2AC from BoatDB's Model Asset / LOD 1 /
         // LOD 2 Model Asset - the instance loads 0x5322C0 / 0x520080 are the rendering layer: our model path) placed
-        // at the draw 0x41EAE0's matrix, hidden until race_draw shows the instance the draw picks. SUBSTITUTED: the
-        // skin pass 0x421490 is not read - the Proxy part takes SkinDB's Boat.Textures.DiffuseTexture for the
-        // boat's Skin (skin_texture, ours). The matrix is placed once: it moves only through the Build tick's
-        // +0x49C and the dynamics, both stopped while the sections load stops.
-        const value_t* skins = find( m_skin_db, "VuDBAsset" );
+        // at the draw 0x41EAE0's matrix, hidden until race_draw shows the instance the draw picks. The SKIN is the
+        // skin pass 0x421490 (world/livery.hxx, 1:1): the last step of 0x420A70, so it is reached only when the
+        // sections load ran to its end (b.sections); the Skin watcher's earlier run (0x481CE0 sets Skin before the
+        // models load) finds the instances' scenes null and leaves every skin empty. Until the boat agent's
+        // collision-mesh reader lets 0x420A70 finish, the hulls therefore draw their own materials (the
+        // Boat_proxy/Proxy_diffuse placeholder) - retail's state at that point, not a stand-in. The damage pieces'
+        // skins (+0x238, 0x4119F0) are not built here: our renderer does not draw the pieces. The matrix is placed
+        // once: it moves only through the Build tick's +0x49C and the dynamics, both stopped with the sections load.
         for ( std::size_t k = 0; k < m_race.boats.size( ); ++k )
         {
             race_session_boat_t& b = *m_race.boats[ k ];
@@ -904,21 +931,42 @@ public:
                 continue;
             float m[ 16 ];
             race_boat_draw_matrix( b.graph.objects[ 0 ].image.data( ), transform, m );
-            const std::string texture = skin_texture( skins, b.skin.c_str( ) );
             const int at[ 3 ] = { 0xC4, 0xDC, 0xF4 };
+            std::vector< livery_draw_t > draws[ 3 ];
+            int skinned = 0;
+            if ( b.sections )
+            {
+                livery_scene_t scenes[ 3 ];
+                const livery_scene_t* pointers[ 3 ] = { };
+                for ( int i = 0; i < 3; ++i )
+                    if ( livery_scene_for( b.io.boat_strings[ at[ i ] ], scenes[ i ] ) )
+                        pointers[ i ] = &scenes[ i ];
+                std::vector< std::vector< livery_material_t > > skins;
+                if ( livery_pass( m_skin_db.tag == 6 ? &m_skin_db : nullptr, b.skin, pointers, { }, skins ) )
+                    for ( int i = 0; i < 3; ++i )
+                        for ( std::size_t s = 0; pointers[ i ] && s < skins[ i ].size( ) && s < scenes[ i ].size( ); ++s )
+                        {
+                            draws[ i ].push_back( livery_draw_of( scenes[ i ][ s ], skins[ static_cast< std::size_t >( i ) ][ s ] ) );
+                            skinned += draws[ i ].back( ).texture_set ? 1 : 0;
+                        }
+                else
+                    LOG_WARNING( "race: %s skin pass 0x421490 UNKNOWN (a texture name of 64 bytes or more: strcpy_s's invalid-parameter path)",
+                                 b.name.c_str( ) );
+            }
             for ( int i = 0; i < 3; ++i )
             {
                 const std::string& asset = b.io.boat_strings[ at[ i ] ];
                 if ( asset.empty( ) )
                     continue;
-                place_model( asset, m, 0, -1, nullptr, texture.c_str( ), -1, &b.placements[ i ] );
+                place_model( asset, m, 0, -1, nullptr, draws[ i ].empty( ) ? nullptr : &draws[ i ], -1, &b.placements[ i ] );
                 for ( int handle : b.placements[ i ] )
                     c_engine::show( handle, false );
             }
             b.shown = -1;
-            LOG_INFO( "race: %s hull at %.1f %.1f %.1f - models '%s' / '%s' / '%s', skin texture '%s'", b.name.c_str( ), m[ 12 ], m[ 13 ], m[ 14 ],
-                      b.io.boat_strings[ 0xC4 ].c_str( ), b.io.boat_strings[ 0xDC ].c_str( ), b.io.boat_strings[ 0xF4 ].c_str( ),
-                      texture.empty( ) ? "(none: the proxy)" : texture.c_str( ) );
+            LOG_INFO( "race: %s hull at %.1f %.1f %.1f - models '%s' / '%s' / '%s', skin '%s': %s", b.name.c_str( ), m[ 12 ], m[ 13 ], m[ 14 ],
+                      b.io.boat_strings[ 0xC4 ].c_str( ), b.io.boat_strings[ 0xDC ].c_str( ), b.io.boat_strings[ 0xF4 ].c_str( ), b.skin.c_str( ),
+                      b.sections ? ( skinned ? "skin pass 0x421490 applied" : "skin pass 0x421490 ran, no texture changed" )
+                                 : "skin pass 0x421490 not reached (0x420A70 stopped) - the models' own materials" );
         }
     }
 

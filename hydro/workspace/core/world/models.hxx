@@ -228,7 +228,7 @@ inline const std::vector< c_world::cached_part_t >& c_world::model_for( const st
         item.index_start = part.index_start;
         item.index_count = part.index_count;
         item.alpha_test = part.alpha_test;
-        item.paint = part.texture.find( "Proxy" ) != std::string::npos || part.texture.find( "Diffuse" ) != std::string::npos;
+        item.shader = part.shader;
         std::memcpy( item.node, part.node, sizeof( item.node ) );
         item.specular[ 0 ] = part.specular[ 0 ];
         item.specular[ 1 ] = part.specular[ 1 ];
@@ -239,9 +239,6 @@ inline const std::vector< c_world::cached_part_t >& c_world::model_for( const st
         item.specular_amount = part.specular_amount;
         item.environment_amount = part.environment_amount;
         item.cube = part.cube;
-        // The substring rule is a guess, but it holds for the hulls:
-        // a boat is a SINGLE part whose material is literally named
-        // Boat_proxy/Proxy_diffuse, so the paint flag fires correctly.
         cached.push_back( item );
     }
     // Report the authored shading constants once per model. These are the
@@ -295,22 +292,34 @@ inline const std::vector< c_world::cached_part_t >& c_world::model_for( const st
 // single distinct geometry buffer even when it carries two parts, so one
 // clone backs all of a prop's parts and the placement can be made once at
 // load and then fed new vertices every frame.
-inline void c_world::place_model( const std::string& asset, const float* world, int bob, int alpha_override, const float* tint, const char* skin, int geometry_override, std::vector< int >* out_placements)
+inline void c_world::place_model( const std::string& asset, const float* world, int bob, int alpha_override, const float* tint, const std::vector< livery_draw_t >* skin, int geometry_override, std::vector< int >* out_placements)
 {
     const float white[ 3 ] = { 1.0f, 1.0f, 1.0f };
     const float* color = tint != nullptr ? tint : white;
-    const int skin_id = skin != nullptr && skin[ 0 ] != '\0' ? texture_for( skin ) : -1;
-    // The hull is a single part whose material is the placeholder
-    // Boat_proxy/Proxy_diffuse, replaced here by the skin from SkinDB.
-    // Measured working: Vector and TidalBlade both resolve a real
-    // texture id, so skin selection and decode are not the cause of the
-    // boats looking wrong.
-    for ( const cached_part_t& part : model_for( asset ) )
+    // A skin (world/livery.hxx's skin pass) replaces, per material (the part's shader), only what it changed.
+    for ( const cached_part_t& model_part : model_for( asset ) )
     {
+        cached_part_t part = model_part;
+        if ( skin != nullptr && part.shader >= 0 && static_cast< std::size_t >( part.shader ) < skin->size( ) )
+        {
+            const livery_draw_t& d = ( *skin )[ static_cast< std::size_t >( part.shader ) ];
+            if ( d.texture_set )
+                part.texture = texture_for( d.texture );
+            if ( d.cube_set )
+                part.cube = d.cube;
+            if ( d.diffuse_set )
+                std::memcpy( part.diffuse, d.diffuse, sizeof( part.diffuse ) );
+            if ( d.specular_set )
+                std::memcpy( part.specular, d.specular, sizeof( part.specular ) );
+            if ( d.specular_amount_set )
+                part.specular_amount = d.specular_amount;
+            if ( d.environment_amount_set )
+                part.environment_amount = d.environment_amount;
+        }
         int alpha = bob != 0 ? 4 : part.alpha_test;
         if ( alpha_override >= 0 )
             alpha = alpha_override;
-        const int texture = skin_id >= 0 && part.paint ? skin_id : part.texture;
+        const int texture = part.texture;
         float placed_node[ 16 ]{};
         math_multiply( placed_node, world, part.node );
         const int handle = c_engine::place( geometry_override >= 0 ? geometry_override : part.geometry,

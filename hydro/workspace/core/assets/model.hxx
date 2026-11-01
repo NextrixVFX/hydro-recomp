@@ -33,6 +33,9 @@ struct model_buffer_t
 struct model_part_t
 {
     int buffer = 0;
+    // The mesh part's shader index (the stream's second word, VuGfxSceneMeshPart +0x14): which material - and so
+    // which skin material (world/livery.hxx) - draws it.
+    int shader = -1;
     int index_start = 0;
     int index_count = 0;
     std::string texture;
@@ -1007,6 +1010,7 @@ inline bool load_model( const std::vector< std::uint8_t >& blob, model_t& model 
         if ( placements != nullptr && !placements->empty( ) )
             std::memcpy( part.node, ( *placements )[ static_cast< std::size_t >( copy ) ].matrix, sizeof( part.node ) );
         part.buffer = static_cast< int >( record.buffer );
+        part.shader = static_cast< int >( record.material );
         part.index_start = static_cast< int >( record.index_start );
         part.index_count = static_cast< int >( record.index_count );
         if ( record.material < materials.size( ) )
@@ -1321,6 +1325,7 @@ inline bool load_model_scene( const std::vector< std::uint8_t >& blob, model_t& 
                 model_part_t part{};
                 std::memcpy( part.node, world[ node ].data( ), sizeof( part.node ) );
                 part.buffer = static_cast< int >( p.chunk );
+                part.shader = static_cast< int >( p.shader );
                 part.index_start = static_cast< int >( p.first_index );
                 part.index_count = static_cast< int >( 3u * p.triangles );
                 const scene_shader_t& shader = scene.shaders[ p.shader ];
