@@ -2651,9 +2651,66 @@ inline bool verify_pfx_quad_fill( )
     return bad == 0;
 }
 
+// pfxclass.hxx pfx_trail_fill against retail's 0x58D3F0 (case pfx_trail_fill): every vertex word (position, colour, u, v)
+// of 120 synthetic draw records (80 2D Trail, 40 3D Ribbon), and the strip's primitive count / the 3D Ribbon's vt+0xAC
+// pair from the GPU half's logged calls.
+inline bool verify_pfx_trail_fill( )
+{
+    const unsigned* w = g_golden_ptf_words;
+    const unsigned n = *w++;
+    int bad = 0, verts = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        std::uint8_t node[ 0xA0 ] = { };
+        std::memcpy( node + 0x3C, w++, 4 );
+        float eye[ 3 ];
+        std::memcpy( eye, w, 12 );
+        w += 3;
+        const unsigned nr = *w++;
+        std::vector< std::uint8_t > rec( 4 * nr );
+        std::memcpy( rec.data( ), w, 4 * nr );
+        w += nr;
+        const unsigned nv = *w++;
+        std::vector< pfx_trail_vertex_t > out( nv / 6 + 1 );
+        const int written = pfx_trail_fill( rec.data( ), node, eye, out.data( ) );
+        if ( static_cast< unsigned >( written ) * 6u != nv )
+            ++bad;
+        else if ( nv && std::memcmp( out.data( ), w, 4 * nv ) != 0 )
+        {
+            int diff = 0;
+            for ( unsigned k = 0; k < nv; ++k )
+                diff += std::memcmp( reinterpret_cast< const std::uint8_t* >( out.data( ) ) + 4 * k, w + k, 4 ) ? 1 : 0;
+            if ( bad < 4 )
+                LOG_ERROR( "pfx_trail_fill vector %u: %d of %u vertex words differ", v, diff, nv );
+            ++bad;
+        }
+        verts += static_cast< int >( nv / 6 );
+        w += nv;
+        std::int32_t count;
+        std::memcpy( &count, rec.data( ) + 0x68, 4 );
+        const unsigned nd = *w++;
+        // the draw vt+0xC0( 4, 2 count - 2, 0x799898, 0x18 )
+        if ( nd != 4 || w[ 0 ] != 4u || w[ 1 ] != static_cast< unsigned >( 2 * count - 2 ) || w[ 2 ] != 0x799898u || w[ 3 ] != 0x18u )
+            ++bad;
+        w += nd;
+        const unsigned na = *w++;
+        std::int32_t type;
+        std::memcpy( &type, node + 0x3C, 4 );
+        if ( type != 0 ? ( na != 2 || w[ 0 ] != 0u || w[ 1 ] != 1u ) : na != 0 )
+            ++bad;
+        w += na;
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "The trail renderer's vertex fill (0x58D3F0, CPU half) matches retail: %u draw records, %d vertices word for word", n, verts );
+    else
+        LOG_ERROR( "pfx_trail_fill FAILED %d", bad );
+    return bad == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_pfx_trail_fill( ) && ok;
     ok = verify_pfx_quad_fill( ) && ok;
     ok = verify_pfx_sort_layers( ) && ok;
     ok = verify_pfx_impl_teardown( ) && ok;

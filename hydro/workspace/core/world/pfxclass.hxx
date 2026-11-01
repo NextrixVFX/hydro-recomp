@@ -557,6 +557,97 @@ inline int pfx_quad_fill( const std::uint8_t* draw, const std::uint8_t* node, co
     return count;
 }
 
+// The trail renderer's draw callback 0x58D3F0 (reached through 0x58CE30, the callback the trail submit 0x58D030 names;
+// thiscall renderer = record +0, the record): its CPU half - the ribbon, 2 vertices of 24 bytes per particle into the
+// static 0x799898 (x y z, colour, u, v), drawn as one triangle strip. The GPU half is render side (hooks, not here): the
+// texture bind g 0x75907C vt+0xB4( renderer +8, node +0x8C -> +0x4C -> +0x58, else g 0x75902C +0x1C ), the draw
+// vt+0xC0( 4, 2 count - 2, 0x799898, 0x18 ), and for the 3D Ribbon vt+0xAC( 0 ) before it / vt+0xAC( 1 ) after (0x5AD000:
+// the device's +0xA0 state word, dirty byte +0x9C).
+// The record is 0x58D030's (render side, not recreated): +4 the node (+0x3C Trail Type: 0 "2D Trail", else "3D Ribbon"),
+// +8 .. +0x44 the matrix (rows +8 / +0x18 / +0x28, translation +0x38), +0x68 the count, the particles at +0x6C, 0x2C bytes
+// each (+0 position, +0x10 the ribbon axis, +0x20 the colour dword, +0x24 v, +0x28 the half width). The eye: g 0x7594A0.
+// 2D Trail: P_i = the position through the matrix; per particle d = P_next - P_prev (prev / next clamped to the ends:
+// the first uses P_1 - P_0, the last P_last - P_last-1), e = P_i - eye, c = d x e ((dy ez - dz ey, dz ex - dx ez, dx ey -
+// dy ex)), n = c x (1 / sqrtss( (cy cy + cx cx) + cz cz )) - NO epsilon test (a zero c gives 0 x inf = NaN, as retail);
+// o = width x n. 3D Ribbon: o = width x (the axis through the rows, no translation). Vertices: (o + P, u 0) then (P - o,
+// u 1), the colour and v copied. The 2D Trail needs count >= 2 (0x58D030 packs only then; retail reads particle 1
+// regardless): below that UNKNOWN, -1. Returns the vertices written (2 x count; 0 for a 3D Ribbon of count <= 0).
+struct pfx_trail_vertex_t
+{
+    float x, y, z;
+    std::uint32_t colour;
+    float u, v;
+};
+
+inline int pfx_trail_fill( const std::uint8_t* draw, const std::uint8_t* node, const float* eye, pfx_trail_vertex_t* out )
+{
+    auto f = []( const std::uint8_t* b, int off ) { float v; std::memcpy( &v, b + off, 4 ); return v; };
+    std::int32_t count, type;
+    std::memcpy( &count, draw + 0x68, 4 );
+    std::memcpy( &type, node + 0x3C, 4 );
+    const float r0x = f( draw, 0x08 ), r0y = f( draw, 0x0C ), r0z = f( draw, 0x10 );
+    const float r1x = f( draw, 0x18 ), r1y = f( draw, 0x1C ), r1z = f( draw, 0x20 );
+    const float r2x = f( draw, 0x28 ), r2y = f( draw, 0x2C ), r2z = f( draw, 0x30 );
+    const float tx = f( draw, 0x38 ), ty = f( draw, 0x3C ), tz = f( draw, 0x40 );
+    auto particle = [ & ]( int i ) { return draw + 0x6C + 0x2C * i; };
+    auto emit = [ & ]( int i, const std::uint8_t* p, float ox, float oy, float oz, float X, float Y, float Z ) {
+        std::uint32_t colour;
+        std::memcpy( &colour, p + 0x20, 4 );
+        pfx_trail_vertex_t& a = out[ 2 * i ];
+        pfx_trail_vertex_t& b = out[ 2 * i + 1 ];
+        a.x = ox + X, a.y = oy + Y, a.z = oz + Z;
+        a.colour = colour, a.u = 0.0f, a.v = f( p, 0x24 );
+        b.x = X - ox, b.y = Y - oy, b.z = Z - oz;
+        b.colour = colour, b.u = 1.0f, b.v = f( p, 0x24 );
+    };
+    if ( type != 0 )
+    {
+        for ( int i = 0; i < count; ++i )
+        {
+            const std::uint8_t* p = particle( i );
+            const float x = f( p, 0 ), y = f( p, 4 ), z = f( p, 8 );
+            const float X = ( ( r0x * x + y * r1x ) + z * r2x ) + tx;
+            const float Y = ( ( r0y * x + y * r1y ) + z * r2y ) + ty;
+            const float Z = ( ( r0z * x + y * r1z ) + z * r2z ) + tz;
+            const float ax = f( p, 0x10 ), ay = f( p, 0x14 ), az = f( p, 0x18 );
+            const float Ax = ( ax * r0x + ay * r1x ) + az * r2x;
+            const float Ay = ( ax * r0y + ay * r1y ) + az * r2y;
+            const float Az = ( ax * r0z + ay * r1z ) + r2z * az;
+            const float w = f( p, 0x28 );
+            emit( i, p, w * Ax, Ay * w, Az * w, X, Y, Z );
+        }
+        return count > 0 ? 2 * count : 0;
+    }
+    if ( count < 2 )
+        return -1;
+    auto place = [ & ]( int i, float* P ) {
+        const std::uint8_t* p = particle( i );
+        const float x = f( p, 0 ), y = f( p, 4 ), z = f( p, 8 );
+        P[ 0 ] = ( ( r0x * x + r1x * y ) + z * r2x ) + tx;
+        P[ 1 ] = ( ( r0y * x + r1y * y ) + r2y * z ) + ty;
+        P[ 2 ] = ( ( r0z * x + r1z * y ) + r2z * z ) + tz;
+    };
+    std::vector< float > P( 3 * static_cast< std::size_t >( count ) );
+    for ( int i = 0; i < count; ++i )
+        place( i, &P[ 3 * i ] );
+    for ( int i = 0; i < count; ++i )
+    {
+        const float* c = &P[ 3 * i ];
+        const float* a = &P[ 3 * ( i > 0 ? i - 1 : 0 ) ];
+        const float* b = &P[ 3 * ( i + 1 < count ? i + 1 : count - 1 ) ];
+        const float ex = c[ 0 ] - eye[ 0 ], ey = c[ 1 ] - eye[ 1 ], ez = c[ 2 ] - eye[ 2 ];
+        const float dx = b[ 0 ] - a[ 0 ], dy = b[ 1 ] - a[ 1 ], dz = b[ 2 ] - a[ 2 ];
+        const float cx = dy * ez - dz * ey;
+        const float cy = dz * ex - dx * ez;
+        const float cz = dx * ey - dy * ex;
+        const float inv = 1.0f / _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( cy * cy + cx * cx ) + cz * cz ) ) );
+        const std::uint8_t* p = particle( i );
+        const float w = f( p, 0x28 );
+        emit( i, p, w * ( cx * inv ), w * ( cy * inv ), w * ( cz * inv ), c[ 0 ], c[ 1 ], c[ 2 ] );
+    }
+    return 2 * count;
+}
+
 inline const pfx_class_t* pfx_class_find( const char* name )
 {
     for ( const pfx_class_t& c : g_pfx_classes )
