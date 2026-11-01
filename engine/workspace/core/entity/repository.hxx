@@ -31,9 +31,10 @@
 //   slot 11 0x552860 findEntity( const char* name ): FNV-1a 32 (0x811C9DC5,
 //           0x1000193) of the text, then slot 10.
 // SUBSTITUTION: the project set (an MSVC std::set<VuString> tree) is std::set
-// - same membership and order. Slot 13 0x552960 (838 B) is not read here.
+// - same membership and order.
+//   slot 13 0x552960 ( VuJsonContainer& out ): entity_repository_tree below.
 // Verified against retail: hydro checks/logic.hxx verify_entity_repository
-// (case entity_repository).
+// (case entity_repository), verify_repository_tree (case repository_tree).
 
 // The words an entity lends the repository: +0x30 its hash, +0x54 prev, +0x58
 // next. `entity` is the caller's object (what slot 10 answers).
@@ -120,6 +121,44 @@ inline bool entity_repository_has_project( const entity_repository_t& r, const s
     return r.projects.count( name ) != 0;
 }
 
+// slot 13 0x552960 ( VuJsonContainer& out ): every registered entity - the
+// buckets 0 .. 255, each from its head by +0x58 (the next read after the
+// entity is written) - as a tree of its long name's segments. Per entity:
+// path = its long name (0x500BF0: the ancestors' names and its own, root
+// first, "/"-joined); from `out`, while path != its name (entity +0x18, a
+// whole-string compare): the container is made an object (inline 0x4FBB10 +
+// tag 6 + a fresh map) and its member [ the first segment ] (0x564940: before
+// the first '/', or the whole path) taken (0x4FCAB0, a null one inserted),
+// path = the rest (0x5649C0: after the first '/', or the whole path); then
+// the same make-object and member [ path ] with the answer dropped - so the
+// entity itself is a null member unless something already sits there. `out`
+// is not cleared first; an empty repository leaves it as it was.
+// names( link, name, long_name ) gives the entity's +0x18 and 0x500BF0. A
+// path with no '/' that is not the name loops for ever in retail (never so
+// for a real long name, which ends in "/" + the name): returned here, UNKNOWN.
+#include <workspace/core/entity/json.hxx>
+
+template < typename N >
+inline void entity_repository_tree( const entity_repository_t& r, value_t& out, N names )
+{
+    for ( std::uint32_t b = 0; b < 256; ++b )
+        for ( const entity_link_t* e = r.buckets[ b ]; e != nullptr; e = e->next )
+        {
+            std::string name, path;
+            names( *e, name, path );
+            value_t* j = &out;
+            while ( path != name )
+            {
+                const std::size_t slash = path.find( '/' );
+                if ( slash == std::string::npos )
+                    return;   // retail: no end
+                j = &json_member( *j, path.substr( 0, slash ) );
+                path = path.substr( slash + 1 );
+            }
+            json_member( *j, path );
+        }
+}
+
 // ---------------------------------------------------------------------------
 // The entity framework's two base destructors, on retail's own memory layout
 // (M: any word store with std::uint32_t& operator[]( address ) - pfx_heap_t
@@ -136,6 +175,10 @@ struct vu_dtor_hooks_t
     std::function< void( std::uint32_t object, std::uint32_t slot, std::int64_t arg ) > call;
     std::function< void( std::uint32_t asset ) > asset_release;                              // g 0x759004 vt+0x24
     std::function< void( std::uint32_t key, std::uint32_t value ) > event_remove;            // g 0x759028: 0x5057E0
+    // batch 28 (the framework dtors below):
+    std::function< void( std::uint32_t container ) > json_clear;                             // 0x4FBB10 on retail memory
+    std::function< void( std::uint32_t component ) > instigator_remove;                      // g 0x759064: 0x5362A0
+    std::function< void( std::uint32_t block ) > aligned_free;                               // _aligned_free 0x64C15C
 };
 
 template < typename M >
@@ -294,4 +337,323 @@ inline void vu_entity_dtor( M& m, std::uint32_t e, const vu_dtor_hooks_t& h )
     while ( const std::uint32_t ref = m[ e + 8 ] )
         h.call( ref, 0, -1 );
     m[ e ] = 0x7458C0;
+}
+
+// ---------------------------------------------------------------------------
+// Batch 28: the component / plug / ref / project destructors on retail's memory (same conventions as above). Verified
+// against retail: hydro checks/logic.hxx verify_framework_dtors (case framework_dtors). A retail loop that cannot end
+// (a list whose first element the step does not remove) answers false here: UNKNOWN (retail spins for ever).
+
+// VuRefObj's tail (every VuRefObj dtor ends so): vtable 0x7458B8; while the weak-reference list +8 is non-zero, its
+// first's slot 0 (no argument - it unlinks itself); vtable 0x7458C0.
+template < typename M >
+inline void vu_refobj_tail( M& m, std::uint32_t o, const vu_dtor_hooks_t& h )
+{
+    m[ o ] = 0x7458B8;
+    while ( const std::uint32_t ref = m[ o + 8 ] )
+        h.call( ref, 0, -1 );
+    m[ o ] = 0x7458C0;
+}
+
+// The first `value` in the pointer vector at v (begin v, end v + 4) erased (memmove 0x64C144 of the words after it,
+// end -= 4); false when absent. The count is the signed (end - begin) >> 2.
+template < typename M >
+inline bool vu_vector_erase( M& m, std::uint32_t v, std::uint32_t value )
+{
+    const std::uint32_t begin = m[ v ], end = m[ v + 4 ];
+    const std::int32_t n = static_cast< std::int32_t >( end - begin ) >> 2;
+    for ( std::int32_t i = 0; i < n; ++i )
+        if ( m[ begin + 4u * static_cast< std::uint32_t >( i ) ] == value )
+        {
+            const std::uint32_t at = begin + 4u * static_cast< std::uint32_t >( i );
+            for ( std::uint32_t q = at; q + 4 < end; q += 4 )
+                m[ q ] = m[ q + 4 ];
+            m[ v + 4 ] = end - 4;
+            return true;
+        }
+    return false;
+}
+
+// A pointer vector's storage freed when begin is non-zero, then begin / end / capacity = 0.
+template < typename M >
+inline void vu_vector_free( M& m, std::uint32_t v, const vu_dtor_hooks_t& h )
+{
+    if ( const std::uint32_t begin = m[ v ] )
+    {
+        h.free( begin );
+        m[ v ] = 0, m[ v + 4 ] = 0, m[ v + 8 ] = 0;
+    }
+}
+
+// VuComponent's dtor body (inline in every component dtor; vtable 0x738CE0 after): the properties (+4, next +0x10 -
+// the head moved on BEFORE each call) slot 0 with 1.
+template < typename M >
+inline void vu_component_base_dtor( M& m, std::uint32_t c, const vu_dtor_hooks_t& h )
+{
+    m[ c ] = 0x738CE0;
+    while ( const std::uint32_t p = m[ c + 4 ] )
+    {
+        m[ c + 4 ] = m[ p + 0x10 ];
+        h.call( p, 0, 1 );
+    }
+}
+
+// An owned object's slot 0 with 1 when the word at a is non-zero.
+template < typename M >
+inline void vu_delete_owned( M& m, std::uint32_t a, const vu_dtor_hooks_t& h )
+{
+    if ( const std::uint32_t o = m[ a ] )
+        h.call( o, 0, 1 );
+}
+
+// 0x539610 Vu2dLayoutComponent (vtable 0x738A78): +0x10 owned. 0x50B990 Vu3dLayoutComponent (0x74C550): +0x10, +0x14.
+// 0x5342B0 VuTransformComponent (0x74D324): +0xC0. 0x531DC0 VuInstigatorComponent (0x74D29C): when byte +0x28, the
+// instigator manager's removal (g 0x759064 0x5362A0: hook), byte +0x28 = 0. Each then VuComponent's body.
+template < typename M >
+inline void vu_2d_layout_dtor( M& m, std::uint32_t c, const vu_dtor_hooks_t& h )
+{
+    m[ c ] = 0x738A78;
+    vu_delete_owned( m, c + 0x10, h );
+    vu_component_base_dtor( m, c, h );
+}
+
+template < typename M >
+inline void vu_3d_layout_dtor( M& m, std::uint32_t c, const vu_dtor_hooks_t& h )
+{
+    m[ c ] = 0x74C550;
+    vu_delete_owned( m, c + 0x10, h );
+    vu_delete_owned( m, c + 0x14, h );
+    vu_component_base_dtor( m, c, h );
+}
+
+template < typename M >
+inline void vu_transform_component_dtor( M& m, std::uint32_t c, const vu_dtor_hooks_t& h )
+{
+    m[ c ] = 0x74D324;
+    vu_delete_owned( m, c + 0xC0, h );
+    vu_component_base_dtor( m, c, h );
+}
+
+template < typename M >
+inline void vu_instigator_dtor( M& m, std::uint32_t c, const vu_dtor_hooks_t& h )
+{
+    m[ c ] = 0x74D29C;
+    if ( vu_byte( m, c + 0x28 ) != 0 )
+        h.instigator_remove( c );
+    vu_set_byte( m, c + 0x28, 0 );
+    vu_component_base_dtor( m, c, h );
+}
+
+// 0x503BA0 VuScriptComponent (vtable 0x74C3F0): the plugs (+0x10 vector) and the refs (+0x1C vector), by index with
+// the size re-read: --refcount +4, at 0 slot 0 with 1; then while the +0x28 vector (the refs that point AT this
+// component) is not empty: its first ref r - when r +0x18 (its target) is set: r erased from the target's +0x28
+// vector (if there), r +0x18 = 0, and r +0x20's vt+8 (no argument) when set; then the three vectors freed (+0x28,
+// +0x1C, +0x10) and VuComponent's body. A first ref whose target is 0 (or another component) never leaves the list:
+// false (UNKNOWN), the vectors and the body not reached.
+template < typename M >
+inline bool vu_script_component_dtor( M& m, std::uint32_t c, const vu_dtor_hooks_t& h )
+{
+    m[ c ] = 0x74C3F0;
+    for ( const std::uint32_t list : { c + 0x10, c + 0x1C } )
+        for ( std::int32_t i = 0; i < ( static_cast< std::int32_t >( m[ list + 4 ] - m[ list ] ) >> 2 ); ++i )
+        {
+            const std::uint32_t o = m[ m[ list ] + 4u * static_cast< std::uint32_t >( i ) ];
+            if ( --m[ o + 4 ] == 0 )
+                h.call( o, 0, 1 );
+        }
+    while ( ( m[ c + 0x2C ] - m[ c + 0x28 ] ) & ~3u )
+    {
+        const std::uint32_t r = m[ m[ c + 0x28 ] ], size = m[ c + 0x2C ] - m[ c + 0x28 ];
+        if ( const std::uint32_t t = m[ r + 0x18 ] )
+        {
+            vu_vector_erase( m, t + 0x28, r );
+            m[ r + 0x18 ] = 0;
+            if ( const std::uint32_t owner = m[ r + 0x20 ] )
+                h.call( owner, 8, -1 );
+        }
+        if ( m[ c + 0x2C ] - m[ c + 0x28 ] == size && m[ m[ c + 0x28 ] ] == r )
+            return false;
+    }
+    vu_vector_free( m, c + 0x28, h );
+    vu_vector_free( m, c + 0x1C, h );
+    vu_vector_free( m, c + 0x10, h );
+    vu_component_base_dtor( m, c, h );
+    return true;
+}
+
+// 0x5042A0 VuScriptComponent slot 8 (thiscall component): the baseline its template-diff save (slot 7 0x504450)
+// compares against - per plug (+0x10 vector) +0x5C = its connection count ((+0x54 - +0x50) sar 2); per ref (+0x1C
+// vector) byte +0x1C = ( +0x18 != 0 ); +0x34 = the count of refs pointing at it ((+0x2C - +0x28) sar 2); +0x38 /
+// +0x3C = +0x4C / +0x50 (the node position), +0x44 = +0x48. Counts signed, re-read each step.
+template < typename M >
+inline void vu_script_component_snapshot( M& m, std::uint32_t c )
+{
+    for ( std::int32_t i = 0; i < ( static_cast< std::int32_t >( m[ c + 0x14 ] - m[ c + 0x10 ] ) >> 2 ); ++i )
+    {
+        const std::uint32_t p = m[ m[ c + 0x10 ] + 4u * static_cast< std::uint32_t >( i ) ];
+        m[ p + 0x5C ] = static_cast< std::uint32_t >( static_cast< std::int32_t >( m[ p + 0x54 ] - m[ p + 0x50 ] ) >> 2 );
+    }
+    for ( std::int32_t i = 0; i < ( static_cast< std::int32_t >( m[ c + 0x20 ] - m[ c + 0x1C ] ) >> 2 ); ++i )
+    {
+        const std::uint32_t r = m[ m[ c + 0x1C ] + 4u * static_cast< std::uint32_t >( i ) ];
+        vu_set_byte( m, r + 0x1C, m[ r + 0x18 ] != 0 ? 1 : 0 );
+    }
+    m[ c + 0x34 ] = static_cast< std::uint32_t >( static_cast< std::int32_t >( m[ c + 0x2C ] - m[ c + 0x28 ] ) >> 2 );
+    m[ c + 0x38 ] = m[ c + 0x4C ];
+    m[ c + 0x3C ] = m[ c + 0x50 ];
+    m[ c + 0x44 ] = m[ c + 0x48 ];
+}
+
+// 0x502340 (thiscall a, b): the connection undone both ways - b erased from a's +0x50 vector, then a from b's, then b
+// from a's again ... until one is not found.
+template < typename M >
+inline void vu_plug_disconnect( M& m, std::uint32_t a, std::uint32_t b )
+{
+    while ( vu_vector_erase( m, a + 0x50, b ) )
+        std::swap( a, b );
+}
+
+// 0x502180 VuScriptPlug (vtable 0x74C268; VuScriptOutputPlug's too): while +0x50 (the connections) is not empty,
+// 0x502340( first, this ); the vector freed; the name VuString +0xC emptied; VuRefObj's tail. A first connection that
+// does not list this plug back never leaves: false (UNKNOWN).
+template < typename M >
+inline bool vu_script_plug_dtor( M& m, std::uint32_t p, const vu_dtor_hooks_t& h )
+{
+    m[ p ] = 0x74C268;
+    while ( ( m[ p + 0x54 ] - m[ p + 0x50 ] ) & ~3u )
+    {
+        const std::uint32_t size = m[ p + 0x54 ] - m[ p + 0x50 ], first = m[ m[ p + 0x50 ] ];
+        vu_plug_disconnect( m, first, p );
+        if ( m[ p + 0x54 ] - m[ p + 0x50 ] == size && m[ m[ p + 0x50 ] ] == first )
+            return false;
+    }
+    vu_vector_free( m, p + 0x50, h );
+    vu_string_tidy( m, p + 0xC, h );
+    vu_refobj_tail( m, p, h );
+    return true;
+}
+
+// 0x5426B0 VuScriptRef (vtable 0x74D8EC): when +0x18 (the target component) is set: 0x504980 (the target's +0x28
+// vector loses this ref), +0x18 = 0, +0x20's vt+8 (no argument) when set; then +0x20's slot 0 with 1 when set;
+// VuRefObj's tail.
+template < typename M >
+inline void vu_script_ref_dtor( M& m, std::uint32_t r, const vu_dtor_hooks_t& h )
+{
+    m[ r ] = 0x74D8EC;
+    if ( const std::uint32_t t = m[ r + 0x18 ] )
+    {
+        vu_vector_erase( m, t + 0x28, r );   // 0x504980
+        m[ r + 0x18 ] = 0;
+        if ( const std::uint32_t owner = m[ r + 0x20 ] )
+            h.call( owner, 8, -1 );
+    }
+    vu_delete_owned( m, r + 0x20, h );
+    vu_refobj_tail( m, r, h );
+}
+
+// 0x4B4290 VuProject (vtable 0x7459F0): +0xC (its root entity) --refcount +4, at 0 slot 0 with 1, +0xC = 0; the
+// VuJsonContainer +0x10 cleared (0x4FBB10: hook); VuRefObj's tail.
+template < typename M >
+inline void vu_project_dtor( M& m, std::uint32_t p, const vu_dtor_hooks_t& h )
+{
+    m[ p ] = 0x7459F0;
+    if ( const std::uint32_t o = m[ p + 0xC ] )
+    {
+        if ( --m[ o + 4 ] == 0 )
+            h.call( o, 0, 1 );
+        m[ p + 0xC ] = 0;
+    }
+    h.json_clear( p + 0x10 );
+    vu_refobj_tail( m, p, h );
+}
+
+// Entity classes' dtor bodies (each ends in VuEntity's 0x500870):
+//   0x5CE980 VuKeyframeMotionEntity (inline): _aligned_free of the VuArray buffers +0xD0, +0xBC, +0xB0, +0xA0, +0x90, +0x7C
+//            (in that order; a null one is passed too);
+//   0x5EB000 VuStaticPfxEntity (inline): the VuString +0x70 emptied;
+//   0x5F4AE0 VuSubstituteAssetEntity: the VuStrings +0x90, +0x78, +0x60 emptied;
+//   0x5DB430 VuWaterSurfaceEntity (VuWaterRampEntity's 0x5D6F50 runs it): vtables 0x753F1C / +0x5C 0x753F08; +0x12C (a
+//            ref-counted object) --refcount +4, at 0 slot 0 with 1, +0x12C = 0; 0x59A300 on +0xA4 (its VuStrings +0x6C,
+//            +0x4C, +0x30, +0 emptied); the VuString +0x8C emptied.
+template < typename M >
+inline void vu_keyframe_motion_dtor( M& m, std::uint32_t e, const vu_dtor_hooks_t& h )
+{
+    for ( const std::uint32_t off : { 0xD0u, 0xBCu, 0xB0u, 0xA0u, 0x90u, 0x7Cu } )
+        h.aligned_free( m[ e + off ] );
+    vu_entity_dtor( m, e, h );
+}
+
+template < typename M >
+inline void vu_static_pfx_dtor( M& m, std::uint32_t e, const vu_dtor_hooks_t& h )
+{
+    vu_string_tidy( m, e + 0x70, h );
+    vu_entity_dtor( m, e, h );
+}
+
+template < typename M >
+inline void vu_substitute_asset_dtor( M& m, std::uint32_t e, const vu_dtor_hooks_t& h )
+{
+    for ( const std::uint32_t off : { 0x90u, 0x78u, 0x60u } )
+        vu_string_tidy( m, e + off, h );
+    vu_entity_dtor( m, e, h );
+}
+
+template < typename M >
+inline void vu_water_surface_entity_dtor( M& m, std::uint32_t e, const vu_dtor_hooks_t& h )
+{
+    m[ e ] = 0x753F1C;
+    m[ e + 0x5C ] = 0x753F08;
+    if ( const std::uint32_t o = m[ e + 0x12C ] )
+    {
+        if ( --m[ o + 4 ] == 0 )
+            h.call( o, 0, 1 );
+        m[ e + 0x12C ] = 0;
+    }
+    for ( const std::uint32_t off : { 0x6Cu, 0x4Cu, 0x30u, 0x0u } )   // 0x59A300
+        vu_string_tidy( m, e + 0xA4 + off, h );
+    vu_string_tidy( m, e + 0x8C, h );
+    vu_entity_dtor( m, e, h );
+}
+
+// The deleting dtors (slot 0 / slot 2, thiscall object, flags): the body, then operator delete when flags & 1.
+//   0x423770 VuComponent (body inline)       0x4268F0 Vu2dLayoutComponent     0x50B960 Vu3dLayoutComponent
+//   0x531D90 VuInstigatorComponent           0x534280 VuTransformComponent    0x503B70 VuScriptComponent
+//   0x4052E0 VuScriptPlug / VuScriptOutputPlug  0x542680 VuScriptRef      0x4B4330 VuProject
+//   0x5EFA30 VuOnProjectInitializedEntity (vtable 0x756828, then VuEntity's 0x500870)
+//   0x4032A0 VuMethod0 / 1 / 2 (vtable 0x736EDC only)
+//   0x5CE980 VuKeyframeMotionEntity  0x5EB000 VuStaticPfxEntity  0x5F4AB0 VuSubstituteAssetEntity  0x5D6F50 VuWaterRampEntity
+// Answers false when the body did (UNKNOWN; nothing freed). (Slot 12 of the enum's order is the case's VuScriptComponent
+// slot 8 vectors - not a dtor; the check runs vu_script_component_snapshot for it.)
+enum class vu_framework_dtor_t
+{
+    component, layout_2d, layout_3d, instigator, transform, script, plug, ref, project, project_initialized, method,
+    snapshot_, keyframe_motion, static_pfx, substitute_asset, water_ramp
+};
+
+template < typename M >
+inline bool vu_framework_delete( M& m, vu_framework_dtor_t kind, std::uint32_t o, std::uint32_t flags, const vu_dtor_hooks_t& h )
+{
+    bool ok = true;
+    switch ( kind )
+    {
+    case vu_framework_dtor_t::component: vu_component_base_dtor( m, o, h ); break;
+    case vu_framework_dtor_t::layout_2d: vu_2d_layout_dtor( m, o, h ); break;
+    case vu_framework_dtor_t::layout_3d: vu_3d_layout_dtor( m, o, h ); break;
+    case vu_framework_dtor_t::instigator: vu_instigator_dtor( m, o, h ); break;
+    case vu_framework_dtor_t::transform: vu_transform_component_dtor( m, o, h ); break;
+    case vu_framework_dtor_t::script: ok = vu_script_component_dtor( m, o, h ); break;
+    case vu_framework_dtor_t::plug: ok = vu_script_plug_dtor( m, o, h ); break;
+    case vu_framework_dtor_t::ref: vu_script_ref_dtor( m, o, h ); break;
+    case vu_framework_dtor_t::project: vu_project_dtor( m, o, h ); break;
+    case vu_framework_dtor_t::project_initialized: m[ o ] = 0x756828; vu_entity_dtor( m, o, h ); break;
+    case vu_framework_dtor_t::method: m[ o ] = 0x736EDC; break;
+    case vu_framework_dtor_t::snapshot_: return false;
+    case vu_framework_dtor_t::keyframe_motion: vu_keyframe_motion_dtor( m, o, h ); break;
+    case vu_framework_dtor_t::static_pfx: vu_static_pfx_dtor( m, o, h ); break;
+    case vu_framework_dtor_t::substitute_asset: vu_substitute_asset_dtor( m, o, h ); break;
+    case vu_framework_dtor_t::water_ramp: vu_water_surface_entity_dtor( m, o, h ); break;
+    }
+    if ( ok && ( flags & 1u ) != 0 )
+        h.free( o );
+    return ok;
 }

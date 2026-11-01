@@ -196,12 +196,18 @@ inline bool verify_logic_types( )
         }
     }
     bad += n != g_golden_lgt_count ? 1 : 0;
-    // VuControlComponent's name getter 0x619F50
-    bad += g_golden_lgt_name_count == 1 && g_golden_lgt_names[ 0 ].address == 0x619F50u
-        && std::strcmp( g_golden_lgt_names[ 0 ].chain, control_component_name( ) ) == 0 ? 0 : 1;
+    // the components' name getters (VuControlComponent's 0x619F50 first)
+    const std::size_t nn = sizeof( g_component_names ) / sizeof( g_component_names[ 0 ] );
+    bad += g_golden_lgt_name_count == nn && std::strcmp( g_component_names[ 0 ].name, control_component_name( ) ) == 0 ? 0 : 1;
+    for ( std::size_t i = 0; i < g_golden_lgt_name_count && i < nn; ++i )
+        if ( g_golden_lgt_names[ i ].address != g_component_names[ i ].address || std::strcmp( g_golden_lgt_names[ i ].chain, g_component_names[ i ].name ) != 0 )
+        {
+            ++bad;
+            LOG_ERROR( "logic_types name getter 0x%X differs (retail %s)", g_golden_lgt_names[ i ].address, g_golden_lgt_names[ i ].chain );
+        }
     if ( bad == 0 )
-        LOG_SUCCESS( "g_logic_types match the logic / script classes' %d getType slots (descriptor and chain each); VuControlComponent's name 0x619F50",
-                     static_cast< int >( n ) );
+        LOG_SUCCESS( "g_logic_types match the logic / script / framework classes' %d getType slots (descriptor and chain each); %d component name getters",
+                     static_cast< int >( n ), static_cast< int >( nn ) );
     else
         LOG_ERROR( "logic_types FAILED %d", bad );
     return bad == 0;
@@ -1457,6 +1463,57 @@ inline bool verify_entity_repository( )
     return bad == 0;
 }
 
+// entity/repository.hxx entity_repository_tree against retail's slot 13 0x552960 (case repository_tree): Hydroelectric's
+// 1379 template entities registered in the case's orders into a fresh repository per vector; out's dump after.
+inline bool verify_repository_tree( )
+{
+    logic_check_t c{ g_golden_rtr_words };
+    const unsigned n = c.next( );
+    std::vector< std::string > names( n ), paths( n );
+    std::vector< entity_link_t > links( n );
+    for ( unsigned i = 0; i < n; ++i )
+    {
+        names[ i ] = c.str( );
+        const std::int32_t parent = static_cast< std::int32_t >( c.next( ) );
+        paths[ i ] = parent < 0 ? names[ i ] : paths[ parent ] + "/" + names[ i ];   // 0x500BF0 (parents come first)
+        links[ i ].hash = c.next( );
+    }
+    auto of = [ & ]( const entity_link_t& e, std::string& name, std::string& path )
+    {
+        const std::size_t i = static_cast< std::size_t >( &e - links.data( ) );
+        name = names[ i ], path = paths[ i ];
+    };
+    const unsigned nv = c.next( );
+    value_t out;
+    int bad = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned preset = c.next( );
+        if ( preset == 0 )
+            out = value_t{ };
+        else if ( preset == 1 )
+            json_set_int( out, 7 );
+        for ( auto& l : links )
+            l.prev = nullptr, l.next = nullptr;
+        entity_repository_t r;
+        const unsigned no = c.next( );
+        for ( unsigned k = 0; k < no; ++k )
+            entity_repository_add( r, links[ c.next( ) ] );
+        entity_repository_tree( r, out, of );
+        const std::string want = c.str( );
+        std::string got;
+        vujb_dump( out, got );
+        if ( got != want && bad++ < 6 )
+            LOG_ERROR( "repository_tree vector %u (%u entities): dump differs (%u bytes, retail %u)", v, no,
+                       static_cast< unsigned >( got.size( ) ), static_cast< unsigned >( want.size( ) ) );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuEntityRepositoryImpl slot 13 matches retail (0x552960 0x564940 0x5649C0 0x4FCAB0): %u vectors over %u entities", nv, n );
+    else
+        LOG_ERROR( "repository_tree FAILED %d", bad );
+    return bad == 0;
+}
+
 // entity/repository.hxx vu_property_dtor / vu_entity_dtor against retail's 0x405260 / 0x500870 (case entity_dtors): fake
 // objects in one region, the region's words after and every call out in order.
 struct edt_check_memory_t
@@ -1523,6 +1580,203 @@ inline bool verify_entity_dtors( )
         LOG_SUCCESS( "VuProperty / VuEntity base dtors match retail (0x405260 0x500870 0x500E00 0x500DB0 0x515620 0x43CD80 0x43CD30 0x43CA10): %u vectors", n );
     else
         LOG_ERROR( "entity_dtors FAILED %d", bad );
+    return bad == 0;
+}
+
+// entity/repository.hxx vu_framework_delete against retail's component / plug / ref / project deleting dtors (case
+// framework_dtors): fake objects in one region; the region's words after and every call out in order.
+inline bool verify_framework_dtors( )
+{
+    logic_check_t c{ g_golden_fdt_words };
+    const unsigned n = c.next( );
+    const std::uint32_t base = c.next( );
+    const unsigned count = c.next( );
+    int bad = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = c.next( ), self = c.next( ), flags = c.next( );
+        edt_check_memory_t m;
+        m.base = base;
+        m.words.assign( count, 0u );
+        for ( unsigned k = c.next( ); k > 0; --k )
+        {
+            const unsigned i = c.next( );
+            m.words[ i ] = c.next( );
+        }
+        std::vector< std::uint32_t > after = m.words;
+        for ( unsigned k = c.next( ); k > 0; --k )
+        {
+            const unsigned i = c.next( );
+            after[ i ] = c.next( );
+        }
+        std::vector< std::vector< std::uint32_t > > want( c.next( ) );
+        for ( auto& e : want )
+        {
+            e.resize( c.next( ) );
+            for ( auto& x : e )
+                x = c.next( );
+        }
+        std::vector< std::vector< std::uint32_t > > got;
+        vu_dtor_hooks_t h;
+        h.free = [ & ]( std::uint32_t b ) { got.push_back( { 0u, b } ); };
+        h.call = [ & ]( std::uint32_t o, std::uint32_t slot, std::int64_t arg )
+        {
+            got.push_back( { 1u, o, slot, static_cast< std::uint32_t >( arg ) } );
+            if ( slot == 0 && arg < 0 )   // a weak reference's slot 0: unlinked from its target's +8 list (the case's stub does the same)
+                m[ m[ o + 8 ] + 8 ] = m[ o + 4 ];
+        };
+        h.asset_release = [ & ]( std::uint32_t a ) { got.push_back( { 2u, a } ); };
+        h.event_remove = [ & ]( std::uint32_t k, std::uint32_t val ) { got.push_back( { 3u, k, val } ); };
+        h.instigator_remove = [ & ]( std::uint32_t comp ) { got.push_back( { 4u, 0x30000000u + 0x20C0u, comp } ); };   // the case's g 0x759064
+        h.json_clear = [ & ]( std::uint32_t j ) { got.push_back( { 5u, j } ); };
+        h.aligned_free = [ & ]( std::uint32_t b ) { got.push_back( { 6u, b } ); };
+        bool ok = true;
+        if ( kind == 11 )   // VuScriptComponent slot 8 0x5042A0 (not a dtor; the case's appended vectors)
+            vu_script_component_snapshot( m, self );
+        else
+            ok = vu_framework_delete( m, static_cast< vu_framework_dtor_t >( kind ), self, flags, h );
+        const bool same = ok && m.words == after && got == want && !m.outside;
+        if ( !same && bad++ < 6 )
+            LOG_ERROR( "framework_dtors vector %u (kind %u): %s, memory %s, calls %s (%u, retail %u)", v, kind, ok ? "ended" : "UNKNOWN",
+                       m.words == after ? "ok" : "differs", got == want ? "ok" : "differ", static_cast< unsigned >( got.size( ) ),
+                       static_cast< unsigned >( want.size( ) ) );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "the framework dtors match retail (0x423770 0x4268F0/0x539610 0x50B960/0x50B990 0x531D90/0x531DC0 0x534280/0x5342B0 "
+                     "0x503B70/0x503BA0 0x4052E0/0x502180/0x502340 0x542680/0x5426B0/0x504980 0x4B4330/0x4B4290 0x5EFA30 0x4032A0 0x5CE980 0x5EB000 0x5F4AB0/0x5F4AE0 0x5D6F50/0x5DB430/0x59A300; VuScriptComponent "
+                     "slot 8 0x5042A0): %u vectors", n );
+    else
+        LOG_ERROR( "framework_dtors FAILED %d", bad );
+    return bad == 0;
+}
+
+// entity/broadcast.hxx against retail's VuEventManager (case event_manager): the same op sequence on the model; per op
+// the calls out in order (fires with their params, locks, the platform calls), the queue (record words; the real-time
+// word's low byte only - its other three bytes are the resize's fill, never written), the subscriber sets.
+#include <workspace/core/entity/broadcast.hxx>
+
+inline bool verify_event_manager( )
+{
+    logic_check_t c{ g_golden_evm_words };
+    const std::uint32_t self = c.next( );
+    const unsigned n = c.next( );
+    event_manager_t m;
+    std::uint32_t mutex = 0;
+    std::vector< std::vector< std::uint32_t > > got;
+    float real = 0.0f;
+    event_manager_hooks_t h;
+    h.fire = [ & ]( std::uint32_t handler, const std::uint32_t* p )
+    {
+        std::vector< std::uint32_t > e{ 1u, handler };
+        e.insert( e.end( ), p, p + 33 );
+        got.push_back( e );
+    };
+    h.real_delta = [ & ]( ) { return real; };
+    h.lock = [ & ]( bool on ) { got.push_back( { on ? 6u : 7u, mutex } ); };
+    int bad = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = c.next( );
+        std::vector< std::uint32_t > args( c.next( ) );
+        for ( auto& a : args )
+            a = c.next( );
+        const std::string name = c.str( );
+        std::vector< std::uint32_t > params( c.next( ) );
+        for ( auto& p : params )
+            p = c.next( );
+        params.resize( 33 );
+        const std::uint32_t poke = c.next( ), poke_delay = c.next( ), poke_handler = c.next( ), real_bits = c.next( ), g = c.next( );
+        std::memcpy( &real, &real_bits, 4 );
+        got.clear( );
+        switch ( kind )
+        {
+        case 0:
+            event_manager_init( self, mutex,
+                                [ & ]( std::uint32_t vt, std::uint32_t s, std::uint32_t fn, const char* phase )
+                                {
+                                    std::vector< std::uint32_t > e{ 2u, vt, s, fn, 0u };
+                                    for ( const char* q = phase; *q; ++q )
+                                        e.push_back( static_cast< unsigned char >( *q ) );
+                                    got.push_back( e );
+                                },
+                                [ & ]( ) { got.push_back( { 4u } ); return 0x4D555458u; } );
+            break;
+        case 1: event_manager_subscribe( m, event_hash( name.c_str( ) ), args[ 0 ] ); break;
+        case 2: event_manager_broadcast( m, args[ 0 ], params.data( ), h ); break;
+        case 3: event_manager_broadcast( m, name.c_str( ), params.data( ), h ); break;
+        case 4:
+        {
+            float f;
+            std::memcpy( &f, &args[ 0 ], 4 );
+            event_manager_queue( m, f, ( args[ 1 ] & 0xFFu ) != 0, name.c_str( ), params.data( ), h );   // retail's bool: the word's low byte
+            if ( poke & 1u )
+                std::memcpy( &m.queue.back( ).delay, &poke_delay, 4 );
+            if ( poke & 2u )
+                m.queue.back( ).handler = poke_handler;
+            break;
+        }
+        case 5:
+        {
+            float dt;
+            std::memcpy( &dt, &args[ 0 ], 4 );
+            event_manager_tick( m, dt, h );
+            break;
+        }
+        case 6: event_manager_remove( m, args[ 0 ], args[ 1 ], h ); break;
+        default:
+            event_manager_release( self, mutex, [ & ]( std::uint32_t s ) { got.push_back( { 3u, s } ); },
+                                   [ & ]( std::uint32_t x ) { got.push_back( { 5u, x } ); } );
+            break;
+        }
+        std::vector< std::vector< std::uint32_t > > want( c.next( ) );
+        for ( auto& e : want )
+        {
+            e.resize( c.next( ) );
+            for ( auto& x : e )
+                x = c.next( );
+        }
+        bool same = got == want && ( kind != 7 || g == 0 );
+        const unsigned nq = c.next( );
+        same = nq == m.queue.size( ) && same;
+        for ( unsigned q = 0; q < nq; ++q )
+        {
+            std::uint32_t w[ 37 ];
+            for ( auto& x : w )
+                x = c.next( );
+            if ( q >= m.queue.size( ) )
+                continue;
+            const event_record_t& r = m.queue[ q ];
+            std::uint32_t delay;
+            std::memcpy( &delay, &r.delay, 4 );
+            same = same && w[ 0 ] == r.handler && w[ 1 ] == delay && ( w[ 2 ] & 0xFFu ) == r.real_time && w[ 3 ] == r.hash
+                && std::memcmp( w + 4, r.params, sizeof( r.params ) ) == 0;
+        }
+        const unsigned ns = c.next( );
+        same = ns == m.subscribers.size( ) && same;
+        auto it = m.subscribers.begin( );
+        for ( unsigned s = 0; s < ns; ++s )
+        {
+            std::vector< std::uint32_t > e( c.next( ) );
+            for ( auto& x : e )
+                x = c.next( );
+            if ( it == m.subscribers.end( ) )
+            {
+                same = false;
+                continue;
+            }
+            std::vector< std::uint32_t > mine{ it->first };
+            mine.insert( mine.end( ), it->second.begin( ), it->second.end( ) );
+            same = same && mine == e;
+            ++it;
+        }
+        if ( !same && bad++ < 6 )
+            LOG_ERROR( "event_manager op %u (kind %u) differs: calls %s (%u, retail %u), queue %u (retail %u)", v, kind, got == want ? "ok" : "differ",
+                       static_cast< unsigned >( got.size( ) ), static_cast< unsigned >( want.size( ) ), static_cast< unsigned >( m.queue.size( ) ), nq );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuEventManager matches retail (0x505690 0x505650 0x505720 0x5057E0 0x505950 0x5055C0 0x505610 0x505430): %u ops", n );
+    else
+        LOG_ERROR( "event_manager FAILED %d", bad );
     return bad == 0;
 }
 

@@ -2744,8 +2744,11 @@ inline bool verify_water_all( )
     ok = verify_json_text( ) && ok;
     ok = verify_json_member( ) && ok;
     ok = verify_entity_repository( ) && ok;
+    ok = verify_repository_tree( ) && ok;
     ok = verify_tick_slots( ) && ok;
     ok = verify_entity_dtors( ) && ok;
+    ok = verify_framework_dtors( ) && ok;
+    ok = verify_event_manager( ) && ok;
     ok = verify_voice_over( ) && ok;
     ok = verify_audio_emitter( ) && ok;
     ok = verify_force_affector( ) && ok;
