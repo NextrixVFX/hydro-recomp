@@ -3210,5 +3210,6 @@ inline bool verify_race_all( )
     ok = verify_thunk_exclude( ) && ok;
     ok = verify_boat_contact( ) && ok;
     ok = verify_piece_fluid( ) && ok;
+    ok = verify_piece_dtor( ) && ok;
     return ok;
 }

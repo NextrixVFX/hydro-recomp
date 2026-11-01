@@ -142,3 +142,66 @@ inline bool piece_fluid_step( fluid_solver_t& s, std::uint8_t* piece, std::uint8
     state_put_f( body, 0x1C8, sse_add( sse_mul( state_f( body, 0x268 ), tz ), state_f( body, 0x1C8 ) ) );
     return true;
 }
+// The dtor body 0x412B00 (thiscall piece; plain ret - reached through the
+// scalar-deleting dtor 0x412A70), on the piece's image: the two VuPiece
+// vtables (+0 0x738088, +4 0x73807C); when +0x20C: g_vudynamicsimpl vt+0x40
+// (the body word +0x208) and vt+0x30 (piece + 4), +0x20C = 0; when +0x228:
+// g_vupfximpl vt+0x2C (it); +0x228 = 0; g_vuassetfactoryimpl vt+0x24 (+0x1A0,
+// even 0); +0x200's / +0x204's slot 0 (1) and +0x208's slot 1 (1) when set;
+// the std::string +0x210 (operator delete of +0x210 when its capacity +0x224
+// >= 16 - `jb`), +0x224 = 15, +0x220 = 0, byte +0x210 = 0; +0x180 =
+// btStridingMeshInterface's vtable 0x738128; the solver's asset (+0x78) to the
+// asset factory's vt+0x24 when set; operator delete[] (+0xAC); _aligned_free
+// (+0xBC), (+0xB0); +0x68 = VuModelSkin's vtable 0x738068 and its dtor
+// 0x521E40 (piece + 0x68); _aligned_free (+0x6C); +0x48 =
+// VuStaticModelInstance's 0x74CDAC and its dtor 0x520000 (piece + 0x48), then
+// VuModelInstance's 0x7505F8; +0 = btMotionState's 0x7380B4. Every callee is
+// a hook (the dynamics, pfx and asset systems, the owned objects' dtors, the
+// allocator, the model dtors - not recreated), told in order: code, word.
+//   1 dynamics vt+0x40, 2 dynamics vt+0x30, 3 pfx vt+0x2C, 4 the asset factory's
+//   vt+0x24 (twice), 5 / 6 slot 0 of +0x200 / +0x204, 7 slot 1 of +0x208, 8
+//   operator delete, 10 operator delete[], 11 _aligned_free (three times), 13
+//   0x521E40, 15 0x520000.
+using piece_destroy_fn = void ( * )( void* user, int code, std::uint32_t word );
+
+inline void piece_destroy( std::uint8_t* p, std::uint32_t self, piece_destroy_fn hook, void* user )
+{
+    auto w = [ & ]( int at ) { std::uint32_t x; std::memcpy( &x, p + at, 4 ); return x; };
+    auto put = [ & ]( int at, std::uint32_t x ) { std::memcpy( p + at, &x, 4 ); };
+    put( 0, 0x738088u );
+    put( 4, 0x73807Cu );
+    if ( p[ 0x20C ] )
+    {
+        hook( user, 1, w( 0x208 ) );
+        hook( user, 2, self + 4 );
+        p[ 0x20C ] = 0;
+    }
+    if ( w( 0x228 ) )
+        hook( user, 3, w( 0x228 ) );
+    put( 0x228, 0 );
+    hook( user, 4, w( 0x1A0 ) );
+    if ( w( 0x200 ) )
+        hook( user, 5, w( 0x200 ) );
+    if ( w( 0x204 ) )
+        hook( user, 6, w( 0x204 ) );
+    if ( w( 0x208 ) )
+        hook( user, 7, w( 0x208 ) );
+    if ( w( 0x224 ) >= 16u )
+        hook( user, 8, w( 0x210 ) );
+    put( 0x224, 15 );
+    put( 0x220, 0 );
+    p[ 0x210 ] = 0;
+    put( 0x180, 0x738128u );
+    if ( w( 0x78 ) )
+        hook( user, 4, w( 0x78 ) );
+    hook( user, 10, w( 0xAC ) );
+    hook( user, 11, w( 0xBC ) );
+    hook( user, 11, w( 0xB0 ) );
+    put( 0x68, 0x738068u );
+    hook( user, 13, self + 0x68 );
+    hook( user, 11, w( 0x6C ) );
+    put( 0x48, 0x74CDACu );
+    hook( user, 15, self + 0x48 );
+    put( 0x48, 0x7505F8u );
+    put( 0, 0x7380B4u );
+}

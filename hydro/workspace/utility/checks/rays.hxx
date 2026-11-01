@@ -504,3 +504,40 @@ inline bool verify_piece_fluid( )
     LOG_ERROR( "piece_fluid FAILED %d of %d steps", failed, static_cast< int >( g_golden_piece_fluid_count ) );
     return false;
 }
+// verify_piece_dtor: piece_destroy (boat damage.hxx: 0x412B00) on the case's
+// images - the hook log in order and the image after.
+inline bool verify_piece_dtor( )
+{
+    const unsigned* g = g_golden_piece_dtor_words;
+    const unsigned nv = *g++;
+    int failed = 0, calls = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned self = *g++;
+        std::vector< std::uint8_t > img( 0x230 );
+        std::memcpy( img.data( ), g, 0x230 );
+        g += 0x230 / 4;
+        const unsigned* after = g;
+        g += 0x230 / 4;
+        const unsigned n = *g++;
+        std::vector< unsigned > want( g, g + 2 * n );
+        g += 2 * n;
+        std::vector< unsigned > got;
+        piece_destroy( img.data( ), self, []( void* u, int code, std::uint32_t word ) {
+            auto& l = *static_cast< std::vector< unsigned >* >( u );
+            l.push_back( static_cast< unsigned >( code ) );
+            l.push_back( word );
+        }, &got );
+        calls += static_cast< int >( n );
+        if ( ( got != want || std::memcmp( img.data( ), after, 0x230 ) != 0 ) && ++failed <= 4 )
+            LOG_ERROR( "piece_dtor %u: %d calls (retail %d), image %s", v, static_cast< int >( got.size( ) / 2 ), static_cast< int >( n ),
+                       std::memcmp( img.data( ), after, 0x230 ) == 0 ? "same" : "differs" );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuPiece's dtor body 0x412B00 (piece_destroy, its callees hooks) matches retail: %u images, %d hook calls", nv, calls );
+        return true;
+    }
+    LOG_ERROR( "piece_dtor FAILED %d of %u", failed, nv );
+    return false;
+}
