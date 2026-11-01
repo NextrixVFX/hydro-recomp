@@ -18,10 +18,10 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 1625 | 709315 |
-| callee | 977 | 206802 |
-| cited | 351 | 124338 |
-| absent | 5685 | 1185805 |
+| verified | 1636 | 712320 |
+| callee | 979 | 206924 |
+| cited | 358 | 124123 |
+| absent | 5665 | 1182893 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -30,11 +30,11 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 
 | subsystem | functions | verified | callee | cited | absent | verified bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| unattributed | 1845 | 383 | 196 | 84 | 1182 | 244221 of 695394 |
+| unattributed | 1845 | 392 | 196 | 91 | 1166 | 245954 of 695394 |
 | physics (Bullet) | 646 | 259 | 90 | 46 | 251 | 100840 of 256657 |
 | entity / component / script framework | 1094 | 160 | 174 | 44 | 716 | 54609 of 207438 |
 | HUD / UI / fonts | 648 | 81 | 137 | 12 | 418 | 50859 of 184315 |
-| game modes / race | 766 | 73 | 57 | 22 | 614 | 35156 of 179957 |
+| game modes / race | 766 | 75 | 59 | 22 | 610 | 36428 of 179957 |
 | rendering / gfx | 552 | 78 | 43 | 34 | 397 | 28572 of 126915 |
 | water | 325 | 170 | 68 | 33 | 54 | 58200 of 96416 |
 | boat | 264 | 163 | 40 | 18 | 43 | 67085 of 87400 |
@@ -58,7 +58,7 @@ Over-approximate (a referenced vtable brings every slot) and under-approximate (
 
 | tier | functions | verified | callee | cited | absent | runtime / STL / thunk | platform layer | game + engine logic not verified |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| race | 4905 | 1401 | 681 | 326 | 2497 | 68 | 610 | 2919 |
+| race | 4905 | 1412 | 683 | 333 | 2477 | 68 | 610 | 2908 |
 | game | 2431 | 222 | 295 | 23 | 1891 | 77 | 313 | 1824 |
 | service | 452 | 0 | 0 | 0 | 452 | 45 | 98 | 309 |
 | dead | 850 | 2 | 1 | 2 | 845 | 61 | 126 | 661 |
