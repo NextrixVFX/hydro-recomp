@@ -1949,6 +1949,90 @@ inline bool verify_surface_table( )
     return false;
 }
 
+// VuPowerUpHiddenPackageEntity slots 6 / 13 / 15 against retail (oracle case hidden_package): the name from the
+// long name, the enable gate, the apply (driver answers RUN in retail; boat_driver_kind's here) - +0x138 / +0x128,
+// the return and the hooks' order and arguments, the OnPackageFound params word for word.
+inline bool verify_hidden_package( )
+{
+    const unsigned* g = g_golden_hidden_package_words;
+    auto text = [ &g ]( ) {
+        const unsigned n = *g++;
+        std::string s( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        return s;
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned slot = *g++, kind = *g++;
+        const std::string name = text( ), long_name = text( ), level = text( );
+        const unsigned found = *g++, first = *g++, a = *g++, b = *g++, b128 = *g++, b129 = *g++, ret = *g++;
+        const std::string after_name = text( );
+        const unsigned after128 = *g++;
+        std::vector< std::vector< unsigned > > glog( *g++ );
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        powerup_t p;
+        p.in_world = static_cast< std::uint8_t >( b128 );
+        p.active = static_cast< std::uint8_t >( b129 );
+        std::string package = name;
+        std::vector< std::vector< unsigned > > log;
+        unsigned mine_ret = 0;
+        powerup_package_hooks_t h;
+        h.is_found = [ & ]( const std::string& n ) { log.push_back( { 3u, n == name ? 1u : 0u } ); return found != 0; };
+        h.set_found = [ & ]( const std::string& n ) { log.push_back( { 2u, n == name ? 1u : 0u } ); };
+        h.level = [ & ]( ) { return level; };
+        h.first = [ & ]( const std::string& l, std::int32_t& x ) {
+            log.push_back( { 4u, l == level ? 1u : 0u, static_cast< unsigned >( x ) } );
+            x = static_cast< std::int32_t >( a );
+            return first != 0;
+        };
+        h.second = [ & ]( const std::string& l, std::int32_t& x ) {
+            log.push_back( { 5u, l == level ? 1u : 0u } );
+            x = static_cast< std::int32_t >( b );
+        };
+        h.broadcast = [ & ]( const std::vector< std::uint32_t >& params ) {
+            std::vector< unsigned > e = { 6u, 1u, static_cast< unsigned >( 4 * params.size( ) ) };
+            e.insert( e.end( ), params.begin( ), params.end( ) );
+            log.push_back( e );
+        };
+        h.remove_from_world = [ & ]( ) { log.push_back( { 8u } ); };
+        if ( slot == 6 )
+        {
+            package = powerup_package_name( long_name );
+            log.push_back( { 1u } );
+        }
+        else if ( slot == 13 )
+        {
+            powerup_world_hooks_t w;
+            w.create_pfx = [ & ]( const std::string&, std::uint8_t, float ) { log.push_back( { 7u } ); return 0u; };
+            w.add_body = [ & ]( ) { log.push_back( { 9u } ); };
+            powerup_package_enable( p, package, h, w );
+        }
+        else
+        {
+            boat_driver_kind_t k;
+            const bool human = boat_driver_kind( kind, k ) && k.human;
+            mine_ret = powerup_package_apply( true, human, package, h ) ? 1u : 0u;
+        }
+        const bool same = log == glog && package == after_name && p.in_world == after128 && mine_ret == ret;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "hidden_package vector %u (slot %u): \"%s\" (retail \"%s\"), %zu calls (%zu), return %u (%u)", v, slot, package.c_str( ),
+                       after_name.c_str( ), log.size( ), glog.size( ), mine_ret, ret );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuPowerUpHiddenPackageEntity slots 6 0x43DD20 / 13 0x43DE20 / 15 0x43DE80 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "hidden_package FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -1972,5 +2056,6 @@ inline bool verify_race_all( )
     ok = verify_trigger_apply( ) && ok;
     ok = verify_powerup_db( ) && ok;
     ok = verify_surface_table( ) && ok;
+    ok = verify_hidden_package( ) && ok;
     return ok;
 }

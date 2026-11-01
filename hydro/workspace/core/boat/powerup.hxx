@@ -507,3 +507,71 @@ inline bool powerup_trigger_apply( bool driver_30, bool driver_38, const std::fu
         fire( );
     return true;
 }
+// ---- VuPowerUpHiddenPackageEntity (create 0x43DC00, vtable 0x73AF5C) -------
+//
+// The base power-up (0x150 bytes) plus +0x138 the package's name (a
+// std::string, "TestPackage" at creation). The hidden package manager
+// g_vuhiddenpackagemanagerimpl 0x758FD0 is the profile's progress (a
+// platform service: hooks).
+
+// Slot 6 0x43DD20 (gameInitialize): the entity's long name (0x500BF0), its
+// first '/' (0x43E030: std::string::find of one char from 0 - the position
+// argument is ignored; npos when absent or empty), the name = the long
+// name from that position + 1 (0x43DFF0 substr; npos + 1 = 0: the whole
+// name) into +0x138; then the base gameInitialize 0x43B9D0.
+inline std::string powerup_package_name( const std::string& long_name )
+{
+    const std::size_t slash = long_name.find( '/' );
+    return long_name.substr( slash == std::string::npos ? 0 : slash + 1 );
+}
+
+struct powerup_package_hooks_t
+{
+    std::function< bool( const std::string& name ) > is_found;   // manager vt+0x1C
+    std::function< void( const std::string& name ) > set_found;  // manager vt+0x18
+    std::function< std::string( ) > level;                       // 0x4D3410 on g_vugameutil 0x758FF8
+    std::function< bool( const std::string& level, std::int32_t& value ) > first;    // manager vt+0x20
+    std::function< void( const std::string& level, std::int32_t& value ) > second;  // manager vt+0x24
+    // g_vueventmanager 0x759028's 0x505650("OnPackageFound", params): the
+    // VuParams bytes (0x434E50 twice: tag 0 = int, then the value).
+    std::function< void( const std::vector< std::uint32_t >& params ) > broadcast;
+    std::function< void( ) > remove_from_world;                  // vt+0x30 (slot 12)
+};
+
+// Slot 13 0x43DE20 (the "Enable" plug): not when the manager already has
+// the package (vt+0x1C(+0x138) true); else the base slot 13 inlined
+// (powerup_add_to_world).
+inline void powerup_package_enable( powerup_t& p, const std::string& name, const powerup_package_hooks_t& package,
+    const powerup_world_hooks_t& hooks )
+{
+    if ( package.is_found && package.is_found( name ) )
+        return;
+    powerup_add_to_world( p, hooks );
+}
+
+// Slot 15 0x43DE80 (thiscall boat; retn 4): the boat's driver vt+0x38 and
+// then vt+0x30 (the local human) - either false: 0. Else the package marked
+// found (vt+0x18), the level's name (0x4D3410), a = 0 and vt+0x20(level, a);
+// when it answers true: b from vt+0x24(level, b) (its initial value is
+// stack the function never writes: UNKNOWN - 0 here), the params (0, b, 0,
+// a) broadcast as "OnPackageFound"; then slot 12; 1.
+inline bool powerup_package_apply( bool driver_38, bool driver_30, const std::string& name, const powerup_package_hooks_t& hooks )
+{
+    if ( !driver_38 || !driver_30 )
+        return false;
+    if ( hooks.set_found )
+        hooks.set_found( name );
+    const std::string level = hooks.level ? hooks.level( ) : std::string( );
+    std::int32_t a = 0;
+    if ( hooks.first && hooks.first( level, a ) )
+    {
+        std::int32_t b = 0;
+        if ( hooks.second )
+            hooks.second( level, b );
+        if ( hooks.broadcast )
+            hooks.broadcast( { 0u, static_cast< std::uint32_t >( b ), 0u, static_cast< std::uint32_t >( a ) } );
+    }
+    if ( hooks.remove_from_world )
+        hooks.remove_from_world( );
+    return true;
+}
