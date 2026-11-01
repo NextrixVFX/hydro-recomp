@@ -2,6 +2,7 @@
 
 #include <workspace/core/collision/raytest.hxx>
 #include <workspace/core/boat/rays.hxx>
+#include <workspace/core/boat/effects.hxx>
 
 #include <array>
 #include <cstring>
@@ -763,5 +764,144 @@ inline bool verify_piece_dtor( )
         return true;
     }
     LOG_ERROR( "piece_dtor FAILED %d of %u", failed, nv );
+    return false;
+}
+// verify_boat_pfx (boat batch 17): the pfx controller tick 0x419700
+// (boat/effects.hxx boat_pfx_tick) on the oracle's fakes (cases/boat.py
+// boat_pfx): the call log (every VuPfxSystemInstance slot with its argument
+// words, and 0x41E2E0's xmm1 / xmm2) in order, the on bytes, the aabb's x y z
+// lanes - and its w lanes where no record merged (a merge leaves 0x41A790's
+// stale stack there: UNKNOWN).
+struct boat_pfx_check_t
+{
+    std::vector< unsigned > log;
+    std::vector< const unsigned* > aabbs;   // by system handle - 0x100
+};
+
+inline void boat_pfx_check_put( void* u, unsigned slot, std::uint32_t s, const void* words, unsigned n )
+{
+    auto& l = static_cast< boat_pfx_check_t* >( u )->log;
+    l.push_back( slot );
+    l.push_back( s - 0x100u );
+    l.push_back( n );
+    const unsigned* w = static_cast< const unsigned* >( words );
+    if ( n )
+        l.insert( l.end( ), w, w + n );
+}
+
+inline bool verify_boat_pfx( )
+{
+    int failed = 0, calls = 0, merges = 0, starts = 0, stops = 0, raises = 0;
+    for ( std::size_t v = 0; v < g_golden_boat_pfx_count; ++v )
+    {
+        const unsigned* g = g_golden_boat_pfx_words + g_golden_boat_pfx_offsets[ v ];
+        auto f = [ & ]( ) { float x; std::memcpy( &x, g++, 4 ); return x; };
+        const float dt = f( );
+        boat_pfx_boat_t b;
+        b.throttle = f( );
+        b.d570 = f( );
+        boat_pfx_t c;
+        for ( auto& x : c.on )
+            x = static_cast< std::uint8_t >( *g++ );
+        const bool extra = *g++ != 0;
+        const unsigned* vel = g;
+        g += 4;
+        b.velocity = vel;
+        b.b32c = static_cast< std::uint8_t >( *g++ );
+        b.f400 = *g++;
+        b.f404 = *g++;
+        b.f2b4 = f( );
+        std::uint8_t colour[ 8 ];
+        std::memcpy( colour, g, 8 );
+        g += 2;
+        b.colour = colour;
+        float off[ 3 ], world[ 16 ];
+        for ( float& x : off )
+            x = f( );
+        for ( float& x : world )
+            x = f( );
+        b.offset = off;
+        b.world = world;
+        b.bone_count = static_cast< int >( *g++ );
+        std::vector< float > bones( 16 * static_cast< std::size_t >( b.bone_count ) );
+        for ( float& x : bones )
+            x = f( );
+        b.bones = bones.empty( ) ? nullptr : bones.data( );
+        boat_pfx_check_t k;
+        for ( int li = 0; li < 7; ++li )
+        {
+            const unsigned n = *g++;
+            for ( unsigned ri = 0; ri < n; ++ri )
+            {
+                boat_pfx_record_t r;
+                r.system = 0x100u + static_cast< unsigned >( li ) * 16u + ri;
+                r.bone = static_cast< std::int32_t >( *g++ );
+                for ( float& x : r.local )
+                    x = f( );
+                if ( k.aabbs.size( ) <= r.system - 0x100u )
+                    k.aabbs.resize( r.system - 0x100u + 1, nullptr );
+                k.aabbs[ r.system - 0x100u ] = g;
+                g += 8;
+                c.list[ li ].push_back( r );
+            }
+        }
+        if ( extra )
+            c.extra = 0x170u;
+        const unsigned nlog = *g++;
+        const unsigned* want = g;
+        for ( unsigned e = 0; e < nlog; ++e )
+        {
+            const unsigned slot = g[ 0 ];
+            starts += slot == 11;
+            stops += slot == 12;
+            raises += slot == 100;
+            g += 3 + g[ 2 ];
+        }
+        const std::vector< unsigned > want_log( want, g );
+        const unsigned* after = g;
+        boat_pfx_ops_t o;
+        o.user = &k;
+        // the oracle logs 4 words at slot 0's pointer (the slot itself reads 3)
+        o.set_position = []( void* u, std::uint32_t s, const float* p ) { boat_pfx_check_put( u, 0, s, p, 4 ); };
+        o.set_matrix = []( void* u, std::uint32_t s, const float* m ) { boat_pfx_check_put( u, 2, s, m, 16 ); };
+        o.set_velocity = []( void* u, std::uint32_t s, const std::uint32_t* w ) { boat_pfx_check_put( u, 3, s, w, 4 ); };
+        o.set_color = []( void* u, std::uint32_t s, const float* c4 ) { boat_pfx_check_put( u, 5, s, c4, 4 ); };
+        o.aabb = []( void* u, std::uint32_t s ) -> const std::uint32_t* {
+            boat_pfx_check_put( u, 7, s, nullptr, 0 );
+            return static_cast< boat_pfx_check_t* >( u )->aabbs[ s - 0x100u ];
+        };
+        o.start = []( void* u, std::uint32_t s ) { boat_pfx_check_put( u, 11, s, nullptr, 0 ); };
+        o.stop = []( void* u, std::uint32_t s, bool immediate ) {
+            const unsigned w = immediate ? 1u : 0u;
+            boat_pfx_check_put( u, 12, s, &w, 1 );
+        };
+        o.tick = []( void* u, std::uint32_t s, float t ) { boat_pfx_check_put( u, 13, s, &t, 1 ); };
+        o.raise = []( void* u, float a, float bb ) {
+            const float w[ 2 ] = { a, bb };
+            boat_pfx_check_put( u, 100, 0x100u, w, 2 );
+        };
+        const bool ran = boat_pfx_tick( c, b, dt, o );
+        bool same = ran && k.log == want_log;
+        for ( int i = 0; i < 5; ++i )
+            same = same && c.on[ i ] == after[ i ];
+        for ( int i = 0; i < 8; ++i )
+            if ( ( i != 3 && i != 7 ) || !c.aabb_w_stale )
+                same = same && c.aabb[ i ] == after[ 5 + i ];
+        merges += c.aabb_w_stale ? 1 : 0;
+        calls += static_cast< int >( nlog );
+        if ( !same && ++failed <= 4 )
+            LOG_ERROR( "boat_pfx %u: ran %d, %d log words (retail %d), on %d%d%d%d%d (retail %u%u%u%u%u), aabb x 0x%08X (retail 0x%08X)",
+                       static_cast< unsigned >( v ), ran ? 1 : 0, static_cast< int >( k.log.size( ) ), static_cast< int >( want_log.size( ) ),
+                       c.on[ 0 ], c.on[ 1 ], c.on[ 2 ], c.on[ 3 ], c.on[ 4 ], after[ 0 ], after[ 1 ], after[ 2 ], after[ 3 ], after[ 4 ],
+                       c.aabb[ 0 ], after[ 5 ] );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the boat's pfx controller tick 0x419700 (boat_pfx_tick: 0x41ABE0 / 0x41AC50 / 0x41AAD0 / 0x41AB70 / 0x41A790) "
+                     "matches retail: %d ticks, %d calls (%d starts, %d stops, %d 0x41E2E0), %d with a merged aabb",
+                     static_cast< int >( g_golden_boat_pfx_count ), calls, starts, stops, raises, merges );
+        return true;
+    }
+    LOG_ERROR( "boat_pfx FAILED %d of %d", failed, static_cast< int >( g_golden_boat_pfx_count ) );
     return false;
 }
