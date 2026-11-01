@@ -5,7 +5,9 @@
 #include <workspace/core/world/background.hxx>
 #include <workspace/core/world/action.hxx>
 #include <workspace/core/world/mine.hxx>
+#include <workspace/core/world/rules.hxx>
 
+#include <algorithm>
 #include <cstdio>
 
 // The world area's second checks file (checks/world.hxx is at its size limit): the race session's
@@ -515,9 +517,180 @@ inline bool verify_breakable_contact( )
     return failed == 0;
 }
 
+// The canonical text of a tree, as oracle case results_writer prints retail's containers: n null, i / f / b / l the
+// payload in hex (an int, float bits, the bool byte, an int64), s<len>:<text>, [..] an array, {key=..} a map in key
+// order (std::map's), t<tag> anything else.
+inline std::string race_results_canonical( const value_t& v )
+{
+    char t[ 32 ];
+    switch ( v.tag )
+    {
+    case 0: return "n";
+    case 1: std::snprintf( t, sizeof( t ), "i%X", static_cast< unsigned >( v.integer ) ); return t;
+    case 2:
+    {
+        std::uint32_t w;
+        std::memcpy( &w, &v.real, 4 );
+        std::snprintf( t, sizeof( t ), "f%X", w );
+        return t;
+    }
+    case 3: std::snprintf( t, sizeof( t ), "b%X", static_cast< unsigned >( v.integer & 0xFF ) ); return t;
+    case 4: return "s" + std::to_string( v.text.size( ) ) + ":" + v.text;
+    case 5:
+    {
+        std::string s = "[";
+        for ( std::size_t k = 0; k < v.list.size( ); ++k )
+            s += ( k ? "," : "" ) + race_results_canonical( v.list[ k ] );
+        return s + "]";
+    }
+    case 6:
+    {
+        std::vector< const std::pair< std::string, value_t >* > fields;
+        for ( const auto& f : v.object )
+            fields.push_back( &f );
+        std::sort( fields.begin( ), fields.end( ), [ ]( const auto* a, const auto* b ) { return a->first < b->first; } );
+        std::string s = "{";
+        for ( std::size_t k = 0; k < fields.size( ); ++k )
+            s += ( k ? "," : "" ) + std::string( "s" ) + std::to_string( fields[ k ]->first.size( ) ) + ":" + fields[ k ]->first + "=" +
+                 race_results_canonical( fields[ k ]->second );
+        return s + "}";
+    }
+    case 7: std::snprintf( t, sizeof( t ), "l%llX", static_cast< unsigned long long >( v.int64 ) ); return t;
+    default: return "t" + std::to_string( v.tag );
+    }
+}
+
+inline std::string race_results_unhex( const char* h )
+{
+    std::string s;
+    for ( ; h[ 0 ] && h[ 1 ]; h += 2 )
+    {
+        const auto nib = [ ]( char c ) { return c <= '9' ? c - '0' : ( c | 0x20 ) - 'a' + 10; };
+        s.push_back( static_cast< char >( nib( h[ 0 ] ) * 16 + nib( h[ 1 ] ) ) );
+    }
+    return s;
+}
+
+// race_game_write_results (world/rules.hxx) against retail's VuRaceGame slot 12 0x489C60 run whole (oracle case
+// results_writer): sessions of calls on one gameutil root (fresh; GameResults a string; GameResults.Table an int), each
+// boat's fields / texts (inline, heap, empty, an embedded NUL) / driver class (the five vtables' slots 12 / 14 through
+// boat_driver_of, and two fake (human, not local), (neither)); compared: every boat's place and the whole tree after.
+inline bool verify_race_results( )
+{
+    int failed = 0;
+    value_t root;
+    for ( std::size_t k = 0; k < g_golden_results_writer_count; ++k )
+    {
+        const golden_results_writer_call_t& want = g_golden_results_writer[ k ];
+        if ( want.first )
+        {
+            root = value_t{ };
+            if ( std::strcmp( want.pre, "string" ) == 0 )
+                ui_json_set_string( ui_json_child( root, "GameResults" ), "junk text" );
+            else if ( std::strcmp( want.pre, "table_int" ) == 0 )
+                race_results_set( ui_json_child( ui_json_child( root, "GameResults" ), "Table" ), 1, 77 );
+        }
+        std::vector< std::vector< std::uint8_t > > images( static_cast< std::size_t >( want.nb ), std::vector< std::uint8_t >( 0x520, 0 ) );
+        std::vector< race_rules_boat_t > boats( static_cast< std::size_t >( want.nb ) );
+        std::vector< race_results_entry_t > entries( static_cast< std::size_t >( want.nb ) );
+        race_rules_game_t g;
+        g.circuit = static_cast< std::uint8_t >( want.circuit );
+        static const std::uint32_t k_vt[ 5 ] = { 0x737B5Cu, 0x737F44u, 0x737CDCu, 0x737C4Cu, 0x737DDCu };
+        for ( int b = 0; b < want.nb; ++b )
+        {
+            const golden_results_writer_boat_t& w = want.boats[ b ];
+            std::uint8_t* img = images[ static_cast< std::size_t >( b ) ].data( );
+            img[ 0x32F ] = static_cast< std::uint8_t >( w.finished );
+            std::memcpy( img + 0x4B4, &w.time, 4 );
+            std::memcpy( img + 0x4B8, &w.best, 4 );
+            std::memcpy( img + 0x4D4, &w.laps, 4 );
+            boats[ static_cast< std::size_t >( b ) ].boat = img;
+            g.order.push_back( want.order[ b ] );
+            race_results_entry_t& e = entries[ static_cast< std::size_t >( b ) ];
+            e.boat_class = race_results_unhex( w.cls );
+            e.boat_name = race_results_unhex( w.boat );
+            e.driver_name = race_results_unhex( w.name );
+            if ( w.kind < 5 )
+            {
+                const boat_driver_t d = boat_driver_of( k_vt[ w.kind ] );
+                e.human = d.slot[ 0 ], e.local = d.slot[ 2 ];
+            }
+            else
+                e.human = w.kind == 5, e.local = false;
+        }
+        float dt;
+        std::memcpy( &dt, &want.dt, 4 );
+        race_game_write_results( root, g, boats, entries, dt );
+        bool same = race_results_canonical( root ) == want.root;
+        for ( int b = 0; b < want.nb; ++b )
+            same = same && rules_i32( images[ static_cast< std::size_t >( b ) ].data( ), 0x4CC ) == want.places[ b ];
+        if ( !same && ++failed <= 4 )
+            LOG_ERROR( "race results call %d (session %d): ours %.300s\n retail %.300s", static_cast< int >( k ), want.session,
+                       race_results_canonical( root ).c_str( ), want.root );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "race_game_write_results matches VuRaceGame slot 12 0x489C60 on %d calls (the places and the whole GameResults tree)",
+                     static_cast< int >( g_golden_results_writer_count ) );
+    else
+        LOG_ERROR( "the race results writer FAILED on %d of %d calls", failed, static_cast< int >( g_golden_results_writer_count ) );
+    return failed == 0;
+}
+
+// race_rules_cheat_finish (world/rules.hxx) against retail's OnCheatFinish 0x483190 -> 0x4848C0 (oracle case
+// cheat_finish): 300 human lists of 0..4 boats - the six words of each boat after, and the AI manager's vt+0x30 calls.
+inline bool verify_cheat_finish( )
+{
+    static const int k_at[ 6 ] = { 0x308, 0x32F, 0x334, 0x4AC, 0x4B0, 0x4B8 };
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_cheat_finish_count; ++k )
+    {
+        const golden_cheat_finish_t& want = g_golden_cheat_finish[ k ];
+        std::vector< std::vector< std::uint8_t > > images( static_cast< std::size_t >( want.n ), std::vector< std::uint8_t >( 0x520, 0 ) );
+        std::vector< std::uint8_t* > humans;
+        for ( int b = 0; b < want.n; ++b )
+        {
+            std::uint8_t* img = images[ static_cast< std::size_t >( b ) ].data( );
+            for ( int i = 0; i < 6; ++i )
+            {
+                if ( i == 1 || i == 2 )
+                    img[ k_at[ i ] ] = static_cast< std::uint8_t >( want.in[ b ][ i ] );
+                else
+                    std::memcpy( img + k_at[ i ], &want.in[ b ][ i ], 4 );
+            }
+            humans.push_back( img );
+        }
+        std::vector< int > calls;
+        race_rules_cheat_finish( humans, [ & ]( std::size_t h ) { calls.push_back( static_cast< int >( h ) ); } );
+        bool same = static_cast< int >( calls.size( ) ) == want.calls;
+        for ( std::size_t c = 0; same && c < calls.size( ); ++c )
+            same = calls[ c ] == want.call[ c ];
+        for ( int b = 0; b < want.n; ++b )
+            for ( int i = 0; i < 6; ++i )
+            {
+                const std::uint8_t* img = images[ static_cast< std::size_t >( b ) ].data( );
+                std::uint32_t w = 0;
+                if ( i == 1 || i == 2 )
+                    w = img[ k_at[ i ] ];
+                else
+                    std::memcpy( &w, img + k_at[ i ], 4 );
+                same = same && w == want.out[ b ][ i ];
+            }
+        if ( !same && ++failed <= 6 )
+            LOG_ERROR( "cheat finish %d: %d boats - a word or the vt+0x30 calls differ", static_cast< int >( k ), want.n );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "race_rules_cheat_finish matches VuGame's OnCheatFinish 0x4848C0 on %d human lists, bit for bit",
+                     static_cast< int >( g_golden_cheat_finish_count ) );
+    else
+        LOG_ERROR( "the cheat finish FAILED on %d of %d lists", failed, static_cast< int >( g_golden_cheat_finish_count ) );
+    return failed == 0;
+}
+
 inline bool verify_session_all( )
 {
     bool ok = true;
+    ok = verify_cheat_finish( ) && ok;
+    ok = verify_race_results( ) && ok;
     ok = verify_breakable_properties( ) && ok;
     ok = verify_breakable_contact( ) && ok;
     ok = verify_mine_explode( ) && ok;

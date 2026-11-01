@@ -151,6 +151,10 @@ struct race_session_t
     bool active = false;
     std::string mode;
     value_t game_data;
+    // gameutil (g 0x758FF8) +0x50, the game-util root: its GameData (VuGame's boat load reads it) and the GameResults the
+    // results writer (VuRaceGame slot 12 0x489C60) fills - the UI's results table (core/ui/results.hxx) reads it.
+    value_t util;
+    bool results_logged = false;   // ours: the first GameResults write logged
     race_game_t game;
     race_start_game_t start;
     race_boat_manager_t manager;
@@ -1672,7 +1676,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     s.track = track;
 
     // VuGame's boat load 0x481CE0 + each boat's postLoad 0x41CFF0.
-    value_t util;
+    value_t& util = s.util;
     ui_json_child( util, "GameData" ) = s.game_data;
     const entity_registry_t registry = build_entity_registry( { } );
     race_load_hooks_t hooks;
@@ -1914,6 +1918,56 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         std::snprintf( text, sizeof( text ), "%s 0x%X - not recreated, not run (UNKNOWN)", what, address );
         race_unwired( s, text );
     };
+    // VuGame's Results tick 0x484280: the game's vt+0x30 = VuRaceGame slot 12 0x489C60 (rules.hxx race_game_write_results)
+    // into gameutil +0x50, then that root's "GameResults" type (0x4FBDF0: a non-map root or an absent name = the static
+    // null container, type 0).
+    s.rules.screen_hooks.game_results_tick = [ &s ]( float dt )
+    {
+        std::vector< race_results_entry_t > entries( s.rules_boats.size( ) );
+        for ( std::size_t k = 0; k < entries.size( ); ++k )
+        {
+            race_results_entry_t& e = entries[ k ];
+            if ( k < s.boats.size( ) )
+            {
+                const race_session_boat_t& b = *s.boats[ k ];
+                if ( b.driver )
+                {
+                    const auto it = b.driver->strings.find( 0x60 );
+                    e.driver_name = it == b.driver->strings.end( ) ? std::string( ) : it->second;
+                }
+                const auto cls = b.io.boat_strings.find( 0x160 ), id = b.io.boat_strings.find( 0x178 );
+                e.boat_class = cls == b.io.boat_strings.end( ) ? std::string( ) : cls->second;
+                e.boat_name = id == b.io.boat_strings.end( ) ? std::string( ) : id->second;
+            }
+            if ( k < s.start_boats.size( ) )
+            {
+                e.human = s.start_boats[ k ].cls.slot[ 0 ];   // vt+0x30
+                e.local = s.start_boats[ k ].cls.slot[ 2 ];   // vt+0x38
+            }
+        }
+        if ( !race_game_write_results( s.util, s.rules_game, s.rules_boats, entries, dt ) )
+            race_unwired( s, "0x489C60: the places over more than 32 boats or a negative place (UNKNOWN) - that row not written" );
+        if ( !s.results_logged )
+        {
+            s.results_logged = true;
+            const value_t& results = ui_json_find( s.util, "GameResults" );
+            const value_t& table = ui_json_find( results, "Table" );
+            LOG_INFO( "race: GameResults written (VuRaceGame slot 12 0x489C60) - CircuitRace %d, %d rows", ui_json_find( results, "CircuitRace" ).integer,
+                      table.tag == 5 ? static_cast< int >( table.list.size( ) ) : -1 );
+            for ( std::size_t k = 0; table.tag == 5 && k < table.list.size( ); ++k )
+            {
+                const value_t& row = table.list[ k ];
+                LOG_INFO( "race: results row %d: DriverName '%s' Boat '%s' BoatClass '%s' TotalTime %.3f BestLapTime %.3f LapsCompleted %d IsFinished %d "
+                          "IsHuman %d IsLocal %d PlayerUID %d%s",
+                          static_cast< int >( k ) + 1, ui_json_text( ui_json_find( row, "DriverName" ) ).c_str( ), ui_json_text( ui_json_find( row, "Boat" ) ).c_str( ),
+                          ui_json_text( ui_json_find( row, "BoatClass" ) ).c_str( ), ui_json_find( row, "TotalTime" ).real,
+                          ui_json_find( row, "BestLapTime" ).real, ui_json_find( row, "LapsCompleted" ).integer, ui_json_find( row, "IsFinished" ).integer,
+                          ui_json_find( row, "IsHuman" ).integer, ui_json_find( row, "IsLocal" ).integer, ui_json_find( row, "PlayerUID" ).integer,
+                          ui_json_find( row, "PadIndex" ).tag == 1 ? " PadIndex 0" : "" );
+            }
+        }
+    };
+    s.rules.screen_hooks.json_type = [ &s ]( const char* name ) { return static_cast< int >( ui_json_find( s.util, name ).tag ); };
     for ( std::size_t k = 0; k < s.game.boats.size( ) && k < s.start_boats.size( ); ++k )
     {
         race_rules_boat_t rb;

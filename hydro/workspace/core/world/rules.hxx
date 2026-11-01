@@ -4,6 +4,7 @@
 #include <workspace/core/boat/track.hxx>
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/entity/property.hxx>
+#include <workspace/core/ui/config.hxx>
 #include <workspace/core/ui/fsm.hxx>
 #include <workspace/core/ui/split.hxx>
 
@@ -526,6 +527,145 @@ inline void race_rules_post_exit( race_rules_t& r )
         return;
     if ( rules_i32( r.humans[ 0 ], 0x4CC ) == 0 && r.buoys == 0x1Fu )
         race_rules_platform( r, "achievement DingDong" );
+}
+
+// ---- VuRaceGame slot 12 0x489C60: the results writer (world batch 26) -----
+//
+// thiscall(game, float dt; retn 4), reached as the game's vt+0x30 from VuGame's
+// Results tick 0x484280 every frame of that state (case results_writer: retail's
+// run whole on its own containers). First 0x4831D0(dt) and 0x48AB20 (the clocks
+// and the places, as the Game / PostGame ticks begin), then gameutil (g
+// 0x758FF8) +0x50 ["GameResults"] (0x4FC090: the root made a map, the member
+// inserted): ["Table"] cleared (0x4FBB10); ["CircuitRace"] = tag 3, the game's
+// +0x44 byte as it is; ["Table"] resized to the boat count (0x4FBCD0: made an
+// array, then 0x4FC880 - shrunk or grown with nulls). Then per boat k (+0x38
+// list, +0x3C count): GameResults made a map again if it is not, its "Table"
+// (0x4FC970, a VuString key) made an array if it is not, grown to place + 1 when
+// the place +0x4CC is not below its size (signed jl), the row [place] - each
+// field below first makes the row a map (a cmp [row], 6 before every one), the
+// member cleared and set:
+//   DriverName   tag 4  the driver's (+0x220) +0x60 text up to its first NUL
+//   BestLapTime  tag 2  +0x4B8         LapsCompleted tag 1 +0x4D4
+//   TotalTime    tag 2  +0x4B4         IsLocal  tag 3 the driver's vt+0x38
+//   IsHuman      tag 3  vt+0x30        BoatClass tag 4 +0x160 up to its NUL
+//   IsFinished   tag 3  +0x32F         Boat     0x4FC640 +0x178 (strlen)
+//   PlayerUID    tag 1  0 (0x4FC090)   PadIndex tag 1 0 - only when vt+0x30
+//                                      and then vt+0x38 answer true
+// A negative place indexes before the array in retail: UNKNOWN, that row is not
+// written here (the places 0x48AB20 writes are 0 .. count - 1).
+struct race_results_entry_t
+{
+    std::string driver_name;   // the driver's +0x60 VuString
+    std::string boat_class;    // +0x160 (BoatDB "Class")
+    std::string boat_name;     // +0x178 (BoatDB "StringID")
+    bool human = false;        // the driver's vt+0x30 (slot 12)
+    bool local = false;        // the driver's vt+0x38 (slot 14)
+};
+
+inline void race_results_set( value_t& v, std::uint32_t tag, int integer )
+{
+    ui_json_clear( v );
+    v.tag = tag;
+    v.kind = value_t::kind_t::integer;
+    v.integer = integer;
+}
+
+inline void race_results_set_float( value_t& v, float f )
+{
+    ui_json_clear( v );
+    v.tag = 2;
+    v.kind = value_t::kind_t::real;
+    v.real = f;
+}
+
+// False when a path not recreated was reached (the sort over more than 32 boats,
+// a negative place): the rest still runs as retail's does.
+inline bool race_game_write_results( value_t& util_root, race_rules_game_t& g, std::vector< race_rules_boat_t >& boats,
+                                     const std::vector< race_results_entry_t >& entries, float dt )
+{
+    bool known = true;
+    race_rules_clocks( boats, dt );
+    if ( !race_rules_places( g, boats ) )
+        known = false;
+    value_t& results = ui_json_child( util_root, "GameResults" );
+    ui_json_clear( ui_json_child( results, "Table" ) );
+    race_results_set( ui_json_child( results, "CircuitRace" ), 3, g.circuit );
+    {
+        value_t& table = ui_json_child( results, "Table" );
+        if ( table.tag != 5 )
+        {
+            ui_json_clear( table );
+            table.tag = 5;
+            table.kind = value_t::kind_t::list;
+        }
+        table.list.resize( boats.size( ) );
+    }
+    for ( std::size_t k = 0; k < boats.size( ); ++k )
+    {
+        const std::uint8_t* b = boats[ k ].boat;
+        const race_results_entry_t& e = k < entries.size( ) ? entries[ k ] : race_results_entry_t{ };
+        value_t& table = ui_json_child( results, "Table" );
+        if ( table.tag != 5 )
+        {
+            ui_json_clear( table );
+            table.tag = 5;
+            table.kind = value_t::kind_t::list;
+        }
+        const std::int32_t place = rules_i32( b, 0x4CC );
+        if ( place < 0 )
+        {
+            known = false;
+            continue;
+        }
+        if ( static_cast< std::size_t >( place ) >= table.list.size( ) )
+            table.list.resize( static_cast< std::size_t >( place ) + 1 );
+        value_t& row = table.list[ static_cast< std::size_t >( place ) ];
+        const auto text = [ & ]( const char* key, const std::string& s )
+        {
+            value_t& v = ui_json_child( row, key );
+            ui_json_clear( v );
+            v.tag = 4;
+            v.kind = value_t::kind_t::text;
+            v.text = s.c_str( );
+        };
+        text( "DriverName", e.driver_name );
+        race_results_set_float( ui_json_child( row, "BestLapTime" ), rules_f( b, 0x4B8 ) );
+        race_results_set( ui_json_child( row, "LapsCompleted" ), 1, rules_i32( b, 0x4D4 ) );
+        race_results_set_float( ui_json_child( row, "TotalTime" ), rules_f( b, 0x4B4 ) );
+        race_results_set( ui_json_child( row, "IsLocal" ), 3, e.local ? 1 : 0 );
+        race_results_set( ui_json_child( row, "IsHuman" ), 3, e.human ? 1 : 0 );
+        text( "BoatClass", e.boat_class );
+        race_results_set( ui_json_child( row, "IsFinished" ), 3, b[ 0x32F ] );
+        ui_json_set_string( ui_json_child( row, "Boat" ), e.boat_name.c_str( ) );
+        race_results_set( ui_json_child( row, "PlayerUID" ), 1, 0 );
+        if ( e.human && e.local )
+            race_results_set( ui_json_child( row, "PadIndex" ), 1, 0 );
+    }
+    return known;
+}
+
+// ---- VuGame's OnCheatFinish 0x483190 -> 0x4848C0 (world batch 26; case cheat_finish)
+//
+// The event method (VuMethod1, registered by VuGame's base ctor 0x480BA0 - a
+// developer cheat's broadcast) calls 0x4848C0: for each human boat (the boat
+// manager g 0x758FB8 +0x24 list / +0x28 count) +0x308 += 1, +0x32F = 1, the AI
+// manager g 0x758F8C's vt+0x30(boat) (slot 12 0x4036C0: fleet_remove_driver),
+// +0x334 = 1, +0x4AC = the lap when it is above 2 else 2 (cmovg), +0x4B8 =
+// minss(+0x4B8, +0x4B0).
+inline void race_rules_cheat_finish( const std::vector< std::uint8_t* >& humans, const std::function< void( std::size_t human ) >& ai_remove )
+{
+    for ( std::size_t k = 0; k < humans.size( ); ++k )
+    {
+        std::uint8_t* b = humans[ k ];
+        rules_put_i32( b, 0x308, rules_i32( b, 0x308 ) + 1 );
+        b[ 0x32F ] = 1;
+        if ( ai_remove )
+            ai_remove( k );
+        b[ 0x334 ] = 1;
+        const std::int32_t lap = rules_i32( b, 0x4AC );
+        rules_put_i32( b, 0x4AC, lap > 2 ? lap : 2 );
+        rules_put_f( b, 0x4B8, rules_minss( rules_f( b, 0x4B8 ), rules_f( b, 0x4B0 ) ) );
+    }
 }
 
 // ---- VuGame's machines (ctor 0x480BA0): the tables -------------------------

@@ -1300,6 +1300,25 @@ inline void race_session_game_mode( void* user, float dt )
     if ( !s.rules_running || !s.track )
         return;
     ++s.rules_frames;
+    {
+        // Ours (a test driver): `--cheat-finish N` broadcasts VuGame's "OnCheatFinish" (retail's developer cheat, 0x483190 ->
+        // 0x4848C0: rules.hxx race_rules_cheat_finish) on game tick N, before this tick's bookkeeping - a forced finish that
+        // takes the race to PostGame and the results writer without driving the whole race.
+        static const char* cheat = c_engine::option( "cheat-finish" );
+        if ( cheat && cheat[ 0 ] && s.rules_frames == std::atoi( cheat ) )
+        {
+            std::vector< std::uint8_t* > humans;
+            for ( const void* b : s.manager.lists.humans.boats )
+                humans.push_back( const_cast< std::uint8_t* >( static_cast< const std::uint8_t* >( b ) ) );
+            race_rules_cheat_finish( humans, [ & ]( std::size_t h )
+            {
+                for ( std::size_t k = 0; k < s.rules_boats.size( ); ++k )
+                    if ( s.rules_boats[ k ].boat == humans[ h ] )
+                        fleet_remove_driver( s.fleet, static_cast< int >( k ) );   // the AI manager's slot 12 0x4036C0
+            } );
+            LOG_INFO( "race: OnCheatFinish (--cheat-finish %d): %d human boats finished", s.rules_frames, static_cast< int >( humans.size( ) ) );
+        }
+    }
     const track_manager_t& tm = *s.track;
     for ( std::size_t k = 0; k < s.rules_boats.size( ); ++k )
     {
