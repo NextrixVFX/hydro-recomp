@@ -1178,12 +1178,54 @@ inline void ocean_construct( wave_image_t& w, const std::uint32_t* d )
     w.set( 196, 0xBFF00000u );
 }
 
+// VuWaterOceanWave_Update @0x59ccb0 on a BUILT wave - the rectangular /
+// circular re-describes @0x59d9b0 / @0x59ddc0 run it on the entity's fresh
+// descriptor. When the complexity differs the old arrays are freed (0x59cf90,
+// when it was non-zero) and a new non-zero one sets +0x6C / +0x70 / +0x74
+// (shift, size, mask) before the arrays are made again (0x59ce70; field.hxx
+// ocean_field_update does the field half); an unchanged complexity keeps all
+// of it. Then the eight words to +0x4C, +0x78 = (float) +0x70 / Bin Siz,
+// +0x7C .. +0x84 as the ctor's; +0xA4 = 0 before the rebuild, buffer 0's time
+// +0xB0 = the wave's CURRENT time +0x88 (not reset), +0xA4 / +0xA8 = 0 / 1,
+// and buffer 1's time +0xC0 = ITS OWN minus 1.0 (only buffer 0's arrays are
+// copied into buffer 1). False when the new complexity is 0: retail then
+// works on null or freed arrays (UNKNOWN; the words are still written).
+inline bool ocean_modify( wave_image_t& w, const std::uint32_t* d )
+{
+    if ( d[ 0 ] != w.word[ 0x4C / 4 ] && d[ 0 ] != 0 )
+    {
+        const int shift = static_cast< int >( d[ 0 ] );
+        const int size = 1 << shift;
+        w.set( 108, static_cast< std::uint32_t >( shift ) );
+        w.set( 112, static_cast< std::uint32_t >( size ) );
+        w.set( 116, static_cast< std::uint32_t >( size - 1 ) );
+    }
+    for ( int k = 0; k < 8; ++k )
+        w.set( 76 + 4 * k, d[ k ] );
+    w.setf( 120, static_cast< float >( static_cast< std::int32_t >( w.word[ 112 / 4 ] ) ) / wave_bits( d[ 1 ] ) );
+    const float angle = wave_bits( d[ 2 ] ) - 3.1415927f;
+    w.setf( 124, angle );
+    w.setf( 128, wave_x87_sin( angle ) );
+    w.setf( 132, wave_x87_cos( angle ) );
+    w.set( 164, 0 );
+    w.set( 176, w.word[ 136 / 4 ] );
+    w.set( 180, w.word[ 140 / 4 ] );
+    w.set( 168, 1 );
+    double t1;
+    std::memcpy( &t1, &w.word[ 192 / 4 ], 8 );
+    t1 = t1 - 1.0;
+    std::uint32_t t[ 2 ];
+    std::memcpy( t, &t1, 8 );
+    w.set( 192, t[ 0 ] );
+    w.set( 196, t[ 1 ] );
+    return d[ 0 ] != 0;
+}
+
 // VuRectangularOceanWaveEntity_onEnable @0x5d8ce0: buildRegionDesc @0x5d8e20,
 // then VuWater_createWave @0x528b40 -> VuWaterRectangularOceanWave_ctor
 // @0x59d940, whose bounds are @0x59dbf0.
-inline wave_image_t rectangular_ocean_create( const wave_source_t& s )
+inline void rectangular_ocean_desc( const wave_source_t& s, std::uint32_t* d )   // 16 words
 {
-    std::uint32_t d[ 16 ];
     for ( int k = 0; k < 8; ++k )
         d[ k ] = s.e( 0x68 + 4 * k );
     for ( int k = 0; k < 4; ++k )
@@ -1192,10 +1234,12 @@ inline wave_image_t rectangular_ocean_create( const wave_source_t& s )
     d[ 13 ] = s.t( 0xB4 );
     d[ 14 ] = s.e( 0x8C );   // Decay Ratio X %
     d[ 15 ] = s.e( 0x90 );   // Decay Ratio Y %
-    wave_image_t w{};
-    ocean_construct( w, d );
-    for ( int k = 0; k < 8; ++k )
-        w.set( 208 + 4 * k, d[ 8 + k ] );
+}
+
+// 0x59dbf0: the box from the position +208 / +212 / +216 and the half
+// extents +224 / +228, the centre, the radius (VuMath_sqrt).
+inline void rectangular_ocean_bounds( wave_image_t& w )
+{
     const float half_y = w.f( 228 ) * 0.5f;
     const float half_x = w.f( 224 ) * 0.5f;
     const float y = w.f( 212 );
@@ -1209,25 +1253,38 @@ inline wave_image_t rectangular_ocean_create( const wave_source_t& s )
     w.setf( 44, x );
     w.setf( 48, y );
     w.setf( 52, _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( half_y * half_y ) + ( half_x * half_x ) ) ) ) );
+}
+
+inline wave_image_t rectangular_ocean_create( const wave_source_t& s )
+{
+    std::uint32_t d[ 16 ];
+    rectangular_ocean_desc( s, d );
+    wave_image_t w{};
+    ocean_construct( w, d );
+    for ( int k = 0; k < 8; ++k )
+        w.set( 208 + 4 * k, d[ 8 + k ] );
+    rectangular_ocean_bounds( w );
     return w;
 }
 
 // The circular one's slot 6 @0x5d9340: its descriptor @0x5d9440 (Radius and
 // Decay Ratio % in place of the scale and the two decays), then @0x528c20 ->
 // the ctor @0x59dcd0 with its bounds inline.
-inline wave_image_t circular_ocean_create( const wave_source_t& s )
+inline void circular_ocean_desc( const wave_source_t& s, std::uint32_t* d )   // 14 words
 {
-    std::uint32_t d[ 14 ];
     for ( int k = 0; k < 8; ++k )
         d[ k ] = s.e( 0x68 + 4 * k );
     for ( int k = 0; k < 4; ++k )
         d[ 8 + k ] = s.t( 0x80 + 4 * k );
     d[ 12 ] = s.e( 0x8C );   // Radius
     d[ 13 ] = s.e( 0x90 );   // Decay Ratio %
-    wave_image_t w{};
-    ocean_construct( w, d );
-    for ( int k = 0; k < 6; ++k )
-        w.set( 208 + 4 * k, d[ 8 + k ] );
+}
+
+// The circular ocean's bounds, inline in the ctor @0x59dcd0 and in its
+// re-describe @0x59ddc0: the box from the position +208 .. +216 and the
+// radius +224.
+inline void circular_ocean_bounds( wave_image_t& w )
+{
     const float x = w.f( 208 );
     const float y = w.f( 212 );
     const float r = w.f( 224 );
@@ -1240,6 +1297,17 @@ inline wave_image_t circular_ocean_create( const wave_source_t& s )
     w.setf( 44, x );
     w.setf( 48, y );
     w.setf( 52, r );
+}
+
+inline wave_image_t circular_ocean_create( const wave_source_t& s )
+{
+    std::uint32_t d[ 14 ];
+    circular_ocean_desc( s, d );
+    wave_image_t w{};
+    ocean_construct( w, d );
+    for ( int k = 0; k < 6; ++k )
+        w.set( 208 + 4 * k, d[ 8 + k ] );
+    circular_ocean_bounds( w );
     return w;
 }
 
@@ -1249,16 +1317,19 @@ inline wave_image_t circular_ocean_create( const wave_source_t& s )
 // Size, Angular Decay Ratio); @0x528f40 -> the ctor @0x5a4d80, which copies it
 // flat to +76 and derives the kernel's direction (-fsin, fcos of +92) and its
 // extent (+108 * 0.5).
-inline wave_image_t banked_turn_create( const wave_source_t& s )
+inline void banked_turn_desc( const wave_source_t& s, std::uint32_t* d )   // 10 words
 {
-    std::uint32_t d[ 10 ];
     for ( int k = 0; k < 4; ++k )
         d[ k ] = s.t( 0x80 + 4 * k );
     d[ 4 ] = s.t( 0xA8 );
     for ( int k = 0; k < 5; ++k )
         d[ 5 + k ] = s.e( 0x60 + 4 * k );
-    wave_image_t w{};
-    wave_base( w );
+}
+
+// What the ctor @0x5a4d80 and the re-describe @0x5a4ef0 both do with the
+// descriptor: the flat copy, the direction, the extent, the bounds.
+inline void banked_turn_set( wave_image_t& w, const std::uint32_t* d )
+{
     for ( int k = 0; k < 10; ++k )
         w.set( 76 + 4 * k, d[ k ] );
     const float angle = w.f( 92 );
@@ -1277,6 +1348,15 @@ inline wave_image_t banked_turn_create( const wave_source_t& s )
     w.setf( 44, x );
     w.setf( 48, y );
     w.setf( 52, outer );
+}
+
+inline wave_image_t banked_turn_create( const wave_source_t& s )
+{
+    std::uint32_t d[ 10 ];
+    banked_turn_desc( s, d );
+    wave_image_t w{};
+    wave_base( w );
+    banked_turn_set( w, d );
     return w;
 }
 
@@ -1284,15 +1364,20 @@ inline wave_image_t banked_turn_create( const wave_source_t& s )
 // +0x60 .. +0x77 (whirlpool_t's note above names each); @0x528d00 -> the ctor
 // @0x5a1470, flat to +76; +116 stays the ctor's zero. Its bounds reach DOWN by
 // the depth and not up.
-inline wave_image_t whirlpool_create( const wave_source_t& s )
+inline void whirlpool_desc( const wave_source_t& s, std::uint32_t* d )   // 10 words
 {
-    wave_image_t w{};
-    wave_base( w );
     for ( int k = 0; k < 4; ++k )
-        w.set( 76 + 4 * k, s.t( 0x80 + 4 * k ) );
+        d[ k ] = s.t( 0x80 + 4 * k );
     for ( int k = 0; k < 6; ++k )
-        w.set( 92 + 4 * k, s.e( 0x60 + 4 * k ) );
-    w.set( 116, 0 );
+        d[ 4 + k ] = s.e( 0x60 + 4 * k );
+}
+
+// What the ctor @0x5a1470 and the re-describe @0x5a1580 both do: the flat
+// copy to +76 and the bounds (the clock +116 is the ctor's alone).
+inline void whirlpool_set( wave_image_t& w, const std::uint32_t* d )
+{
+    for ( int k = 0; k < 10; ++k )
+        w.set( 76 + 4 * k, d[ k ] );
     const float x = w.f( 76 );
     const float y = w.f( 80 );
     const float outer = w.f( 92 );
@@ -1305,6 +1390,16 @@ inline wave_image_t whirlpool_create( const wave_source_t& s )
     w.setf( 44, x );
     w.setf( 48, y );
     w.setf( 52, outer );
+}
+
+inline wave_image_t whirlpool_create( const wave_source_t& s )
+{
+    std::uint32_t d[ 10 ];
+    whirlpool_desc( s, d );
+    wave_image_t w{};
+    wave_base( w );
+    whirlpool_set( w, d );
+    w.set( 116, 0 );
     return w;
 }
 
