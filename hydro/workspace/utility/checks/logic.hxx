@@ -1376,6 +1376,87 @@ inline bool verify_json_access( )
         LOG_ERROR( "json_access FAILED %d", bad );
     return bad == 0;
 }
+// entity/repository.hxx against retail's VuEntityRepositoryImpl (case entity_repository): the same op sequence on 48
+// entities (each prev starting at a dummy) and 8 projects; after every op the answer, every link, the bucket heads,
+// the count and the project set.
+#include <workspace/core/entity/repository.hxx>
+
+inline bool verify_entity_repository( )
+{
+    logic_check_t c{ g_golden_erp_words };
+    const unsigned n = c.next( );
+    std::vector< entity_link_t > links( n + 1 );
+    entity_link_t& dummy = links[ n ];
+    for ( unsigned i = 0; i < n; ++i )
+        links[ i ].hash = c.next( ), links[ i ].prev = &dummy;
+    std::vector< std::string > projects( c.next( ) );
+    for ( auto& p : projects )
+        p = c.str( );
+    auto index = [ & ]( const entity_link_t* e ) -> std::int32_t
+    {
+        return e == nullptr ? -1 : e == &dummy ? -2 : static_cast< std::int32_t >( e - links.data( ) );
+    };
+    entity_repository_t r;
+    const unsigned no = c.next( );
+    int bad = 0;
+    for ( unsigned k = 0; k < no; ++k )
+    {
+        const unsigned kind = c.next( ), e = c.next( ), p = c.next( );
+        std::int32_t answer = 0;
+        if ( kind == 0 )
+            entity_repository_add( r, links[ e ] );
+        else if ( kind == 1 )
+            entity_repository_remove( r, links[ e ] );
+        else if ( kind == 2 )
+            answer = index( entity_repository_find( r, c.next( ) ) );
+        else if ( kind == 3 )
+            answer = index( entity_repository_find( r, c.str( ).c_str( ) ) );
+        else if ( kind == 4 )
+            entity_repository_add_project( r, projects[ p ] );
+        else if ( kind == 5 )
+            entity_repository_remove_project( r, projects[ p ] );
+        else
+            answer = entity_repository_has_project( r, projects[ p ] ) ? 1 : 0;
+        bool same = static_cast< std::int32_t >( c.next( ) ) == answer;
+        for ( unsigned i = 0; i < n; ++i )
+        {
+            same = static_cast< std::int32_t >( c.next( ) ) == index( links[ i ].prev ) && same;
+            same = static_cast< std::int32_t >( c.next( ) ) == index( links[ i ].next ) && same;
+        }
+        same = static_cast< std::int32_t >( c.next( ) ) == index( dummy.next ) && same;
+        std::vector< std::pair< std::uint32_t, std::int32_t > > heads;
+        for ( std::uint32_t b = 0; b < 256; ++b )
+            if ( r.buckets[ b ] != nullptr )
+                heads.push_back( { b, index( r.buckets[ b ] ) } );
+        const unsigned nh = c.next( );
+        same = nh == heads.size( ) && same;
+        for ( unsigned h = 0; h < nh; ++h )
+        {
+            const std::uint32_t b = c.next( );
+            const std::int32_t at = static_cast< std::int32_t >( c.next( ) );
+            same = h < heads.size( ) && heads[ h ].first == b && heads[ h ].second == at && same;
+        }
+        same = c.next( ) == r.count && same;
+        same = c.next( ) == r.projects.size( ) && same;
+        const unsigned np = c.next( );
+        auto it = r.projects.begin( );
+        for ( unsigned q = 0; q < np; ++q )
+        {
+            const std::string name = c.str( );
+            same = it != r.projects.end( ) && *it == name && same;
+            if ( it != r.projects.end( ) )
+                ++it;
+        }
+        if ( !same && bad++ < 6 )
+            LOG_ERROR( "entity_repository op %u (kind %u, entity %u) differs", k, kind, e );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuEntityRepositoryImpl matches retail (0x5527D0 0x552810 0x5528A0 0x552860 0x552740 0x552790 0x5528D0): %u ops on %u entities", no, n );
+    else
+        LOG_ERROR( "entity_repository FAILED %d", bad );
+    return bad == 0;
+}
+
 // entity/json.hxx json_member against retail's member-or-insert 0x4FC090 (case json_member) on c_reader-built roots
 // whose objects keep the file's (unsorted) key order: per op the returned member, the int written into it, the root.
 inline bool verify_json_member( )
