@@ -381,3 +381,29 @@ inline void pfx_asset_destroy( pfx_asset_t& a, pfx_manager_t* m, const pfx_manag
     if ( asset_base != nullptr )
         asset_base( user );
 }
+
+// ---------------------------------------------------------------------------
+// The entry's Vu3dDrawComponent delegates (0x552D50 installs them in the
+// component's +0x10 {0x74EA9C, entity, 0x552EF0} and +0x14 {0x74EA8C, entity,
+// 0x552F10}; thiscall entity, params, retn 4): with a system instance (+0x68)
+// a tail jump to its slot 14 (draw, 0x58AF60) / slot 15 (shadow, 0x58AFA0)
+// with the same params (pfxclass.hxx pfx_system_draw - the render side); else
+// nothing. Verified: case pfx_entity_draw.
+struct pfx_entity_draw_ops_t
+{
+    void* user = nullptr;
+    void ( *draw )( void* user, std::uint32_t instance, const void* params ) = nullptr;          // slot 14
+    void ( *draw_shadow )( void* user, std::uint32_t instance, const void* params ) = nullptr;   // slot 15
+};
+
+inline void pfx_entity_draw( const pfx_manager_entry_t& x, const pfx_entity_draw_ops_t& o, const void* params )
+{
+    if ( x.instance != 0u && o.draw )
+        o.draw( o.user, x.instance, params );
+}
+
+inline void pfx_entity_draw_shadow( const pfx_manager_entry_t& x, const pfx_entity_draw_ops_t& o, const void* params )
+{
+    if ( x.instance != 0u && o.draw_shadow )
+        o.draw_shadow( o.user, x.instance, params );
+}

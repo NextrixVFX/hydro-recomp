@@ -141,9 +141,10 @@ inline const water_prop_row_t k_water_bump_props[] = {
     { nullptr, 0, water_prop_t::real, 0, nullptr } };
 
 // VuDirectionalFlowWaveEntity's ctor 0x5D6410 (engine schema.hxx's capture):
-// Flow Velocity (a VuVector3 at +0x60, (0, 5, 0); its fourth word +0x6C the
-// ctor's 0, after a load the vector load's stack word - UNKNOWN), the two decay
-// ratios (percentages, 0.5).
+// Flow Velocity (a VuVector3 at +0x60, (0, 5, 0); its fourth word +0x6C is
+// written by no ctor - heap garbage, case water_ctors_game - and after a load
+// the vector load's stack word: UNKNOWN), the two decay ratios (percentages,
+// 0.5). The whole creation: world/watchers.hxx water_game_entity_construct.
 inline const water_prop_row_t k_water_flow_props[] = {
     { "Flow Velocity", 0x60, water_prop_t::vec3, 0, nullptr, 0x40A00000u, 0 },
     { "Longitudinal Decay Ratio %", 0x70, water_prop_t::percent, 0x3F000000u, nullptr },
@@ -668,15 +669,24 @@ inline water_words_t ramp_wave_create( const water_input_t& in )
 // VuWater's pool, as its ctor's 0x594B20 on +4 builds it: 1024 eight-byte
 // nodes linked in order, the last to null; count 1024, the free head the
 // first. Shared by the wave list (+0x30) and every wave's entry list (+0x40).
-inline void water_hold_init( water_hold_t& w )
+// (The pool's +4 capacity is 1024 too; a node's first word is never written by
+// it - case water_create reads it as the heap's fill.)
+inline void water_hold_pool_init( water_hold_t& w )
 {
-    w = water_hold_t{};
-    water_tree_init( w.surface_tree );
     w.pool.assign( 1024, water_pool_node_t{} );
     for ( int k = 0; k < 1024; ++k )
         w.pool[ k ].next = k < 1023 ? k + 1 : -1;
     w.pool_free = 0;
     w.pool_count = 1024;
+}
+
+// The pool plus the surface tree VuWater's init 0x528200 makes (+0x3C: new +
+// 0x598C70) - the state every level build starts from.
+inline void water_hold_init( water_hold_t& w )
+{
+    w = water_hold_t{};
+    water_tree_init( w.surface_tree );
+    water_hold_pool_init( w );
 }
 
 // A wave the hold takes: its held fields from its words (+12 .. +40 the box,
@@ -826,7 +836,31 @@ struct water_built_t
     // race sets wake_reuse = true after water_build_world.
     std::vector< int > wake_free;
     bool wake_reuse = false;
+    // VuWater +0x44 / +0x45 / +0x46: three bytes its ctor 0x528050 sets to 1 (a
+    // word store of 0x101, then a byte); the surface's shader rebuild 0x5DB840
+    // reads +0x44 / +0x46 (render side). Nothing here reads them.
+    std::uint8_t render_flags[ 3 ] = { 1, 1, 1 };
 };
+
+// VuWater's vtable (its ctor's word +0).
+constexpr std::uint32_t k_water_vtable = 0x74D05Cu;
+
+// VuWater's create 0x527E90 (cdecl; g_vuwater 0x759058 = the answer, 0 when
+// operator new fails): new 0x48, +0xC .. +0x3C zeroed (+0x1C the renderer
+// pointer among them), then the ctor 0x528050: vtable 0x74D05C, the pool
+// 0x594B20 on +4 (water_hold_pool_init), +0x14 (the shader object) 0, the +0x18
+// byte (water_t::skip_waves) 0, the surface list +0x20 / size +0x24 and the
+// +0x28 / +0x2C list (0x4031B0: a self-linked std::list sentinel each - the
+// +0x28 one is not modelled), +0x30 (the wave list) 0, the listener list +0x34
+// / +0x38 (0x52A640), +0x40 = 1.0 (wake_rate), render_flags. The surface tree
+// (+0x3C) stays null: the init 0x528200 makes it (water_tree_init) - here an
+// empty `nodes`. Verified: case water_create.
+inline void water_create( water_built_t& b )
+{
+    b = water_built_t{};
+    water_hold_pool_init( b.hold );
+    b.wake_rate = 1.0f;
+}
 
 // The field of ocean wave `wave`, or null (not an ocean wave / not built).
 inline water_built_t::ocean_t* water_ocean_of( water_built_t& b, int wave )

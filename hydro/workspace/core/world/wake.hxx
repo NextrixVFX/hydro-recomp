@@ -252,7 +252,8 @@ inline int water_static_wake_create( water_built_t& b, const std::uint32_t* enti
 }
 
 // Slot 2 0x5D5E30 (thiscall entity; one argument unread; retn 4) and the
-// transform's watcher 0x5D5ED0 (the same body without the argument): when the
+// transform's watcher 0x5D5ED0 (the same body without the argument - measured:
+// case static_wake_watcher): when the
 // entity's +0x14 bit 2 is set, its wake released as slot 7 0x5D5E90 does
 // (surface.hxx water_entity_release: the reference, then 0x529800; +0x80 = 0)
 // and made again (0x5D6060); else nothing. `wave` is the entity's +0x80.
