@@ -211,8 +211,10 @@ inline void race_dynamics_init( race_dynamics_t& d, const contact_callbacks_t* c
     d.impl.hooks.world_add = []( void* u, vu_rigid_body_t& b, std::int32_t group, std::int32_t mask ) {
         race_dynamics_t& r = *static_cast< race_dynamics_t* >( u );
         const auto it = r.objects.find( &b );
+        // has_motion: the body's +0x1F4 motion state (the boat's +0x5C; a level prop's is 0).
         return it != r.objects.end( ) &&
-               world_add_rigid_body( r.world, r.collision, *it->second, true, static_cast< short >( group ), static_cast< short >( mask ) ) == 1;
+               world_add_rigid_body( r.world, r.collision, *it->second, r.motion.count( &b.body ) != 0, static_cast< short >( group ),
+                                     static_cast< short >( mask ) ) == 1;
     };
     d.impl.hooks.manifold_count = []( void* u ) { return static_cast< int >( static_cast< race_dynamics_t* >( u )->collision.dispatcher.manifolds.size( ) ); };
     d.impl.hooks.manifold_bodies = []( void* u, int i, vu_rigid_body_t*& b0, vu_rigid_body_t*& b1 ) {

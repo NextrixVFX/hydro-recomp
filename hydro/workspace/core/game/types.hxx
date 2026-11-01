@@ -5,6 +5,7 @@
 #include <workspace/core/world/transform.hxx>
 #include <workspace/core/entity/corona.hxx>
 #include <workspace/core/entity/draw.hxx>
+#include <workspace/core/entity/rigid.hxx>
 #include <workspace/core/entity/rig.hxx>
 #include <workspace/core/entity/gfx.hxx>
 #include <workspace/core/entity/trigger.hxx>
@@ -1167,8 +1168,23 @@ struct model_draw_state_t
     model_draw_t defaults;
 };
 
+// VuRigidBodyComponent (engine entity/rigid.hxx): its targets and each node's default.
+constexpr std::uint32_t k_rigid_body_component_vtable = 0x74DAE4u;
+
+struct rigid_component_state_t
+{
+    rigid_component_t value;
+    rigid_component_t defaults;
+};
+
 inline void entity_load_component( entity_t& owner, entity_component_t& component, const value_t& properties, bool )
 {
+    if ( component.m_vtable == k_rigid_body_component_vtable )
+    {
+        rigid_component_state_t* s = static_cast< rigid_component_state_t* >( component.m_state.get( ) );
+        rigid_component_load( s->value, properties, s->defaults );
+        return;   // postLoad 0x545010: no body yet - nothing (entity/rigid.hxx)
+    }
     if ( component.m_vtable == k_static_model_component_vtable || component.m_vtable == k_animated_model_component_vtable )
     {
         model_draw_state_t* s = static_cast< model_draw_state_t* >( component.m_state.get( ) );
@@ -1192,6 +1208,12 @@ inline void entity_load_component( entity_t& owner, entity_component_t& componen
 // a hook.
 inline void entity_mark_component( entity_t&, entity_component_t& component )
 {
+    if ( component.m_vtable == k_rigid_body_component_vtable )
+    {
+        rigid_component_state_t* s = static_cast< rigid_component_state_t* >( component.m_state.get( ) );
+        s->defaults = s->value;
+        return;
+    }
     if ( component.m_vtable == k_static_model_component_vtable || component.m_vtable == k_animated_model_component_vtable )
     {
         model_draw_state_t* s = static_cast< model_draw_state_t* >( component.m_state.get( ) );
@@ -1325,8 +1347,17 @@ inline const T* entity_action( const entity_t& e )
     return e.m_state && entity_action_kind( e.m_type ) ? &static_cast< const props_state_t< T >* >( e.m_state.get( ) )->value : nullptr;
 }
 
+// VuPropEntity's own property the race reads: "Initially Visible" (ctor 0x5464C0: bool vt 0x737450, target +0x78,
+// default 1 - the word 0x0101 stored at +0x78 before the node is made).
+struct prop_entity_state_t
+{
+    std::uint8_t visible = 1, visible_default = 1;
+};
+
 inline std::shared_ptr< void > entity_state_for( const std::string& cls )
 {
+    if ( cls == "VuPropEntity" )
+        return std::make_shared< prop_entity_state_t >( );
     if ( const action_kind_t* k = entity_action_kind( cls ) )
         return k->m_make( );
     if ( cls == "VuCoronaEntity" )
@@ -1387,7 +1418,12 @@ inline void entity_load_properties( entity_t& entity, const value_t& properties 
             k->m_load( entity.m_state.get( ), properties );
         return;
     }
-    if ( entity.m_type == "VuCoronaEntity" && entity.m_state )
+    if ( entity.m_type == "VuPropEntity" && entity.m_state )
+    {
+        prop_entity_state_t* s = static_cast< prop_entity_state_t* >( entity.m_state.get( ) );
+        property_bool( properties, "Initially Visible", s->visible, s->visible_default );
+    }
+    else if ( entity.m_type == "VuCoronaEntity" && entity.m_state )
     {
         corona_state_t* s = static_cast< corona_state_t* >( entity.m_state.get( ) );
         corona_load( s->value, properties, s->defaults );
@@ -1430,7 +1466,12 @@ inline void entity_mark_properties( entity_t& entity )
             k->m_mark( entity.m_state.get( ) );
         return;
     }
-    if ( entity.m_type == "VuCoronaEntity" && entity.m_state )
+    if ( entity.m_type == "VuPropEntity" && entity.m_state )
+    {
+        prop_entity_state_t* s = static_cast< prop_entity_state_t* >( entity.m_state.get( ) );
+        s->visible_default = s->visible;
+    }
+    else if ( entity.m_type == "VuCoronaEntity" && entity.m_state )
     {
         corona_state_t* s = static_cast< corona_state_t* >( entity.m_state.get( ) );
         s->defaults = s->value;
@@ -1488,6 +1529,13 @@ inline std::vector< entity_component_t > entity_components_constructed( const st
         {
             auto state = std::make_shared< model_draw_state_t >( );
             model_draw_construct( state->value, c.m_vtable == k_animated_model_component_vtable );
+            state->defaults = state->value;
+            c.m_state = state;
+        }
+        else if ( c.m_vtable == k_rigid_body_component_vtable )
+        {
+            auto state = std::make_shared< rigid_component_state_t >( );
+            rigid_component_construct( state->value );
             state->defaults = state->value;
             c.m_state = state;
         }

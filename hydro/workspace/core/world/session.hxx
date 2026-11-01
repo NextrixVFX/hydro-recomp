@@ -7,6 +7,7 @@
 #include <workspace/core/boat/respawn.hxx>
 #include <workspace/core/dynamics/contact.hxx>
 #include <workspace/core/ui/config.hxx>
+#include <workspace/core/world/bodies.hxx>
 #include <workspace/core/world/dynamics.hxx>
 #include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/start.hxx>
@@ -141,6 +142,9 @@ struct race_session_t
     // g_vudynamicsimpl 0x75900C: the dynamics world (world/dynamics.hxx), made before the boats as the engine
     // init 0x566230 makes it; its DynamicsSync / DynamicsKick ticks registered first in their phases.
     std::unique_ptr< race_dynamics_t > dynamics;
+    // The level's static bodies (world/bodies.hxx) and their collision mesh assets.
+    boat_mesh_library_t level_meshes;
+    std::vector< std::unique_ptr< level_body_t > > level_bodies;
 };
 
 // The Decision tick 0x41EFF0 and the Viewports tick 0x4AB0A0 composed on the
@@ -346,6 +350,88 @@ inline void race_session_enable( race_session_t& s, race_session_boat_t& b, bool
     if ( !ok )
         race_unwired( s, on ? "the boat's slot 17 0x421980 reached a dynamics path not modelled - UNKNOWN"
                             : "the boat's slot 18 0x421940 reached a dynamics path not modelled - UNKNOWN" );
+}
+
+// The level's gameInitialize as 0x4BA060 runs it after the boat load (0x4BA322:
+// VuEntity::gameInitialize 0x500B10 on the project root): post-order - each
+// entity's children first (+0x38 order), then its own vt slot 6, skipped when
+// +0x14 bit 2 (already initialised) is set; before that, unless +0x14 bit 3,
+// g 0x759080 vt+0x20 (the entity registration - a hook here) and each
+// component's vt+0x24 (VuRigidBodyComponent's: a nop). RECREATED: VuPropEntity's
+// slot 6 0x546910 (world/bodies.hxx) - the level's static bodies into the race's
+// dynamics world (g_vudynamicsimpl slot 15). Every other type's slot 6 is not
+// recreated: counted, logged once (UNKNOWN). The collision mesh assets come
+// from the pack (boat meshes.hxx's library - its factory substitution; retail's
+// asset property creates them at load, 0x545200, here at the build). The
+// VuRigidBody ids (the debug global 0x759030) continue from one per boat
+// (FLAGGED: the boat ctor's own count is the boat agent's, seeded 0).
+inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const c_archive& archive )
+{
+    if ( !s.dynamics )
+        return;
+    race_dynamics_t& d = *s.dynamics;
+    s.level_meshes.read_user = const_cast< c_archive* >( &archive );
+    s.level_meshes.read = []( void* u, const std::string& asset, std::vector< std::uint8_t >& blob ) {
+        return static_cast< const c_archive* >( u )->read( asset.c_str( ), blob );
+    };
+    s.level_meshes.surfaces = s.surfaces_built ? &s.surfaces : nullptr;
+    bodies_hooks_t hooks;
+    hooks.user = &s;
+    hooks.surface = []( void* u, const std::string& n ) -> std::uint8_t {
+        race_session_t& r = *static_cast< race_session_t* >( u );
+        return r.surfaces_built ? surface_id( r.surfaces, n.c_str( ) ) : 0;
+    };
+    hooks.gravity = []( void* u, float* g ) { std::memcpy( g, static_cast< race_session_t* >( u )->dynamics->world.gravity, 12 ); };
+    std::uint32_t id = static_cast< std::uint32_t >( s.boats.size( ) );
+    std::map< std::string, int > unknown;
+    int added = 0;
+    const auto walk = [ & ]( const auto& self, entity_t& e ) -> void
+    {
+        for ( auto& c : e.m_children )
+            self( self, *c );
+        if ( e.m_type != "VuPropEntity" )
+        {
+            ++unknown[ e.m_type.empty( ) ? std::string( "(UNKNOWN node)" ) : e.m_type ];
+            return;
+        }
+        rigid_component_state_t* rs = nullptr;
+        for ( entity_component_t& c : e.m_components )
+            if ( c.m_vtable == k_rigid_body_component_vtable )
+                rs = static_cast< rigid_component_state_t* >( c.m_state.get( ) );
+        const transform_component_t* t = entity_transform( e );
+        if ( !rs || !t || !e.m_state || e.m_world_unknown )
+        {
+            race_unwired( s, "a VuPropEntity without its component state / known world - its gameInitialize 0x546910 not run (UNKNOWN)" );
+            return;
+        }
+        rigid_component_t& c = rs->value;
+        const collision_mesh_asset_t* asset = nullptr;
+        if ( !c.mesh_asset.empty( ) && boat_mesh_exists( &s.level_meshes, "VuCollisionMeshAsset", c.mesh_asset ) )
+            asset = s.level_meshes.collision_of( boat_mesh_create( &s.level_meshes, "VuCollisionMeshAsset", c.mesh_asset ) );
+        auto b = std::make_unique< level_body_t >( );
+        b->name = e.m_name;
+        level_body_t* bp = b.get( );
+        std::string why;
+        const std::uint8_t visible = static_cast< prop_entity_state_t* >( e.m_state.get( ) )->visible;
+        const bool ok = bodies_prop_game_initialize( *bp, c, visible, asset, t->world, t->scale, id, hooks, [] { /* g 0x7590B8 vt+0x28: the renderer */ },
+            [ & ]( level_body_t& lb ) {
+                d.objects[ &lb.body ] = &lb.collision;
+                return vu_dynamics_add_rigid_body( d.impl, lb.body );
+            },
+            why );
+        if ( !ok )
+            race_unwired( s, "VuPropEntity '" + e.m_name + "': " + why + " (UNKNOWN, no body)" );
+        if ( bp->in_world )
+            ++added;
+        s.level_bodies.push_back( std::move( b ) );
+    };
+    walk( walk, tree );
+    LOG_INFO( "race: the level's gameInitialize: %d static bodies added to the dynamics world (VuPropEntity 0x546910)", added );
+    std::string rest;
+    for ( const auto& u : unknown )
+        rest += ( rest.empty( ) ? "" : ", " ) + u.first + " x" + std::to_string( u.second );
+    if ( !rest.empty( ) )
+        race_unwired( s, "the level's gameInitialize (0x500B10): slot 6 not recreated for " + rest + " (UNKNOWN)" );
 }
 
 // The DynamicsSync / DynamicsKick ticks 0x4F8A20 / 0x4F8A90 (world/dynamics.hxx).
@@ -565,6 +651,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     if ( s.stopped_transform )
         LOG_WARNING( "race: the transform-changed delegate 0x421670 STOPPED (UNKNOWN) on %d boat(s) - it reads the sections load's +0x290 centre",
                      s.stopped_transform );
+    race_session_level_bodies( s, tree, archive );
 
     // The tick manager (ctor 0x4F6F60, slot 5 0x4F7050) and the AI manager's tick.
     tick_manager_init( s.ticks );
