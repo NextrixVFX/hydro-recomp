@@ -1,7 +1,11 @@
 #pragma once
 
+#include <workspace/core/ui/chooser.hxx>
 #include <workspace/core/ui/controls.hxx>
 #include <workspace/core/ui/hud.hxx>
+#include <workspace/core/ui/leave.hxx>
+#include <workspace/core/ui/leaves.hxx>
+#include <workspace/core/ui/navigate.hxx>
 #include <workspace/core/ui/screen.hxx>
 #include <workspace/core/ui/slider.hxx>
 #include <workspace/core/ui/ticker.hxx>
@@ -56,6 +60,9 @@
 // - the four VuSliderEntity subclasses (slider.hxx): OnUISetFocus 0x46F8F0,
 //   OnUITick 0x46F940, OnUIEvent 0x46FCC0; inputs Show / Hide / SetFocus; the
 //   settings manager, the touch device and the FMOD categories are hooks.
+// - batch 19: VuGameConfigEntity / VuBoatConfigEntity (see ui_bound_config_t),
+//   VuShortUnlockUITextEntity 0x445570, VuBoatStatEntity "Set" 0x44FCA0, and
+//   VuUISubtitlesSettingEntity (chooser.hxx: slots 13..16, 0x475B40).
 // Anything else: an input plug reached is UNKNOWN (counted; its VuRetVal is
 // the m_answer hook's - e.g. VuLicenseEntity's IsFullVersion, a platform
 // service); a registered handler not recreated (k_ui_event_facts) is entered
@@ -74,9 +81,6 @@ struct ui_event_fact_t
 inline constexpr ui_event_fact_t k_ui_event_facts[] = {
     { 0x738614u, 0x407F5DB0u, 0x4232B0u },  // VuSysNotifyEntity
     { 0x756828u, 0xD5127E2Du, 0x5EFA60u },  // VuOnProjectInitializedEntity
-    { 0x73DF3Cu, 0x4CF1B9C6u, 0x404AB2u },  // VuUISubtitlesSettingEntity OnUISetFocus (thunk -> slot 14 0x475230)
-    { 0x73DF3Cu, 0x5E798927u, 0x4077DEu },  // its OnUITick (thunk -> slot 15 0x475280)
-    { 0x73DF3Cu, 0xFE191C9Eu, 0x4077E8u },  // its OnUIEvent (thunk -> slot 16 0x475640)
 };
 
 inline constexpr std::uint32_t k_ui_screen_vtable = 0x6F7140u;
@@ -104,6 +108,7 @@ enum class ui_trace_kind_t
     query,      // the input manager's slot 9 (the pause tick's "Pause"): the name, the answer
     button,     // the input manager's vt+0x44 (an on-screen button): the name
     axis,       // the input manager's vt+0x48 (an on-screen axis): the name, the value bits
+    profile,    // a platform answer the config selectors ask (m_platform): "tag|text|..."
 };
 
 struct ui_trace_t
@@ -190,6 +195,51 @@ inline constexpr std::uint32_t k_ui_onscreen_axis_vtable = 0x739020u;
 inline constexpr std::uint32_t k_ui_onscreen_button_vtable = 0x739058u;
 inline constexpr std::uint32_t k_ui_multi_delay_vtable = 0x754B68u;
 
+// Batch 19: the GameConfig* screens. VuGameConfigEntity (ctor 0x45CC80 over
+// VuBaseConfigEntity 0x4471C0, vtable 0x73D1DC) registers "OnUITick" -> the
+// thunk 0x4077ED = slot 13 0x448470 (ui_config_tick; dt = the tick manager's,
+// m_delta) and "OnUIEvent" -> the thunk 0x404AB2 = slot 14 0x448A50
+// (ui_config_input); its input plugs Unlocked / Available / InstalledOnHost /
+// NotUsedSP (select.hxx ui_config_plug). config_setup( ) = the load's slot 4
+// 0x448120 (ui_game_config_build over m_option_db / m_track_db) then slot 6
+// 0x45D050 (ui_game_config_initialize). Bound only with m_platform set: every
+// platform answer the selector asks goes through it (traced as profile):
+//   "92|name|value" / "96|..." / "100|mode|track|course" / "104|..."  unlock manager g 0x758FE8 slots
+//   "license" (g 0x758FAC +0x18), "4D3170" (the store-beta build test)
+//   "132|value", "144|asset" (asset factory 0x759004 +0x90)
+//   "48|mode|track|course" / "88|championship" / "124|track"  progress manager g 0x758FD8:
+//   .first the bool, .second the best placing +48 / +88 write.
+// VuShortUnlockUITextEntity (ctor 0x445450, vtable 0x73BDDC): "OnSetShortUnlock
+// StringID" 0x445570 (disassembled): +0x10C = VuStringDB slot 6 (m_string_db,
+// a HOOK) of the params' first string.
+inline constexpr std::uint32_t k_ui_game_config_vtable = 0x73D1DCu;
+inline constexpr std::uint32_t k_ui_lock_text_vtable = 0x73BDDCu;
+
+// VuBoatConfigEntity (ctor 0x44C9F0, vtable 0x73C69C) the same way over the
+// boat class (dock.hxx): setup = slot 4 (ui_dock_build) + slot 6 0x44CD10
+// (ui_dock_initialize); its slot 12 0x44E2B0 fires the four stat plugs into
+// VuBoatStatEntity (0x73C808) "Set" 0x44FCA0 (leaves.hxx, bound in every
+// binding: +0xB0).
+inline constexpr std::uint32_t k_ui_boat_config_vtable = 0x73C69Cu;
+inline constexpr std::uint32_t k_ui_boat_stat_vtable = 0x73C808u;
+
+struct ui_bound_config_t
+{
+    bool m_boat = false;
+    ui_dock_t m_dock;             // the boat selector (m_dock.m_base its base)
+    ui_config_entity_t& base( ) { return m_boat ? m_dock.m_base : m_entity; }
+    ui_config_entity_t m_entity;
+    ui_game_config_t2 m_game;
+    ui_config_nav_t m_nav;
+    ui_config_env_t m_env;
+    value_t m_doc;                // slot 4's options document (+0x2A0)
+    ui_config_class_t m_class;
+    ui_profile_t m_profile;
+    ui_config_hooks_t m_hooks;
+    std::string m_option_type;
+    std::uint32_t m_flags = 2;    // entity +0x14
+};
+
 // A text base's / an image's runtime fields the HUD's inputs drive.
 struct ui_hud_shown_t
 {
@@ -218,6 +268,12 @@ struct ui_bound_t
     std::unique_ptr< c_ui_hud_speedometer > m_speedometer;
     std::unique_ptr< ui_hud_button_t > m_hud_button;        // pause / recover
     std::unique_ptr< ui_hud_onscreen_t > m_onscreen;        // on-screen axis / button
+    // batch 19
+    std::unique_ptr< ui_bound_config_t > m_config;          // VuGameConfigEntity
+    std::unique_ptr< std::string > m_lock_text;             // VuShortUnlockUITextEntity +0x10C
+    ui_combo_box_hooks_t m_combo_hooks;
+    std::unique_ptr< c_ui_combo_box > m_combo;              // VuUISubtitlesSettingEntity (chooser.hxx)
+    std::unique_ptr< ui_boat_stat_t > m_stat;               // VuBoatStatEntity +0xB0
 };
 
 struct ui_bind_hooks_t
@@ -261,6 +317,17 @@ struct ui_bind_hooks_t
     std::function< void( int, const char*, float ) > m_input_axis;
     std::function< void( const char* ) > m_sound;
     std::function< void( ) > m_recover;
+    // The GameConfig* screens (batch 19; see ui_bound_config_t): the platform
+    // answers (null: VuGameConfigEntity not bound), the OptionDB / TrackDB
+    // documents (gameutil +52 / +0x10), the entity flags +0x14 the load leaves.
+    std::function< std::pair< bool, int >( const std::string& ) > m_platform;
+    const value_t* m_option_db = nullptr;
+    const value_t* m_track_db = nullptr;
+    std::uint32_t m_config_flags = 2;
+    // the boat selector's: BoatDB / SkinDB / ChampDB (gameutil +8 / +12 / +20)
+    const value_t* m_boat_db = nullptr;
+    const value_t* m_skin_db = nullptr;
+    const value_t* m_champ_db = nullptr;
 };
 
 // An entity's own property slot (its loaded ui_state_t), or null.
@@ -338,9 +405,28 @@ public:
     void exit( ) { m_screen.screen_exit( ); }
     void tick( float dt, bool input ) { m_screen.tick( dt, input ); }
 
+    // The GameConfig* screens' load + gameInitialize (see ui_bound_config_t):
+    // slot 4 0x448120 then slot 6 0x45D050 on every bound selector, in order.
+    void config_setup( )
+    {
+        for ( auto& b : m_bound )
+            if ( b->m_config )
+            {
+                ui_bound_config_t& c = *b->m_config;
+                const bool ok = c.m_boat ? ui_dock_build( c.m_dock, c.m_env, c.m_doc, m_hooks.m_option_db, c.m_option_type, c.m_flags, c.m_profile, c.m_hooks ) &&
+                                               ui_dock_initialize( c.m_dock, c.m_env, c.m_doc, c.m_profile, c.m_hooks )
+                                         : ui_game_config_build( c.m_entity, c.m_env, c.m_doc, m_hooks.m_option_db, c.m_option_type, m_hooks.m_track_db, c.m_flags,
+                                                                 c.m_profile, c.m_hooks ) &&
+                                               ui_game_config_initialize( c.m_entity, c.m_game, c.m_env, c.m_doc, c.m_profile, c.m_hooks );
+                if ( !ok )
+                    ++m_config_faults;
+            }
+    }
+
     std::vector< std::unique_ptr< ui_bound_t > > m_bound;  // pre-order
     std::vector< ui_trace_t > m_trace;
     int m_unknown_events = 0;  // registered handlers entered that are not recreated
+    int m_config_faults = 0;   // a selector path that returned "not recreated"
     c_ui_wiring m_wiring;
     c_ui_screen m_screen;
 
@@ -675,6 +761,99 @@ private:
         }
     }
 
+    std::pair< bool, int > ask( const std::string& name )
+    {
+        trace( ui_trace_kind_t::profile, -1, name, 0u, ui_params_t( ), true );
+        return m_hooks.m_platform( name );
+    }
+
+    // VuGameConfigEntity (see ui_bound_config_t): its fields from OUR loaded
+    // properties, the platform answers through ask( ), the hooks into this
+    // binding's graph / broadcast / trace.
+    void bind_config( ui_bound_t& b )
+    {
+        entity_t& e = *b.m_entity;
+        b.m_config = std::make_unique< ui_bound_config_t >( );
+        ui_bound_config_t& c = *b.m_config;
+        const ui_front_end_screen_t screen = ui_front_end_screen( e, m_hooks.m_config_flags );
+        c.m_boat = b.m_vtable == k_ui_boat_config_vtable;
+        c.m_option_type = screen.m_option_type;
+        c.m_flags = screen.m_flags;
+        c.base( ).m_single_player = screen.m_single_player;
+        c.base( ).m_force_online = screen.m_force_online;
+        c.m_dock.m_allow_special = screen.m_allow_special;
+        c.m_dock.m_boat_db = m_hooks.m_boat_db;
+        c.m_dock.m_skin_db = m_hooks.m_skin_db;
+        c.m_dock.m_champ_db = m_hooks.m_champ_db;
+        const auto take = [ &e ]( const char* name, float* out, std::size_t words )
+        {
+            if ( const ui_slot_t* s = ui_bind_slot( e, name ) )
+                std::memcpy( out, s->m_bits, 4 * words );
+        };
+        take( "Screen Scale", c.m_nav.m_scale, 2 );
+        take( "Position X", &c.m_nav.m_position[ 0 ], 1 );
+        take( "Position Y", &c.m_nav.m_position[ 1 ], 1 );
+        take( "Spacing", &c.m_nav.m_spacing, 1 );
+        const char* const rect[ 4 ] = { " X", " Y", " Width", " Height" };
+        for ( int k = 0; k < 4; ++k )
+        {
+            take( ( std::string( "TouchLeft" ) + rect[ k ] ).c_str( ), &c.m_nav.m_left[ k ], 1 );
+            take( ( std::string( "TouchRight" ) + rect[ k ] ).c_str( ), &c.m_nav.m_right[ k ], 1 );
+        }
+        c.m_env.m_root = m_hooks.m_root;   // gameutil +0x60 clear, +0x64 "" (the caller's root)
+        ui_profile_t& p = c.m_profile;
+        const auto join = []( std::initializer_list< std::string > parts )
+        {
+            std::string out;
+            for ( const std::string& s : parts )
+                out += out.empty( ) ? s : "|" + s;
+            return out;
+        };
+        p.unlock = [ this, join ]( int slot, const std::string& a, const std::string& x, const std::string& y )
+        {
+            const std::string tag = std::to_string( slot );
+            return ask( slot >= 100 ? join( { tag, a, x, y } ) : join( { tag, a, x } ) ).first;
+        };
+        p.license = [ this ] { return ask( "license" ).first; };
+        p.store_beta = [ this ] { return ask( "4D3170" ).first; };
+        p.progress = [ this ]( const std::string& v ) { return ask( "132|" + v ).first; };
+        p.package = [ this ]( const std::string& asset ) { return ask( "144|" + asset ).first; };
+        p.champ_rank = [ this ]( const std::string& champ ) { return ask( "88|" + champ ).second; };
+        p.champ_done = [ this ]( const std::string& champ ) { return ask( "88|" + champ ).first; };
+        p.race_rank = [ this, join ]( const std::string& m, const std::string& t, const std::string& k ) { return ask( join( { "48", m, t, k } ) ).second; };
+        p.race_done = [ this, join ]( const std::string& m, const std::string& t, const std::string& k ) { return ask( join( { "48", m, t, k } ) ).first; };
+        p.ghost_done = [ this ]( const std::string& track ) { return ask( "124|" + track ).first; };
+        const int index = b.m_index;
+        ui_config_hooks_t& h = c.m_hooks;
+        h.broadcast = [ this ]( std::uint32_t hash, const ui_params_t& params ) { broadcast( hash, params ); };
+        h.touch = [ this, index ] { trace( ui_trace_kind_t::hook, index, "touch_add", 0u, ui_params_t( ), true ); };   // 0x53FB90 (HOOK)
+        h.fire = [ this, &e ]( const std::string& plug, const ui_params_t& params )
+        {
+            if ( plug_index( e, plug.c_str( ) ) < 0 )
+                return false;
+            fire_named( e, plug.c_str( ), params );
+            return true;
+        };
+        h.sound = [ this ]( const char* name ) { trace( ui_trace_kind_t::sound, -1, name, 0u, ui_params_t( ), true ); };
+        h.trophy = [ this ]( const char* model ) { trace( ui_trace_kind_t::hook, -1, std::string( "trophy:" ) + model, 0u, ui_params_t( ), true ); };
+        h.draw_add = [ this, index ] { trace( ui_trace_kind_t::hook, index, "draw_add", 0u, ui_params_t( ), true ); };   // g 0x7590B8 +40 (HOOK)
+        if ( c.m_boat )
+            ui_dock_class( c.m_class, c.m_dock, c.m_env, p, h );
+        else
+            ui_game_config_class_full( c.m_class, c.m_entity, c.m_game, *m_hooks.m_root, p, h );
+        // both ctors (0x45CC80 / 0x44C9F0, through the base 0x4471C0) register these two
+        add( b, "OnUITick", 0x4077EDu, [ this, &c ]( const ui_params_t& )
+        {
+            if ( !ui_config_tick( c.base( ), c.m_nav, c.m_env, c.m_doc, m_hooks.m_delta ? m_hooks.m_delta( ) : 0.0f, c.m_class, c.m_profile, c.m_hooks ) )
+                ++m_config_faults;
+        } );
+        add( b, "OnUIEvent", 0x404AB2u, [ this, &c ]( const ui_params_t& params )
+        {
+            if ( !ui_config_input( c.base( ), c.m_env, c.m_doc, params, c.m_class, c.m_profile, c.m_hooks ) )
+                ++m_config_faults;
+        } );
+    }
+
     void bind( ui_bound_t& b )
     {
         entity_t& e = *b.m_entity;
@@ -785,6 +964,65 @@ private:
             add( b, "OnUITick", 0x46F940u, [ &slider ]( const ui_params_t& ) { slider.on_tick( ); } );
             add( b, "OnUIEvent", 0x46FCC0u, [ &slider ]( const ui_params_t& p ) { slider.on_event( p ); } );
         }
+        else if ( ( b.m_vtable == k_ui_game_config_vtable || b.m_vtable == k_ui_boat_config_vtable ) && m_hooks.m_platform && m_hooks.m_root )
+            bind_config( b );
+        else if ( b.m_vtable == k_ui_boat_stat_vtable )
+            b.m_stat = std::make_unique< ui_boat_stat_t >( );
+        else if ( b.m_vtable == k_ui_subtitles_vtable )
+        {
+            ui_combo_box_hooks_t& h = b.m_combo_hooks;
+            h.m_broadcast = [ this ]( std::uint32_t hash, const ui_params_t& p ) { broadcast( hash, p ); };
+            h.m_fire = [ this, &e ]( const char* plug, const ui_params_t& p ) { fire_named( e, plug, p ); };
+            h.m_connections = [ &e ]( const char* plug ) -> int
+            {
+                const script_component_t* sc = script_of( e );
+                const int k = plug_index( e, plug );
+                return sc && k >= 0 ? static_cast< int >( sc->m_plugs[ static_cast< std::size_t >( k ) ].m_links.size( ) ) : 0;
+            };
+            h.m_sound = [ this ]( const char* name ) { trace( ui_trace_kind_t::sound, -1, name, 0u, ui_params_t( ), true ); };
+            h.m_delta = [ this ] { return m_hooks.m_delta ? m_hooks.m_delta( ) : 0.0f; };
+            h.m_apply = [ this ]( std::uint32_t, int current )
+            {
+                // 0x46D9B0: g 0x758FE0 +0x5C = current != 0 (no null test in retail)
+                if ( m_hooks.m_settings )
+                    m_hooks.m_settings->m_subtitles = current != 0;
+                else
+                    ++m_config_faults;
+            };
+            b.m_combo = std::make_unique< c_ui_combo_box >( ui_entity_id( ui_long_name( e ) ), b.m_vtable, h );
+            c_ui_combo_box& c = *b.m_combo;
+            const auto take = [ &e ]( const char* name, float* out, std::size_t words )
+            {
+                if ( const ui_slot_t* s = ui_bind_slot( e, name ) )
+                    std::memcpy( out, s->m_bits, 4 * words );
+            };
+            take( "Screen Scale", c.m_scale, 2 );
+            take( "Position X", &c.m_position[ 0 ], 1 );
+            take( "Position Y", &c.m_position[ 1 ], 1 );
+            const char* const rect[ 4 ] = { " X", " Y", " Width", " Height" };
+            for ( int k = 0; k < 4; ++k )
+            {
+                take( ( std::string( "TouchLeft" ) + rect[ k ] ).c_str( ), &c.m_left[ k ], 1 );
+                take( ( std::string( "TouchRight" ) + rect[ k ] ).c_str( ), &c.m_right[ k ], 1 );
+            }
+            // 0x474590 registers OnUISetFocus / OnUITick / OnUIEvent through the slot thunks
+            add( b, "OnUISetFocus", 0x404AB2u, [ &c ]( const ui_params_t& p ) { c.on_set_focus( p ); } );
+            add( b, "OnUITick", 0x4077DEu, [ &c ]( const ui_params_t& ) { c.on_tick( ); } );
+            add( b, "OnUIEvent", 0x4077E8u, [ &c ]( const ui_params_t& p ) { c.on_event( p ); } );
+        }
+        else if ( b.m_vtable == k_ui_lock_text_vtable )
+        {
+            b.m_lock_text = std::make_unique< std::string >( );
+            std::string& text = *b.m_lock_text;
+            // 0x445450 registers OnSetShortUnlockStringID 0x445570
+            add( b, "OnSetShortUnlockStringID", 0x445570u, [ this, &text ]( const ui_params_t& p )
+            {
+                ui_params_reader_t r( p );
+                const std::string id = r.read_string( );
+                trace( ui_trace_kind_t::string, -1, id, 0u, ui_params_t( ), true );
+                text = m_hooks.m_string_db ? m_hooks.m_string_db( id.c_str( ) ) : std::string( );
+            } );
+        }
         else
         {
             for ( const ui_event_fact_t& f : k_ui_event_facts )
@@ -830,6 +1068,15 @@ private:
                     return true;
         if ( ui_is_slider_vtable( vt ) )
             for ( const char* name : { "Show", "Hide", "SetFocus" } )
+                if ( std::strcmp( plug, name ) == 0 )
+                    return true;
+        if ( vt == k_ui_subtitles_vtable && std::strcmp( plug, "SetFocus" ) == 0 )
+            return true;
+        if ( vt == k_ui_boat_stat_vtable && std::strcmp( plug, "Set" ) == 0 )
+            return true;
+        if ( ( vt == k_ui_game_config_vtable || vt == k_ui_boat_config_vtable ) && index_of( owner ) >= 0 &&
+             m_bound[ static_cast< std::size_t >( index_of( owner ) ) ]->m_config )
+            for ( const char* name : { "Unlocked", "Available", "InstalledOnHost", "NotUsedSP" } )
                 if ( std::strcmp( plug, name ) == 0 )
                     return true;
         return ( vt == k_ui_if_vtable || vt == k_ui_set_info_vtable ) && std::strcmp( plug, "Trigger" ) == 0;
@@ -1048,6 +1295,29 @@ private:
     {
         ui_ret_t out;
         const std::uint32_t vt = owner.m_ctor ? owner.m_ctor->m_vtable : 0u;
+        if ( vt == k_ui_boat_stat_vtable )
+        {
+            // 0x44FCA0: +0xB0 = the first record as an int; VuRetVal +0 = 0
+            ui_boat_stat_set( *m_bound[ static_cast< std::size_t >( index_of( owner ) ) ]->m_stat, p );
+            out.m_known = false;
+            return out;
+        }
+        if ( vt == k_ui_game_config_vtable || vt == k_ui_boat_config_vtable )
+        {
+            // 0x4483D0 / 0x4483F0 / 0x448410 / 0x448430: VuRetVal { 3, al } (the byte +4 only)
+            ui_bound_config_t& c = *m_bound[ static_cast< std::size_t >( index_of( owner ) ) ]->m_config;
+            out.m_known = false;
+            out.m_words[ 0 ] = 3u;
+            out.m_words[ 1 ] = static_cast< std::uint32_t >( ui_config_plug( plug, c.base( ), *m_hooks.m_root, c.m_class, c.m_profile ) );
+            return out;
+        }
+        if ( vt == k_ui_subtitles_vtable )
+        {
+            // SetFocus -> slot 13 0x475190: VuRetVal +0 = 0 (+4 the caller's)
+            m_bound[ static_cast< std::size_t >( index_of( owner ) ) ]->m_combo->set_focus( );
+            out.m_known = false;
+            return out;
+        }
         if ( ( m_hooks.m_hud && vt != k_ui_if_vtable && vt != k_ui_set_info_vtable && !ui_is_slider_vtable( vt ) && vt != k_ui_button_vtable ) ||
              shown_input( vt, plug ) )
             return run_hud_input( owner, vt, plug, p );
