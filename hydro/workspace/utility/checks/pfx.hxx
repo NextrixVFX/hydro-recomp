@@ -2539,10 +2539,56 @@ inline bool verify_pfx_impl_teardown( )
     return failed == 0;
 }
 
+// VuPfxEntity's draw delegates (world/pfxmgr.hxx pfx_entity_draw / _draw_shadow) against 0x552EF0 / 0x552F10 (case
+// pfx_entity_draw): with and without a system instance, the slot reached, its this and its argument.
+inline bool verify_pfx_entity_draw( )
+{
+    struct log_t
+    {
+        std::vector< unsigned > words;
+        std::uint32_t instance = 0;
+        const void* params = nullptr;
+    } log;
+    pfx_entity_draw_ops_t o{};
+    o.user = &log;
+    o.draw = []( void* u, std::uint32_t inst, const void* p ) {
+        log_t& l = *static_cast< log_t* >( u );
+        l.words.insert( l.words.end( ), { 14u, inst == l.instance ? 1u : 0u, p == l.params ? 1u : 0u } );
+    };
+    o.draw_shadow = []( void* u, std::uint32_t inst, const void* p ) {
+        log_t& l = *static_cast< log_t* >( u );
+        l.words.insert( l.words.end( ), { 15u, inst == l.instance ? 1u : 0u, p == l.params ? 1u : 0u } );
+    };
+    const unsigned* s = g_golden_ped_words;
+    const unsigned n = *s++;
+    int bad = 0;
+    const int params = 0;
+    for ( unsigned c = 0; c < n; ++c )
+    {
+        const unsigned fn = *s++, on = *s++, count = *s++;
+        pfx_manager_entry_t x{};
+        x.instance = on ? 0x20000200u : 0u;
+        log.words.clear( );
+        log.instance = x.instance;
+        log.params = &params;
+        if ( fn == 0x552EF0u )
+            pfx_entity_draw( x, o, &params );
+        else
+            pfx_entity_draw_shadow( x, o, &params );
+        bad += log.words != std::vector< unsigned >( s, s + 3 * count );
+        s += 3 * count;
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "pfx_entity_draw / _draw_shadow match VuPfxEntity's draw delegates 0x552EF0 / 0x552F10: %u calls", n );
+    else
+        LOG_ERROR( "pfx_entity_draw FAILED %d of %u", bad, n );
+    return bad == 0;
+}
 inline bool verify_pfx_all( )
 {
     bool ok = true;
     ok = verify_pfx_impl_teardown( ) && ok;
+    ok = verify_pfx_entity_draw( ) && ok;
     ok = verify_pfx_calls( ) && ok;
     ok = verify_pfx_unload( ) && ok;
     ok = verify_ocean_infinite( ) && ok;
