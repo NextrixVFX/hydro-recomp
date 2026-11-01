@@ -132,6 +132,9 @@
     <ClInclude Include="workspace\core\trigger\volume.hxx">
       <Filter>workspace\core\trigger</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\ui\action.hxx">
+      <Filter>workspace\core\ui</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\ui\button.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
@@ -142,6 +145,9 @@
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\ui\fsm.hxx">
+      <Filter>workspace\core\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\ui\hud.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\ui\schema.hxx">
