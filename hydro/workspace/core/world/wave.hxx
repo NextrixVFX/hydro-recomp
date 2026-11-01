@@ -2117,3 +2117,33 @@ inline void ocean_patch_vertex96( const ocean_patch_t& wave, bool circle, float 
     flow[ 1 ] = flow[ 1 ] + gy;
     height = h + height;
 }
+
+// VuWaterInfiniteOceanWave_SampleHeight @0x59e9e0 (slot 3 @0x59d900 with
+// ctx+0x60 set; SampleHeight2 @0x59eb80 = the same body behind the ctx+100 tag
+// test, read instruction for instruction: only the stack slot of du moves).
+// The rectangular +96 body WITHOUT the centre, the footprint or any fade: the
+// rotation as the base infinite kernel reads it, ONE buffer (+164's) through
+// the evaluator 0x5a0f70, the value added to +8, its partials turned back
+// through the rotation added to +0xC / +0x10. Foam (+0x14) untouched.
+inline void ocean_infinite_vertex96( const ocean_patch_t& wave, float x, float y, float& height, float* flow )
+{
+    const float a = ( x * wave.cosine ) - ( y * wave.sine );
+    const float b = ( wave.sine * x ) + ( y * wave.cosine );
+    const float va = a * wave.scale;
+    const float vb = b * wave.scale;
+    const int ia = ocean_cell( va );
+    const int ib = ocean_cell( vb );
+    const float u = va - static_cast< float >( ia );
+    const float w = vb - static_cast< float >( ib );
+    const int cell = ( ( ib & wave.mask ) << wave.shift ) + ( ia & wave.mask );
+    float du;
+    float dw;
+    const float value = ocean_patch_eval_d( wave.patches[ wave.current ] + 16 * cell, u, w, du, dw );
+    const float sdu = wave.scale * du;
+    const float sdw = wave.scale * dw;
+    const float gx = ( wave.sine * sdw ) + ( wave.cosine * sdu );
+    const float gy = ( wave.cosine * sdw ) - ( wave.sine * sdu );
+    flow[ 1 ] = flow[ 1 ] + gy;
+    flow[ 0 ] = gx + flow[ 0 ];
+    height = height + value;
+}
