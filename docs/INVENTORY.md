@@ -18,10 +18,10 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 1381 | 612975 |
+| verified | 1397 | 616236 |
 | callee | 986 | 232668 |
-| cited | 308 | 119810 |
-| absent | 5963 | 1260807 |
+| cited | 301 | 117573 |
+| absent | 5954 | 1259783 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -30,13 +30,13 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 
 | subsystem | functions | verified | callee | cited | absent | verified bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| unattributed | 1845 | 340 | 204 | 67 | 1234 | 222763 of 695394 |
+| unattributed | 1845 | 343 | 204 | 65 | 1233 | 224102 of 695394 |
 | physics (Bullet) | 646 | 219 | 70 | 47 | 310 | 80780 of 256657 |
-| entity / component / script framework | 1094 | 122 | 179 | 46 | 747 | 37612 of 207438 |
+| entity / component / script framework | 1094 | 130 | 179 | 45 | 740 | 38329 of 207438 |
 | HUD / UI / fonts | 648 | 61 | 142 | 8 | 437 | 39082 of 184315 |
 | game modes / race | 766 | 68 | 56 | 14 | 628 | 33606 of 179957 |
 | rendering / gfx | 552 | 68 | 46 | 26 | 412 | 23503 of 126915 |
-| water | 325 | 117 | 72 | 33 | 103 | 46237 of 96416 |
+| water | 325 | 122 | 72 | 29 | 102 | 47442 of 96416 |
 | boat | 264 | 155 | 42 | 20 | 47 | 63732 of 87400 |
 | engine core / math / containers | 391 | 32 | 15 | 17 | 327 | 5728 of 76072 |
 | other classes | 731 | 9 | 3 | 1 | 718 | 5251 of 67698 |
@@ -58,8 +58,8 @@ Over-approximate (a referenced vtable brings every slot) and under-approximate (
 
 | tier | functions | verified | callee | cited | absent | runtime / STL / thunk | platform layer | game + engine logic not verified |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| race | 4905 | 1236 | 685 | 290 | 2694 | 68 | 610 | 3072 |
-| game | 2431 | 143 | 300 | 17 | 1971 | 77 | 313 | 1899 |
+| race | 4905 | 1249 | 685 | 284 | 2687 | 68 | 610 | 3059 |
+| game | 2431 | 146 | 300 | 16 | 1969 | 77 | 313 | 1896 |
 | service | 452 | 0 | 0 | 0 | 452 | 45 | 98 | 309 |
 | dead | 850 | 2 | 1 | 1 | 846 | 61 | 126 | 661 |
 
