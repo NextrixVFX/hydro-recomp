@@ -4,6 +4,7 @@
 #include <workspace/core/world/strings.hxx>
 #include <workspace/core/world/background.hxx>
 #include <workspace/core/world/action.hxx>
+#include <workspace/core/world/mine.hxx>
 
 #include <cstdio>
 
@@ -349,9 +350,82 @@ inline bool verify_mine_properties( )
     return failed == 0;
 }
 
+// explosion_add / mine_contact (world/mine.hxx) against retail's VuExplosionManagerImpl add 0x510180 (fake listeners:
+// the hits in order and their scale words) and VuFloatingMineEntity's contact callback 0x438E10 (the request byte, the
+// component's +0xD0, the body's +0xD8) - oracle case mine_explode.
+inline bool verify_mine_explode( )
+{
+    struct lis_t
+    {
+        const golden_mine_listener_t* g;
+        int index;
+        std::vector< std::pair< int, std::uint32_t > >* hits;
+    };
+    int failed = 0, hits_total = 0;
+    for ( std::size_t k = 0; k < g_golden_mine_add_count; ++k )
+    {
+        const golden_mine_add_t& want = g_golden_mine_adds[ k ];
+        std::uint8_t params[ 0x38 ] = { };
+        std::memcpy( params, want.position, 12 );
+        std::memcpy( params + 0x10, &want.outer, 4 );
+        std::memcpy( params + 0x14, &want.inner, 4 );
+        std::vector< std::pair< int, std::uint32_t > > got;
+        std::vector< lis_t > owners( static_cast< std::size_t >( want.count ) );
+        std::vector< explosion_listener_t > ls;
+        for ( int i = 0; i < want.count; ++i )
+        {
+            owners[ static_cast< std::size_t >( i ) ] = { &g_golden_mine_listeners[ want.first + i ], i, &got };
+            explosion_listener_t l;
+            l.user = &owners[ static_cast< std::size_t >( i ) ];
+            l.position = []( void* u, float* out ) { std::memcpy( out, static_cast< lis_t* >( u )->g->position, 16 ); };
+            l.radius = []( void* u ) { float r; std::memcpy( &r, &static_cast< lis_t* >( u )->g->radius, 4 ); return r; };
+            l.hit = []( void* u, const std::uint8_t*, float scale ) {
+                std::uint32_t w;
+                std::memcpy( &w, &scale, 4 );
+                static_cast< lis_t* >( u )->hits->push_back( { static_cast< lis_t* >( u )->index, w } );
+            };
+            ls.push_back( l );
+        }
+        explosion_add( params, ls, hull_sqrt );
+        bool bad = static_cast< int >( got.size( ) ) != want.hits;
+        for ( int h = 0; !bad && h < want.hits; ++h )
+            bad = got[ static_cast< std::size_t >( h ) ].first != g_golden_mine_hits[ want.hit_first + h ].listener ||
+                  got[ static_cast< std::size_t >( h ) ].second != g_golden_mine_hits[ want.hit_first + h ].scale;
+        hits_total += want.hits;
+        if ( bad && ++failed <= 8 )
+            LOG_ERROR( "explosion add %d: %d hits, retail %d (or a listener / scale differs)", static_cast< int >( k ), static_cast< int >( got.size( ) ), want.hits );
+    }
+    for ( std::size_t k = 0; k < g_golden_mine_contact_count; ++k )
+    {
+        const golden_mine_contact_t& want = g_golden_mine_contacts[ k ];
+        mine_contact_t in;
+        in.owner = want.owner != 0;
+        in.owner_is_boat = want.owner == 1;
+        in.driver_answer = ( want.driver & 0xFFu ) != 0u;
+        in.other_flags = want.flags;
+        rigid_component_t c;
+        c.flags_d0 = want.d0;
+        std::uint8_t body[ 0x2E0 ] = { };
+        std::uint8_t request = 0;
+        mine_contact( in, request, c, want.body ? body : nullptr );
+        std::uint32_t d8;
+        std::memcpy( &d8, body + 0xD8, 4 );
+        if ( ( request != want.request || c.flags_d0 != want.out_d0 || d8 != want.out_d8 ) && ++failed <= 8 )
+            LOG_ERROR( "mine contact %d (owner %d flags 0x%X driver 0x%X): request %d +0xD0 0x%X +0xD8 0x%X, retail %d 0x%X 0x%X", static_cast< int >( k ),
+                       want.owner, want.flags, want.driver, request, c.flags_d0, d8, want.request, want.out_d0, want.out_d8 );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "explosion_add / mine_contact match retail's 0x510180 (%d explosions, %d hits) and 0x438E10 (%d contacts), bit for bit",
+                     static_cast< int >( g_golden_mine_add_count ), hits_total, static_cast< int >( g_golden_mine_contact_count ) );
+    else
+        LOG_ERROR( "the mine explosion FAILED on %d vectors", failed );
+    return failed == 0;
+}
+
 inline bool verify_session_all( )
 {
     bool ok = true;
+    ok = verify_mine_explode( ) && ok;
     ok = verify_mine_properties( ) && ok;
     ok = verify_action_mode( ) && ok;
     ok = verify_front_end_trigger( ) && ok;
