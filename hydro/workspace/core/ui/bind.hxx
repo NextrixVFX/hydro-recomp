@@ -950,7 +950,26 @@ private:
         const int index = b.m_index;
         ui_config_hooks_t& h = c.m_hooks;
         h.broadcast = [ this ]( std::uint32_t hash, const ui_params_t& params ) { broadcast( hash, params ); };
-        h.touch = [ this, index ] { trace( ui_trace_kind_t::hook, index, "touch_add", 0u, ui_params_t( ), true ); };   // 0x53FB90 (HOOK)
+        // 0x448140's 0x53FB90 { this + 0x5C, 0 } on the touch device g 0x759070 (+4): batch 26 - with m_touch_device it
+        // lands there and the device's dispatch reaches the selector's callbacks (navigate.hxx ui_config_touch_handlers)
+        h.touch = [ this, index, &c ]
+        {
+            trace( ui_trace_kind_t::hook, index, "touch_add", 0u, ui_params_t( ), true );
+            if ( !m_hooks.m_touch_device )
+                return;
+            ui_touch_add( *m_hooks.m_touch_device, &c.m_nav, 0u );
+            ui_config_touch_handlers( *m_hooks.m_touch_device, &c.m_nav, [ this ] { return touch_inverse( ); }, m_config_faults );
+        };
+        // slot 7 (0x45D080 / 0x44D090): 0x53FA60 (this + 0x5C), and VuGameConfigEntity's 3D draw manager remove (HOOK)
+        h.touch_remove = [ this, index, &c ]
+        {
+            trace( ui_trace_kind_t::hook, index, "touch_remove", 0u, ui_params_t( ), true );
+            if ( !m_hooks.m_touch_device )
+                return;
+            ui_touch_remove( *m_hooks.m_touch_device, &c.m_nav );
+            m_hooks.m_touch_device->m_handlers.erase( &c.m_nav );
+        };
+        h.draw_remove = [ this, index ] { trace( ui_trace_kind_t::hook, index, "draw_remove", 0u, ui_params_t( ), true ); };   // g 0x7590B8 +44 (HOOK)
         h.fire = [ this, &e ]( const std::string& plug, const ui_params_t& params )
         {
             if ( plug_index( e, plug.c_str( ) ) < 0 )
@@ -1490,6 +1509,8 @@ private:
             known = true;
         else if ( vt == k_ui_leaderboard_vtable && b && b->m_ladder )
             known = true;
+        else if ( !init && ( vt == k_ui_game_config_vtable || ( vt == k_ui_boat_config_vtable && m_hooks.m_root ) ) && b && b->m_config )
+            known = true;   // batch 26: slot 7 0x45D080 / 0x44D090 (slot 6 stays config_setup( )'s)
         trace( ui_trace_kind_t::game, index, std::string( ), address, ui_params_t( ), known );
         if ( !known )
         {
@@ -1502,6 +1523,14 @@ private:
                 m_screen.screen_enter( );
             else
                 m_screen.screen_exit( );
+        }
+        else if ( vt == k_ui_game_config_vtable || vt == k_ui_boat_config_vtable )
+        {
+            ui_bound_config_t& c = *b->m_config;
+            if ( !c.m_boat )
+                ui_game_config_release( c.m_game, c.m_hooks );   // 0x45D080
+            else if ( !ui_boat_config_game_release( *m_hooks.m_root, c.m_dock.m_player, c.m_dock.m_base.m_options.size( ), c.m_hooks ) )   // 0x44D090
+                ++m_config_faults;
         }
         else if ( vt == k_ui_button_vtable )
         {

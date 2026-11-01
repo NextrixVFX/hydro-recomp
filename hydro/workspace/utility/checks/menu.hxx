@@ -54,7 +54,7 @@ inline float ui_cn_float( std::uint32_t bits )
 inline bool verify_ui_config_nav( )
 {
     const ui_loaded_t& loaded = ui_loaded( );
-    int failed = 0, runs = 0, steps = 0, calls = 0;
+    int failed = 0, runs = 0, steps = 0, calls = 0, failed_runs = 0;
     auto bad = [ &failed ]( const char* what, int k )
     {
         if ( ++failed <= 8 )
@@ -198,10 +198,21 @@ inline bool verify_ui_config_nav( )
             e.m_force_online = screen.m_force_online;
             ui_game_config_t2 g;
             ui_config_nav_t n = nav0;
+            // batch 26: setup's 0x53FB90 registers the selector's callbacks in a touch device and every touch op below goes
+            // through the device's dispatch (controls.hxx) to them (navigate.hxx ui_config_touch_handlers) - the binding's glue
+            ui_touch_device_t device;
+            int touch_faults = 0;
+            h.touch = [ & ]( )
+            {
+                next( 4 );
+                ui_touch_add( device, &n, 0u );
+                ui_config_touch_handlers( device, &n, [ ] { return inverse; }, touch_faults );
+            };
             value_t doc;
             ui_config_class_t cls;
             ui_game_config_class_full( cls, e, g, root, p, h );
             ++runs;
+            const int failed_before = failed;
             for ( int s = 0; s < run.m_steps; ++s )
             {
                 step = &g_golden_cn_steps[ run.m_first + s ];
@@ -227,22 +238,23 @@ inline bool verify_ui_config_nav( )
                     done = ui_config_tick( e, n, env, doc, ui_cn_float( step->m_a ), cls, p, h );
                     break;
                 case 2:
-                {
-                    const float point[ 2 ] = { ui_cn_float( step->m_a ), ui_cn_float( step->m_b ) };
-                    ui_config_touch_down( n, inverse, point );
+                    ui_touch_dispatch_down( device, 1u, ui_cn_float( step->m_a ), ui_cn_float( step->m_b ) );   // 0x5393E0
                     break;
-                }
                 case 3:
-                {
+                    // the device's touch 0 answers the case's point (retail's hooked slot 7), then 0x53FB40
                     next( 15 );
-                    const float point[ 2 ] = { ui_cn_float( step->m_a ), ui_cn_float( step->m_b ) };
-                    ui_config_touch_move( n, inverse, point );
+                    if ( device.m_touches.empty( ) )
+                        device.m_touches.resize( 1 );
+                    device.m_touches[ 0 ].m_point[ 0 ] = ui_cn_float( step->m_a );
+                    device.m_touches[ 0 ].m_point[ 1 ] = ui_cn_float( step->m_b );
+                    ui_touch_dispatch_move( device );
                     break;
-                }
                 default:
-                    ui_config_touch_up( n );
+                    ui_touch_dispatch_up( device, 1u, 0.0f, 0.0f );   // 0x5394A0
                     break;
                 }
+                if ( touch_faults || device.m_unhandled )
+                    bad( "the touch dispatch (an unhandled callback / indeterminate touch)", row );
                 ++steps;
                 std::string after;
                 vujb_dump( root, after );
@@ -261,15 +273,18 @@ inline bool verify_ui_config_nav( )
                 if ( !hooks_same || at != step->m_logs )
                     bad( "the hook calls", row );
             }
+            if ( failed > failed_before )
+                ++failed_runs;
         }
     }
     if ( failed == 0 )
         LOG_SUCCESS( "ui_config_input / touch / tick match retail's VuBaseConfigEntity navigation (slot 14 0x448A50, touch 0x4481C0 / "
                      "0x4482C0 / 0x4482D0, slot 13 0x448470, focus 0x4496E0, change 0x449830) on %d GameConfig entities from our loaded "
-                     "properties: %d runs, %d steps (root, combos, focus, nav bytes, trophy), %d hook calls",
+                     "properties: %d runs, %d steps (root, combos, focus, nav bytes, trophy; the touch ops through the device's dispatch 0x5393E0 / "
+                     "0x5394A0 / 0x53FB40 to the callbacks setup's 0x53FB90 registered), %d hook calls",
             static_cast< int >( g_golden_cn_entities_count ), runs, steps, calls );
     else
-        LOG_ERROR( "the config navigation FAILED %d checks against retail's", failed );
+        LOG_ERROR( "the config navigation FAILED %d checks against retail's (%d runs)", failed, failed_runs );
     return failed == 0;
 }
 

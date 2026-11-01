@@ -6,7 +6,9 @@
 #include <workspace/core/ui/slider.hxx>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -613,9 +615,77 @@ inline bool verify_ui_message_box_draw( )
     return failed == 0;
 }
 
+// ui_game_config_release (core/ui expand.hxx) over the touch device's removal
+// (controls.hxx ui_touch_remove) against retail's VuGameConfigEntity slot 7
+// 0x45D080 with 0x53FA60 live (oracle case game_config_release) on the five
+// GameConfig* screens' selectors: the device's entries after, +0x1C, the draw
+// object's +0x1E and the 3D draw manager removes.
+inline bool verify_ui_game_config_release( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0, runs = 0;
+    for ( std::size_t k = 0; k < g_golden_gcr_entities_count; ++k )
+    {
+        const golden_gcr_entity_t& want = g_golden_gcr_entities[ k ];
+        const entity_t* have = nullptr;
+        for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+            if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, want.m_project ) == 0 && want.m_index >= 0 &&
+                 static_cast< std::size_t >( want.m_index ) < loaded.trees[ p ].size( ) )
+                have = loaded.trees[ p ][ static_cast< std::size_t >( want.m_index ) ].second;
+        if ( !have || have->m_type != "VuGameConfigEntity" || have->m_name != want.m_name )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "ui game config release: %s entity %d is not the authored selector", want.m_project, want.m_index );
+            continue;
+        }
+        for ( int r = 0; r < want.m_runs; ++r )
+        {
+            const golden_gcr_run_t& run = g_golden_gcr_runs[ want.m_first + r ];
+            ui_config_nav_t self;
+            int others[ 2 ] = { };
+            const std::map< std::string, const void* > tags = { { "self", &self }, { "o1", &others[ 0 ] }, { "o2", &others[ 1 ] } };
+            ui_touch_device_t device;
+            for ( const char* at = run.m_before; *at; )
+            {
+                const char* comma = std::strchr( at, ',' );
+                const char* semi = comma ? std::strchr( comma, ';' ) : nullptr;
+                if ( !semi )
+                    break;
+                device.m_callbacks.push_back( { tags.at( std::string( at, comma ) ), static_cast< std::uint32_t >( std::strtoul( comma + 1, nullptr, 10 ) ) } );
+                at = semi + 1;
+            }
+            device.m_priority = 7u;
+            ui_game_config_t2 g;
+            g.m_drawn = run.m_drawn != 0;
+            int draws = 0;
+            ui_config_hooks_t h;
+            h.touch_remove = [ & ] { ui_touch_remove( device, &self ); };
+            h.draw_remove = [ & ] { ++draws; };
+            ui_game_config_release( g, h );
+            std::string after;
+            for ( const auto& c : device.m_callbacks )
+                for ( const auto& t : tags )
+                    if ( t.second == c.first )
+                        after += t.first + "," + std::to_string( c.second ) + ";";
+            ++runs;
+            if ( ( after != run.m_after || device.m_priority != run.m_priority || ( g.m_drawn ? 1 : 0 ) != run.m_byte || draws != run.m_draws ) && ++failed <= 8 )
+                LOG_ERROR( "ui game config release: %s run %d: entries %s +0x1C %u +0x1E %d draws %d (retail %s %u %d %d)", want.m_project, r, after.c_str( ),
+                           device.m_priority, g.m_drawn ? 1 : 0, draws, run.m_after, run.m_priority, run.m_byte, run.m_draws );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_game_config_release matches retail's VuGameConfigEntity onGameRelease 0x45D080 (touch removal 0x53FA60, 3D draw manager "
+                     "slot +0x2C) on %d selectors: %d runs (the device's entries and +0x1C, +0x1E, the draw removes)",
+            static_cast< int >( g_golden_gcr_entities_count ), runs );
+    else
+        LOG_ERROR( "the game config release FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_widgets_all( )
 {
     bool ok = true;
+    ok = verify_ui_game_config_release( ) && ok;
     ok = verify_ui_message_box_draw( ) && ok;
     ok = verify_ui_slider_draw( ) && ok;
     ok = verify_ui_hud_controls( ) && ok;

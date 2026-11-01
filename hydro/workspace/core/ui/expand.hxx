@@ -325,3 +325,19 @@ inline bool ui_game_config_initialize( ui_config_entity_t& e, ui_game_config_t2&
     }
     return ok;
 }
+
+// Slot 7 (onGameRelease) 0x45D080 (disassembled, batch 26): the touch removal
+// 0x53FA60 (g 0x759070, this + 0x5C - h.touch_remove), then, when the draw
+// object (+0x2E0) is in the 3D draw manager (+0x1E), g 0x7590B8 slot +0x2C
+// (h.draw_remove) and +0x1E = 0.
+inline void ui_game_config_release( ui_game_config_t2& g, const ui_config_hooks_t& h )
+{
+    if ( h.touch_remove )
+        h.touch_remove( );
+    if ( g.m_drawn )
+    {
+        if ( h.draw_remove )
+            h.draw_remove( );
+        g.m_drawn = false;
+    }
+}
