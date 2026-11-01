@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/boat/hull.hxx>
+#include <workspace/core/entity/gfx.hxx>
 #include <workspace/core/world/transform.hxx>
 
 #include <cstdint>
@@ -249,4 +250,27 @@ inline void gfx_zone_trigger( gfx_zone_t& z )
 inline void gfx_global_trigger( gfx_blender_t& b, const std::uint32_t* record )
 {
     std::memcpy( b.record, record, sizeof( b.record ) );
+}
+
+// A gfx-settings entity's words as the blend reads them, from its loaded
+// targets (engine entity/gfx.hxx: +0x60 .. +0xC4): +0x60 Always Active, +0x64 /
+// +0x68 / +0x6C the times, +0x70 .. +0xC4 the record; +0xC8 the timer = 0 (the
+// base ctor 0x5A6520 at 0x5A658C); +0xD0 / +0xD4 the inner radii (the zones').
+inline void gfx_zone_view( gfx_zone_t& z, const gfx_settings_t& g, gfx_zone_kind_t kind, const float* inner, const transform_component_t* t )
+{
+    std::uint32_t words[ 26 ];
+    gfx_settings_words( g, words );
+    z.kind = kind;
+    z.transform = t;
+    z.always_active = g.always_active;
+    z.ramp_up = g.ramp_up_time;
+    z.duration = g.duration;
+    z.ramp_down = g.ramp_down_time;
+    std::memcpy( z.record, words + 4, sizeof( z.record ) );
+    z.timer = 0.0f;
+    if ( inner )
+    {
+        z.inner[ 0 ] = inner[ 0 ];
+        z.inner[ 1 ] = inner[ 1 ];
+    }
 }

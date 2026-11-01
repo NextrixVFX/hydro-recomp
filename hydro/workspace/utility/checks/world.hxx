@@ -164,6 +164,48 @@ inline bool verify_gfx_settings( )
     return failed == 0;
 }
 
+// The gfx-settings zones' blend views (world/blend.hxx gfx_zone_view on hydro's game/types.hxx zone state: the
+// base set + the VuPercentageProperty inner radii) against retail's VuEntity::load on every
+// VuRectangularGfxSettingsEntity / VuEllipticalGfxSettingsEntity of the level templates and projects plus four
+// hand-built ones (oracle case load_gfx_zones): +0x60 Always Active, the times, the +0x70 record, the +0xC8 timer,
+// the inner radii - every word the blend 0x52F690 and the weights read - bit for bit.
+inline bool verify_gfx_zones( )
+{
+    std::map< std::string, entity_t* > by_name;
+    const std::unique_ptr< entity_t > tree = world_check_tree( g_golden_gfx_zones_document, g_golden_gfx_zones_document_bytes, by_name );
+    int failed = 0;
+    int compared = 0;
+    for ( std::size_t k = 0; k < g_golden_gfx_zones_count; ++k )
+    {
+        const golden_entity_targets_t& want = g_golden_gfx_zones[ k ];
+        const auto found = by_name.find( want.m_child );
+        if ( found == by_name.end( ) || !found->second->m_state || found->second->m_type != want.m_type )
+        {
+            LOG_ERROR( "gfx zones: '%s' (%s) missing or without state", want.m_source, want.m_child );
+            ++failed;
+            continue;
+        }
+        const bool rect = found->second->m_type == "VuRectangularGfxSettingsEntity";
+        const gfx_zone_state_t& st = *static_cast< const gfx_zone_state_t* >( found->second->m_state.get( ) );
+        gfx_zone_t z;
+        gfx_zone_view( z, st.value, rect ? gfx_zone_kind_t::rectangular : gfx_zone_kind_t::elliptical, st.inner, nullptr );
+        std::vector< std::uint32_t > ours = { z.always_active, gfx_w( z.ramp_up ), gfx_w( z.duration ), gfx_w( z.ramp_down ) };
+        ours.insert( ours.end( ), z.record, z.record + 22 );
+        ours.push_back( gfx_w( z.timer ) );
+        ours.push_back( gfx_w( z.inner[ 0 ] ) );
+        if ( rect )
+            ours.push_back( gfx_w( z.inner[ 1 ] ) );
+        world_check_words( "gfx zones", want, ours, failed, compared );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "The gfx-settings zones' blend views match retail's loads (ctors 0x5D1FB0 / 0x5D2580 on the base 0x5A6520) on %d "
+                     "entities: %d values, bit for bit",
+                     static_cast< int >( g_golden_gfx_zones_count ), compared );
+    else
+        LOG_ERROR( "the gfx zones' loads FAILED %d checks", failed );
+    return failed == 0;
+}
+
 // VuTriggerEntity's two property loads (engine entity/trigger.hxx through the
 // tree's entity_load_properties) against retail's VuEntity::load on the
 // VuTriggerPlaneEntity / VuTriggerBoxEntity of the templates plus five
@@ -2710,6 +2752,7 @@ inline bool verify_world_all( )
 {
     bool ok = true;
     ok = verify_gfx_blend( ) && ok;
+    ok = verify_gfx_zones( ) && ok;
     ok = verify_race_hull_wake( ) && ok;
     ok = verify_prop_rigid_bodies( ) && ok;
     ok = verify_water_surface_under( ) && ok;

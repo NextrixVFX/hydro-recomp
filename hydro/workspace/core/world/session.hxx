@@ -8,6 +8,7 @@
 #include <workspace/core/boat/thunk.hxx>
 #include <workspace/core/dynamics/contact.hxx>
 #include <workspace/core/ui/config.hxx>
+#include <workspace/core/world/blend.hxx>
 #include <workspace/core/world/bodies.hxx>
 #include <workspace/core/world/dynamics.hxx>
 #include <workspace/core/world/kernel.hxx>
@@ -152,6 +153,10 @@ struct race_session_t
     // The level's static bodies (world/bodies.hxx) and their collision mesh assets.
     boat_mesh_library_t level_meshes;
     std::vector< std::unique_ptr< level_body_t > > level_bodies;
+    // The gfx-settings blender g 0x759430 (world/blend.hxx; 0x52F620 at the session's start) and the level's gfx-settings
+    // entities' blend views (the zones in its list; the global's not listed - its timer only), made by their gameInitialize.
+    gfx_blender_t blender;
+    std::vector< std::unique_ptr< gfx_zone_t > > gfx_entities;
 };
 
 // The Decision tick 0x41EFF0 and the Viewports tick 0x4AB0A0 composed on the
@@ -433,6 +438,43 @@ inline void race_session_enable( race_session_t& s, race_session_boat_t& b, bool
 // asset property creates them at load, 0x545200, here at the build). The
 // VuRigidBody ids (the debug global 0x759030) continue from one per boat
 // (FLAGGED: the boat ctor's own count is the boat agent's, seeded 0).
+// The zones' "Build" tick 0x5A7210 (timer -= dt).
+inline void race_session_gfx_tick( void* user, float dt )
+{
+    gfx_zone_tick( *static_cast< gfx_zone_t* >( user ), dt );
+}
+
+// The gfx-settings entities' slot 6 in the level walk: VuGfxSettingsEntity's
+// 0x5A71B0 (VuGlobalGfxSettingsEntity: the "Build" tick 0x5A7210 registered
+// unless Always Active) and the zones' 0x5D21B0 (the same, then pushed onto
+// the blender's list g 0x759488 / 0x75948C). The blend view: the +0x70 record
+// = the targets' +0x70 .. +0xC4 words, the timer +0xC8 = 0 (the base ctor), the
+// transform component's world / scale. True when `e` is one of the three
+// (UNKNOWN - logged, not built - without its state or a known world).
+inline bool race_session_gfx_game_initialize( race_session_t& s, entity_t& e )
+{
+    const bool rect = e.m_type == "VuRectangularGfxSettingsEntity", ellip = e.m_type == "VuEllipticalGfxSettingsEntity";
+    if ( !rect && !ellip && e.m_type != "VuGlobalGfxSettingsEntity" )
+        return false;
+    const transform_component_t* t = entity_transform( e );
+    if ( !e.m_state || ( ( rect || ellip ) && ( !t || e.m_world_unknown ) ) )
+    {
+        race_unwired( s, "a gfx-settings entity without its state / known world - its gameInitialize not run (UNKNOWN)" );
+        return true;
+    }
+    auto z = std::make_unique< gfx_zone_t >( );
+    const gfx_settings_t& g = rect || ellip ? static_cast< gfx_zone_state_t* >( e.m_state.get( ) )->value
+                                            : static_cast< gfx_settings_state_t* >( e.m_state.get( ) )->value;
+    const gfx_zone_state_t* zs = rect || ellip ? static_cast< gfx_zone_state_t* >( e.m_state.get( ) ) : nullptr;
+    gfx_zone_view( *z, g, ellip ? gfx_zone_kind_t::elliptical : gfx_zone_kind_t::rectangular, zs ? zs->inner : nullptr, t );
+    if ( !z->always_active )
+        tick_register( s.ticks, { z.get( ), race_session_gfx_tick, z.get( ) }, "Build" );
+    if ( rect || ellip )
+        s.blender.zones.push_back( z.get( ) );
+    s.gfx_entities.push_back( std::move( z ) );
+    return true;
+}
+
 inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const c_archive& archive )
 {
     if ( !s.dynamics )
@@ -457,6 +499,8 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
     {
         for ( auto& c : e.m_children )
             self( self, *c );
+        if ( race_session_gfx_game_initialize( s, e ) )
+            return;
         if ( e.m_type != "VuPropEntity" )
         {
             ++unknown[ e.m_type.empty( ) ? std::string( "(UNKNOWN node)" ) : e.m_type ];
@@ -784,8 +828,6 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     if ( s.stopped_transform )
         LOG_WARNING( "race: the transform-changed delegate 0x421670 STOPPED (UNKNOWN) on %d boat(s) - it reads the sections load's +0x290 centre",
                      s.stopped_transform );
-    race_session_level_bodies( s, tree, archive );
-
     // The tick manager (ctor 0x4F6F60, slot 5 0x4F7050) and the AI manager's tick.
     tick_manager_init( s.ticks );
     tick_register( s.ticks, { s.dynamics.get( ), race_session_dynamics_sync, &s }, "DynamicsSync" );   // 0x4F8050's registrations
@@ -795,6 +837,13 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     // VuWater's tick 0x529E30 in "Water" (VuWater made by the engine init, before the race: c_world's
     // water_tick - surface.hxx water_built_tick and the queries' view).
     tick_register( s.ticks, { &s.world, race_session_water, &s }, "Water" );
+
+    // The level's gameInitialize walk (after the tick manager: the gfx-settings entities register their Build ticks),
+    // on the blender as the engine's init 0x52F620 leaves it.
+    gfx_blender_init( s.blender );
+    race_session_level_bodies( s, tree, archive );
+    if ( !s.gfx_entities.empty( ) )
+        race_unwired( s, "the gfx-settings entities' Trigger inputs (0x5A7230 / the global's 0x5D2980) - the race runs no event graph: never fired (UNKNOWN), the blender keeps 0x41B400's record" );
 
     // The grid: every VuGridPositionEntity's transform world, through 0x43A740,
     // in the tree's pre-order (the project's gameInitialize walk; the list is

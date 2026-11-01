@@ -31,8 +31,8 @@
 //      component (+0x6C) +0x24..+0x43; registered (+0x1E) -> the draw
 //      manager g 0x7590B8 vt+0x30(draw);
 //   7. 0x4200E0(dt) - boat_build_audio below, RECREATED + VERIFIED.
-// Step 2 is recreated below (boat_build_water, verified through 0x52ACB0);
-// steps 1 and 3 - 6 are NOT yet (the gfx settings blender, the driver's
+// Step 1 is world/blend.hxx gfx_blend (verified: case gfx_blend; run by drive.hxx race_drive_build). Step 2 is recreated below (boat_build_water, verified through 0x52ACB0);
+// steps 3 - 6 are NOT yet (the driver's
 // vt+0x4C, the model instances / animation system, 0x419700, 0x411A50).
 
 // 0x4200E0's outside calls: 0x50FBF0 on the event slot +0x488 (the engine's

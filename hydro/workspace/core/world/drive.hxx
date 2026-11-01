@@ -665,8 +665,18 @@ inline void race_drive_decision( race_session_t& s, std::size_t boat, float dt )
 inline void race_drive_build( race_session_t& s, std::size_t boat, float dt )
 {
     race_drive_t& r = *s.drives[ boat ];
-    race_unwired( s, "the Build tick 0x41F330's step 1 (gfx settings 0x52F690 -> +0x408) and steps 3 - 6 (the driver's vt+0x4C, the "
-                     "animation / model instances, the pfx 0x419700, the debris 0x411A50, the draw aabb) - NOT recreated" );
+    race_unwired( s, "the Build tick 0x41F330's steps 3 - 6 (the driver's vt+0x4C, the animation / model instances, the pfx 0x419700, the "
+                     "debris 0x411A50, the draw aabb) - NOT recreated" );
+    // Step 1: 0x52F690 on the blender g 0x759430 (world/blend.hxx) with the position (transform +0x80, copied first)
+    // into boat +0x408 (the 22-word record: +0x408 the far plane the race camera reads, +0x454 / +0x458 the pfx
+    // colours step 2 lerps).
+    {
+        float position[ 4 ];
+        std::memcpy( position, r.d.transform + 0x80, 16 );
+        std::uint32_t out[ 22 ];
+        gfx_blend( s.blender, position, out );
+        std::memcpy( r.d.boat + 0x408, out, sizeof( out ) );
+    }
     // Step 2: the surface under the position (0x52ACB0) and the colour lerp (world/build.hxx boat_build_water). It
     // reads the position copied before step 1 and writes only +0x2B4 .. +0x2C4, which step 1 does not touch.
     {
