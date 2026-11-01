@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/ui/bind.hxx>
+#include <workspace/core/ui/board.hxx>
 #include <workspace/core/ui/chooser.hxx>
 #include <workspace/core/ui/results.hxx>
 
@@ -538,11 +539,219 @@ inline bool verify_ui_screen_game_init( )
     return failed == 0;
 }
 
+// verify_ui_mini_board (batch 21): c_ui_mini_board (core/ui board.hxx) against retail's
+// VuUIMiniLeaderboardEntity slot 6 0x47DAB0, Decision 0x47E170, draw 0x47DB40 (Read
+// 0x47E560 / Show 0x47E600 / NotConnected 0x47EA20) and slot 7 0x47DB10 through one script
+// per authored instance (oracle case mini_board). The fields from OUR loaded entity
+// (ui_mini_board_of; compared with retail's bytes first), the three fonts' params 0..40
+// from OUR load over FontDB (41..59 retail's - UNKNOWN); the leaderboard manager (status,
+// rows), the tick manager's delta, VuStringDB slot 6 and the font answers are the case's
+// (inputs); the game-data root = OUR reader on the step's VUJB. Per step: the hook log in
+// order, the commands and records byte for byte (one sort per buffer), the FSM after.
+inline bool verify_ui_mini_board( )
+{
+    ui_gfx_sort_t sort;
+    ui_lv_sort( sort );
+    int failed = 0, steps = 0, commands = 0, logs = 0, fields = 0;
+    const auto fsm_text = []( const c_ui_mini_board& b )
+    {
+        char word[ 48 ];
+        std::snprintf( word, sizeof word, "%d,%d,%d|", b.m_fsm.m_current, b.m_fsm.m_previous, b.m_fsm.m_next );
+        std::string t = word;
+        for ( const fsm_condition_t& c : b.m_fsm.m_conditions )
+        {
+            std::snprintf( word, sizeof word, "%d,%d;", c.m_value, c.m_pulse );
+            t += word;
+        }
+        std::snprintf( word, sizeof word, "|0x%08X|", ui_lv_bits( b.m_fsm.m_time ) );
+        return t + word + b.m_key;
+    };
+    for ( std::size_t k = 0; k < g_golden_mb_entities_count; ++k )
+    {
+        const golden_mb_entity_t& ge = g_golden_mb_entities[ k ];
+        const entity_t* e = ui_lv_entity( ge.m_project, ge.m_index );
+        const std::vector< std::uint8_t > raw = ui_unhex( ge.m_fields );
+        bool same = e && e->m_ctor && e->m_ctor->m_vtable == k_ui_mini_board_vtable && raw.size( ) == 0x190;
+        ui_mini_board_t f;
+        ui_mini_board_draw_t d;
+        if ( same )
+        {
+            f = ui_mini_board_of( *e );
+            const auto against = [ & ]( const void* ours, int offset, std::size_t bytes )
+            {
+                if ( std::memcmp( ours, raw.data( ) + ( offset - 0x60 ), bytes ) != 0 )
+                    same = false;
+                ++fields;
+            };
+            against( f.m_scale, 0x64, 8 );
+            against( f.m_pos, 0x6C, 8 );
+            against( &f.m_rows, 0x74, 4 );
+            against( f.m_row, 0x78, 16 );
+            against( &f.m_spacing, 0x88, 4 );
+            against( &f.m_name_x, 0x8C, 4 );
+            against( &f.m_score_x, 0x90, 4 );
+            against( f.m_info, 0x15C, 16 );
+            against( &f.m_h_align, 0x1D0, 4 );
+            against( &f.m_v_align, 0x1D4, 4 );
+            against( &f.m_no_clip, 0x1D8, 1 );
+            against( &f.m_single_line, 0x1D9, 1 );
+            against( &f.m_wordbreak, 0x1DA, 1 );
+            against( &f.m_anchor, 0x1DC, 16 );
+            same = same && ui_lv_bits( f.m_depth ) == ge.m_depth;
+            const char* const font_names[ 3 ] = { "NameFont", "ScoreFont", "InfoFont" };
+            for ( int c = 0; same && c < 3; ++c )
+            {
+                const golden_rr_font_t& gf = g_golden_mb_font_rows[ ge.m_first_font + c ];
+                const ui_slot_t* name = ui_property_value( *e, font_names[ c ] );
+                const std::vector< std::uint8_t > want = ui_unhex( gf.m_params );
+                same = name && name->m_text == gf.m_name && want.size( ) == 60;
+                if ( !same )
+                    break;
+                std::uint8_t* params = d.m_fonts[ c ].m_params;
+                std::memcpy( params, want.data( ), 60 );   // 41..59: retail's (UNKNOWN)
+                std::memset( params, 0, 41 );
+                std::string asset;
+                ui_font_params( ui_font_db( 0 ), name->m_text, params, asset );
+                same = std::memcmp( params, want.data( ), 41 ) == 0;
+                d.m_fonts[ c ].m_font = g_golden_mb_fonts[ 0 ];   // the case gives every block TxtWorld's font asset
+                ++fields;
+            }
+        }
+        std::vector< std::string > log;
+        ui_mini_board_hooks_t hooks;
+        std::string set;
+        int status = 0;
+        value_t root;
+        const auto rows_of = [ & ]( int k_row, std::string& name, std::int32_t& score )
+        {
+            for ( std::size_t r = 0; r < g_golden_mb_rows_count; ++r )
+                if ( set == g_golden_mb_rows[ r ].m_set && g_golden_mb_rows[ r ].m_k == k_row )
+                {
+                    name = g_golden_mb_rows[ r ].m_name;
+                    score = g_golden_mb_rows[ r ].m_score;
+                }
+        };
+        const auto row_count = [ & ]
+        {
+            int n = 0;
+            for ( std::size_t r = 0; r < g_golden_mb_rows_count; ++r )
+                n += set == g_golden_mb_rows[ r ].m_set ? 1 : 0;
+            return n;
+        };
+        hooks.m_read = [ & ]( const std::string& key, int a, int b ) { log.push_back( "read|" + key + "|" + std::to_string( a ) + "|" + std::to_string( b ) ); };
+        hooks.m_status = [ & ] { log.push_back( "status" ); return status; };
+        hooks.m_count = [ & ] { log.push_back( "count" ); return row_count( ); };
+        hooks.m_row = [ & ]( int k_row, std::string& name, std::int32_t& score )
+        {
+            log.push_back( "row|" + std::to_string( k_row ) );
+            rows_of( k_row, name, score );
+        };
+        hooks.m_tick_register = [ & ]( bool on ) { log.push_back( on ? "register|Decision" : "unregister|Decision" ); };
+        hooks.m_delta = [ ] { return ui_lv_float( g_golden_mb_delta ); };
+        hooks.m_root = &root;
+        d.m_string = [ & ]( const std::string& id ) { log.push_back( "string|" + id ); return id + "~"; };
+        c_ui_mini_board board( f, hooks );
+        same = same && fsm_text( board ) == ge.m_initial;
+        if ( !same )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "ui mini board: %s entity %d: OUR loaded fields / fonts / FSM differ from retail's", ge.m_project, ge.m_index );
+            continue;
+        }
+        for ( int s = 0; s < ge.m_steps; ++s )
+        {
+            const golden_mb_step_t& st = g_golden_mb_steps[ ge.m_first + s ];
+            const golden_txt_env_t& te = g_golden_txt_envs[ st.m_env ];
+            ui_font_draw_env_t env;
+            const std::vector< std::uint8_t > matrix = ui_unhex( st.m_matrix );
+            std::memcpy( env.m_matrix, matrix.data( ), 64 );
+            std::memcpy( &env.m_top, &te.m_top, 4 );
+            for ( int m = 0; m < 2; ++m )
+            {
+                env.m_material[ m ] = 0x5D001000u + 0x800u * static_cast< std::uint32_t >( m );   // TxtWorld's font materials
+                env.m_material_key[ m ] = g_golden_txt_material_keys[ m ];
+            }
+            std::memcpy( &d.m_crop.m_matrix[ 0 ], &te.m_crop[ 0 ], 4 );
+            std::memcpy( &d.m_crop.m_matrix[ 5 ], &te.m_crop[ 1 ], 4 );
+            std::memcpy( &d.m_crop.m_matrix[ 12 ], &te.m_crop[ 2 ], 4 );
+            std::memcpy( &d.m_crop.m_matrix[ 13 ], &te.m_crop[ 3 ], 4 );
+            d.m_db.m_present = true;   // the case always serves VuStringDB
+            d.m_db.m_slot12 = te.m_sdb_answer != 0;
+            d.m_sort = &sort;
+            d.m_env = &env;
+            sort.m_index = te.m_index;
+            sort.m_key_lo = te.m_key_lo;
+            sort.m_key_hi = te.m_key_hi;
+            std::vector< ui_gfx_command_t >& list = sort.m_commands[ te.m_index ];
+            const std::size_t before = list.size( );
+            log.clear( );
+            switch ( st.m_op )
+            {
+            case 0:
+            {
+                const std::vector< std::uint8_t > blob = ui_unhex( st.m_blob );
+                root = c_reader( blob ).parse( );
+                break;
+            }
+            case 1:
+                set = st.m_name;
+                break;
+            case 2:
+                status = st.m_int;
+                break;
+            case 3:
+                board.draw( d );
+                break;
+            case 4:
+                board.initialize( );
+                break;
+            case 5:
+                board.decision( );
+                break;
+            default:
+                board.release( );
+                break;
+            }
+            bool ok = list.size( ) - before == static_cast< std::size_t >( st.m_commands ) && static_cast< int >( log.size( ) ) == st.m_logs;
+            for ( int q = 0; ok && q < st.m_logs; ++q )
+            {
+                ok = log[ static_cast< std::size_t >( q ) ] == g_golden_mb_logs[ st.m_first_log + q ];
+                ++logs;
+            }
+            for ( int c = 0; ok && c < st.m_commands; ++c )
+            {
+                const golden_txt_command_t& want = g_golden_mb_commands[ st.m_first + c ];
+                const ui_gfx_command_t& h = list[ before + static_cast< std::size_t >( c ) ];
+                const std::vector< std::uint8_t > record = ui_unhex( want.m_record );
+                const auto& memory = sort.m_buffers[ te.m_index ].m_memory;
+                ok = std::memcmp( h.m_words, want.m_words, sizeof( h.m_words ) ) == 0 && h.m_words[ 3 ] + record.size( ) <= memory.size( ) &&
+                     std::memcmp( memory.data( ) + h.m_words[ 3 ], record.data( ), record.size( ) ) == 0;
+                ++commands;
+            }
+            ok = ok && fsm_text( board ) == st.m_fsm;
+            ++steps;
+            if ( !ok && ++failed <= 8 )
+                LOG_ERROR( "ui mini board: %s entity %d step %d (op %d): %d commands (retail %d), %d log lines (retail %d) - or a word / record / "
+                           "line / the FSM differs", ge.m_project, ge.m_index, s, st.m_op, static_cast< int >( list.size( ) - before ), st.m_commands,
+                           static_cast< int >( log.size( ) ), st.m_logs );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_mini_board initialize / decision / draw / release match retail's VuUIMiniLeaderboardEntity 0x47DAB0 / 0x47E170 / "
+                     "0x47DB40 (0x47E560 / 0x47E600 / 0x47EA20, 0x47E090, the key 0x47E2B0) / 0x47DB10 on %d entities (%d of OUR loaded fields / "
+                     "fonts): %d steps, %d commands byte for byte, %d hook calls in order, the FSM after each",
+            static_cast< int >( g_golden_mb_entities_count ), fields, steps, commands, logs );
+    else
+        LOG_ERROR( "the UI mini leaderboard FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_results_all( )
 {
     bool ok = true;
     ok = verify_ui_race_results( ) && ok;
     ok = verify_ui_subtitles_combo( ) && ok;
     ok = verify_ui_screen_game_init( ) && ok;
+    ok = verify_ui_mini_board( ) && ok;
     return ok;
 }
