@@ -100,6 +100,39 @@ inline void pfx_tick_alpha_in_out( pfx_tick_particle_t& p, const float* params, 
     p.alpha = alpha + ( after ? params[ 3 ] * dt : 0.0f );
 }
 
+// The spring body both spring constraints run per particle (particle words by
+// retail offset / 4: +0x08 position, +0x18 velocity, +0x3C age): past the start
+// delay (age > params +0x38, comiss / jbe) each velocity component
+//   v += ( ( target - pos ) * k - ( v - target_velocity ) * damping ) * dt
+// with k = params +0x30, damping = +0x34; x is stored as v + term, y and z as
+// term + v (retail's addss operand orders; the same bits).
+inline void pfx_spring_particle( float* p, const float* params, const float* target, const float* target_velocity, float dt )
+{
+    if ( !_mm_comigt_ss( _mm_set_ss( p[ 0x3C / 4 ] ), _mm_set_ss( params[ 2 ] ) ) )
+        return;
+    const float k = params[ 0 ];
+    const float damping = params[ 1 ];
+    float term[ 3 ];
+    for ( int i = 0; i < 3; ++i )
+        term[ i ] = ( ( ( target[ i ] - p[ 2 + i ] ) * k ) - ( ( p[ 6 + i ] - target_velocity[ i ] ) * damping ) ) * dt;
+    p[ 6 ] = p[ 6 ] + term[ 0 ];
+    p[ 7 ] = term[ 1 ] + p[ 7 ];
+    p[ 8 ] = term[ 2 ] + p[ 8 ];
+}
+
+// VuPfxSpringConstraintInstance's slot 1 @0x58e1c0 (thiscall node; float dt;
+// retn 4), per particle of the pattern's list (node +0xC -> +0x20, next +0):
+// the target is the params' offset (+0x3C .. +0x44) plus the node's own
+// (+0x14 .. +0x1C), summed per particle in that order; there is no target
+// velocity - retail's ( v * damping ) is ( v - 0 ) * damping here, the same
+// bits. `params` from +0x30.
+inline void pfx_tick_spring( float* p, const float* params, const float* node_offset, float dt )
+{
+    const float target[ 3 ] = { params[ 3 ] + node_offset[ 0 ], params[ 4 ] + node_offset[ 1 ], params[ 5 ] + node_offset[ 2 ] };
+    const float still[ 3 ] = { 0.0f, 0.0f, 0.0f };
+    pfx_spring_particle( p, params, target, still, dt );
+}
+
 // VuPfxQuadPatternInstance's tick @0x591c30 over an index model of retail's
 // particle lists. A particle is retail's 30 words from +0 (+0 next, +4 prev as
 // indices, -1 null; +0x08 pos, +0x18 velocity, +0x34 alpha, +0x38 scale,

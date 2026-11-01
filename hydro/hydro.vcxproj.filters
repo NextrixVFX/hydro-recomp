@@ -210,6 +210,9 @@
     <ClInclude Include="workspace\core\world\query.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\world\spray.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\world\surface.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
