@@ -137,6 +137,9 @@
     <ClInclude Include="workspace\core\assets\reader.hxx">
       <Filter>workspace\core\assets</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\assets\rtti.hxx">
+      <Filter>workspace\core\assets</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\assets\tree.hxx">
       <Filter>workspace\core\assets</Filter>
     </ClInclude>
@@ -192,6 +195,9 @@
       <Filter>workspace\core\collision</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\collision\raytest.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\collision\rebuild.hxx">
       <Filter>workspace\core\collision</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\collision\simplex.hxx">

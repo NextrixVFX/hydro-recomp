@@ -3228,7 +3228,11 @@ inline bool verify_race_all( )
     ok = verify_bt_rows7( ) && ok;
     ok = verify_bt_rows8( ) && ok;
     ok = verify_bt_rows9( ) && ok;
+    ok = verify_bt_rows10( ) && ok;
+    ok = verify_bt_rows11( ) && ok;
     ok = verify_mesh_scaling( ) && ok;
+    ok = verify_bvh_build( ) && ok;
+    ok = verify_asset_rtti( ) && ok;
     ok = verify_compound_remove( ) && ok;
     ok = verify_hull_scaling( ) && ok;
     ok = verify_simplex_ctor( ) && ok;

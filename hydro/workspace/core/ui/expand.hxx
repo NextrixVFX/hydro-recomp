@@ -203,7 +203,7 @@ inline bool ui_game_config_build( ui_config_entity_t& e, ui_config_env_t& env, v
 struct ui_game_config_t2
 {
     bool m_drawn = false;   // +0x2E0 -> +0x1E
-    bool m_trophy = false;  // +0x324
+    bool m_trophy = true;   // +0x324 (the ctor 0x45CC80 stores 1 at 0x45CD63)
     bool m_info_reached = false;  // slot 23 0x45DBF0 was asked for a text
 };
 
@@ -295,8 +295,8 @@ inline void ui_game_config_info_text( const value_t& root, std::string& out )
 }
 
 // VuGameConfigEntity's whole class for the walks (slot 12 bound to `g`; slot
-// 23 0x45DBF0 above; slot 20 0x4471A0 = false; slot 17 0x45D720 is reached
-// only from 0x45E300, the next_choice HOOK).
+// 23 0x45DBF0 above; slot 20 0x4471A0 = false; slot 17 0x45D720 from
+// ui_game_config_class: reached by 0x45E300 and 0x4494C0).
 inline void ui_game_config_class_full( ui_config_class_t& c, ui_config_entity_t& e, ui_game_config_t2& g, value_t& root, const ui_profile_t& p,
                                        const ui_config_hooks_t& h )
 {
