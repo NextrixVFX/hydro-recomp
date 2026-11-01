@@ -396,6 +396,12 @@ inline bool verify_ui_screen_game_init( )
             leaderboard.m_root = &board_root;
             hooks.m_leaderboard = &leaderboard;
         }
+        // batch 23: the full leaderboard's slot 6 / 7 run live (the manager's read / count answered 0 as the case's)
+        const value_t option_db = ui_cx_document( 4 );
+        ui_leaderboard_hooks_t ladder;
+        ladder.m_option_db = &option_db;
+        ladder.m_total = [ ] { return 0; };
+        hooks.m_ladder = &ladder;
         c_ui_binding bind( *root, hooks );
         if ( static_cast< int >( bind.m_bound.size( ) ) != gp.m_count )
         {
@@ -421,7 +427,8 @@ inline bool verify_ui_screen_game_init( )
         const auto owner_of = [ &bind ]( const void* callback )
         {
             for ( const auto& b : bind.m_bound )
-                if ( ( b->m_button && b->m_button.get( ) == callback ) || ( b->m_combo && b->m_combo.get( ) == callback ) )
+                if ( ( b->m_button && b->m_button.get( ) == callback ) || ( b->m_combo && b->m_combo.get( ) == callback ) ||
+                     ( b->m_ladder && b->m_ladder.get( ) == callback ) )
                     return b->m_index;
             return -1;
         };
@@ -459,6 +466,15 @@ inline bool verify_ui_screen_game_init( )
                 }
             if ( !boards.empty( ) )
                 t += "|B" + boards;
+            std::string ladders;
+            for ( const auto& b : bind.m_bound )
+                if ( b->m_ladder )
+                {
+                    std::snprintf( word, sizeof word, "%d,%d,%d;", b->m_index, b->m_ladder->m_fsm.m_current, b->m_ladder->m_first );
+                    ladders += word;
+                }
+            if ( !ladders.empty( ) )
+                t += "|L" + ladders;
             return t;
         };
         // the trace from `first` as retail's log lines (init / release: repository, slots, 0x5EFA60; trigger: broadcasts)
@@ -479,7 +495,7 @@ inline bool verify_ui_screen_game_init( )
                     std::snprintf( line, sizeof line, "%s|%d", t.m_name == "repository_add" ? "repo_add" : "repo_remove", t.m_index );
                 else if ( t.m_kind == ui_trace_kind_t::game )
                     std::snprintf( line, sizeof line, "slot|%d|0x%06X", t.m_index, t.m_word );
-                else if ( t.m_kind == ui_trace_kind_t::hook && t.m_name.compare( 0, 6, "board_" ) == 0 )
+                else if ( t.m_kind == ui_trace_kind_t::hook && ( t.m_name.compare( 0, 6, "board_" ) == 0 || t.m_name.compare( 0, 7, "ladder_" ) == 0 ) )
                     std::snprintf( line, sizeof line, "%s", t.m_name.c_str( ) );
                 else if ( t.m_kind == ui_trace_kind_t::event && t.m_word == 0x5EFA60u )
                     std::snprintf( line, sizeof line, "event|%d|0x%06X", t.m_index, t.m_word );
@@ -553,7 +569,7 @@ inline bool verify_ui_screen_game_init( )
     }
     if ( failed == 0 )
         LOG_SUCCESS( "c_ui_binding project_initialize / project_release (+ VuUserNextUIAction's Trigger) match retail's 0x500B10 / 0x501260 / "
-                     "0x500B80 (button 0x4426E0 + 0x53FAE0, subtitles 0x46D7A0, 0x4253D0, mini leaderboard 0x47DAB0 / 0x47DB10; 0x470E50) on %d Screens projects: %d phases, %d log "
+                     "0x500B80 (button 0x4426E0 + 0x53FAE0, subtitles 0x46D7A0, 0x4253D0, mini leaderboard 0x47DAB0 / 0x47DB10, leaderboard 0x479C50 / 0x479CF0; 0x470E50) on %d Screens projects: %d phases, %d log "
                      "lines in order (%d slot 6 / 7 entries), %d triggers, the touch device / combos / flags after each",
             static_cast< int >( g_golden_sgi_projects_count ), phases, logs, slots, triggers );
     else
