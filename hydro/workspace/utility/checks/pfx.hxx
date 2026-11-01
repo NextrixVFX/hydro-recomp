@@ -819,9 +819,76 @@ inline bool verify_pfx_manager( )
     return failed == 0;
 }
 
+// water_point_height (world/query.hxx) against VuWater's base-mode one-point query 0x529140 - the fountain's water snap -
+// on Hydroelectric's built water (case water_snap): every out word (+0x1C, retail's stale stack, skipped; +0x24 must stay
+// as the caller had it), the slot 3 calls in order (wave, tag, ctx+0x60, ctx+0x64), kernels water_view_kernel.
+inline bool verify_water_snap( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "water_snap: the document did not load" );
+        return false;
+    }
+    water_built_t built{};
+    water_build_world( *tree, built, []( entity_t& e ) { return entity_transform( e ); } );
+    water_view_t view{};
+    water_view_build( built, view );
+    struct logged_t
+    {
+        const water_view_t* view;
+        std::vector< std::uint32_t > log;
+    } logged{ &view, {} };
+    const water_kernel_fn kernel = []( void* user, int wave, water_query_t& ctx ) {
+        logged_t& l = *static_cast< logged_t* >( user );
+        l.log.insert( l.log.end( ), { static_cast< std::uint32_t >( wave ), ctx.tag, ctx.flag96, ctx.flag100 } );
+        return water_view_kernel( const_cast< water_view_t* >( l.view ), wave, ctx );
+    };
+    int failed = 0, found = 0, calls = 0, skipped = 0, moved = 0;
+    for ( std::size_t index = 0; index < g_golden_wsn_count; ++index )
+    {
+        const unsigned* s = g_golden_wsn_words + g_golden_wsn_offsets[ index ];
+        view.water.skip_waves = s[ 0 ] != 0u;
+        skipped += s[ 0 ] ? 1 : 0;
+        float point[ 4 ];
+        std::memcpy( point, s + 1, 16 );
+        std::uint32_t out[ 11 ];
+        std::memset( out, 0x77, sizeof( out ) );
+        logged.log.clear( );
+        const bool reached = water_point_height( view.water, point, kernel, &logged, *reinterpret_cast< water_vertex_t* >( out ) );
+        const char* what = reached ? nullptr : "a path not recreated was reached";
+        for ( int k = 0; k < 11; ++k )
+            if ( !what && k != 7 && out[ k ] != s[ 5 + k ] )
+                what = "an out word";
+        found += s[ 5 + 8 ] != 0xFEFFFFFFu ? 1 : 0;
+        moved += ( s[ 5 + 4 ] | s[ 5 + 5 ] | s[ 5 + 6 ] ) != 0u ? 1 : 0;
+        const unsigned n = s[ 16 ];
+        calls += static_cast< int >( n );
+        if ( !what && logged.log.size( ) != 4 * n )
+            what = "the number of slot 3 calls";
+        for ( unsigned k = 0; k < 4 * n && !what; ++k )
+            if ( logged.log[ k ] != s[ 17 + k ] )
+                what = "a slot 3 call";
+        if ( what )
+        {
+            ++failed;
+            LOG_ERROR( "water_snap: query %d: %s", static_cast< int >( index ), what );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_point_height matches VuWater's base-mode one-point query 0x529140 (0x52AEC0 / 0x413500(0) / 0x52B0E0) on %d "
+                     "queries: %d on a surface, %d displaced by waves, %d slot 3 calls, %d with waves skipped - every out word but the stale "
+                     "+0x1C",
+            static_cast< int >( g_golden_wsn_count ), found, moved, calls, skipped );
+    else
+        LOG_ERROR( "water_snap FAILED %d of %d", failed, static_cast< int >( g_golden_wsn_count ) );
+    return failed == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_water_snap( ) && ok;
     ok = verify_pfx_manager( ) && ok;
     ok = verify_pfx_load( ) && ok;
     ok = verify_water_types( ) && ok;
