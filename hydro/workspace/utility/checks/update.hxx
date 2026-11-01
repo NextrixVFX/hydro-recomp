@@ -32,7 +32,7 @@ inline bool verify_ui_frames( )
         const auto found = templates->find( "VuTemplateAsset/" + name );
         return found == templates->end( ) ? nullptr : &found->second;
     } );
-    int sliders = 0;
+    int sliders = 0, extras = 0;
     int failed = 0, steps = 0, traces = 0, buttons = 0, tickers = 0, rows = 0, entities = 0, unknown_inputs = 0, unknown_events = 0;
     auto bad = [ &failed ]( const char* what, const char* project, int step )
     {
@@ -63,7 +63,26 @@ inline bool verify_ui_frames( )
         }
         std::vector< std::string > down;
         value_t game_root;
+        if ( gp.m_root0[ 0 ] )
+            game_root = c_reader( ui_unhex( gp.m_root0 ) ).parse( );
         ui_bind_hooks_t hooks;
+        // batch 19, the GameConfig* screens: the case's frm_answer (FNV-1a of "tag|texts": bit 0 the bool, (h >> 8) % 5
+        // the placing), the real OptionDB / TrackDB (config_expand's blobs), VuStringDB slot 6 "<id>|short"
+        const value_t option_db = ui_cx_document( 4 ), track_db = ui_cx_document( 2 );
+        hooks.m_platform = []( const std::string& name )
+        {
+            const std::uint32_t h = fsm_hash( name.c_str( ) );
+            return std::pair< bool, int >( ( h & 1u ) != 0, static_cast< int >( ( h >> 8 ) % 5u ) );
+        };
+        hooks.m_option_db = &option_db;
+        hooks.m_track_db = &track_db;
+        const value_t boat_db = ui_cx_document( 0 ), skin_db = ui_cx_document( 1 ), champ_db = ui_cx_document( 3 );
+        hooks.m_boat_db = &boat_db;
+        hooks.m_skin_db = &skin_db;
+        hooks.m_champ_db = &champ_db;
+        if ( gp.m_config_flags >= 0 )
+            hooks.m_config_flags = static_cast< std::uint32_t >( gp.m_config_flags );
+        hooks.m_string_db = []( const char* id ) { return std::string( id ) + "|short"; };
         hooks.m_input = [ &down ]( int, const char* name ) { return std::find( down.begin( ), down.end( ), name ) != down.end( ); };
         // the case's FRM_ANSWER (the license queries: platform services); anything else { 0, 0 }
         hooks.m_answer = []( const entity_t&, const char* plug )
@@ -240,6 +259,42 @@ inline bool verify_ui_frames( )
             tickers += count;
             return ok;
         };
+        // batch 19: the config selectors ("c:focus.nav bytes.trophy|combos") and the lock texts ("t:" +0x10C)
+        const auto same_extras = [ &bind, &extras ]( int first, int count )
+        {
+            std::vector< std::pair< int, std::string > > have;
+            for ( const auto& b : bind.m_bound )
+                if ( b->m_config )
+                {
+                    ui_bound_config_t& c = *b->m_config;
+                    char head[ 32 ];
+                    std::snprintf( head, sizeof( head ), c.m_boat ? "b:%d." : "c:%d.", c.base( ).m_focus );
+                    have.push_back( { b->m_index, head + ui_cn_nav_hex( c.m_nav ) + ( c.m_boat ? "|" : c.m_game.m_trophy ? ".1|" : ".0|" ) +
+                                                      ui_cx_combo_text( c.base( ).m_combos ) } );
+                }
+                else if ( b->m_stat )
+                    have.push_back( { b->m_index, "v:" + std::to_string( b->m_stat->m_value ) } );
+                else if ( b->m_lock_text )
+                    have.push_back( { b->m_index, "t:" + *b->m_lock_text } );
+                else if ( b->m_combo )
+                {
+                    const c_ui_combo_box& x = *b->m_combo;
+                    std::uint32_t shown;
+                    std::memcpy( &shown, &x.m_shown, 4 );
+                    char text[ 64 ];
+                    std::snprintf( text, sizeof( text ), "s:%02x%02x%02x.%08x.%08x.%02x%02x%02x%02x.%d", x.m_latched, x.m_left_pressed, x.m_right_pressed,
+                                   static_cast< std::uint32_t >( x.m_current ), shown, x.m_focused, x.m_down, x.m_held, x.m_up, x.m_press );
+                    have.push_back( { b->m_index, text } );
+                }
+            bool ok = have.size( ) == static_cast< std::size_t >( count );
+            for ( int k = 0; ok && k < count; ++k )
+                ok = have[ static_cast< std::size_t >( k ) ].first == g_golden_frm_extras[ first + k ].m_index &&
+                     have[ static_cast< std::size_t >( k ) ].second == g_golden_frm_extras[ first + k ].m_state;
+            extras += count;
+            return ok;
+        };
+        if ( !same_extras( gp.m_first_extra, gp.m_extras ) )
+            bad( "the selectors' / lock texts' loaded state", gp.m_asset, -1 );
         if ( !same_buttons( gp.m_first_button, gp.m_buttons ) )
             bad( "the buttons' loaded state", gp.m_asset, -1 );
         if ( !same_tickers( gp.m_first_ticker, gp.m_tickers ) )
@@ -258,13 +313,29 @@ inline bool verify_ui_frames( )
             }
             bind.m_trace.clear( );
             words( st.m_touches, points );   // "x,y;x,y": the separators are skipped alike
-            if ( std::strcmp( st.m_op, "enter" ) == 0 )
+            if ( std::strcmp( st.m_op, "setup" ) == 0 )
+                bind.config_setup( );
+            else if ( std::strcmp( st.m_op, "enter" ) == 0 )
                 bind.enter( );
             else if ( std::strcmp( st.m_op, "exit" ) == 0 )
                 bind.exit( );
             else
                 bind.tick( dt, st.m_allow != 0 );
             bool ok = bind.m_trace.size( ) == static_cast< std::size_t >( st.m_logs );
+            if ( !ok && failed < 8 )
+                LOG_ERROR( "ui frames: %s step %d: %d trace entries, retail %d", gp.m_asset, s, static_cast< int >( bind.m_trace.size( ) ), st.m_logs );
+            for ( int k = 0; k < st.m_logs && k < static_cast< int >( bind.m_trace.size( ) ); ++k )
+            {
+                const ui_trace_t& t = bind.m_trace[ static_cast< std::size_t >( k ) ];
+                const golden_frm_log_t& g = g_golden_frm_logs[ st.m_first_log + k ];
+                if ( static_cast< int >( t.m_kind ) != g.m_kind || t.m_name != g.m_name || t.m_word != g.m_word )
+                {
+                    if ( failed < 8 )
+                        LOG_ERROR( "ui frames: %s step %d entry %d: kind %d '%s' 0x%08X, retail kind %d '%s' 0x%08X", gp.m_asset, s, k,
+                                   static_cast< int >( t.m_kind ), t.m_name.c_str( ), t.m_word, g.m_kind, g.m_name, g.m_word );
+                    break;
+                }
+            }
             for ( int k = 0; ok && k < st.m_logs; ++k )
             {
                 const ui_trace_t& t = bind.m_trace[ static_cast< std::size_t >( k ) ];
@@ -274,7 +345,8 @@ inline bool verify_ui_frames( )
                 const bool params = t.m_kind == ui_trace_kind_t::measure ? std::strcmp( font, g.m_params ) == 0
                                     : t.m_kind == ui_trace_kind_t::sound || t.m_kind == ui_trace_kind_t::event || t.m_kind == ui_trace_kind_t::string ||
                                               t.m_kind == ui_trace_kind_t::touches || t.m_kind == ui_trace_kind_t::touch ||
-                                              t.m_kind == ui_trace_kind_t::category
+                                              t.m_kind == ui_trace_kind_t::category || t.m_kind == ui_trace_kind_t::hook ||
+                                              t.m_kind == ui_trace_kind_t::profile
                                         ? true
                                         : ui_hex( t.m_params ) == g.m_params;
                 ok = static_cast< int >( t.m_kind ) == g.m_kind && t.m_index == g.m_index && t.m_name == g.m_name && t.m_word == g.m_word && params &&
@@ -293,6 +365,8 @@ inline bool verify_ui_frames( )
                 bad( "the ticker states", gp.m_asset, s );
             if ( !same_sliders( st.m_first_slider, st.m_sliders ) )
                 bad( "the slider states", gp.m_asset, s );
+            if ( !same_extras( st.m_first_extra, st.m_extras ) )
+                bad( "the selector / lock text states", gp.m_asset, s );
             if ( settings_text( ) != st.m_settings )
                 bad( "the settings manager", gp.m_asset, s );
             std::string after;
@@ -301,15 +375,18 @@ inline bool verify_ui_frames( )
                 bad( "the game-data root", gp.m_asset, s );
             ++steps;
         }
+        if ( bind.m_config_faults )
+            bad( "a selector path (not recreated)", gp.m_asset, -1 );
     }
     if ( failed == 0 )
         LOG_SUCCESS( "c_ui_binding matches retail's frames over %d real Screens projects (VuUIScreenEntity 0x629A70 / 0x629B90 / 0x629B00, "
                      "containers 0x62F7A0 / 0x62F7C0, buttons, VuUIEventEntity, VuIfEntity 0x5DDE60, the Info ticker, SetInfoString 0x471E30, "
                      "the actions; graph 0x5023A0 / 0x404BE0, broadcast 0x505690): %d entities and %d event-map rows, %d steps, %d trace entries "
                      "in order (%d unrecreated inputs, %d unrecreated handlers - hooks), %d button states, %d ticker states, %d slider states "
-                     "(VuSliderEntity 0x46F8F0 / 0x46F940 / 0x46FCC0, the settings manager after each step), the game-data root",
+                     "(VuSliderEntity 0x46F8F0 / 0x46F940 / 0x46FCC0, the settings manager after each step), %d selector / lock text states "
+                     "(VuGameConfigEntity slots 4 / 6 / 13 / 14 + its input plugs, VuShortUnlockUITextEntity 0x445570), the game-data root",
             static_cast< int >( g_golden_frm_projects_count ), entities, rows, steps, traces, unknown_inputs, unknown_events, buttons, tickers,
-            sliders );
+            sliders, extras );
     else
         LOG_ERROR( "the UI per-frame binding FAILED %d checks against retail's", failed );
     return failed == 0;

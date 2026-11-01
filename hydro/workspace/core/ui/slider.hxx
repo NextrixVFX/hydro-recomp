@@ -57,6 +57,7 @@ struct ui_settings_t
     float m_music = 0.0f;      // +0x3C
     float m_display = 0.0f;    // +0x40
     float m_display_out = 0.0f;  // g 0x758F94 +0xC
+    bool m_subtitles = false;    // +0x5C (VuUISubtitlesSettingEntity slot 12 0x46D9B0)
 };
 
 struct ui_slider_hooks_t

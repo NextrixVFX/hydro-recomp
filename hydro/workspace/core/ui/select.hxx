@@ -553,6 +553,8 @@ inline ui_config_class_t ui_game_config_class( const ui_config_entity_t& e, valu
     c.fallback = []( const value_t&, const std::string& ) { return 0; };
     c.last = [ &root ]( const std::string& name ) { return ui_game_config_last( root, name ); };
     c.remember = [ &root ]( const std::string& name, const std::string& value ) { ui_game_config_remember( root, name, value ); };
+    // Slot 17 0x45D720 (reached by 0x4494C0 - the NotUsedSP plug - and 0x45E300).
+    c.blocked = [ &root, &p ]( const std::string& name, const std::string& value ) { return ui_game_config_done( root, name, value, p ); };
     // Slot 26: 0x45E300 recreated above, unless the profile answers it itself
     // (the checks whose retail runs hooked 0x45E300 set p.next_choice).
     if ( p.next_choice )
@@ -641,6 +643,47 @@ inline bool ui_config_all_licensed( const ui_config_entity_t& e, const value_t& 
 inline bool ui_config_all_available( const ui_config_entity_t& e, const value_t& root, const ui_config_class_t& cls )
 {
     return ui_config_scan( e, root, cls, cls.unavailable );
+}
+
+// 0x4494C0 (thiscall this; the base's, disassembled): true without the unlock
+// manager g 0x758FE8; else for each option of the vector slot 17 (+68) on
+// (Name, the current choice's Value) - the first FALSE answer returns false;
+// true when every one answers true (or the vector is empty). The inverse
+// sense of the three scans above.
+inline bool ui_config_all_done( const ui_config_entity_t& e, const value_t& root, const ui_config_class_t& cls, const ui_profile_t& p )
+{
+    if ( !p.has_unlock )
+        return true;
+    for ( const value_t* option : e.m_options )
+    {
+        const value_t& choice = ui_config_current_choice( *option, root, cls );
+        const std::string value = ui_json_text( member( choice, "Value" ) );
+        if ( !cls.blocked( ui_json_text( member( *option, "Name" ) ), value ) )
+            return false;
+    }
+    return true;
+}
+
+// VuBaseConfigEntity's four input plugs (base ctor 0x4471C0: plug class 0x44C2E0 =
+// a VuRetVal plug over a member, vtable 0x737138 / delegate 0x73C490; each
+// writes VuRetVal { 3, al } - the byte +4 only):
+//   "Unlocked"        0x4483D0 = 0x449040 (ui_config_all_unlocked)
+//   "Available"       0x4483F0 = 0x4491C0 (ui_config_all_licensed)
+//   "InstalledOnHost" 0x448410 = 0x449350 (ui_config_all_available)
+//   "NotUsedSP"       0x448430 = 0x449040 && !0x4494C0 (0x4494C0 asked only
+//                     when 0x449040 answered true)
+// -1 for any other name.
+inline int ui_config_plug( const char* plug, const ui_config_entity_t& e, const value_t& root, const ui_config_class_t& cls, const ui_profile_t& p )
+{
+    if ( std::strcmp( plug, "Unlocked" ) == 0 )
+        return ui_config_all_unlocked( e, root, cls, p ) ? 1 : 0;
+    if ( std::strcmp( plug, "Available" ) == 0 )
+        return ui_config_all_licensed( e, root, cls, p ) ? 1 : 0;
+    if ( std::strcmp( plug, "InstalledOnHost" ) == 0 )
+        return ui_config_all_available( e, root, cls ) ? 1 : 0;
+    if ( std::strcmp( plug, "NotUsedSP" ) == 0 )
+        return ui_config_all_unlocked( e, root, cls, p ) && !ui_config_all_done( e, root, cls, p ) ? 1 : 0;
+    return -1;
 }
 
 // 0x44B9C0 (thiscall this): the info string. Not all unlocked: "Common_
