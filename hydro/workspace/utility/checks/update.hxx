@@ -379,6 +379,8 @@ inline bool verify_ui_hud_frames( )
     int failed = 0, steps = 0, traces = 0, states = 0, rows = 0, entities = 0, unknown_inputs = 0, unknown_events = 0, hooks_seen = 0;
     int draws = 0, commands = 0, stubs = 0, emitted = 0;
     const ui_texture_t texture_a = { g_golden_hf_textures[ 0 ].m_handle, g_golden_hf_textures[ 0 ].m_width, g_golden_hf_textures[ 0 ].m_height };
+    const golden_img_texture_t& gtb = g_golden_hf_textures[ sizeof( g_golden_hf_textures ) / sizeof( g_golden_hf_textures[ 0 ] ) > 1 ? 1 : 0 ];
+    const ui_texture_t texture_b = { gtb.m_handle, gtb.m_width, gtb.m_height };
     const golden_txt_env_t& txt = g_golden_txt_envs[ 0 ];
     auto bad = [ &failed ]( const char* what, const char* project, int step )
     {
@@ -528,6 +530,11 @@ inline bool verify_ui_hud_frames( )
                 }
         };
         in.m_string = []( const std::string& id ) { return id + "~"; };   // the case's VuStringDB slot 7
+        // batch 17: the controls' leaves live - the case's stand-ins (Texture -> texture 0, Pressed -> texture 1 for odd-length names)
+        in.m_control_texture = [ &texture_a, &texture_b ]( const entity_t& who, int which ) -> const ui_texture_t*
+        {
+            return which == 0 ? &texture_a : who.m_name.size( ) % 2 ? &texture_b : nullptr;
+        };
         const auto parse_floats = []( const char* text, std::vector< float >& out )
         {
             out.clear( );
