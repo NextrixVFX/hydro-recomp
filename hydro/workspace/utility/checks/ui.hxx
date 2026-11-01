@@ -8,6 +8,7 @@
 #include <workspace/core/ui/flow.hxx>
 #include <workspace/core/ui/screen.hxx>
 #include <workspace/core/ui/wiring.hxx>
+#include <workspace/core/ui/compose.hxx>
 
 #include <algorithm>
 #include <array>
@@ -1366,9 +1367,87 @@ inline bool verify_ui_texture_draw( )
     return failed == 0;
 }
 
+// ui_hud_draw (core/ui compose.hxx) against retail's VuHUDEntity draw 0x423A70
+// (0x50B4B0, 0x50B530, 0x628070; oracle case hud_draw) on the root of every
+// loaded project (OUR trees: which children have a UI draw component, and which
+// one comes first) under three environments: every child draw reached in order
+// (child, component, alpha bits, both stacks' tops and sizes, the sort key),
+// then the sizes and the key after.
+inline bool verify_ui_hud_draw( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0, calls = 0;
+    for ( std::size_t r = 0; r < g_golden_hud_runs_count; ++r )
+    {
+        const golden_hud_run_t& run = g_golden_hud_runs[ r ];
+        const golden_hud_env_t& he = g_golden_hud_envs[ run.m_env ];
+        const golden_txt_env_t& e = g_golden_txt_envs[ he.m_txt ];
+        const entity_t* root = nullptr;
+        for ( std::size_t p = 0; p < g_golden_ui_projects_count && !root; ++p )
+            if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, run.m_project ) == 0 )
+                root = loaded.roots[ p ].get( );
+        if ( !root || root->m_children.size( ) != static_cast< std::size_t >( run.m_children ) )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "ui hud draw: %s has no loaded root or a different child count", run.m_project );
+            continue;
+        }
+        ui_gfx_sort_t sort;
+        sort.m_index = e.m_index;
+        sort.m_key_lo = e.m_key_lo;
+        sort.m_key_hi = he.m_key_hi;
+        ui_gfx_stacks_t stacks;
+        stacks.m_matrices.resize( static_cast< std::size_t >( run.m_matrices_before ) );
+        stacks.m_floats.resize( static_cast< std::size_t >( run.m_floats_before ) );
+        ui_impl_t impl;
+        const std::vector< std::uint8_t > crop = ui_unhex( run.m_crop );
+        std::memcpy( impl.m_crop.m_matrix, crop.data( ), 64 );
+        std::memcpy( &impl.m_float, &he.m_float, 4 );
+        float alpha;
+        std::memcpy( &alpha, &he.m_alpha, 4 );
+        bool same = true;
+        int at = 0;
+        ui_hud_draw( sort, stacks, impl, *root, alpha, [ & ]( const entity_t& child, int component, float a )
+        {
+            if ( at >= run.m_calls )
+            {
+                same = false;
+                return;
+            }
+            const golden_hud_call_t& want = g_golden_hud_calls[ run.m_first + at++ ];
+            int index = -1;
+            for ( std::size_t k = 0; k < root->m_children.size( ); ++k )
+                if ( root->m_children[ k ].get( ) == &child )
+                    index = static_cast< int >( k );
+            std::uint32_t bits, top;
+            std::memcpy( &bits, &a, 4 );
+            std::memcpy( &top, &stacks.m_floats.back( ), 4 );
+            const std::vector< std::uint8_t > matrix = ui_unhex( want.m_matrix );
+            same = same && index == want.m_child && component == want.m_component && bits == want.m_alpha &&
+                   stacks.m_matrices.size( ) == static_cast< std::size_t >( want.m_matrices ) &&
+                   std::memcmp( stacks.m_matrices.back( ).data( ), matrix.data( ), 64 ) == 0 &&
+                   stacks.m_floats.size( ) == static_cast< std::size_t >( want.m_floats ) && top == want.m_float &&
+                   sort.m_key_lo == want.m_key[ 0 ] && sort.m_key_hi == want.m_key[ 1 ];
+            ++calls;
+        } );
+        same = same && at == run.m_calls && stacks.m_matrices.size( ) == static_cast< std::size_t >( run.m_matrices_after ) &&
+               stacks.m_floats.size( ) == static_cast< std::size_t >( run.m_floats_after ) && sort.m_key_lo == run.m_key[ 0 ] && sort.m_key_hi == run.m_key[ 1 ];
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui hud draw: %s env %d reached %d child draws, retail %d - or a call / stack / key differs", run.m_project, run.m_env, at, run.m_calls );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_hud_draw matches retail's VuHUDEntity draw 0x423A70 (0x50B4B0, 0x50B530, 0x628070) on %d runs over the loaded projects' "
+                     "roots: %d child draws - child, component, alpha, both stacks' tops and sizes, the sort key - and the state after",
+            static_cast< int >( g_golden_hud_runs_count ), calls );
+    else
+        LOG_ERROR( "the HUD draw FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_hud_draw( ) && ok;
     ok = verify_ui_texture_draw( ) && ok;
     ok = verify_ui_wiring( ) && ok;
     ok = verify_ui_text_draw( ) && ok;    ok = verify_ui_fade( ) && ok;
