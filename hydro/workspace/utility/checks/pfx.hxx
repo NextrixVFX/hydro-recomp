@@ -1267,9 +1267,207 @@ inline bool verify_water_release( )
     return failed == 0;
 }
 
+// A tree as case water_surface_release's flat words: root, free, leaves, used, free count, node count, then per node its
+// rect words, parent, first, second, tag.
+inline std::vector< unsigned > water_tree_words( const water_tree_t& t )
+{
+    std::vector< unsigned > w = { static_cast< unsigned >( t.root ), static_cast< unsigned >( t.free ), static_cast< unsigned >( t.leaves ),
+        static_cast< unsigned >( t.used ), static_cast< unsigned >( t.free_count ), static_cast< unsigned >( t.nodes.size( ) ) };
+    for ( const water_tree_node_t& n : t.nodes )
+    {
+        unsigned r[ 4 ];
+        std::memcpy( r, n.rect, 16 );
+        w.insert( w.end( ), { r[ 0 ], r[ 1 ], r[ 2 ], r[ 3 ], static_cast< unsigned >( n.parent ), static_cast< unsigned >( n.first ),
+                                static_cast< unsigned >( n.second ), n.tag } );
+    }
+    return w;
+}
+
+// water_surface_entity_release / water_ramp_entity_release (world/surface.hxx) against VuWaterSurfaceEntity's slot 7
+// 0x5DB5C0 and VuWaterRampEntity's 0x5D7030 on Hydroelectric's built water (case water_surface_release): the surface list's
+// sorted order after the build, then every surface / ramp entity released in entity order (release 2 with the surface's
+// refcount forced to 2, the renderer's byte set on every fourth from 1, two listeners). Compared per release: the hook
+// calls in order (draw removal, render wait, both listeners' slot 1, the tree dtor) and the destroyed surfaces / waves,
+// the wave tree as 0x598D10 receives it word for word, the draw / render bytes after, the surface list, the surface tree
+// word for word, the wave list, every listed wave's entries, the pool, every wave and surface refcount, every live
+// surface's wave tree (summary + FNV-1a 64).
+inline bool verify_water_surface_release( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "water_surface_release: the document did not load" );
+        return false;
+    }
+    water_built_t b{};
+    water_build_world( *tree, b, []( entity_t& e ) { return entity_transform( e ); } );
+    const unsigned* s = g_golden_wsr_words;
+    int failed = 0;
+    const unsigned nf = *s++;
+    int bad0 = b.surface_list.size( ) != nf;
+    for ( unsigned k = 0; k < nf; ++k )
+        bad0 += k < b.surface_list.size( ) && static_cast< unsigned >( b.surface_list[ k ] ) != s[ k ];
+    s += nf;
+    if ( bad0 )
+    {
+        ++failed;
+        LOG_ERROR( "water_surface_release: the surface list after the build: %d differences", bad0 );
+    }
+    struct log_t
+    {
+        std::vector< std::array< unsigned, 3 > > events;
+        std::vector< std::vector< unsigned > > trees;
+    } log;
+    bool busy = false;
+    water_surface_hooks_t hk;
+    hk.user = &log;
+    hk.render_busy = &busy;
+    hk.render_wait = []( void* u ) { static_cast< log_t* >( u )->events.push_back( { 1u, 0u, 0u } ); };
+    hk.listeners = 2;
+    hk.listener = []( void* u, int k, int surface ) {
+        static_cast< log_t* >( u )->events.push_back( { 2u, static_cast< unsigned >( k ), static_cast< unsigned >( surface ) } );
+    };
+    hk.draw_remove = []( void* u, int surface ) { static_cast< log_t* >( u )->events.push_back( { 0u, static_cast< unsigned >( surface ), 0u } ); };
+    hk.destroying = []( void* u, int surface, const water_tree_t& t ) {
+        static_cast< log_t* >( u )->events.push_back( { 4u, static_cast< unsigned >( surface ), 0u } );
+        static_cast< log_t* >( u )->trees.push_back( water_tree_words( t ) );
+    };
+    const unsigned n = *s++;
+    int hooked = 0, destroyed = 0, words = 0;
+    for ( unsigned r = 0; r < n; ++r )
+    {
+        const int surface = static_cast< int >( *s++ );
+        const int wave = static_cast< int >( *s++ );
+        const unsigned forced = *s++;
+        busy = *s++ != 0;
+        bool drawn = *s++ != 0;
+        if ( forced )
+            b.surfaces[ static_cast< std::size_t >( surface ) ].word[ 1 ] = 2u;
+        std::vector< std::uint8_t > wbefore = b.wave_gone, sbefore = b.surface_gone;
+        wbefore.resize( b.waves.size( ), 0 );
+        sbefore.resize( b.surfaces.size( ), 0 );
+        log.events.clear( );
+        log.trees.clear( );
+        const int unread = b.unread_dtors;
+        const int missing = wave >= 0 ? water_ramp_entity_release( b, surface, wave, drawn, hk ) : water_surface_entity_release( b, surface, drawn, hk );
+        b.wave_gone.resize( b.waves.size( ), 0 );
+        b.surface_gone.resize( b.surfaces.size( ), 0 );
+        int bad = missing != 0 || b.unread_dtors != unread;
+        // the events: the hooks' in order; the dtors (kinds 3 / 5) as the gone transitions, in index order
+        std::vector< std::array< unsigned, 3 > > want;
+        std::vector< unsigned > sd, wd;
+        const unsigned ne = *s++;
+        for ( unsigned k = 0; k < ne; ++k, s += 3 )
+            if ( s[ 0 ] == 3u )
+                sd.push_back( s[ 1 ] );
+            else if ( s[ 0 ] == 5u )
+                wd.push_back( s[ 1 ] );
+            else
+                want.push_back( { s[ 0 ], s[ 0 ] == 1u ? 0u : s[ 1 ], s[ 0 ] == 2u ? s[ 2 ] : 0u } );
+        bad += want != log.events;
+        hooked += static_cast< int >( want.size( ) );
+        std::vector< unsigned > sg, wg;
+        for ( std::size_t k = 0; k < b.surfaces.size( ); ++k )
+            if ( b.surface_gone[ k ] && !sbefore[ k ] )
+                sg.push_back( static_cast< unsigned >( k ) );
+        for ( std::size_t k = 0; k < b.waves.size( ); ++k )
+            if ( b.wave_gone[ k ] && !wbefore[ k ] )
+                wg.push_back( static_cast< unsigned >( k ) );
+        bad += sg != sd || wg != wd;
+        destroyed += static_cast< int >( sd.size( ) + wd.size( ) );
+        const unsigned nt = *s++;
+        bad += nt != log.trees.size( );
+        for ( unsigned k = 0; k < nt; ++k )
+        {
+            const unsigned len = *s++;
+            bad += k >= log.trees.size( ) || log.trees[ k ] != std::vector< unsigned >( s, s + len );
+            words += static_cast< int >( len );
+            s += len;
+        }
+        bad += s[ 0 ] != ( drawn ? 1u : 0u ) || s[ 3 ] != ( busy ? 1u : 0u );   // +0x128 / +0x140 = 0: the caller's stores
+        s += 4;
+        const unsigned nl = *s++;
+        bad += b.surface_list.size( ) != nl;
+        for ( unsigned k = 0; k < nl; ++k )
+            bad += k < b.surface_list.size( ) && static_cast< unsigned >( b.surface_list[ k ] ) != s[ k ];
+        s += nl;
+        bad += *s++ != b.surface_list.size( );
+        const unsigned ns = *s++;
+        bad += water_tree_words( b.hold.surface_tree ) != std::vector< unsigned >( s, s + ns );
+        words += static_cast< int >( ns );
+        s += ns;
+        const unsigned nw = *s++;
+        int e = b.hold.list;
+        std::vector< int > listed;
+        for ( unsigned k = 0; k < nw; ++k, s += 2 )
+        {
+            bad += static_cast< unsigned >( e ) != s[ 0 ];
+            if ( e < 0 )
+                break;
+            bad += static_cast< unsigned >( b.hold.pool[ e ].leaf ) != s[ 1 ];
+            listed.push_back( b.hold.pool[ e ].leaf );
+            e = b.hold.pool[ e ].next;
+        }
+        bad += e != -1;
+        for ( unsigned k = 0; k < nw; ++k )
+        {
+            const unsigned m = *s++;
+            int c = k < listed.size( ) ? b.hold.waves[ static_cast< std::size_t >( listed[ k ] ) ].entries : -1;
+            for ( unsigned j = 0; j < m; ++j, s += 2 )
+            {
+                bad += c < 0 || static_cast< unsigned >( c ) != s[ 0 ] || static_cast< unsigned >( b.hold.pool[ c ].surface ) != s[ 1 ];
+                if ( c >= 0 )
+                    c = b.hold.pool[ c ].next;
+            }
+            bad += c != -1;
+        }
+        bad += static_cast< unsigned >( b.hold.pool_count ) != *s++;
+        bad += static_cast< unsigned >( b.hold.pool_free ) != *s++;
+        const unsigned nr = *s++;
+        for ( unsigned k = 0; k < nr; ++k, ++s )
+            bad += *s != 0xFFFFFFFFu ? ( b.wave_gone[ k ] || b.waves[ k ].word[ 1 ] != *s ) : !b.wave_gone[ k ];
+        const unsigned nsr = *s++;
+        for ( unsigned k = 0; k < nsr; ++k, ++s )
+            bad += *s != 0xFFFFFFFFu ? ( b.surface_gone[ k ] || b.surfaces[ k ].word[ 1 ] != *s ) : !b.surface_gone[ k ];
+        const unsigned nwt = *s++;
+        unsigned live = 0;
+        for ( std::size_t k = 0; k < b.surfaces.size( ); ++k )
+            live += b.surface_gone[ k ] ? 0u : 1u;
+        bad += live != nwt;
+        for ( unsigned k = 0; k < nwt; ++k, s += 9 )
+        {
+            const std::vector< unsigned > t = water_tree_words( b.hold.surfaces[ s[ 0 ] ].waves );
+            const std::uint64_t h = water_fnv64( t.data( ) + 6, t.size( ) - 6 );
+            for ( int j = 0; j < 6; ++j )
+                bad += t[ static_cast< std::size_t >( j ) ] != s[ 1 + j ];
+            bad += static_cast< unsigned >( h ) != s[ 7 ] || static_cast< unsigned >( h >> 32 ) != s[ 8 ];
+        }
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "water_surface_release: release %u (surface %d, wave %d): %d differences", r, surface, wave, bad );
+        }
+    }
+    if ( s != g_golden_wsr_words + g_golden_wsr_size )
+    {
+        ++failed;
+        LOG_ERROR( "water_surface_release: the golden words were not consumed exactly" );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_surface_entity_release / water_ramp_entity_release match VuWaterSurfaceEntity 0x5DB5C0 / VuWaterRampEntity "
+                     "0x5D7030 (removeSurface 0x529770, 0x529990, the trees 0x598FC0 / 0x598D10) on Hydroelectric's built water: the "
+                     "sorted surface list, %u releases, %d hook calls in order, %d dtors, %d tree words, the lists, pool, refcounts and "
+                     "wave trees after each",
+            n, hooked, destroyed, words );
+    else
+        LOG_ERROR( "water_surface_release FAILED %d", failed );
+    return failed == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_water_surface_release( ) && ok;
     ok = verify_water_release( ) && ok;
     ok = verify_pfx_reload( ) && ok;
     ok = verify_water_snap( ) && ok;
