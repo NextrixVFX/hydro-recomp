@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/assets/tree.hxx>
+#include <workspace/core/ui/config.hxx>
 #include <workspace/core/ui/fsm.hxx>
 
 #include <cstdint>
@@ -308,6 +309,30 @@ public:
 
     // The FSM start at the end of the enter 0x4BF630.
     void start( ) { m_fsm.start( ); }
+
+    // slot 3 0x4BF9B0, the mode's exit: the current state's exit delegate (FSM
+    // +0 -> state +0x24, its slot 2); gameutil's audio stop / release 0x4D3100
+    // (FMOD channel and sound, the asset factory's release - a HOOK); unload
+    // 0x4C0690; the SnapMode project (+148) released the same way, inlined;
+    // the game mode manager's slot 10 (g 0x758FF0) and 0x530BB0( 0 ) on g
+    // 0x759060 (UNREAD) - hooks; then the data step ui_game_config over
+    // gameutil +80 (`root`) with the next game mode (+52).
+    ui_game_config_t exit( value_t& root, const ui_game_env_t& env )
+    {
+        if ( m_fsm.current( ) && m_fsm.current( )->m_exit )
+            m_fsm.current( )->m_exit( );
+        platform( "0x4D3100", 0 );
+        unload( );
+        if ( m_snap_project )
+        {
+            if ( m_engine.m_release_project )
+                m_engine.m_release_project( m_snap_project );
+            m_snap_project = 0;
+        }
+        platform( "mode manager", 10 );
+        platform( "0x530BB0", 0 );
+        return ui_game_config( m_mode, root, env );
+    }
 
     // slot 2 0x4BF630, the mode's enter. `game_data` is gameutil +80. The
     // first screen: "Screens/Start" when InitialScreen (a string member, else

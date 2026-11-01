@@ -1055,6 +1055,235 @@ inline bool verify_ui_font_params( )
     return failed == 0;
 }
 
+// One of the game_data_race documents (g_golden_gd_at: word offset, bytes) parsed.
+inline value_t ui_gd_document( int index )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_gd_words + g_golden_gd_at[ 2 * index ] );
+    return c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_gd_at[ 2 * index + 1 ] ) ).parse( );
+}
+
+// c_front_end::exit / ui_game_config / ui_race_game_data (hydro core/ui/
+// config.hxx) against retail's VuFrontEndGameMode exit 0x4BF9B0 and race
+// builder 0x4C0A50 (oracle case game_data_race): the real BoatDB / TrackDB and a
+// hand-built BoatDB, each vector's game-data root (and a separate GameData for
+// the direct calls) - the WHOLE root container after (vujb_dump: every key,
+// tag and payload), the separate GameData after, VuRandom's 34 words after,
+// and the hooks in order (the string DB's ids, the exit's teardown hooks, the
+// unrecreated builders). Retail's 0x4C0690 is logged by the case and skipped
+// here: our unload is the recreated one (m_current is checked cleared).
+inline bool verify_ui_game_data( )
+{
+    const value_t boat_db = ui_gd_document( 0 );
+    const value_t track_db = ui_gd_document( 1 );
+    const value_t synthetic_db = ui_gd_document( 2 );
+    int failed = 0, entries = 0;
+    for ( std::size_t k = 0; k < g_golden_gd_vectors_count; ++k )
+    {
+        const golden_gd_vector_t& v = g_golden_gd_vectors[ k ];
+        std::vector< std::pair< std::string, std::string > > log;
+        value_t root = ui_gd_document( v.m_root );
+        value_t game_data = v.m_game_data >= 0 ? ui_gd_document( v.m_game_data ) : value_t{ };
+        fleet_random_t rng;
+        const unsigned* words = g_golden_gd_rng + v.m_rng;
+        std::memcpy( &rng.seed, words, 4 );
+        std::memcpy( &rng.last, words + 1, 4 );
+        std::memcpy( rng.table, words + 2, 128 );
+        ui_game_env_t env;
+        env.boat_db = v.m_db == 0 ? &boat_db : &synthetic_db;
+        env.track_db = &track_db;
+        env.random = &rng;
+        env.player_name = "Player One";
+        env.string_db = [ &log ]( const char* id ) { log.push_back( { "string", id } ); return std::string( "S" ) + id; };
+        bool cleared = true;
+        if ( v.m_direct )
+            ui_race_game_data( game_data, root, env );
+        else
+        {
+            front_end_engine_t engine;
+            engine.m_platform = [ &log ]( const char* what, int arg ) { log.push_back( { what, std::string( what ) == "0x4D3100" ? "" : std::to_string( arg ) } ); };
+            c_front_end fe( engine, value_t{ } );
+            fe.m_fsm.m_current = fe.m_fsm.state_index( "Exit" );
+            if ( v.m_delegate )
+                fe.m_fsm.current( )->m_exit = [ &log ] { log.push_back( { "state exit", "" } ); };
+            fe.m_mode = v.m_next;
+            fe.m_current = "Screens/SinglePlayer";
+            const ui_game_config_t r = fe.exit( root, env );
+            if ( r.builder && !r.built && r.builder != 0x4C0A50u )
+            {
+                char at[ 16 ];
+                std::snprintf( at, sizeof( at ), "0x%X", r.builder );
+                log.push_back( { "builder", at } );
+            }
+            cleared = fe.m_current.empty( );
+        }
+        std::string root_after, gd_after;
+        vujb_dump( root, root_after );
+        if ( v.m_direct )
+            vujb_dump( game_data, gd_after );
+        bool same = cleared && root_after == v.m_root_after && gd_after == v.m_game_data_after &&
+                    std::memcmp( &rng.seed, words + 34, 4 ) == 0 && std::memcmp( &rng.last, words + 35, 4 ) == 0 &&
+                    std::memcmp( rng.table, words + 36, 128 ) == 0;
+        std::size_t j = 0;
+        for ( int g = 0; g < v.m_logs; ++g )
+        {
+            const golden_btn_log_t& want = g_golden_gd_logs[ v.m_first + g ];
+            if ( std::strcmp( want.m_kind, "0x4C0690" ) == 0 )
+                continue;
+            same = same && j < log.size( ) && log[ j ].first == want.m_kind && log[ j ].second == want.m_a;
+            ++j;
+        }
+        same = same && j == log.size( );
+        entries += static_cast< int >( member( v.m_direct ? game_data : member( root, "GameData" ), "Boats" ).list.size( ) );
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui game data: vector %d (%s) differs from retail's 0x4BF9B0 / 0x4C0A50", static_cast< int >( k ), v.m_label );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_game_config / ui_race_game_data match retail's VuFrontEndGameMode exit 0x4BF9B0 and race GameData 0x4C0A50 "
+                     "(picks 0x4C3380 / shuffle 0x50FF40, AI entry 0x4C31D0, player 0x4C3120) on %d vectors: the whole game-data "
+                     "container, VuRandom's state, the hooks in order (%d boat entries)",
+            static_cast< int >( g_golden_gd_vectors_count ), entries );
+    else
+        LOG_ERROR( "the game data FAILED %d of %d vectors against retail's", failed, static_cast< int >( g_golden_gd_vectors_count ) );
+    return failed == 0;
+}
+
+// THE EXPORT ui_front_end_game_data (hydro core/ui/config.hxx) against the
+// GameData retail's exit 0x4BF9B0 left at gameutil +80 (oracle case
+// game_data_race, every exit vector whose next mode is "Action"): only the five
+// strings 0x4BF9B0 / 0x4C0A50 / 0x4C18D0 read (GameConfig.Mode / .Track / .Course, PlayerBoats[0]
+// .Properties.Boat / .Skin, each a string member's text else "") are taken
+// from the vector's root - stale GameData, Results, other members dropped - and
+// the container it returns must equal retail's root["GameData"] (vujb_dump),
+// VuRandom's state after too.
+inline bool verify_ui_front_end_game_data( )
+{
+    const value_t boat_db = ui_gd_document( 0 );
+    const value_t track_db = ui_gd_document( 1 );
+    const value_t synthetic_db = ui_gd_document( 2 );
+    int failed = 0, checked = 0, races = 0;
+    for ( std::size_t k = 0; k < g_golden_gd_vectors_count; ++k )
+    {
+        const golden_gd_vector_t& v = g_golden_gd_vectors[ k ];
+        if ( v.m_direct || std::strcmp( v.m_next, "Action" ) != 0 )
+            continue;
+        const value_t root = ui_gd_document( v.m_root );
+        static const value_t null{ };
+        const value_t& players = member( member( root, "BoatConfig" ), "PlayerBoats" );
+        const value_t& player = players.tag == 5 && !players.list.empty( ) ? players.list[ 0 ] : null;
+        fleet_random_t rng;
+        const unsigned* words = g_golden_gd_rng + v.m_rng;
+        std::memcpy( &rng.seed, words, 4 );
+        std::memcpy( &rng.last, words + 1, 4 );
+        std::memcpy( rng.table, words + 2, 128 );
+        ui_game_env_t env;
+        env.boat_db = v.m_db == 0 ? &boat_db : &synthetic_db;
+        env.track_db = &track_db;
+        env.random = &rng;
+        env.player_name = "Player One";
+        env.string_db = []( const char* id ) { return std::string( "S" ) + id; };
+        ui_game_config_t r;
+        const value_t game_data = ui_front_end_game_data( ui_json_text( member( member( root, "GameConfig" ), "Mode" ) ),
+                                                          ui_json_text( member( member( root, "GameConfig" ), "Track" ) ),
+                                                          ui_json_text( member( member( root, "GameConfig" ), "Course" ) ),
+                                                          ui_json_text( member( member( player, "Properties" ), "Boat" ) ),
+                                                          ui_json_text( member( member( player, "Properties" ), "Skin" ) ), env, &r );
+        std::string have;
+        vujb_dump( game_data, have );
+        ++checked;
+        races += r.built ? 1 : 0;
+        const bool same = have == v.m_game_data_member && std::memcmp( &rng.seed, words + 34, 4 ) == 0 &&
+                          std::memcmp( &rng.last, words + 35, 4 ) == 0 && std::memcmp( rng.table, words + 36, 128 ) == 0;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui front end game data: vector %d (%s) differs from the GameData retail's 0x4BF9B0 left", static_cast< int >( k ), v.m_label );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_front_end_game_data (mode, track, boat, skin) reproduces the GameData retail's exit 0x4BF9B0 leaves at gameutil +80 "
+                     "on %d front-end states (%d races / slaloms built; the rest a variant not recreated or no event), VuRandom's state too",
+            checked, races );
+    else
+        LOG_ERROR( "the front end game data export FAILED %d of %d states against retail's", failed, checked );
+    return failed == 0;
+}
+
+// ui_set_game_mode (hydro core/ui/action.hxx) against retail's
+// VuSetGameModeUIAction slot 12 0x472740 through Trigger (oracle case
+// ui_set_game_mode): every authored instance as entity_load_project built it
+// (its "Game Mode" as the load left it, checked against retail's) and hand-made
+// ones (the ctor's property nodes against the schema), each on four game-data
+// roots - the whole root after, the VuRetVal, no broadcast.
+inline bool verify_ui_set_game_mode( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0, fires = 0;
+    auto bad = [ &failed ]( const char* what, int k )
+    {
+        if ( ++failed <= 8 )
+            LOG_ERROR( "ui set game mode: %s differs from retail (row %d)", what, k );
+    };
+    for ( std::size_t k = 0; k < g_golden_gms_count; ++k )
+    {
+        const golden_gm_t& want = g_golden_gms[ k ];
+        const int row = static_cast< int >( k );
+        const std::vector< std::uint8_t > raw = ui_unhex( want.m_mode );
+        std::string mode( raw.begin( ), raw.end( ) );
+        if ( want.m_project )
+        {
+            const entity_t* have = nullptr;
+            for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+                if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, want.m_project ) == 0 && want.m_index >= 0 &&
+                     static_cast< std::size_t >( want.m_index ) < loaded.trees[ p ].size( ) )
+                    have = loaded.trees[ p ][ static_cast< std::size_t >( want.m_index ) ].second;
+            if ( !have || have->m_type != "VuSetGameModeUIAction" || have->m_name != want.m_name || !ui_is_state( *have ) )
+            {
+                bad( "the authored entity", row );
+                continue;
+            }
+            const ui_state_t* s = static_cast< const ui_state_t* >( have->m_state.get( ) );
+            bool found = false;
+            for ( int n = 0; n < s->m_count; ++n )
+                if ( std::strcmp( s->m_rows[ n ]->m_name, "Game Mode" ) == 0 )
+                {
+                    found = true;
+                    if ( s->m_value[ n ].m_text != mode )
+                        bad( "the loaded Game Mode", row );
+                    mode = s->m_value[ n ].m_text;
+                }
+            if ( !found )
+                bad( "the Game Mode node's presence", row );
+        }
+        else
+        {
+            int count = 0;
+            const ui_property_row_t* first = ui_rows_for( "VuSetGameModeUIAction", count );
+            if ( count != want.m_nodes )
+                bad( "the ctor's node count", row );
+            for ( int n = 0; first && n < count && n < want.m_nodes; ++n )
+                if ( std::strcmp( first[ n ].m_name, g_golden_gm_nodes[ want.m_first_node + n ].m_name ) != 0 ||
+                     first[ n ].m_vtable != g_golden_gm_nodes[ want.m_first_node + n ].m_vtable )
+                    bad( "a ctor node", row );
+        }
+        for ( int f = 0; f < want.m_fires; ++f )
+        {
+            const golden_gm_fire_t& fire = g_golden_gm_fires[ want.m_first + f ];
+            const std::vector< std::uint8_t > doc = ui_unhex( fire.m_root );
+            value_t root = c_reader( doc ).parse( );
+            const std::uint32_t ret = ui_set_game_mode( root, mode );
+            std::string after;
+            vujb_dump( root, after );
+            ++fires;
+            if ( ret != fire.m_ret || after != fire.m_after || fire.m_broadcasts != 0 )
+                bad( "a fire's root / VuRetVal", row );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_set_game_mode matches retail's VuSetGameModeUIAction slot 12 0x472740 (Trigger 0x472800) on %d actions "
+                     "(authored + hand-made) x 4 game-data roots: %d fires, the whole root after",
+            static_cast< int >( g_golden_gms_count ), fires );
+    else
+        LOG_ERROR( "the set game mode action FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 // ui_text_draw (hydro core/ui/draw.hxx) against retail's VuUITextBaseEntity draw
 // 0x627C60 -> font draw 0x536C10 -> VuGfxSort 0x426B80 / 0x429010 (oracle cases
 // text_draw, text_draw_sweep): every new command's 8 words and its record's
@@ -1848,6 +2077,9 @@ inline bool verify_ui_container_draw( )
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_game_data( ) && ok;
+    ok = verify_ui_set_game_mode( ) && ok;
+    ok = verify_ui_front_end_game_data( ) && ok;
     ok = verify_ui_container_draw( ) && ok;
     ok = verify_ui_font_params( ) && ok;
     ok = verify_ui_minimap_draw( ) && ok;
