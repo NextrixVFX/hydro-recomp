@@ -1,8 +1,11 @@
 #pragma once
 
 #include <workspace/core/world/pfxclass.hxx>
+#include <workspace/core/world/pfxsim.hxx>
 
 #include <cstring>
+#include <map>
+#include <vector>
 
 // The water area's particle checks (included by checks/water.hxx before verify_water_all, which runs
 // verify_pfx_all). Golden tables come from hydro-tools oracle/cases/water.py through emit/water.py.
@@ -176,9 +179,169 @@ inline bool verify_pattern_draw( )
     return failed == 0;
 }
 
+// The VuPfx pools and the system lifecycle (world/pfxsim.hxx) against retail's memory (case pfx_lifecycle): the
+// resources' ctor + init, then a plan of createSystemInstance / start / allocateParticle / tick / stop / release /
+// VuPfxImpl tick on hand-built node trees (real node vtables); the pattern ticks are the case's stubs, replayed. After
+// the init and after every operation: the 25 resource words and every block word (but the system AABB pads +0x8C /
+// +0x9C and the pattern AABB pads +0x38 / +0x48, stack words), every return, every pattern tick's pattern and dt.
+struct pfx_check_sim_t
+{
+    std::map< std::uint32_t, std::vector< std::uint32_t > > kids;
+    const unsigned* ticks = nullptr;
+    int nticks = 0, bad = 0;
+};
+
+inline bool verify_pfx_lifecycle( )
+{
+    const unsigned* s = g_golden_plc_words;
+    const std::uint32_t res = s[ 0 ];
+    const std::uint32_t blocks[ 4 ] = { s[ 1 ], s[ 2 ], s[ 3 ], s[ 4 ] };
+    std::uint32_t pairs[ 8 ];
+    std::memcpy( pairs, s + 5, 32 );
+    s += 13 + 16;
+    for ( int k = 1; k < 8; k += 2 )
+        pairs[ k ] = ( pairs[ k ] + 15u ) & 0xFFFFFFF0u;   // the block sizes as 0x58B9A0 rounds them (the regions)
+    pfx_heap_t h;
+    h.add( res, 0x64 );
+    for ( int k = 0; k < 4; ++k )
+        h.add( blocks[ k ], pairs[ 2 * k ] * pairs[ 2 * k + 1 ] );
+    pfx_check_sim_t sim;
+    const unsigned nnodes = *s++;
+    std::vector< std::uint32_t > addr;
+    const unsigned* ns = s;
+    for ( unsigned i = 0; i < nnodes; ++i )
+    {
+        addr.push_back( ns[ 0 ] );
+        ns += 5 + ns[ 4 ];
+    }
+    h.add( addr[ 0 ], 0x80u * nnodes );
+    for ( unsigned i = 0; i < nnodes; ++i )
+    {
+        h[ s[ 0 ] ] = s[ 1 ];
+        h[ s[ 0 ] + 0x30 ] = s[ 2 ];
+        h[ s[ 0 ] + 0x34 ] = s[ 3 ];
+        std::vector< std::uint32_t >& v = sim.kids[ s[ 0 ] ];
+        for ( unsigned k = 0; k < s[ 4 ]; ++k )
+            v.push_back( addr[ s[ 5 + k ] ] );
+        s += 5 + s[ 4 ];
+    }
+    pfx_sim_hooks_t hooks;
+    hooks.user = &sim;
+    hooks.children = []( void* u, std::uint32_t node ) -> const std::vector< std::uint32_t >* {
+        auto& m = static_cast< pfx_check_sim_t* >( u )->kids;
+        auto it = m.find( node );
+        return it == m.end( ) ? nullptr : &it->second;
+    };
+    hooks.pattern_tick = []( void* u, pfx_heap_t& hp, std::uint32_t pattern, float dt ) {
+        pfx_check_sim_t& c = *static_cast< pfx_check_sim_t* >( u );
+        if ( c.nticks <= 0 )
+        {
+            ++c.bad;
+            return;
+        }
+        std::uint32_t d;
+        std::memcpy( &d, &dt, 4 );
+        c.bad += ( c.ticks[ 0 ] != pattern || c.ticks[ 1 ] != d ) ? 1 : 0;
+        hp[ pattern + 0x28 ] = c.ticks[ 2 ];
+        for ( int k = 0; k < 3; ++k )
+        {
+            hp[ pattern + 0x2C + 4 * k ] = c.ticks[ 3 + k ];
+            hp[ pattern + 0x3C + 4 * k ] = c.ticks[ 6 + k ];
+        }
+        c.ticks += 9;
+        --c.nticks;
+    };
+    const std::uint32_t sizes[ 4 ] = { pairs[ 0 ] * pairs[ 1 ], pairs[ 2 ] * pairs[ 3 ], pairs[ 4 ] * pairs[ 5 ], pairs[ 6 ] * pairs[ 7 ] };
+    int failed = 0, compared = 0;
+    auto compare = [ & ]( const unsigned* want, int step ) {
+        int bad = 0;
+        for ( int k = 0; k < 25; ++k, ++compared )
+            if ( h[ res + 4 * k ] != want[ k ] )
+            {
+                if ( bad < 2 )
+                    LOG_ERROR( "pfx_lifecycle step %d: resources +0x%X = 0x%08X, retail 0x%08X", step, 4 * k, h[ res + 4 * k ], want[ k ] );
+                ++bad;
+            }
+        want += 25;
+        for ( int b = 0; b < 4; ++b )
+            for ( std::uint32_t o = 0; o < sizes[ b ]; o += 4, ++want )
+            {
+                if ( b == 0 && ( o % pairs[ 1 ] == 0x8Cu || o % pairs[ 1 ] == 0x9Cu ) )
+                    continue;
+                if ( b == 1 && ( o % pairs[ 3 ] == 0x38u || o % pairs[ 3 ] == 0x48u ) )   // 0x58B240 stores stack words there
+                    continue;
+                ++compared;
+                if ( h[ blocks[ b ] + o ] != *want )
+                {
+                    if ( bad < 2 )
+                        LOG_ERROR( "pfx_lifecycle step %d: block %d +0x%X = 0x%08X, retail 0x%08X", step, b, o, h[ blocks[ b ] + o ], *want );
+                    ++bad;
+                }
+            }
+        return bad;
+    };
+    const std::size_t region = 25 + ( sizes[ 0 ] + sizes[ 1 ] + sizes[ 2 ] + sizes[ 3 ] ) / 4;
+    pfx_resources_ctor( h, res );
+    std::uint32_t authored[ 8 ];
+    std::memcpy( authored, g_golden_plc_words + 5, 32 );
+    pfx_resources_init( h, res, authored, blocks );
+    failed += compare( s, -1 ) ? 1 : 0;
+    s += region;
+    const unsigned nops = *s++;
+    for ( unsigned i = 0; i < nops; ++i )
+    {
+        const unsigned code = *s++;
+        int bad = 0;
+        switch ( code )
+        {
+        case 0:
+            bad += pfx_system_instance_create( h, res, addr[ s[ 0 ] ], hooks ) != s[ 1 ] ? 1 : 0;
+            s += 2;
+            break;
+        case 1: pfx_system_start( h, s[ 0 ] ); s += 1; break;
+        case 2:
+            for ( unsigned k = 0; k < s[ 1 ]; ++k )
+                bad += pfx_particle_allocate( h, res, s[ 0 ] ) != s[ 2 + k ] ? 1 : 0;
+            s += 2 + s[ 1 ];
+            break;
+        case 3:
+        {
+            float dt;
+            std::memcpy( &dt, s + 1, 4 );
+            sim.ticks = s + 3;
+            sim.nticks = static_cast< int >( s[ 2 ] );
+            sim.bad = 0;
+            pfx_system_tick( h, s[ 0 ], dt, hooks );
+            bad += sim.bad + sim.nticks;
+            s += 3 + 9 * s[ 2 ];
+            break;
+        }
+        case 4: pfx_system_stop( h, res, s[ 0 ], s[ 1 ] != 0u ); s += 2; break;
+        case 5: pfx_system_release( h, res, s[ 0 ] ); s += 1; break;
+        default: pfx_impl_tick( h, res ); break;
+        }
+        bad += compare( s, static_cast< int >( i ) );
+        s += region;
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "pfx_lifecycle step %d (operation %u): %d differences", static_cast< int >( i ), code, bad );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuPfxResources 0x58B5B0 / 0x58B670 and the system lifecycle (0x51DA70 / 0x58B880 / 0x58A940 / 0x58B2D0 / 0x58AC90 / "
+                     "0x58B4E0 / 0x58AD70 / 0x58ACC0 / 0x51DAE0 / 0x58AA70 / 0x58B3F0 / 0x51DD80) match retail's memory over %d operations, "
+                     "%d words",
+            static_cast< int >( nops ), compared );
+    else
+        LOG_ERROR( "pfx_lifecycle FAILED %d of %d steps", failed, static_cast< int >( nops ) + 1 );
+    return failed == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_pfx_lifecycle( ) && ok;
     ok = verify_pattern_draw( ) && ok;
     ok = verify_fountain_init( ) && ok;
     return ok;
