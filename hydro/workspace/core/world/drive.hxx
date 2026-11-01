@@ -776,8 +776,16 @@ inline void race_contact_added( void* user, solver_contact_point_t& cp, solver_r
             if ( &dp->body->body.body == self )
             {
                 race_session_t::dyn_prop_t* d = dp.get( );
-                return [ &s, d, other ]( contact_record_t& ) {
-                    const auto base = [ &s ] { race_unwired( s, "VuDynamicGamePropEntity's contact callback 0x437F40 (hit sfx / events, Hard Hit) - not recreated, not run (UNKNOWN)" ); };
+                return [ &s, d, other ]( contact_record_t& rec ) {
+                    // VuDynamicGamePropEntity's 0x437F40 (world/dynprop.hxx dynamic_prop_contact) on this prop's body and the other.
+                    const auto base = [ &s, d, other, &rec ] {
+                        bool owner = false;
+                        for ( const auto& b : s.boats )
+                            owner = owner || &b->body.body == other;
+                        if ( dynamic_prop_contact( *d->p, d->hit, d->timer, reinterpret_cast< const std::uint8_t* >( &d->body->body ),
+                                                   reinterpret_cast< const std::uint8_t* >( other ), rec.pos, rec.normal, owner ) )
+                            ++d->session->prop_hits;
+                    };
                     if ( !d->buoy )
                     {
                         base( );

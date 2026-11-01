@@ -292,7 +292,7 @@ inline const std::vector< c_world::cached_part_t >& c_world::model_for( const st
 // single distinct geometry buffer even when it carries two parts, so one
 // clone backs all of a prop's parts and the placement can be made once at
 // load and then fed new vertices every frame.
-inline void c_world::place_model( const std::string& asset, const float* world, int bob, int alpha_override, const float* tint, const std::vector< livery_draw_t >* skin, int geometry_override, std::vector< int >* out_placements)
+inline void c_world::place_model( const std::string& asset, const float* world, int bob, int alpha_override, const float* tint, const std::vector< livery_draw_t >* skin, int geometry_override, std::vector< int >* out_placements, std::vector< std::array< float, 16 > >* out_nodes )
 {
     const float white[ 3 ] = { 1.0f, 1.0f, 1.0f };
     const float* color = tint != nullptr ? tint : white;
@@ -357,7 +357,41 @@ inline void c_world::place_model( const std::string& asset, const float* world, 
         }
         if ( out_placements != nullptr )
             out_placements->push_back( handle );
+        if ( out_nodes != nullptr )
+        {
+            std::array< float, 16 > node{};
+            std::memcpy( node.data( ), part.node, sizeof( float ) * 16 );
+            out_nodes->push_back( node );
+        }
         ++m_draws;
+    }
+}
+
+// A dynamic prop's Build tick 0x546130 (world/session.hxx race_session_dyn_prop_build) on its static model
+// component: the draw matrix +0x13C = transform_draw_matrix (fromScale(+0xB0) x world +0x50), the world aabb by
+// 0x531D10 (scene_component_aabb) from the LOD 0 instance's scene aabb (its +0x5C) or the zero aabb 0x7593F0 - as the
+// load placed it (entities.hxx); then OUR renderer hand-off (the draw manager's, a hook): every placement moved to
+// the matrix x its part node. Nothing for an owner with no static draw or no modelled transform.
+inline void c_world::prop_draw( const entity_t& owner )
+{
+    const transform_component_t* t = entity_transform( const_cast< entity_t& >( owner ) );
+    if ( !t || owner.m_world_unknown )
+        return;
+    for ( static_draw_item_t& item : m_static_draws )
+    {
+        if ( item.owner != &owner )
+            continue;
+        float matrix[ 16 ];
+        transform_draw_matrix( *t, matrix );
+        const auto box = m_scene_aabbs.find( item.draw.model_asset );
+        scene_component_aabb( item.aabb, box != m_scene_aabbs.end( ) ? box->second.data( ) : scene_zero_aabb( ), matrix, false );
+        for ( int instance = 0; instance < 3; ++instance )
+            for ( std::size_t k = 0; k < item.placements[ instance ].size( ) && k < item.nodes[ instance ].size( ); ++k )
+            {
+                float placed[ 16 ];
+                math_multiply( placed, matrix, item.nodes[ instance ][ k ].data( ) );
+                c_engine::move( item.placements[ instance ][ k ], placed );
+            }
     }
 }
 

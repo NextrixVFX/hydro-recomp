@@ -62,9 +62,60 @@ inline bool verify_logic_properties( )
     return failed == 0;
 }
 
+// dynamic_prop_contact (world/dynprop.hxx) against retail's 0x437F40 run whole (case prop_contact): the two body
+// images built from the vector's words (origin +0x40, linear +0x140, angular +0x150, flags +0xD8, group +0x2CA),
+// the record's point / normal; compared: +0x164, +0x178, +0x17C and the weak ref's target (the owner or none).
+inline bool verify_prop_contact( )
+{
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_prop_contact_count; ++k )
+    {
+        const golden_prop_contact_t& v = g_golden_prop_contact[ k ];
+        std::uint8_t own[ 0x2D8 ] = { }, other[ 0x2D8 ] = { };
+        const auto fill = [ ]( std::uint8_t* b, const unsigned* w ) {
+            static const int at[ 9 ] = { 0x40, 0x44, 0x48, 0x140, 0x144, 0x148, 0x150, 0x154, 0x158 };
+            for ( int i = 0; i < 9; ++i )
+                std::memcpy( b + at[ i ], &w[ i ], 4 );
+            std::memcpy( b + 0xD8, &w[ 9 ], 4 );
+            const std::uint16_t g = static_cast< std::uint16_t >( w[ 10 ] );
+            std::memcpy( b + 0x2CA, &g, 2 );
+        };
+        fill( own, v.own );
+        fill( other, v.other );
+        dynamic_prop_t p{ };
+        std::memcpy( &p.threshold_mph, &v.threshold, 4 );
+        dynamic_prop_hit_t hit;
+        hit.pending = static_cast< std::uint8_t >( v.pending );
+        std::memcpy( &hit.strength, &v.strength, 4 );
+        float timer;
+        std::memcpy( &timer, &v.timer, 4 );
+        float point[ 4 ] = { }, normal[ 4 ] = { };
+        std::memcpy( point, v.point, 12 );
+        std::memcpy( normal, v.normal, 12 );
+        dynamic_prop_contact( p, hit, timer, own, other, point, normal, v.owner != 0 );
+        std::uint32_t s, t;
+        std::memcpy( &s, &hit.strength, 4 );
+        std::memcpy( &t, &timer, 4 );
+        const int target = hit.target == other ? 1 : ( hit.target ? 2 : 0 );
+        if ( hit.pending != v.out_pending || s != v.out_strength || t != v.out_timer || target != v.out_target )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "prop contact: vector %d: pending %d strength 0x%08X timer 0x%08X target %d, retail %d 0x%08X 0x%08X %d",
+                           static_cast< int >( k ), hit.pending, s, t, target, v.out_pending, v.out_strength, v.out_timer, v.out_target );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "dynamic_prop_contact matches VuDynamicGamePropEntity's contact callback 0x437F40 (0x4AD340, the weak ref 0x433B70) on %d "
+                     "contacts: the hit, strength, timer and target, bit for bit", static_cast< int >( g_golden_prop_contact_count ) );
+    else
+        LOG_ERROR( "dynamic_prop_contact FAILED on %d of %d contacts", failed, static_cast< int >( g_golden_prop_contact_count ) );
+    return failed == 0;
+}
+
 inline bool verify_session_all( )
 {
     bool ok = true;
     ok = verify_logic_properties( ) && ok;
+    ok = verify_prop_contact( ) && ok;
     return ok;
 }

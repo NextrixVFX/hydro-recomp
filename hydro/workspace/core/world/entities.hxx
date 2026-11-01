@@ -400,7 +400,8 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
                 m_place_owner = trail;
                 for ( int instance = 0; instance < 3; ++instance )
                     if ( !names[ instance ]->empty( ) )
-                        place_model( *names[ instance ], matrix, 0, -1, tint, nullptr, -1, &item.placements[ instance ] );
+                        place_model( *names[ instance ], matrix, 0, -1, tint, nullptr, -1, &item.placements[ instance ], &item.nodes[ instance ] );
+                item.owner = &e;
                 m_collect = nullptr;
                 // 0x531D10 with the LOD 0 instance's scene aabb (its +0x10 scene's +0x5C), or the zero aabb
                 // 0x7593F0 when it holds no scene; +0x1E's draw-manager hand-off is the renderer's (a hook).

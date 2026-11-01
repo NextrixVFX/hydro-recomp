@@ -159,7 +159,7 @@ private:
 
     // place_model: models.hxx
     // `skin`: per shader, what a skin pass (world/livery.hxx) changed for the draw (livery_draw_of).
-    void place_model( const std::string& asset, const float* world, int bob = 0, int alpha_override = -1, const float* tint = nullptr, const std::vector< livery_draw_t >* skin = nullptr, int geometry_override = -1, std::vector< int >* out_placements = nullptr );
+    void place_model( const std::string& asset, const float* world, int bob = 0, int alpha_override = -1, const float* tint = nullptr, const std::vector< livery_draw_t >* skin = nullptr, int geometry_override = -1, std::vector< int >* out_placements = nullptr, std::vector< std::array< float, 16 > >* out_nodes = nullptr );
 
     const value_t* template_root( const std::string& name )
     {
@@ -595,8 +595,9 @@ private:
     // skin_props: animate.hxx
     void skin_props( float dt );
 
-    // update_static_draws: models.hxx
+    // update_static_draws / prop_draw: models.hxx
     void update_static_draws( );
+    void prop_draw( const entity_t& owner );
 
     void wipe_scene( )
     {
@@ -1004,6 +1005,7 @@ public:
             return;
         }
         m_race.world.triggers = [ this ] { race_triggers( ); };
+        m_race.world.prop_draw = [ this ]( const entity_t& owner ) { prop_draw( owner ); };
         // VuRaceGame's ctor 0x489030 loads its three HUD projects (0x4B4360) - before the boat load.
         load_huds( );
         m_race.world.hud = [ this ]( int project, race_hud_verb_t verb, float step ) { hud( project, verb, step ); };
@@ -1197,6 +1199,7 @@ public:
         m_race.world.view = &m_water_view;
         m_race.world.water_tick = [ this ]( float step ) { water_frame( step ); };
         m_race.world.triggers = [ this ] { race_triggers( ); };
+        m_race.world.prop_draw = [ this ]( const entity_t& owner ) { prop_draw( owner ); };
         if ( !m_race.active )
             water_frame( dt );
 
@@ -1417,6 +1420,10 @@ private:
         float aabb[ 8 ]{};
         std::vector< int > placements[ 3 ];
         int shown = -2;   // the instance whose placements are visible (-1 none; -2 before the first frame)
+        // The owner (its Build tick re-hands the draw matrix: a dynamic prop's 0x546130) and each placement's part
+        // node matrix (placed = draw matrix x node, models.hxx place_model).
+        const entity_t* owner = nullptr;
+        std::vector< std::array< float, 16 > > nodes[ 3 ];
     };
 
     // One Vu3dDrawAnimatedModelComponent instance. The clip and phase are
