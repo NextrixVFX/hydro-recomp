@@ -1147,6 +1147,85 @@ inline bool verify_ui_game_data( )
     return failed == 0;
 }
 
+// ui_set_game_mode (hydro core/ui/action.hxx) against retail's
+// VuSetGameModeUIAction slot 12 0x472740 through Trigger (oracle case
+// ui_set_game_mode): every authored instance as entity_load_project built it
+// (its "Game Mode" as the load left it, checked against retail's) and hand-made
+// ones (the ctor's property nodes against the schema), each on four game-data
+// roots - the whole root after, the VuRetVal, no broadcast.
+inline bool verify_ui_set_game_mode( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0, fires = 0;
+    auto bad = [ &failed ]( const char* what, int k )
+    {
+        if ( ++failed <= 8 )
+            LOG_ERROR( "ui set game mode: %s differs from retail (row %d)", what, k );
+    };
+    for ( std::size_t k = 0; k < g_golden_gms_count; ++k )
+    {
+        const golden_gm_t& want = g_golden_gms[ k ];
+        const int row = static_cast< int >( k );
+        const std::vector< std::uint8_t > raw = ui_unhex( want.m_mode );
+        std::string mode( raw.begin( ), raw.end( ) );
+        if ( want.m_project )
+        {
+            const entity_t* have = nullptr;
+            for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+                if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, want.m_project ) == 0 && want.m_index >= 0 &&
+                     static_cast< std::size_t >( want.m_index ) < loaded.trees[ p ].size( ) )
+                    have = loaded.trees[ p ][ static_cast< std::size_t >( want.m_index ) ].second;
+            if ( !have || have->m_type != "VuSetGameModeUIAction" || have->m_name != want.m_name || !ui_is_state( *have ) )
+            {
+                bad( "the authored entity", row );
+                continue;
+            }
+            const ui_state_t* s = static_cast< const ui_state_t* >( have->m_state.get( ) );
+            bool found = false;
+            for ( int n = 0; n < s->m_count; ++n )
+                if ( std::strcmp( s->m_rows[ n ]->m_name, "Game Mode" ) == 0 )
+                {
+                    found = true;
+                    if ( s->m_value[ n ].m_text != mode )
+                        bad( "the loaded Game Mode", row );
+                    mode = s->m_value[ n ].m_text;
+                }
+            if ( !found )
+                bad( "the Game Mode node's presence", row );
+        }
+        else
+        {
+            int count = 0;
+            const ui_property_row_t* first = ui_rows_for( "VuSetGameModeUIAction", count );
+            if ( count != want.m_nodes )
+                bad( "the ctor's node count", row );
+            for ( int n = 0; first && n < count && n < want.m_nodes; ++n )
+                if ( std::strcmp( first[ n ].m_name, g_golden_gm_nodes[ want.m_first_node + n ].m_name ) != 0 ||
+                     first[ n ].m_vtable != g_golden_gm_nodes[ want.m_first_node + n ].m_vtable )
+                    bad( "a ctor node", row );
+        }
+        for ( int f = 0; f < want.m_fires; ++f )
+        {
+            const golden_gm_fire_t& fire = g_golden_gm_fires[ want.m_first + f ];
+            const std::vector< std::uint8_t > doc = ui_unhex( fire.m_root );
+            value_t root = c_reader( doc ).parse( );
+            const std::uint32_t ret = ui_set_game_mode( root, mode );
+            std::string after;
+            vujb_dump( root, after );
+            ++fires;
+            if ( ret != fire.m_ret || after != fire.m_after || fire.m_broadcasts != 0 )
+                bad( "a fire's root / VuRetVal", row );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_set_game_mode matches retail's VuSetGameModeUIAction slot 12 0x472740 (Trigger 0x472800) on %d actions "
+                     "(authored + hand-made) x 4 game-data roots: %d fires, the whole root after",
+            static_cast< int >( g_golden_gms_count ), fires );
+    else
+        LOG_ERROR( "the set game mode action FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 // ui_text_draw (hydro core/ui/draw.hxx) against retail's VuUITextBaseEntity draw
 // 0x627C60 -> font draw 0x536C10 -> VuGfxSort 0x426B80 / 0x429010 (oracle cases
 // text_draw, text_draw_sweep): every new command's 8 words and its record's
@@ -1941,6 +2020,7 @@ inline bool verify_ui_all( )
 {
     bool ok = true;
     ok = verify_ui_game_data( ) && ok;
+    ok = verify_ui_set_game_mode( ) && ok;
     ok = verify_ui_container_draw( ) && ok;
     ok = verify_ui_font_params( ) && ok;
     ok = verify_ui_minimap_draw( ) && ok;
