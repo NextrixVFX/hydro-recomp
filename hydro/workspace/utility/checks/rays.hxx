@@ -6,6 +6,9 @@
 #include <workspace/core/collision/leaves.hxx>
 #include <workspace/core/collision/teardown.hxx>
 #include <workspace/core/collision/arena.hxx>
+#include <workspace/core/collision/rebuild.hxx>
+#include <workspace/core/assets/rtti.hxx>
+#include <string>
 
 #include <array>
 #include <cstring>
@@ -2443,5 +2446,178 @@ inline bool verify_hull_scaling( )
         LOG_SUCCESS( "btPolyhedralConvexAabbCachingShape::setLocalScaling 0x54B5E0 (+ recalcLocalAabb 0x54B700) matches retail over %d hulls, "
                      "exact (%d NaN scaling lanes)",
             static_cast< int >( g_golden_hull_scaling_count ), nan_lanes );
+    return failed == 0;
+}
+// verify_bvh_build (boat batch 23): cases/boat.py bvh_build - btOptimizedBvh::
+// build at level load (collision/rebuild.hxx). Kind 2: the nine real scaled
+// props' meshes as createRigidBody 0x544100 leaves them (ctor at (1, 1, 1, 0),
+// setOptimizedBvh of the asset's tree) then setLocalScaling 0x5AF300 on the
+// entity's scale (the recalc through the old tree, then the rebuild); kind 1:
+// buildOptimizedBvh 0x5AF380 on random meshes and cached aabbs. Compared: the
+// aabb, the new tree's header (min, max, quantization), version, curNodeIndex,
+// useQuantization, traversal, every node (2n), every subtree header (bounds,
+// root, size - not the 12 padding bytes), the header count, the leaf arrays
+// emptied, ownsBvh.
+inline bool verify_bvh_build( )
+{
+    const unsigned* g = g_golden_bvh_build_words;
+    const unsigned n = *g++;
+    int failed = 0, real = 0, nodes = 0, headers = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = *g++, nv = *g++;
+        const unsigned* verts = g;
+        g += 4 * nv;
+        const unsigned ni = *g++;
+        std::vector< uint16_t > idx( g, g + ni );
+        g += ni;
+        float s0[ 4 ], s1[ 4 ];
+        std::memcpy( s0, g, 16 );
+        std::memcpy( s1, g + 4, 16 );
+        const unsigned* before = g + 8;
+        g += 16;
+        const unsigned nh = *g++;
+        const unsigned* old_header = g;
+        g += nh;
+        const unsigned old_quantized = *g++, old_traversal = *g++, nq = *g++;
+        const unsigned* old_nodes = g;
+        g += nq;
+        const unsigned* aabb = g;
+        const unsigned owns = g[ 8 ];
+        const unsigned* header = g + 9;
+        g += 21;
+        const unsigned version = *g++, cur = *g++, useq = *g++, traversal = *g++, nn = *g++;
+        const unsigned* want_nodes = g;
+        g += 4 * nn;
+        const unsigned ns = *g++;
+        const unsigned* want_subs = g;
+        g += 5 * ns;
+        const unsigned header_count = *g++, qleaf = *g++, leaf = *g++;
+        striding_mesh_t mesh{ };
+        std::memcpy( mesh.scaling, s0, 16 );
+        mesh.vertices = reinterpret_cast< const float( * )[ 4 ] >( verts );
+        mesh.num_vertices = static_cast< int >( nv );
+        mesh.indices = idx.data( );
+        mesh.index_count = static_cast< int >( ni );
+        bvh_mesh_shape_t s{ 21, 0.0f, &mesh, nullptr };
+        optimized_bvh_t built;
+        quantized_bvh_t old{ };
+        const char* what = nullptr;
+        int rc = 0;
+        if ( kind == 2 )
+        {
+            ++real;
+            std::memcpy( old.aabb_min, old_header + 0, 16 );
+            std::memcpy( old.aabb_max, old_header + 4, 16 );
+            std::memcpy( old.quantization, old_header + 8, 16 );
+            old.cur_node_index = static_cast< int >( old_header[ 13 ] );
+            old.use_quantization = static_cast< uint8_t >( old_quantized );
+            old.nodes = reinterpret_cast< const bvh_node_t* >( old_nodes );
+            old.traversal_mode = static_cast< int >( old_traversal );
+            if ( nh != 14 || bvh_mesh_shape_init( s, &mesh ) != 1 || bvh_mesh_set_optimized_bvh( s, mesh, &old, s0 ) != 1 )
+                what = "the setup reached unrecreated code";
+            else if ( std::memcmp( s.local_aabb_min, before, 16 ) != 0 || std::memcmp( s.local_aabb_max, before + 4, 16 ) != 0 )
+                what = "the aabb before the row";
+            else
+                rc = bvh_mesh_set_local_scaling( s, mesh, s1, built );
+        }
+        else
+        {
+            std::memcpy( s.local_aabb_min, before, 16 );
+            std::memcpy( s.local_aabb_max, before + 4, 16 );
+            rc = bvh_mesh_build_optimized_bvh( s, mesh, built );
+        }
+        if ( !what && rc != 1 )
+            what = "the row reached unrecreated code";
+        if ( !what && ( std::memcmp( s.local_aabb_min, aabb, 16 ) != 0 || std::memcmp( s.local_aabb_max, aabb + 4, 16 ) != 0 ) )
+            what = "the aabb after";
+        if ( !what && ( owns != 1 || s.bvh != &built.view ) )
+            what = "ownsBvh / the shape's tree";
+        if ( !what && ( std::memcmp( built.view.aabb_min, header, 16 ) != 0 || std::memcmp( built.view.aabb_max, header + 4, 16 ) != 0 ||
+                        std::memcmp( built.view.quantization, header + 8, 16 ) != 0 ) )
+            what = "the header (min / max / quantization)";
+        if ( !what && ( static_cast< unsigned >( built.bullet_version ) != version || static_cast< unsigned >( built.view.cur_node_index ) != cur ||
+                        built.view.use_quantization != useq || static_cast< unsigned >( built.view.traversal_mode ) != traversal ) )
+            what = "version / curNodeIndex / useQuantization / traversal";
+        if ( !what && ( built.nodes.size( ) != nn || ( nn && std::memcmp( built.nodes.data( ), want_nodes, 16u * nn ) != 0 ) ) )
+        {
+            what = "the nodes";
+            for ( unsigned k = 0; k < nn && k < built.nodes.size( ); ++k )
+                if ( std::memcmp( &built.nodes[ k ], want_nodes + 4 * k, 16 ) != 0 )
+                {
+                    unsigned w[ 4 ];
+                    std::memcpy( w, &built.nodes[ k ], 16 );
+                    LOG_ERROR( "bvh build vector %u node %u: ours %08X %08X %08X %08X retail %08X %08X %08X %08X", v, k, w[ 0 ], w[ 1 ], w[ 2 ], w[ 3 ],
+                               want_nodes[ 4 * k ], want_nodes[ 4 * k + 1 ], want_nodes[ 4 * k + 2 ], want_nodes[ 4 * k + 3 ] );
+                    break;
+                }
+        }
+        if ( !what && built.subtrees.size( ) != ns )
+            what = "the subtree header count";
+        for ( unsigned k = 0; k < ns && !what; ++k )
+        {
+            unsigned w[ 5 ];
+            std::memcpy( w, &built.subtrees[ k ], 20 );
+            if ( std::memcmp( w, want_subs + 5 * k, 20 ) != 0 )
+                what = "a subtree header";
+        }
+        if ( !what && ( static_cast< unsigned >( built.subtree_header_count ) != header_count || qleaf != 0 || leaf != 0 || !built.leaves.empty( ) ) )
+            what = "the header count / the leaf arrays";
+        nodes += static_cast< int >( nn );
+        headers += static_cast< int >( ns );
+        if ( what )
+        {
+            ++failed;
+            LOG_ERROR( "bvh build vector %u (kind %u, %u faces): %s", v, kind, ni / 3, what );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "btOptimizedBvh::build 0x582CB0 (buildOptimizedBvh 0x5AF380, setLocalScaling 0x5AF300's rebuild; collision/rebuild.hxx) "
+                     "matches retail on %u trees (%d real scaled props' meshes): %d nodes, %d subtree headers, exact",
+            n, real, nodes, headers );
+    else
+        LOG_ERROR( "bvh build FAILED %d of %u", failed, n );
+    return failed == 0;
+}
+// verify_asset_rtti (boat batch 23, the asset area): cases/boat.py asset_rtti
+// - engine assets/rtti.hxx against every asset class's getType RUN in retail:
+// the getter's address, the descriptor it answers, and the whole chain (each
+// descriptor, its parent word, its name) to 0.
+inline bool verify_asset_rtti( )
+{
+    int failed = 0, links = 0;
+    for ( std::size_t i = 0; i < g_golden_asset_rtti_count; ++i )
+    {
+        const golden_asset_rtti_t& g = g_golden_asset_rtti[ i ];
+        const asset_rtti_class_t* c = nullptr;
+        for ( const asset_rtti_class_t& k : g_asset_rtti_classes )
+            if ( k.vtable == g.m_vtable && k.slot == g.m_slot )
+                c = &k;
+        const char* what = nullptr;
+        if ( !c || c->get_type != g.m_getter || c->descriptor != g.m_eax )
+            what = "the class row (getter / descriptor)";
+        std::string names;
+        unsigned n = 0;
+        for ( const asset_rtti_t* r = what ? nullptr : asset_rtti_find( c->descriptor ); r && !what; r = r->parent ? asset_rtti_find( r->parent ) : nullptr )
+        {
+            if ( n >= 4 || r->descriptor != g.m_chain[ 2 * n ] || r->parent != g.m_chain[ 2 * n + 1 ] )
+                what = "a chain link (descriptor / parent)";
+            names += ( n ? ">" : "" ) + std::string( r->name );
+            ++n;
+        }
+        if ( !what && ( n != g.m_count || names != g.m_names ) )
+            what = "the chain length / names";
+        links += static_cast< int >( n );
+        if ( what )
+        {
+            ++failed;
+            LOG_ERROR( "asset rtti vtable 0x%X: %s", g.m_vtable, what );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the asset classes' getType table (assets/rtti.hxx) matches retail's %d getters, %d chain links, exact",
+            static_cast< int >( g_golden_asset_rtti_count ), links );
+    else
+        LOG_ERROR( "asset rtti FAILED %d of %d", failed, static_cast< int >( g_golden_asset_rtti_count ) );
     return failed == 0;
 }
