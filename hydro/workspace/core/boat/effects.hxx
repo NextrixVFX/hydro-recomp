@@ -518,7 +518,7 @@ inline void boat_piece_remove( std::uint8_t* piece, const boat_piece_hooks_t& h 
 // +0x140 .. +0x15F (both velocities, four movq) = the piece body's (piece
 // +0x208), then setCenterOfMassTransform 0x50E660( the boat body, the piece
 // body's +0x10 transform ) (engine dynamics/world.hxx). Read from the
-// disassembly; NOT oracle-run (the boat_decision case holds no pieces).
+// disassembly. Verified: case debris_follow (the segment run on its own).
 inline void boat_debris_follow( solver_rigid_t& body, const solver_rigid_t& piece_body, const float* piece_matrix,
                                 void ( *set_world )( void* user, const float* m16 ), void* user )
 {
@@ -762,8 +762,8 @@ inline void boat_debris_launch( std::uint8_t* debris, boat_debris_sub_t& sub, st
 // after the launch: the FMOD event named by the VuString at boat +0x1EC
 // (FMOD::EventSystem::getEvent on g_vuaudio +8, mode 1); found (FMOD_OK) ->
 // set3DAttributes( the transform's +0x80 .. +0x88, no velocity, no
-// orientation ) and start. All three are the platform's audio: hooks. Read
-// from the decompilation; NOT oracle-run.
+// orientation ) and start. All three are the platform's audio: hooks.
+// Verified: case destroyed_event (0x41E240 run whole, FMOD logged).
 struct boat_event_hooks_t
 {
     void* user = nullptr;

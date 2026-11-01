@@ -43,6 +43,46 @@ inline void c_world::load_huds( )
             continue;
         }
         const std::string prefix = h.name + ":";
+        // The UI agent's driver (core/ui overlay.hxx): the same document through the UI's scripted world.
+        {
+            const entity_registry_t registry = build_entity_registry( m_archive.names( "VuTemplateAsset/" ) );
+            h.ui_tree = ui_hud_load( *project, race_project_file( m_archive, asset.c_str( ) ), registry,
+                                     [ this ]( const std::string& name ) { return template_document( name ); } );
+            if ( h.ui_tree )
+            {
+                const auto trails = [ & ]( const auto& self, entity_t& e, const std::string& trail ) -> void
+                {
+                    h.ui_trail[ &e ] = trail;
+                    for ( auto& child : e.m_children )
+                        self( self, *child, trail.empty( ) ? child->m_name : trail + "/" + child->m_name );
+                };
+                trails( trails, *h.ui_tree, std::string( ) );
+                ui_bind_hooks_t hooks;
+                const int index = p;
+                // The world-owned inputs: VuMultiDelayEntity "In" 0x5E0660 (the world's clock); VuAudioEventEntity Start /
+                // Stop (the audio device - a platform hook).
+                hooks.m_external = [ this, index, prefix ]( entity_t& e, const char* plug, const ui_params_t& ) {
+                    hud_project_t& hp = m_huds[ index ];
+                    const auto at = hp.ui_trail.find( &e );
+                    const auto clock = at != hp.ui_trail.end( ) ? m_multi_delays.find( prefix + at->second ) : m_multi_delays.end( );
+                    if ( clock != m_multi_delays.end( ) && std::strcmp( plug, "In" ) == 0 )
+                        multi_delay_in( clock->second.state );
+                    else
+                        race_unwired( m_race, std::string( "the race HUD's external input " ) + e.m_type + " . " + plug + " (audio: a platform hook) - not run" );
+                    return ui_ret_t{ };
+                };
+                hooks.m_broadcast_out = [ this ]( std::uint32_t hash, const ui_params_t& ) {
+                    if ( hash == fsm_hash( "OnStartLightsOut" ) )
+                        race_broadcast( "OnStartLightsOut" );
+                    else
+                        race_unwired( m_race, "a race HUD broadcast with no world subscriber recreated - not run" );
+                };
+                // m_string_db (VuStringDB slot 6, the toast's template) is not wired: no string DB here (UNKNOWN on use).
+                h.ui = std::make_unique< c_ui_race_hud >( *h.ui_tree, hooks );
+            }
+            else
+                LOG_WARNING( "race HUD: %s did not load through the UI's world - the world graph runs it (fallback)", h.name.c_str( ) );
+        }
         std::map< const entity_t*, std::string > path_of;
         const auto name_all = [ & ]( const auto& self, entity_t& e, const std::string& trail ) -> void
         {
@@ -60,7 +100,7 @@ inline void c_world::load_huds( )
                 ++entities;
                 unknown += e.m_ctor ? 0 : 1;
                 m_entity_type[ at ] = e.m_type;
-                if ( const script_component_t* sc = script_of( e ) )
+                if ( const script_component_t* sc = h.ui ? nullptr : script_of( e ) )   // with the UI driver its graph runs the HUD
                     for ( const script_plug_t& plug : sc->m_plugs )
                     {
                         if ( plug.m_links.empty( ) )
@@ -98,6 +138,18 @@ inline void c_world::multi_delay_ticked( void* user, float dt )
     multi_delay_node_t& n = *static_cast< multi_delay_node_t* >( user );
     multi_delay_tick( n.state, dt, [ & ]( int output, const std::uint8_t* params ) {
         LOG_INFO( "race HUD: %s output %d fired (Delay %.2f)", n.path.c_str( ), output + 1, n.state.delay[ output ] );
+        for ( hud_project_t& h : n.world->m_huds )
+            if ( h.ui && n.path.compare( 0, h.name.size( ) + 1, h.name + ":" ) == 0 )
+            {
+                ui_params_t p;
+                if ( params )
+                {
+                    std::memcpy( p.m_bytes, params, 128 );
+                    std::memcpy( &p.m_size, params + 128, 4 );
+                }
+                h.ui->fire( h.ui_tree->m_name + "/" + n.path.substr( h.name.size( ) + 1 ), std::to_string( output + 1 ).c_str( ), p );
+                return;
+            }
         n.world->fire( n.path, std::to_string( output + 1 ), 0, params );
     } );
 }
@@ -114,7 +166,6 @@ inline void c_world::multi_delay_ticked( void* user, float dt )
 // VuHUDEntity root's vt+0x30 - the UI agent's (logged).
 inline void c_world::hud( int project, race_hud_verb_t verb, float dt )
 {
-    ( void )dt;
     if ( project < 0 || project > 2 || !m_huds[ project ].tree )
     {
         race_unwired( m_race, "a race HUD project that did not load (UNKNOWN) - its initialise / tick / release not run" );
@@ -132,8 +183,15 @@ inline void c_world::hud( int project, race_hud_verb_t verb, float dt )
             if ( !n.registered && tick_register( m_race.ticks, { &n, &c_world::multi_delay_ticked, &n }, "Decision" ) )
                 n.registered = true;
         }
-        race_unwired( m_race, "the race HUD projects' gameInitialize 0x500B10 of every type but VuMultiDelayEntity (the HUD elements - the UI's) - not run" );
+        if ( !h.ui )
+            race_unwired( m_race, "the race HUD projects' gameInitialize 0x500B10 of every type but VuMultiDelayEntity (the HUD elements - the UI's) - not run" );
         LOG_INFO( "race HUD: %s initialised (gameInitialize, OnProjectInitialized x%d)", h.name.c_str( ), static_cast< int >( h.initialized.size( ) ) );
+        if ( h.ui )
+        {
+            hud_env( h );
+            h.ui->initialize( );   // gameInitialize 0x500B10 + 0x501260 "OnProjectInitialized" through the UI's binding
+            return;
+        }
         for ( const std::string& at : h.initialized )
             fire( at, "Trigger" );
         return;
@@ -149,7 +207,16 @@ inline void c_world::hud( int project, race_hud_verb_t verb, float dt )
             tick_unregister_all( m_race.ticks, &n );
             n.registered = false;
         }
+        if ( h.ui )
+            h.ui->release( );
         LOG_INFO( "race HUD: %s released", h.name.c_str( ) );
+        return;
+    }
+    if ( h.ui )
+    {
+        hud_env( h );
+        h.ui->tick( dt );   // VuHUDEntity slot 12 0x423A20
+        race_unwired( m_race, "the race HUD's draw (VuHUDEntity slot 13 0x423A70: c_ui_race_hud::draw) - no HUD render pass in the race yet" );
         return;
     }
     race_unwired( m_race, "the race HUD's VuHUDEntity tick vt+0x30 / draw vt+0x34 (the HUD's update and drawing - the UI agent's) - not run here" );
@@ -174,4 +241,25 @@ inline void c_world::race_broadcast( const char* name )
         return;
     }
     race_unwired( m_race, std::string( "a broadcast with no subscriber recreated: " ) + name );
+}
+
+// ui_hud_env_fill before each HUD call: the rules' boats (their 0x520 images), the human's index, the count, no
+// settings (the units: g 0x758FE0 - not wired), the track's built / circuit answers; the control method g 0x758FC0
+// +0x18 is not wired (0).
+inline void c_world::hud_env( hud_project_t& h )
+{
+    std::vector< const std::uint8_t* > images;
+    std::int32_t local = -1;
+    for ( std::size_t k = 0; k < m_race.rules_boats.size( ); ++k )
+    {
+        images.push_back( m_race.rules_boats[ k ].boat );
+        for ( const void* b : m_race.manager.lists.humans.boats )
+            if ( b == m_race.rules_boats[ k ].boat && local < 0 )
+                local = static_cast< std::int32_t >( k );
+    }
+    ui_hud_env_t& env = h.ui->env( );
+    ui_hud_env_fill( env, h.boats, images, local, static_cast< std::int32_t >( images.size( ) ), nullptr );
+    env.m_track_built = m_race.track && track_is_built( *m_race.track );
+    env.m_track_circuit = env.m_track_built && track_is_circuit( *m_race.track );
+    env.m_control_method = 0;
 }
