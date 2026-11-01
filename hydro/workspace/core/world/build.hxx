@@ -2,6 +2,7 @@
 
 #include <workspace/core/boat/hull.hxx>
 #include <workspace/core/boat/state.hxx>
+#include <workspace/core/world/query.hxx>
 
 #include <cstdint>
 #include <cstring>
@@ -30,8 +31,9 @@
 //      component (+0x6C) +0x24..+0x43; registered (+0x1E) -> the draw
 //      manager g 0x7590B8 vt+0x30(draw);
 //   7. 0x4200E0(dt) - boat_build_audio below, RECREATED + VERIFIED.
-// Steps 1 - 6 are NOT recreated yet (the gfx settings blender, the surface
-// lookup 0x52ACB0, the model instances / animation system, 0x419700, 0x411A50).
+// Step 2 is recreated below (boat_build_water, verified through 0x52ACB0);
+// steps 1 and 3 - 6 are NOT yet (the gfx settings blender, the driver's
+// vt+0x4C, the model instances / animation system, 0x419700, 0x411A50).
 
 // 0x4200E0's outside calls: 0x50FBF0 on the event slot +0x488 (the engine's
 // event create: true leaves the FMOD event at +0x48C) and the FMOD imports
@@ -115,4 +117,38 @@ inline void boat_build_audio( std::uint8_t* boat, const std::uint8_t* body, cons
         image_put32( boat, 0x48C, 0 );
     }
     boat[ 0x484 ] = 0;
+}
+
+// Step 2 (0x41F38D .. 0x41F54E): the position (transform +0x80, 16 bytes -
+// copied before step 1's call) as the record {point, +0x10 0xFEFFFFFF, +0x14
+// 0} and its xy, 0x52ACB0 on VuWater's surface tree ([[0x759058] +0x3C]:
+// world/query.hxx water_surface_under). Found: +0x2B4 = v = that surface's
+// map sample 0x535E10 at the position (water_map_sample), and per lane k
+// +0x2B8 + 4k = (1 - v) x (byte(+0x454 + k) x c) + (byte(+0x458 + k) x c) x
+// v, c = 0x3B808081 (1 / 255; movzx -> cvtdq2ps -> mulss); not found:
+// nothing written. False (nothing written): no VuWater (retail would read
+// through a null global - not recreated), a surface-tree stack overflow or a
+// map cell outside the map (both not recreated).
+inline bool boat_build_water( std::uint8_t* boat, const float* position, const water_t* w )
+{
+    if ( !w )
+        return false;
+    const int found = water_surface_under( *w, position, water_bits( 0xFEFFFFFFu ) );
+    if ( found == -2 )
+        return false;
+    if ( found < 0 )
+        return true;
+    float v;
+    if ( !water_map_sample( w->surfaces[ static_cast< std::size_t >( found ) ], position, v ) )
+        return false;
+    state_put_f( boat, 0x2B4, v );
+    const float c = water_bits( 0x3B808081u );
+    const float u = 1.0f - v;
+    for ( int k = 0; k < 4; ++k )
+    {
+        const float a = static_cast< float >( static_cast< std::int32_t >( boat[ 0x458 + k ] ) ) * c;
+        const float b = static_cast< float >( static_cast< std::int32_t >( boat[ 0x454 + k ] ) ) * c;
+        state_put_f( boat, 0x2B8 + 4 * k, u * b + a * v );
+    }
+    return true;
 }

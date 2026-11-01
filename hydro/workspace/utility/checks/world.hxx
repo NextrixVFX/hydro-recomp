@@ -2319,9 +2319,66 @@ inline bool verify_boat_motion_set( )
     return failed == 0;
 }
 
+// water_surface_under (world/query.hxx) against retail's 0x52ACB0 run whole
+// (case water_surface_under): 160 hand-built surface trees (1 - 7 surfaces,
+// rotated / arbitrary inverses, shrunk node rects, points inside / on the
+// edge / outside, below the floor, a -1e30 height), the surface found (or
+// none) per vector. Each surface's 'above' is set to -FLT_MAX here: 0x52ACB0
+// has no above test, so it must not matter.
+inline bool verify_water_surface_under( )
+{
+    int failed = 0, hits = 0;
+    for ( std::size_t index = 0; index < g_golden_water_surface_under_count; ++index )
+    {
+        const unsigned* s = g_golden_water_surface_under_words + g_golden_water_surface_under_offsets[ index ];
+        float p[ 4 ];
+        std::memcpy( p, s, 16 );
+        s += 4;
+        water_t w;
+        w.skip_waves = true;
+        const unsigned ns = *s++;
+        for ( unsigned k = 0; k < ns; ++k )
+        {
+            water_surface_t sf{};
+            std::memcpy( &sf.height, s, 4 );
+            std::memcpy( &sf.below, s + 1, 4 );
+            std::memcpy( sf.inverse, s + 2, 64 );
+            std::memcpy( &sf.half_x, s + 18, 4 );
+            std::memcpy( &sf.half_y, s + 19, 4 );
+            sf.above = -3.4028235e38f;
+            sf.wave_root = -1;
+            s += 20;
+            w.surfaces.push_back( sf );
+        }
+        const unsigned nn = *s++;
+        for ( unsigned k = 0; k < nn; ++k )
+        {
+            water_node_t n{};
+            std::memcpy( n.rect, s, 16 );
+            n.first = static_cast< int >( s[ 4 ] );
+            n.second = static_cast< int >( s[ 5 ] );
+            s += 6;
+            w.nodes.push_back( n );
+        }
+        w.surface_root = 0;
+        const int want = static_cast< int >( *s );
+        const int got = water_surface_under( w, p, water_bits( 0xFEFFFFFFu ) );
+        hits += want >= 0 ? 1 : 0;
+        if ( got != want && ++failed <= 4 )
+            LOG_ERROR( "water surface under vector %d: ours %d, retail %d", static_cast< int >( index ), got, want );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_surface_under matches VuWater's 0x52ACB0 over %d trees (%d with a surface found)",
+                     static_cast< int >( g_golden_water_surface_under_count ), hits );
+    else
+        LOG_ERROR( "water surface under FAILED %d of %d", failed, static_cast< int >( g_golden_water_surface_under_count ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_water_surface_under( ) && ok;
     ok = verify_boat_motion_set( ) && ok;
     ok = verify_sync_motion_states( ) && ok;
     ok = verify_transform_set_world( ) && ok;
