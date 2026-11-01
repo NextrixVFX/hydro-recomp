@@ -158,6 +158,7 @@
     <ClInclude Include="workspace\core\world\motion.hxx" />
     <ClInclude Include="workspace\core\world\pfx.hxx" />
     <ClInclude Include="workspace\core\world\query.hxx" />
+    <ClInclude Include="workspace\core\world\race.hxx" />
     <ClInclude Include="workspace\core\world\spray.hxx" />
     <ClInclude Include="workspace\core\world\surface.hxx" />
     <ClInclude Include="workspace\core\world\transform.hxx" />
