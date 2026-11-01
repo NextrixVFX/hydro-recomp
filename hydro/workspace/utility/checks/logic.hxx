@@ -756,3 +756,151 @@ inline bool verify_audio_emitter( )
         LOG_ERROR( "audio_emitter FAILED %d", bad );
     return bad == 0;
 }
+
+// VuKeyframeMotionEntity (world/keymotion.hxx) against retail (case key_motion): per scenario the children / flags / the
+// target as retail had them, each step replayed with hooks logging what the case logged (plug fires by FNV-1a, the
+// target IF's slots, the "Motion" registration {0x757F58, this, 0x61A6E0}, findMotionComponent); compared: the log, the
+// VuRetVal word, every state word (flags, +0x68, counts, duration, clock, the keys, the claim, the motion component's
+// matrix / linear / angular xyz). Scenarios that reach an unrecreated path fail.
+#include <workspace/core/world/keymotion.hxx>
+
+inline std::uint32_t key_motion_fnv( const char* s )
+{
+    std::uint32_t h = 0x811C9DC5u;
+    for ( ; *s; ++s )
+        h = ( h ^ static_cast< std::uint8_t >( *s ) ) * 0x01000193u;
+    return h;
+}
+
+inline bool verify_key_motion( )
+{
+    logic_check_t c{ g_golden_kfm_words };
+    int bad = 0, steps = 0, reported = 0, unrecreated = 0;
+    {
+        const key_motion_t d;
+        const std::uint32_t want[ 11 ] = { d.initially_active, d.one_shot, d.active, d.latch, d.target ? 1u : 0u, static_cast< std::uint32_t >( d.curve ),
+                                           static_cast< std::uint32_t >( d.loop | d.ease << 8 | d.affect_position << 16 | d.affect_rotation << 24 ),
+                                           static_cast< std::uint32_t >( d.keys.size( ) ), static_cast< std::uint32_t >( d.capacity ), d.duration, d.clock };
+        for ( std::uint32_t x : want )
+            bad += c.next( ) == x ? 0 : 1;
+    }
+    struct env_t
+    {
+        std::vector< std::vector< std::uint32_t > > log;
+        key_motion_target_t target;
+        float mc[ 22 ] = { };
+        bool has = false;
+    };
+    const unsigned n = c.next( );
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        std::vector< key_motion_child_t > kids( c.next( ) );
+        for ( auto& k : kids )
+        {
+            k.keyframe = c.next( ) != 0;
+            k.time = c.next( );
+            for ( float& x : k.transform )
+                x = control_f( c.next( ) );
+        }
+        const bool linked = c.next( ) != 0, has = c.next( ) != 0, tnull = c.next( ) != 0;
+        float tw[ 16 ];
+        for ( float& x : tw )
+            x = control_f( c.next( ) );
+        std::uint32_t fl[ 6 ];
+        for ( auto& x : fl )
+            x = c.next( );
+        key_motion_t e;
+        e.initially_active = static_cast< std::uint8_t >( fl[ 0 ] );
+        e.one_shot = static_cast< std::uint8_t >( fl[ 1 ] );
+        e.loop = static_cast< std::uint8_t >( fl[ 2 ] );
+        e.ease = static_cast< std::uint8_t >( fl[ 3 ] );
+        e.affect_position = static_cast< std::uint8_t >( fl[ 4 ] );
+        e.affect_rotation = static_cast< std::uint8_t >( fl[ 5 ] );
+        env_t env;
+        env.has = has;
+        env.target.transform = tnull ? nullptr : tw;
+        env.target.user = &env;
+        env.target.begin = []( void* u ) { static_cast< env_t* >( u )->log.push_back( { 2u, 1u, 1u } ); };
+        env.target.end = []( void* u ) { static_cast< env_t* >( u )->log.push_back( { 2u, 2u, 1u } ); };
+        env.target.update = []( void* u, const float* m, const float* lin, const float* ang )
+        {
+            auto* x = static_cast< env_t* >( u );
+            std::memcpy( x->mc, m, 64 );
+            std::memcpy( x->mc + 16, lin, 12 );
+            std::memcpy( x->mc + 19, ang, 12 );
+            x->log.push_back( { 2u, 0u, 1u } );
+        };
+        key_motion_hooks_t h;
+        h.user = &env;
+        h.unrecreated = &unrecreated;
+        h.fire = []( void* u, key_motion_t&, const char* plug ) { static_cast< env_t* >( u )->log.push_back( { 1u, key_motion_fnv( plug ) } ); };
+        h.tick_register = []( void* u, key_motion_t&, bool on )
+        {
+            auto* x = static_cast< env_t* >( u );
+            if ( on )
+                x->log.push_back( { 3u, key_motion_fnv( "Motion" ), 0x757F58u, 1u, 0x61A6E0u } );
+            else
+                x->log.push_back( { 4u, 1u } );
+        };
+        h.find = []( void* u, key_motion_t& ) -> key_motion_target_t*
+        {
+            auto* x = static_cast< env_t* >( u );
+            x->log.push_back( { 5u, 1u } );
+            return x->has ? &x->target : nullptr;
+        };
+        static const int foreign = 0;
+        const unsigned ns = c.next( );
+        for ( unsigned s = 0; s < ns; ++s )
+        {
+            const unsigned op = c.next( );
+            const std::uint32_t arg = c.next( );
+            std::vector< std::vector< std::uint32_t > > want( c.next( ) );
+            for ( auto& w : want )
+            {
+                w.resize( c.next( ) );
+                for ( auto& x : w )
+                    x = c.next( );
+            }
+            std::vector< std::uint32_t > want_state( c.next( ) );
+            for ( auto& x : want_state )
+                x = c.next( );
+            env.log.clear( );
+            const int before = unrecreated;
+            std::uint32_t ret = arg;
+            switch ( op )
+            {
+                case 0: key_motion_game_init( e, kids, linked, h ); break;
+                case 1: key_motion_activate( e, h ); ret = 0; break;
+                case 2: key_motion_deactivate( e, h ); ret = 0; break;
+                case 3: key_motion_tick( e, control_f( arg ), h ); break;
+                case 4: key_motion_reset( e ); break;
+                case 5: env.target.claim = arg ? &foreign : nullptr; break;
+                case 6: key_motion_game_release( e, h ); break;
+                default: ++bad; break;
+            }
+            std::vector< std::uint32_t > st{ e.initially_active, e.one_shot, e.active, e.latch, e.target ? 1u : 0u, static_cast< std::uint32_t >( e.curve ),
+                                             static_cast< std::uint32_t >( e.loop | e.ease << 8 | e.affect_position << 16 | e.affect_rotation << 24 ),
+                                             static_cast< std::uint32_t >( e.keys.size( ) ), static_cast< std::uint32_t >( e.capacity ), e.duration, e.clock };
+            // slot 7 zeroes the count only: retail's array words stay, the snapshot reads none (count 0)
+            for ( const auto& k : e.keys )
+                st.insert( st.end( ), k.begin( ), k.end( ) );
+            st.push_back( env.target.claim == nullptr ? 0u : ( env.target.claim == &e ? 1u : 2u ) );
+            for ( float x : env.mc )
+                st.push_back( control_w( x ) );
+            const int diff = ( ( op == 1 || op == 2 ) && ret != arg ? 1 : 0 ) + ( env.log == want ? 0 : 1 ) + ( st == want_state ? 0 : 1 )
+                             + ( unrecreated != before ? 1 : 0 );
+            if ( diff && reported++ < 6 )
+                LOG_ERROR( "key_motion scenario %u step %u (op %u): log %d (%d / %d) state %d (%d / %d words) unrecreated %d", v, s, op,
+                           env.log != want, static_cast< int >( env.log.size( ) ), static_cast< int >( want.size( ) ), st != want_state,
+                           static_cast< int >( st.size( ) ), static_cast< int >( want_state.size( ) ), unrecreated - before );
+            bad += diff;
+            ++steps;
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuKeyframeMotionEntity matches retail: %u scenarios, %d steps (slots 6 / 7 / 8, Activate / Deactivate, the Motion tick on "
+                     "Curve Type 0: the keys, the clock, the target's matrix and velocities)", n, steps );
+    else
+        LOG_ERROR( "key_motion FAILED %d (unrecreated %d)", bad, unrecreated );
+    return bad == 0;
+}
