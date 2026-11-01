@@ -1660,7 +1660,8 @@ inline bool verify_race_begin( )
             image_put32( i.eng.data( ), 4, w[ 2 ] );
             image_put32( i.eng.data( ), 0xC, w[ 3 ] );
             image_put32( i.drv.data( ), 0x80, 1 );
-            boats[ k ] = { i.boat.data( ), i.xf.data( ), i.eng.data( ), i.drv.data( ), boat_driver_of( w[ 0 ] ), -1, static_cast< int >( w[ 4 ] ) };
+            boats[ k ] = { i.boat.data( ), i.xf.data( ), i.eng.data( ), i.drv.data( ), boat_driver_of( w[ 0 ] ), {}, -1, static_cast< int >( w[ 4 ] ) };
+            boat_driver_kind( w[ 0 ], boats[ k ].kind );
         }
         race_boat_manager_t m;
         for ( unsigned j = 0; j < ng; ++j, w += 16 )
@@ -1676,18 +1677,25 @@ inline bool verify_race_begin( )
         for ( unsigned j = 0; j < order_n; ++j, ++t )
             bad = bad ? bad : ( m.grid[ j ].name == *t ? 0 : 1 );
         for ( unsigned k = 0; k < nb; ++k )
-            race_boat_manager_add( m, static_cast< int >( k ), boats[ k ].cls );
+            boat_manager_add( m.lists, boats[ k ].boat, boats[ k ].kind );
         auto lists = [ & ]( int code )
         {
-            const std::vector< int >* l[ 5 ] = { &m.all, &m.racers, &m.humans, &m.ai, &m.ghosts };
+            const boat_manager_list_t* l[ 5 ] = { &m.lists.all, &m.lists.racers, &m.lists.humans, &m.lists.ais, &m.lists.ghosts };
+            auto name_of = [ & ]( const void* p )
+            {
+                for ( unsigned k = 0; k < nb; ++k )
+                    if ( p == imgs[ k ].boat.data( ) )
+                        return "boat" + std::to_string( k );
+                return std::string( "?" );
+            };
             for ( auto* list : l )
             {
                 const unsigned n = *w++;
-                bad = bad ? bad : ( n == list->size( ) ? 0 : code );
+                bad = bad ? bad : ( n == list->boats.size( ) ? 0 : code );
                 for ( unsigned j = 0; j < n; ++j, ++t )
-                    bad = bad ? bad : ( j < list->size( ) && "boat" + std::to_string( ( *list )[ j ] ) == *t ? 0 : code );
+                    bad = bad ? bad : ( j < list->boats.size( ) && name_of( list->boats[ j ] ) == *t ? 0 : code );
             }
-            bad = bad ? bad : ( static_cast< unsigned >( m.focus ) == *w ? 0 : code + 1 );
+            bad = bad ? bad : ( static_cast< unsigned >( m.lists.viewport ) == *w ? 0 : code + 1 );
             ++w;
         };
         lists( 2 );
@@ -1736,14 +1744,14 @@ inline bool verify_race_begin( )
         bad = bad ? bad : ( on == game.order.size( ) ? 0 : 7 );
         for ( unsigned j = 0; j < on; ++j, ++w )
             bad = bad ? bad : ( j < game.order.size( ) && static_cast< unsigned >( game.order[ j ] ) == *w ? 0 : 7 );
-        race_boat_manager_remove( m, 1 );
+        boat_manager_remove( m.lists, boats[ 1 ].boat );
         lists( 8 );
         if ( bad && ++failed <= 6 )
             LOG_ERROR( "race begin vector %d differs from retail: 0x%X (1 grid, 2/3 lists, 4/5 calls, 0x1kkxx transform, "
                        "0x2xx/0x3xx words, 6 game, 7 order, 8/9 removed)", static_cast< int >( v ), bad );
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "race_begin / race_place_boats / race_start_fleet / the boat manager match retail's VuGame begin 0x4829A0 (VuRaceGame "
+        LOG_SUCCESS( "race_begin / race_place_boats / race_start_fleet / boat_manager_add / _remove / race_grid_add match retail's VuGame begin 0x4829A0 (VuRaceGame "
                      "0x48AF90 / 0x4896A0, 0x4AAF60 / 0x4AB040 / 0x43A740): %d vectors, %d boats, %d call rows",
                      static_cast< int >( g_golden_race_begin_vectors ), boats_total, rows_total );
     else

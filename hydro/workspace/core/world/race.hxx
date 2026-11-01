@@ -5,6 +5,7 @@
 #include <workspace/core/assets/tree.hxx>
 #include <workspace/core/boat/driver.hxx>
 #include <workspace/core/boat/hull.hxx>
+#include <workspace/core/boat/manager.hxx>
 #include <workspace/core/boat/track.hxx>
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/entity/property.hxx>
@@ -288,6 +289,13 @@ struct race_boat_init_hooks_t
 {
     std::function< void( const std::string& row ) > call;
     std::function< bool( ) > engine_ready;
+    // The boat manager g 0x758FB8 and this boat's entry (its 0x520 image) and
+    // driver kind: when set, 0x4AAF60 / 0x4AB040 run as boat manager.hxx's
+    // boat_manager_add / _remove (the row is still recorded - the case
+    // intercepts the call to see it).
+    boat_manager_t* manager = nullptr;
+    const void* entry = nullptr;
+    boat_driver_kind_t kind{};
 };
 
 inline void race_boat_game_initialize( const void* boat, tick_manager_t& tm, const tick_handler_t& decision, const tick_handler_t& build,
@@ -314,6 +322,8 @@ inline void race_boat_game_initialize( const void* boat, tick_manager_t& tm, con
     call( "0x410610 anim" );
     call( "0x419FF0 part234" );
     call( "0x4AAF60 boatm boat" );
+    if ( hooks.manager )
+        boat_manager_add( *hooks.manager, hooks.entry, hooks.kind );
     call( "0x531F50 inst" );
 }
 
@@ -325,6 +335,8 @@ inline void race_boat_game_release( const void* boat, tick_manager_t& tm, std::u
         call( "0x5362A0 instm inst" );
     instigator_registered = 0;
     call( "0x4AB040 boatm boat" );
+    if ( hooks.manager )
+        boat_manager_remove( *hooks.manager, hooks.entry );
     tick_unregister_all( tm, boat );
     call( "tick unregister tick boat" );
     if ( draw_added )

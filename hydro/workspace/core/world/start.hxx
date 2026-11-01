@@ -1,5 +1,6 @@
 #pragma once
 
+#include <workspace/core/boat/manager.hxx>
 #include <workspace/core/boat/respawn.hxx>
 #include <workspace/core/boat/sections.hxx>
 #include <workspace/core/boat/track.hxx>
@@ -34,60 +35,14 @@ struct race_grid_entry_t
     float world[ 16 ];
 };
 
+// The five lists and the viewport are the boat agent's boat_manager_t (boat
+// manager.hxx: boat_manager_add 0x4AAF60 / boat_manager_remove 0x4AB040, whose
+// entries are the boats' 0x520 images); the grid list is the world's.
 struct race_boat_manager_t
 {
-    std::vector< int > all, racers, humans, ai, ghosts;
-    std::int32_t focus = 0;
+    boat_manager_t lists;
     std::vector< race_grid_entry_t > grid;
 };
-
-// 0x4AAF60 (thiscall manager, boat; retn 4), called from the boat's
-// gameInitialize: with no human yet, +0x58 = the all-count (so it ends on the
-// first human's index, else the last boat's); unless the driver's slot 16
-// (vt+0x40) - racers, then humans (slot 12) / AI (slot 13) / ghosts (slot 17),
-// the first that holds; every boat onto `all`.
-inline void race_boat_manager_add( race_boat_manager_t& m, int boat, const boat_driver_t& d )
-{
-    if ( m.humans.empty( ) )
-        m.focus = static_cast< std::int32_t >( m.all.size( ) );
-    if ( !d.slot[ 4 ] )
-    {
-        m.racers.push_back( boat );
-        if ( d.slot[ 0 ] )
-            m.humans.push_back( boat );
-        else if ( d.slot[ 1 ] )
-            m.ai.push_back( boat );
-        else if ( d.slot[ 5 ] )
-            m.ghosts.push_back( boat );
-    }
-    m.all.push_back( boat );
-}
-
-// 0x4AB7D0 (thiscall list, boat*; retn 4): the FIRST equal entry removed (the
-// tail moved down); none -> nothing.
-inline void race_list_remove( std::vector< int >& list, int boat )
-{
-    for ( std::size_t k = 0; k < list.size( ); ++k )
-        if ( list[ k ] == boat )
-        {
-            list.erase( list.begin( ) + static_cast< std::ptrdiff_t >( k ) );
-            return;
-        }
-}
-
-// 0x4AB040 (thiscall manager, boat; retn 4), from the boat's gameRelease:
-// the boat out of the five lists, then +0x58 = max(0, min(+0x58, count - 1)).
-inline void race_boat_manager_remove( race_boat_manager_t& m, int boat )
-{
-    for ( std::vector< int >* list : { &m.all, &m.racers, &m.humans, &m.ai, &m.ghosts } )
-        race_list_remove( *list, boat );
-    std::int32_t f = m.focus;
-    const std::int32_t last = static_cast< std::int32_t >( m.all.size( ) ) - 1;
-    if ( last < f )
-        f = last;
-    m.focus = f < 0 ? 0 : f;
-}
-
 // 0x4AAA40 (cdecl a, b): a's name (+0x18) before b's - the bytes compared
 // unsigned over the shorter length, then the shorter first.
 inline bool race_grid_before( const race_grid_entry_t& a, const race_grid_entry_t& b )
@@ -153,6 +108,7 @@ struct race_start_boat_t
     std::uint8_t* engine = nullptr;
     std::uint8_t* driver = nullptr;
     boat_driver_t cls{};
+    boat_driver_kind_t kind{};   // boat manager.hxx's view of the same vtable
     int sector = -1;
     int checkpoint = -1;
 };
@@ -160,7 +116,7 @@ struct race_start_boat_t
 struct race_start_hooks_t
 {
     std::function< void( int boat ) > transform_changed;   // the transform's +0xC0 delegate (0x421670)
-    std::function< void( int boat ) > game_initialize;     // 0x500B10 on the boat (slot 6 -> race_boat_manager_add)
+    std::function< void( int boat ) > game_initialize;     // 0x500B10 on the boat (slot 6 -> boat_manager_add)
     std::function< void( const char* row ) > call;         // a recorded hook (state machines, results, analytics)
     // The AI manager g 0x758F8C: slot 11 addDriver(boat, 0, 0), slots 6 / 7
     // (fleet_add_driver / fleet_start / fleet_run, boat fleet.hxx).
@@ -278,10 +234,15 @@ inline void race_start_fleet( std::vector< race_start_boat_t >& boats, const rac
         const bool list = entry.tag == 5;
         const float hi = race_number( list && entry.list.size( ) >= 1 ? entry.list[ 0 ] : null, 100.0f );
         const float lo = race_number( list && entry.list.size( ) >= 2 ? entry.list[ 1 ] : null, 100.0f );
-        const int n = static_cast< int >( m.ai.size( ) );
+        const int n = static_cast< int >( m.lists.ais.boats.size( ) );
         for ( int i = 0; i < n; ++i )
         {
-            race_start_boat_t& b = boats[ static_cast< std::size_t >( m.ai[ static_cast< std::size_t >( i ) ] ) ];
+            std::size_t index = 0;
+            while ( index < boats.size( ) && boats[ index ].boat != m.lists.ais.boats[ static_cast< std::size_t >( i ) ] )
+                ++index;
+            if ( index == boats.size( ) )
+                continue;   // an entry that is not one of this game's boats: not modelled
+            race_start_boat_t& b = boats[ index ];
             float v = lo;
             if ( i > 0 )
             {
@@ -289,14 +250,14 @@ inline void race_start_fleet( std::vector< race_start_boat_t >& boats, const rac
                 v = ( 1.0f - t ) * lo + t * hi;
             }
             state_put_f( b.engine, 4, v * 0.0099999998f );
-            if ( m.humans.empty( ) && i == n - 1 )
+            if ( m.lists.humans.boats.empty( ) && i == n - 1 )
                 image_put32( b.engine, 4, 0x3F800000u );
             if ( b.driver && difficulty == "Easy" )
                 image_put32( b.driver, 0x80, 0 );
             else if ( b.driver && difficulty == "Hard" )
                 image_put32( b.driver, 0x80, 2 );
             if ( hooks.add_driver )
-                hooks.add_driver( m.ai[ static_cast< std::size_t >( i ) ] );
+                hooks.add_driver( static_cast< int >( index ) );
         }
         if ( hooks.fleet_start )
             hooks.fleet_start( );
