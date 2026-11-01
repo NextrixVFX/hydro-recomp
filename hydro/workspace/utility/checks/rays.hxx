@@ -9,6 +9,7 @@
 #include <workspace/core/collision/rebuild.hxx>
 #include <workspace/core/assets/rtti.hxx>
 #include <workspace/core/assets/factory.hxx>
+#include <workspace/utility/checks/package.hxx>
 #include <string>
 
 #include <array>

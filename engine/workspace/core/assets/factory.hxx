@@ -1,7 +1,10 @@
 #pragma once
 
+#include <workspace/core/assets/package.hxx>
+
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -15,10 +18,15 @@
 //   - the loaded-asset table +0x54: createAsset slot 7 0x4EDA20 up to its package walk, addRef slot 8 0x4EDE60,
 //     release slot 9 0x4EDE70, findAsset slot 22 0x4EF4D0 (hash) / slot 23 0x4EF4B0 (type, name);
 //   - the substitutes +0x9C: lookup 0x4F1C90, addSubstitute slot 42 0x4EF8E0, removeSubstitute slot 43 0x4EF9A0.
-// createAsset past the cache (the packages +0x48, the AssetData entry, skus / langs, the record's create function,
-// the pack read 0x4F08F0, later packages' patches 0x4F1B50, the listeners +0x88) is NOT recreated: it runs through
-// asset_factory_hooks_t, the caller's. With no hooks createAsset answers what retail answers with no package loaded
-// (0 for every name the table does not hold) - the check runs exactly that.
+// createAsset past the cache is recreated since boat batch 25 (package.hxx + below, oracle case asset_package): the
+// packages +0x48 (loadPackage 0x4EFA50 -> 0x4F0090), the AssetData entry and its used byte, skus 0x4F1CF0 / langs
+// 0x55FC50, the pack read + version check 0x4F08F0, later packages' patches 0x4F1B50, newly loaded packages' patches
+// of loaded assets 0x4F05D0, the per-type name vectors 0x4F0710. The caller's (asset_factory_hooks_t): the record's
+// create function, the asset's own load (vt+0x14) and patch (vt+8), the listeners, the platform file system (where
+// <name>.apf lives), the frame sync, the delete. NOT recreated (`unknown` is set, the answer is false / 0): the loose
+// Assets loader 0x4EFBB0 (no <name>.apf), 0x4F08F0's path for an asset its pack does not list (0x4F0EF0 / 0x4F1330 /
+// the bake: the dev tree's raw files). With no package loaded createAsset answers 0 for every name the table does not
+// hold, as retail does.
 // SUBSTITUTIONS (flagged): the +0x40 type map is std::map< std::string, ... > (retail's is the same std::map: find
 // 0x4F22B0, operator[] 0x4F23C0); the +0x54 table is std::unordered_map< std::uint32_t, vu_asset_t* > (retail's is
 // MSVC's _Hash, list + bucket vector, mask 7 / maxidx 8 after construction - its iteration order, which only slots
@@ -82,38 +90,60 @@ struct vu_asset_t
     std::uint32_t hash = 0;
     std::int32_t refs = 1;
     void* object = nullptr;
+    // +0x20 the language (0x55FC50), +0x38 the AssetData info (0x55FC50's copy of 0x4F1CF0's pick), +0x50 the pack
+    // record's hash once the load succeeded (0x4F08F0).
+    std::string lang;
+    value_t info;
+    std::uint32_t data_hash = 0;
 };
 
-// createAsset past the cache, release's two platform calls and the delete: the caller's.
+// The record's create, the asset's own virtuals, the listeners and the platform calls: the caller's.
 struct asset_factory_hooks_t
 {
     void* user = nullptr;
-    // The package walk (+0x48 vector, each package's +60 type -> name -> entry; a hit sets the entry's +56 byte).
+    // NO LONGER CALLED (boat batch 25: the package walk is recreated). Kept for source compatibility.
     bool ( *listed )( void* user, const std::string& type, const std::string& name ) = nullptr;
     // The type record's create function (+0xC), called with no arguments; answers a new asset, refs 1.
     vu_asset_t* ( *create )( void* user, const std::string& type ) = nullptr;
-    // 0x4F08F0 (the pack read + the asset's own load) and 0x4F1B50 per later package; retail ignores the answer.
+    // NO LONGER CALLED (batch 25): load_data is the asset's load now.
     void ( *load )( void* user, vu_asset_t& asset ) = nullptr;
     // The +0x88 listeners' vt+4(asset).
     void ( *created )( void* user, vu_asset_t& asset ) = nullptr;
-    // release's frame sync when g_vugfxsort +0xC is set (VuMetroThread vt+0x3C, D3D11 vt+0x30 / +0xD0): platform.
+    // release's / createAsset's frame sync 0x53A400 when g_vugfxsort +0xC is set (VuMetroThread vt+0x3C, D3D11
+    // vt+0x30 / +0xD0): platform.
     void ( *sync )( void* user ) = nullptr;
     // The asset's vt+4(1), the scalar deleting dtor.
     void ( *destroy )( void* user, vu_asset_t* asset ) = nullptr;
+    // The asset's vt+0x14 load( { data, size } ) on the pack record's bytes: its answer.
+    bool ( *load_data )( void* user, vu_asset_t& asset, const std::vector< std::uint8_t >& data ) = nullptr;
+    // The asset's vt+8 patch( loaded by a later package ): its answer.
+    bool ( *patch )( void* user, vu_asset_t& asset, vu_asset_t& from ) = nullptr;
+    // The +0x88 listeners' vt+0( package name ), after a package load succeeded.
+    void ( *package_loaded )( void* user, const std::string& name ) = nullptr;
+    // The platform file system (g_vumetrofile vt+0x28 exists, then the open the pack makes): the path to open for
+    // a file name such as "Base.apf", or "" when there is none.
+    std::string ( *pack_path )( void* user, const std::string& file ) = nullptr;
+    // The self-test's header variants: the 68 bytes served for the pack's header, or null for the file's own.
+    const unsigned char* pack_header = nullptr;
 };
 
 class c_asset_factory
 {
 public:
-    // The +0x40 map's value: +0xC create, +0x10 bake, +0x14 version, +0x18 flag (its +0 vector of asset names,
-    // slot 12's answer, is filled by the package loads - not here).
+    // The +0x40 map's value: +0 the asset names every package lists for the type (slot 12's answer, filled by
+    // 0x4F0710), +0xC create, +0x10 bake, +0x14 version, +0x18 flag.
     struct record_t
     {
+        std::vector< std::string > names;
         std::uint32_t create = 0;
         std::uint32_t bake = 0;
         std::uint32_t version = 0;
         bool flag = false;
     };
+
+    // A path past what is recreated was reached (the loose loader 0x4EFBB0, 0x4F08F0's unlisted-asset path, a pack
+    // path archive.hxx flags): the answer given was false / 0, retail's is not known.
+    bool unknown = false;
 
     asset_factory_hooks_t hooks{};
 
@@ -229,10 +259,12 @@ public:
     }
 
     // createAsset, slot 7 0x4EDA20. A substitute -> createAsset( type, substitute ) (its answer, nothing else). Else
-    // the key hash through slot 22: a loaded asset gets +0x4C += 1 and is answered. Else the miss path: the package
-    // walk (hooks.listed; none, or no package lists it -> 0), the type's record (none, or its create null -> 0),
-    // create, +8 = the name, +0x48 = the hash, the load (its answer ignored, as retail), the table insert (operator[]
-    // 0x4F3850 of the hash), the listeners.
+    // the key hash through slot 22: a loaded asset gets +0x4C += 1 and is answered. Else the miss path: the first
+    // package (+0x48 order) listing type / name (none -> 0) has the entry's used byte set; the type's record (none,
+    // or its create null -> 0, the byte stays set); the frame sync 0x53A400; the sku pick 0x4F1CF0( "Metro", +4 sku,
+    // entry ); create; +8 = the name, +0x48 = the hash; the language pick 0x55FC50( info, +0x1C language ); the load
+    // 0x4F08F0 (its answer ignored: a failed load is cached too); each LATER package listing it patches it (0x4F1B50;
+    // their used bytes are not set); the table insert (operator[] 0x4F3850 of the hash); the listeners.
     vu_asset_t* create( const std::string& type, const std::string& name )
     {
         std::string with;
@@ -244,23 +276,113 @@ public:
             ++hit->refs;
             return hit;
         }
-        if ( hooks.listed == nullptr || !hooks.listed( hooks.user, type, name ) )
-            return nullptr;
-        const record_t* r = record( type );
-        if ( r == nullptr || r->create == 0 || hooks.create == nullptr )
-            return nullptr;
-        vu_asset_t* asset = hooks.create( hooks.user, type );
-        if ( asset == nullptr )
-            return nullptr;
-        asset->type = type;
-        asset->name = name;
-        asset->hash = h;
-        if ( hooks.load != nullptr )
-            hooks.load( hooks.user, *asset );
-        m_loaded[ h ] = asset;
-        if ( hooks.created != nullptr )
-            hooks.created( hooks.user, *asset );
-        return asset;
+        for ( std::size_t k = 0; k < m_packages.size( ); ++k )
+        {
+            asset_entry_t* e = m_packages[ k ]->entry( type, name );
+            if ( e == nullptr )
+                continue;
+            e->used = true;
+            const record_t* r = record( type );
+            if ( r == nullptr || r->create == 0 )
+                return nullptr;
+            if ( hooks.sync != nullptr )
+                hooks.sync( hooks.user );
+            const value_t& info = asset_pick_sku( "Metro", m_sku, e->data );
+            if ( hooks.create == nullptr )
+            {
+                unknown = true;
+                return nullptr;
+            }
+            vu_asset_t* asset = hooks.create( hooks.user, type );
+            if ( asset == nullptr )
+                return nullptr;
+            asset->type = type;
+            asset->name = name;
+            asset->hash = h;
+            asset_pick_language( asset->info, asset->lang, info, m_lang );
+            load_from( *r, *m_packages[ k ], *asset );
+            for ( std::size_t j = k + 1; j < m_packages.size( ); ++j )
+            {
+                if ( asset_entry_t* later = m_packages[ j ]->entry( type, name ) )
+                    patch_from( *r, *m_packages[ j ], *later, *asset );
+            }
+            m_loaded[ h ] = asset;
+            if ( hooks.created != nullptr )
+                hooks.created( hooks.user, *asset );
+            return asset;
+        }
+        return nullptr;
+    }
+
+    // +4 the sku (0x4ED410: the init argument, then the "Base" package's +0x18), +0x1C the language (0x4ED410: the
+    // platform's g_vumetrosys vt+0x48, or VuDevConfig "Language").
+    void set_sku( const std::string& sku )
+    {
+        m_sku = sku;
+    }
+
+    void set_language( const std::string& language )
+    {
+        m_lang = language;
+    }
+
+    const std::string& sku( ) const
+    {
+        return m_sku;
+    }
+
+    // 0x4F0470: the loaded package of the name, or null.
+    asset_package_t* package( const std::string& name ) const
+    {
+        for ( const auto& p : m_packages )
+        {
+            if ( p->name == name )
+                return p.get( );
+        }
+        return nullptr;
+    }
+
+    std::size_t package_count( ) const
+    {
+        return m_packages.size( );
+    }
+
+    const asset_package_t& package_at( std::size_t index ) const
+    {
+        return *m_packages[ index ];
+    }
+
+    const std::map< std::string, record_t >& records( ) const
+    {
+        return m_types;
+    }
+
+    // loadPackage 0x4EFA50. Already loaded (0x4F0470) -> true. (VuDevConfig "IgnoreAssetDBs": the dev config is the
+    // null container in retail - batch 24 - so that early true is never taken.) <name>.apf through the platform file
+    // system -> 0x4F0090; none -> the loose Assets loader 0x4EFBB0, NOT recreated (unknown, false). A load that
+    // succeeds is announced to the +0x88 listeners (vt+0, the name).
+    bool load_package( const std::string& name )
+    {
+        if ( package( name ) != nullptr )
+            return true;
+        const std::string path = hooks.pack_path != nullptr ? hooks.pack_path( hooks.user, name + ".apf" ) : std::string( );
+        bool ok = false;
+        if ( path.empty( ) )
+            unknown = true;
+        else
+            ok = load_package_file( name, path );
+        if ( ok && hooks.package_loaded != nullptr )
+            hooks.package_loaded( hooks.user, name );
+        return ok;
+    }
+
+    // 0x4ED410's package part: loadPackage( "Base" ) (false -> false), then +4 = that package's sku.
+    bool load_base_package( )
+    {
+        if ( !load_package( "Base" ) )
+            return false;
+        m_sku = package( "Base" )->sku;
+        return true;
     }
 
     // Put an asset in the table as createAsset's miss path does (the check seeds the table this way).
@@ -270,6 +392,139 @@ public:
     }
 
 private:
+    // 0x4F0090 ( name ): a new package (0x4ECC90: words -1, -1, 0); its pack opened (0x567760; false -> the package
+    // deleted, false); +0x18 = the pack's sku, +0x30 / +0x34 = its two words; Assets/AssetData read (0x5679F0): 1 ->
+    // the document (0x55B560 on the bytes as read; a failed read -> false) and per root member, in key order, 0x4F1DC0
+    // (false -> false); 2 -> false; 0 (not listed) -> the package stays, empty. Then, when assets are loaded (+0x58,
+    // the table's size), 0x4F05D0 patches them from the new package; the package goes on +0x48; 0x4F0710 adds its
+    // names to the records.
+    bool load_package_file( const std::string& name, const std::string& path )
+    {
+        auto p = std::make_unique< asset_package_t >( );
+        p->name = name;
+        if ( !p->pack.open_pack( path.c_str( ), hooks.pack_header ) )
+        {
+            unknown = unknown || p->pack.pack_unknown( );
+            return false;
+        }
+        p->sku = p->pack.pack_sku( );
+        p->words[ 0 ] = p->pack.pack_word( 0 );
+        p->words[ 1 ] = p->pack.pack_word( 1 );
+        std::vector< std::uint8_t > blob;
+        std::uint32_t version = 0, hash = 0;
+        const int read = p->pack.read_asset( "Assets", "AssetData", "", version, hash, blob );
+        unknown = unknown || p->pack.pack_unknown( );
+        if ( read == 2 )
+            return false;
+        if ( read == 1 )
+        {
+            value_t root;
+            if ( !c_reader::read_at_start( blob, root ) )
+                return false;
+            for ( const auto* member : asset_sorted_members( root ) )
+            {
+                if ( !asset_package_load_type( *p, member->first, member->second ) )
+                    return false;
+            }
+        }
+        if ( !m_loaded.empty( ) )
+            patch_loaded( *p );
+        m_packages.push_back( std::move( p ) );
+        add_names( *m_packages.back( ) );
+        return true;
+    }
+
+    // 0x4F0710: for each registered type the package lists, its names pushed onto the record's +0 vector, then
+    // sorted and made unique (0x4F38D0 introsort, 0x4F3A00 unique, the tail erased). SUBSTITUTION: std::sort /
+    // std::unique - the same result (distinct strings, total order; unique keeps one of each).
+    void add_names( const asset_package_t& p )
+    {
+        for ( auto& [ type, r ] : m_types )
+        {
+            auto t = p.assets.find( type );
+            if ( t == p.assets.end( ) )
+                continue;
+            for ( const auto& n : t->second )
+                r.names.push_back( n.first );
+            std::sort( r.names.begin( ), r.names.end( ) );
+            r.names.erase( std::unique( r.names.begin( ), r.names.end( ) ), r.names.end( ) );
+        }
+    }
+
+    // 0x4F05D0: each type / name of the new package that is loaded (slot 23) is patched from it (0x4F1B50).
+    void patch_loaded( asset_package_t& p )
+    {
+        for ( auto& [ type, names ] : p.assets )
+        {
+            const record_t* r = record( type );
+            for ( auto& [ n, e ] : names )
+            {
+                vu_asset_t* asset = find( type.c_str( ), n.c_str( ) );
+                if ( asset == nullptr )
+                    continue;
+                if ( r == nullptr )
+                {
+                    // 0x4F1B50 would call through a null record: not modelled.
+                    unknown = true;
+                    continue;
+                }
+                patch_from( *r, p, e, *asset );
+            }
+        }
+    }
+
+    // 0x4F1B50 ( record, package, entry, asset ): a second asset from the record's create, with the asset's name and
+    // +0x48 hash, the sku pick ( "Metro", +4, entry ) and the language pick ( +0x1C ), loaded from this package
+    // (0x4F08F0); a failed load deletes it, false. Else the asset's vt+8 patch( it ), then it is deleted either way;
+    // the patch's answer.
+    bool patch_from( const record_t& r, asset_package_t& p, asset_entry_t& e, vu_asset_t& asset )
+    {
+        if ( r.create == 0 || hooks.create == nullptr )
+        {
+            unknown = true;
+            return false;
+        }
+        const value_t& info = asset_pick_sku( "Metro", m_sku, e.data );
+        vu_asset_t* from = hooks.create( hooks.user, asset.type );
+        if ( from == nullptr )
+            return false;
+        from->type = asset.type;
+        from->name = asset.name;
+        from->hash = asset.hash;
+        asset_pick_language( from->info, from->lang, info, m_lang );
+        bool ok = load_from( r, p, *from );
+        if ( ok )
+            ok = hooks.patch != nullptr && hooks.patch( hooks.user, asset, *from );
+        if ( hooks.destroy != nullptr )
+            hooks.destroy( hooks.user, from );
+        return ok;
+    }
+
+    // 0x4F08F0 ( record, package, asset ): the pack read of "<type>/<name><lang>" (0x5679F0). 1: the record's version
+    // must equal the pack record's, then the asset's vt+0x14 load( data ); true -> +0x50 = the pack hash, true.
+    // Otherwise false. 2 -> false. 0 (the pack does not list it): the raw-file / bake path, NOT recreated.
+    bool load_from( const record_t& r, asset_package_t& p, vu_asset_t& asset )
+    {
+        std::vector< std::uint8_t > data;
+        std::uint32_t version = 0, hash = 0;
+        const int read = p.pack.read_asset( asset.type, asset.name, asset.lang, version, hash, data );
+        unknown = unknown || p.pack.pack_unknown( );
+        if ( read == 0 )
+        {
+            unknown = true;
+            return false;
+        }
+        if ( read != 1 || version != r.version )
+            return false;
+        if ( hooks.load_data == nullptr || !hooks.load_data( hooks.user, asset, data ) )
+            return false;
+        asset.data_hash = hash;
+        return true;
+    }
+
+    std::string m_sku;
+    std::string m_lang;
+    std::vector< std::unique_ptr< asset_package_t > > m_packages;
     std::vector< std::string > m_type_names;
     std::map< std::string, record_t > m_types;
     std::unordered_map< std::uint32_t, vu_asset_t* > m_loaded;

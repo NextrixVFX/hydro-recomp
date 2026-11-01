@@ -3,7 +3,9 @@
 #include <workspace/utility/logger.hxx>
 
 #include <cstdint>
+#include <cstring>
 #include <fstream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -167,7 +169,222 @@ public:
         return out;
     }
 
+    // ---- The package's pack file, as VuAssetPackFile (boat batch 25): ctor 0x567590, open 0x567760, read 0x5679F0.
+    // The handle is the platform file system's (g_vumetrofile vt+0x34 / +0x3C / +0x40 / +0x48): a std::ifstream here.
+
+    // 0x567760 open( path ). A pack whose path is already set (+0x50, the +0x40 string's size) answers false - the
+    // path is copied BEFORE the open, so a failed open leaves it set and every later open fails too. The 68-byte
+    // header: +0x18 a 32-byte text (the sku, VuString_assign through strlen) and the two words +0x38 / +0x3C are taken
+    // before any test; then magic 'VUPF', version 3, the FNV-1a 32 of bytes +0..+0x3F == +0x40; seek +8; the directory
+    // (+0x10 bytes) read whole, its FNV-1a == +0x14; then +0xC records (a signed count), each needing 0x20 bytes left:
+    // a C string, then offset / size / stored size / version / hash / flags into the directory map (operator[] 0x567EB0:
+    // a repeated name overwrites). Any failure closes the handle (+0x58 = 0); records already read stay in the map.
+    // `header` replaces the 68 bytes the file holds (the self-test's variants).
+    bool open_pack( const char* path, const unsigned char* header = nullptr )
+    {
+        if ( !m_pack_path.empty( ) )
+            return false;
+        m_pack_path = path != nullptr ? path : "";
+        m_pack_open = false;
+        if ( m_pack_path.empty( ) )
+            return false;
+        std::ifstream file( m_pack_path, std::ios::binary );
+        if ( !file )
+            return false;
+        unsigned char head[ 68 ]{};
+        file.read( reinterpret_cast< char* >( head ), sizeof( head ) );
+        if ( file.gcount( ) != 68 )
+            return false;
+        if ( header != nullptr )
+            std::memcpy( head, header, sizeof( head ) );
+        std::size_t text = 0;
+        while ( 0x18 + text < sizeof( head ) && head[ 0x18 + text ] != 0 )
+            ++text;
+        if ( 0x18 + text == sizeof( head ) )
+        {
+            // strlen runs past the header into retail's stack frame: not modelled.
+            m_pack_unknown = true;
+            return false;
+        }
+        m_pack_sku.assign( reinterpret_cast< const char* >( head + 0x18 ), text );
+        m_pack_words[ 0 ] = read_u32( head + 0x38 );
+        m_pack_words[ 1 ] = read_u32( head + 0x3C );
+        if ( read_u32( head ) != 0x56555046u || read_u32( head + 4 ) != 3u )
+            return false;
+        if ( fnv( head, 0x40 ) != read_u32( head + 0x40 ) )
+            return false;
+        file.clear( );
+        file.seekg( read_u32( head + 8 ) );
+        if ( !file )
+            return false;
+        std::vector< unsigned char > table( read_u32( head + 0x10 ) );
+        if ( !table.empty( ) )
+        {
+            file.read( reinterpret_cast< char* >( table.data( ) ), static_cast< std::streamsize >( table.size( ) ) );
+            if ( static_cast< std::size_t >( file.gcount( ) ) != table.size( ) )
+                return false;
+        }
+        if ( fnv( table.data( ), table.size( ) ) != read_u32( head + 0x14 ) )
+            return false;
+        const std::int32_t count = static_cast< std::int32_t >( read_u32( head + 0xC ) );
+        std::size_t pos = 0;
+        for ( std::int32_t index = 0; index < count; ++index )
+        {
+            if ( pos > table.size( ) )
+            {
+                // The unsigned size - pos wraps and retail reads past its buffer: not modelled.
+                m_pack_unknown = true;
+                return false;
+            }
+            if ( table.size( ) - pos < 0x20 )
+                return false;
+            std::size_t end = pos;
+            while ( end < table.size( ) && table[ end ] != 0 )
+                ++end;
+            if ( end + 1 + 24 > table.size( ) )
+            {
+                m_pack_unknown = true;
+                return false;
+            }
+            pack_record_t& r = m_pack_records[ std::string( reinterpret_cast< const char* >( table.data( ) + pos ), end - pos ) ];
+            pos = end + 1;
+            r.offset = read_u32( table.data( ) + pos );
+            r.size = read_u32( table.data( ) + pos + 4 );
+            r.stored = read_u32( table.data( ) + pos + 8 );
+            r.version = read_u32( table.data( ) + pos + 12 );
+            r.hash = read_u32( table.data( ) + pos + 16 );
+            r.flags = read_u32( table.data( ) + pos + 20 );
+            pos += 24;
+        }
+        m_pack_open = true;
+        return true;
+    }
+
+    // 0x5679F0 read( type, name, lang, &version, &hash, &data ): 0 when no path is set (+0x50, the path's size) or
+    // "<type>/<name><lang>" is not in the directory (a failed open with its path set still looks the name up; the seek
+    // on its closed handle is then the platform's answer, not modelled); 2 when the seek, the read or the inflate fails or the
+    // data's FNV-1a differs from the record's hash; 1 with the record's version and hash. Flags bit 0: zlib (0x55B3A0,
+    // zlib 1.2.7's inflate in 0x40000-byte reads of the stored size; the data must end the stream and fill the size).
+    // SUBSTITUTION: puff + the zlib header / adler-32 checks zlib makes, for zlib's inflate.
+    int read_asset( const std::string& type, const std::string& name, const std::string& lang, std::uint32_t& version,
+                    std::uint32_t& hash, std::vector< std::uint8_t >& out ) const
+    {
+        if ( m_pack_path.empty( ) )
+            return 0;
+        auto it = m_pack_records.find( type + "/" + name + lang );
+        if ( it == m_pack_records.end( ) )
+            return 0;
+        if ( !m_pack_open )
+        {
+            // The seek on a closed handle (+0x58 = 0) is the platform's answer: not modelled.
+            m_pack_unknown = true;
+            return 2;
+        }
+        const pack_record_t& r = it->second;
+        std::ifstream file( m_pack_path, std::ios::binary );
+        if ( !file )
+            return 2;
+        file.seekg( r.offset );
+        if ( !file )
+            return 2;
+        out.assign( r.size, 0 );
+        if ( ( r.flags & 1 ) != 0 )
+        {
+            std::vector< unsigned char > stored( r.stored );
+            file.read( reinterpret_cast< char* >( stored.data( ) ), static_cast< std::streamsize >( stored.size( ) ) );
+            stored.resize( static_cast< std::size_t >( file.gcount( ) ) );
+            if ( !inflate_zlib( stored, out ) )
+                return 2;
+        }
+        else if ( !out.empty( ) )
+        {
+            file.read( reinterpret_cast< char* >( out.data( ) ), static_cast< std::streamsize >( out.size( ) ) );
+            if ( static_cast< std::size_t >( file.gcount( ) ) != out.size( ) )
+                return 2;
+        }
+        if ( fnv( out.data( ), out.size( ) ) != r.hash )
+            return 2;
+        version = r.version;
+        hash = r.hash;
+        return 1;
+    }
+
+    const std::string& pack_sku( ) const
+    {
+        return m_pack_sku;
+    }
+
+    std::uint32_t pack_word( int index ) const
+    {
+        return m_pack_words[ index & 1 ];
+    }
+
+    std::size_t pack_records( ) const
+    {
+        return m_pack_records.size( );
+    }
+
+    // A pack path a recreation does not model was reached (named where it is set).
+    bool pack_unknown( ) const
+    {
+        return m_pack_unknown;
+    }
+
+    // 0x4ABB40: FNV-1a 32 over a byte range.
+    static std::uint32_t fnv( const unsigned char* bytes, std::size_t size )
+    {
+        std::uint32_t h = 0x811C9DC5u;
+        for ( std::size_t index = 0; index < size; ++index )
+            h = ( h ^ bytes[ index ] ) * 16777619u;
+        return h;
+    }
+
 private:
+    struct pack_record_t
+    {
+        std::uint32_t offset = 0;
+        std::uint32_t size = 0;
+        std::uint32_t stored = 0;
+        std::uint32_t version = 0;
+        std::uint32_t hash = 0;
+        std::uint32_t flags = 0;
+    };
+
+    // zlib's stream as inflate() takes it: CMF method 8 with a window of at most 32K, FCHECK, no preset dictionary,
+    // the deflate data, then the big-endian adler-32 of the output. The output must be exactly out.size( ) bytes.
+    static bool inflate_zlib( const std::vector< unsigned char >& in, std::vector< std::uint8_t >& out )
+    {
+        if ( in.size( ) < 2 )
+            return false;
+        const unsigned header = static_cast< unsigned >( in[ 0 ] ) * 256u + in[ 1 ];
+        if ( ( in[ 0 ] & 0x0F ) != 8 || ( in[ 0 ] >> 4 ) > 7 || ( header % 31u ) != 0 || ( in[ 1 ] & 0x20 ) != 0 )
+            return false;
+        unsigned long dest_len = static_cast< unsigned long >( out.size( ) );
+        unsigned long source_len = static_cast< unsigned long >( in.size( ) - 2 );
+        unsigned char none = 0;
+        if ( puff( out.empty( ) ? &none : out.data( ), &dest_len, in.data( ) + 2, &source_len ) != 0 || dest_len != out.size( ) )
+            return false;
+        const std::size_t tail = 2 + source_len;
+        if ( tail + 4 > in.size( ) )
+            return false;
+        std::uint32_t a = 1, b = 0;
+        for ( std::uint8_t byte : out )
+        {
+            a = ( a + byte ) % 65521u;
+            b = ( b + a ) % 65521u;
+        }
+        const std::uint32_t want = ( static_cast< std::uint32_t >( in[ tail ] ) << 24 ) | ( static_cast< std::uint32_t >( in[ tail + 1 ] ) << 16 )
+            | ( static_cast< std::uint32_t >( in[ tail + 2 ] ) << 8 ) | in[ tail + 3 ];
+        return ( ( b << 16 ) | a ) == want;
+    }
+
+    std::string m_pack_path;
+    std::string m_pack_sku;
+    std::uint32_t m_pack_words[ 2 ]{ 0xFFFFFFFFu, 0xFFFFFFFFu };
+    std::map< std::string, pack_record_t > m_pack_records;
+    bool m_pack_open = false;
+    mutable bool m_pack_unknown = false;
+
     struct entry_t
     {
         std::string name;
