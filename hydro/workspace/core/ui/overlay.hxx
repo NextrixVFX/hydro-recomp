@@ -4,6 +4,7 @@
 #include <workspace/core/ui/frame.hxx>
 #include <workspace/core/ui/gauge.hxx>
 #include <workspace/core/ui/map.hxx>
+#include <workspace/core/ui/results.hxx>
 #include <workspace/core/ui/split.hxx>
 #include <workspace/core/ui/wiring.hxx>
 
