@@ -219,6 +219,29 @@ inline void shape_set_triangle_mesh_scaling( convex_shape_t& s, striding_mesh_t&
     shape_recalc_local_aabb( s );
 }
 
+// btPolyhedralConvexAabbCachingShape::setLocalScaling 0x54B5E0 (slot 5 of
+// the abstract class's vtable - no call site reaches it, a derived class
+// replaces the slot; thiscall scaling*; retn 4): the shape's +0x10..+0x18 =
+// the scaling's lanes `andps` 0x6F7CC0 (0x7FFFFFFF: |x| bitwise, a NaN keeps
+// its payload), +0x1C = 0 (two movq of a stack copy), then recalcLocalAabb
+// 0x54B700 - recreated for type 3 only (its batched support is the MESH walk,
+// which reads the mesh's scaling, not the shape's). Other types: -1.
+inline int shape_set_aabb_caching_scaling( convex_shape_t& s, const float* scaling )
+{
+    for ( int k = 0; k < 3; ++k )
+    {
+        std::uint32_t w;
+        std::memcpy( &w, &scaling[ k ], 4 );
+        w &= 0x7FFFFFFFu;
+        std::memcpy( &s.local_scaling[ k ], &w, 4 );
+    }
+    s.local_scaling[ 3 ] = 0.0f;
+    if ( s.type != 3 || !s.mesh )
+        return -1;
+    shape_recalc_local_aabb( s );
+    return 1;
+}
+
 inline bool shape_support( const convex_shape_t& s, const float* dir, float* out )
 {
     switch ( s.type )

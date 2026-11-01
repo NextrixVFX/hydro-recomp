@@ -2014,3 +2014,211 @@ inline bool verify_bt_rows5( )
             }
         } );
 }
+// verify_mesh_scaling (boat batch 20): cases/boat.py mesh_scaling -
+// btTriangleMeshShape::setLocalScaling 0x60C1C0 (concave.hxx mesh_shape_set
+// _local_scaling: under the BVH vtable the BVH-walk recalc, under the plain
+// vtable the all-triangles walk) and btBvhTriangleMeshShape::setLocalScaling
+// 0x5AF300 (bvh_mesh_set_local_scaling, the no-rebuild vectors): the shape
+// built as the case builds it (ctor, setOptimizedBvh on the level), the
+// cached aabb before, then after the row; the margin and the mesh scaling.
+inline bool verify_mesh_scaling( )
+{
+    const golden_bvh_asset_t& la = g_golden_bvh_assets[ 1 ];
+    const golden_bvh_asset_t& ha = g_golden_bvh_assets[ 0 ];
+    quantized_bvh_t bvh{};
+    std::memcpy( bvh.aabb_min, la.m_header + 0, 16 );
+    std::memcpy( bvh.aabb_max, la.m_header + 4, 16 );
+    std::memcpy( bvh.quantization, la.m_header + 8, 16 );
+    bvh.cur_node_index = static_cast< int >( la.m_header[ 13 ] );
+    bvh.use_quantization = static_cast< uint8_t >( la.m_quantized );
+    bvh.nodes = reinterpret_cast< const bvh_node_t* >( la.m_nodes );
+    bvh.traversal_mode = la.m_traversal;
+    int failed = 0, changed = 0, nan_lanes = 0;
+    for ( std::size_t index = 0; index < g_golden_mesh_scaling_count; ++index )
+    {
+        const golden_mesh_scaling_t& g = g_golden_mesh_scaling[ index ];
+        const golden_bvh_asset_t& a = g.m_level ? la : ha;
+        striding_mesh_t mesh{};
+        std::memcpy( mesh.scaling, g.m_s0, 16 );
+        mesh.vertices = reinterpret_cast< const float( * )[ 4 ] >( a.m_verts );
+        mesh.num_vertices = a.m_nverts;
+        mesh.indices = a.m_indices;
+        mesh.index_count = a.m_nindices;
+        bvh_mesh_shape_t s{ 21, 0.0f, nullptr, nullptr };
+        const char* what = nullptr;
+        int bad_word = -1;
+        unsigned w[ 8 ] = {}, r[ 8 ] = {};
+        float s0[ 4 ], s1[ 4 ];
+        std::memcpy( s0, g.m_s0, 16 );
+        std::memcpy( s1, g.m_s1, 16 );
+        for ( int k = 0; k < 3; ++k )
+            nan_lanes += std::isnan( s1[ k ] ) ? 1 : 0;
+        if ( bvh_mesh_shape_init( s, &mesh ) != 1 || ( g.m_level && bvh_mesh_set_optimized_bvh( s, mesh, &bvh, s0 ) != 1 ) )
+            what = "the setup reached unrecreated code";
+        std::memcpy( w, s.local_aabb_min, 16 );
+        std::memcpy( w + 4, s.local_aabb_max, 16 );
+        for ( int k = 0; k < 8 && !what; ++k )
+            if ( w[ k ] != g.m_before[ k ] )
+            {
+                what = "the aabb before the row";
+                bad_word = k;
+                std::memcpy( r, g.m_before, 32 );
+            }
+        if ( !what )
+        {
+            std::memcpy( &s.margin, &g.m_margin, 4 );
+            const int rc = g.m_fn == 0x5AF300u ? bvh_mesh_set_local_scaling( s, mesh, s1 ) : mesh_shape_set_local_scaling( s, mesh, s1, g.m_plain == 0 );
+            if ( rc != 1 )
+                what = "the row reached unrecreated code";
+            std::memcpy( w, s.local_aabb_min, 16 );
+            std::memcpy( w + 4, s.local_aabb_max, 16 );
+            changed += std::memcmp( g.m_aabb, g.m_before, 32 ) != 0 ? 1 : 0;
+            for ( int k = 0; k < 8 && !what; ++k )
+                if ( w[ k ] != g.m_aabb[ k ] )
+                {
+                    what = "the aabb after the row";
+                    bad_word = k;
+                    std::memcpy( r, g.m_aabb, 32 );
+                }
+            unsigned m;
+            std::memcpy( &m, &s.margin, 4 );
+            if ( !what && m != g.m_margin_after )
+                what = "the margin";
+            if ( !what && std::memcmp( mesh.scaling, g.m_mesh_scaling, 16 ) != 0 )
+                what = "the mesh scaling";
+        }
+        if ( what )
+        {
+            ++failed;
+            LOG_ERROR( "mesh scaling vector %d (0x%X): %s (word %d: ours 0x%08X, retail 0x%08X)", static_cast< int >( index ), g.m_fn, what,
+                bad_word, bad_word >= 0 ? w[ bad_word ] : 0u, bad_word >= 0 ? r[ bad_word ] : 0u );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "btTriangleMeshShape::setLocalScaling 0x60C1C0 + btBvhTriangleMeshShape::setLocalScaling 0x5AF300 match retail over %d "
+                     "meshes, exact (%d aabbs changed, %d NaN scaling lanes)",
+            static_cast< int >( g_golden_mesh_scaling_count ), changed, nan_lanes );
+    return failed == 0;
+}
+// verify_compound_remove (boat batch 20): cases/boat.py compound_remove -
+// btCompoundShape::removeChildShape 0x527110 (compound.hxx compound_remove
+// _child_shape -> removeChildShapeByIndex 0x527030 + the typed
+// recalculateLocalAabb 0x527160) on the typed compound built like retail's
+// (ctor + 0 or 1 addChildShape of a box): before the row (count, local aabb,
+// revision) and after, exact.
+inline bool verify_compound_remove( )
+{
+    int failed = 0, removed = 0;
+    for ( std::size_t index = 0; index < g_golden_compound_remove_count; ++index )
+    {
+        const golden_compound_remove_t& g = g_golden_compound_remove[ index ];
+        convex_shape_t box{}, other{};
+        for ( convex_shape_t* s : { &box, &other } )
+        {
+            s->type = 0;
+            s->local_scaling[ 0 ] = s->local_scaling[ 1 ] = s->local_scaling[ 2 ] = 1.0f;
+            std::memcpy( &s->margin, &g.m_margin, 4 );
+        }
+        std::memcpy( box.implicit, g.m_half, 16 );
+        other.implicit[ 0 ] = 1.0f;
+        other.implicit[ 1 ] = 2.0f;
+        other.implicit[ 2 ] = 3.0f;
+        float t[ 16 ];
+        std::memcpy( t, g.m_transform, 64 );
+        compound_shape_t c;
+        const char* what = nullptr;
+        if ( g.m_n != 0 && compound_add_child( c, t, box ) != 1 )
+            what = "addChildShape reached unrecreated code";
+        unsigned w[ 10 ];
+        const auto snap = [ & ]( ) {
+            w[ 0 ] = static_cast< unsigned >( c.children.size( ) );
+            std::memcpy( w + 1, c.local_aabb_min, 16 );
+            std::memcpy( w + 5, c.local_aabb_max, 16 );
+            w[ 9 ] = static_cast< unsigned >( c.revision );
+        };
+        snap( );
+        if ( !what && std::memcmp( w, g.m_before, 40 ) != 0 )
+            what = "the compound before the row";
+        if ( !what )
+        {
+            const convex_shape_t* target = g.m_target == 0 ? &box : g.m_target == 1 ? &other : nullptr;
+            if ( compound_remove_child_shape( c, target ) != 1 )
+                what = "the row reached unrecreated code";
+            snap( );
+            removed += g.m_count < g.m_before[ 0 ] ? 1 : 0;
+            if ( !what && ( w[ 0 ] != g.m_count || w[ 9 ] != g.m_revision ) )
+                what = "the count / revision";
+            if ( !what && std::memcmp( w + 1, g.m_aabb, 32 ) != 0 )
+                what = "the local aabb";
+        }
+        if ( what )
+        {
+            ++failed;
+            LOG_ERROR( "compound remove vector %d: %s", static_cast< int >( index ), what );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "btCompoundShape::removeChildShape 0x527110 (+ 0x527030, the typed recalculateLocalAabb 0x527160) matches retail over %d "
+                     "compounds, exact (%d children removed)",
+            static_cast< int >( g_golden_compound_remove_count ), removed );
+    return failed == 0;
+}
+// verify_hull_scaling (boat batch 20): cases/boat.py hull_scaling -
+// btPolyhedralConvexAabbCachingShape::setLocalScaling 0x54B5E0 (support.hxx
+// shape_set_aabb_caching_scaling) on the hull built by the
+// btConvexTriangleMeshShape ctor under a mesh scaling, the margin set: the
+// shape's scaling and cached aabb before and after, the mesh scaling, exact.
+inline bool verify_hull_scaling( )
+{
+    const golden_bvh_asset_t& ha = g_golden_bvh_assets[ 0 ];
+    int failed = 0, nan_lanes = 0;
+    for ( std::size_t index = 0; index < g_golden_hull_scaling_count; ++index )
+    {
+        const golden_hull_scaling_t& g = g_golden_hull_scaling[ index ];
+        striding_mesh_t mesh{};
+        std::memcpy( mesh.scaling, g.m_s0, 16 );
+        mesh.vertices = reinterpret_cast< const float( * )[ 4 ] >( ha.m_verts );
+        mesh.num_vertices = ha.m_nverts;
+        mesh.indices = ha.m_indices;
+        mesh.index_count = ha.m_nindices;
+        convex_shape_t s;
+        shape_init_triangle_mesh_hull( s, &mesh );
+        std::memcpy( &s.margin, &g.m_margin, 4 );
+        unsigned w[ 12 ];
+        const auto snap = [ & ]( ) {
+            std::memcpy( w, s.local_scaling, 16 );
+            std::memcpy( w + 4, s.local_aabb_min, 16 );
+            std::memcpy( w + 8, s.local_aabb_max, 16 );
+        };
+        snap( );
+        const char* what = nullptr;
+        if ( std::memcmp( w, g.m_before, 48 ) != 0 )
+            what = "the hull before the row";
+        if ( !what )
+        {
+            float s1[ 4 ];
+            std::memcpy( s1, g.m_s1, 16 );
+            for ( int k = 0; k < 3; ++k )
+                nan_lanes += std::isnan( s1[ k ] ) ? 1 : 0;
+            if ( shape_set_aabb_caching_scaling( s, s1 ) != 1 )
+                what = "the row reached unrecreated code";
+            snap( );
+            if ( !what && std::memcmp( w, g.m_scaling, 16 ) != 0 )
+                what = "the shape's scaling";
+            if ( !what && std::memcmp( w + 4, g.m_aabb, 32 ) != 0 )
+                what = "the cached aabb";
+            if ( !what && std::memcmp( mesh.scaling, g.m_mesh_scaling, 16 ) != 0 )
+                what = "the mesh scaling";
+        }
+        if ( what )
+        {
+            ++failed;
+            LOG_ERROR( "hull scaling vector %d: %s", static_cast< int >( index ), what );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "btPolyhedralConvexAabbCachingShape::setLocalScaling 0x54B5E0 (+ recalcLocalAabb 0x54B700) matches retail over %d hulls, "
+                     "exact (%d NaN scaling lanes)",
+            static_cast< int >( g_golden_hull_scaling_count ), nan_lanes );
+    return failed == 0;
+}

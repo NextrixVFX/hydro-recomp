@@ -284,6 +284,37 @@ inline int bvh_mesh_set_optimized_bvh( bvh_mesh_shape_t& s, striding_mesh_t& mes
     return 1;
 }
 
+// btTriangleMeshShape::setLocalScaling 0x60C1C0 (slot 5; thiscall scaling*;
+// retn 4): the 16 bytes into the mesh's scaling (+0x30's +0x10, two movq),
+// then recalcLocalAabb 0x60BED0 through the object's own vtable - the BVH
+// walk for a btBvhTriangleMeshShape (through_bvh), the all-triangles walk
+// for a plain btTriangleMeshShape.
+inline int mesh_shape_set_local_scaling( bvh_mesh_shape_t& s, striding_mesh_t& mesh, const float* scaling, bool through_bvh )
+{
+    std::memcpy( mesh.scaling, scaling, 16 );
+    return mesh_shape_recalc_local_aabb( s, through_bvh );
+}
+
+// btBvhTriangleMeshShape::setLocalScaling 0x5AF300 (slot 5; scaling*; retn
+// 4): getLocalScaling (vt+0x18: the mesh's scaling) - scaling per lane, d =
+// (dy * dy + dx * dx) + dz * dz; `comiss d, 1.1920929e-7 (0x6F7584); jbe` ->
+// nothing (a NaN lane too). Else 0x60C1C0's body inlined (the 16 bytes, the
+// recalc through the BVH walk) and buildOptimizedBvh 0x5AF380 (a NEW BVH
+// over the rescaled mesh, btOptimizedBvh::build 0x582CB0) - NOT recreated:
+// -1 after the recalc.
+inline int bvh_mesh_set_local_scaling( bvh_mesh_shape_t& s, striding_mesh_t& mesh, const float* scaling )
+{
+    const float dx = mesh.scaling[ 0 ] - scaling[ 0 ];
+    const float dy = mesh.scaling[ 1 ] - scaling[ 1 ];
+    const float dz = mesh.scaling[ 2 ] - scaling[ 2 ];
+    const float d = ( dy * dy + dx * dx ) + dz * dz;
+    if ( !( d > support_bits( 0x34000000u ) ) )
+        return 1;
+    if ( mesh_shape_set_local_scaling( s, mesh, scaling, true ) < 0 )
+        return -1;
+    return -1;   // buildOptimizedBvh 0x5AF380: not recreated
+}
+
 struct compound_shape_t;
 
 // One collision object as processCollision reads it: +16 the world
