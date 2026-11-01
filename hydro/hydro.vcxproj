@@ -166,6 +166,7 @@
     <ClInclude Include="workspace\core\world\race.hxx" />
     <ClInclude Include="workspace\core\world\spray.hxx" />
     <ClInclude Include="workspace\core\world\surface.hxx" />
+    <ClInclude Include="workspace\core\world\tick.hxx" />
     <ClInclude Include="workspace\core\world\transform.hxx" />
     <ClInclude Include="workspace\core\world\tree.hxx" />
     <ClInclude Include="workspace\core\world\water.hxx" />
