@@ -11,6 +11,7 @@
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/entity/property.hxx>
 #include <workspace/core/game/types.hxx>
+#include <workspace/core/world/rules.hxx>
 #include <workspace/core/world/tick.hxx>
 
 #include <cstdint>
@@ -75,10 +76,12 @@ inline entity_world_t race_entity_world( const entity_registry_t& registry, std:
         auto s = waypoint_state_for( cls );
         if ( !s )
             s = nuisance_start_state_for( cls );
+        if ( !s )
+            s = multi_delay_state_for( cls );   // world/rules.hxx (ctor 0x5DFD80)
         return s ? s : entity_state_for( cls );
     };
-    world.m_properties_load = []( entity_t& e, const value_t& p ) { waypoint_load_properties( e, p ); nuisance_start_load_properties( e, p ); entity_load_properties( e, p ); };
-    world.m_properties_mark = []( entity_t& e ) { waypoint_mark_properties( e ); nuisance_start_mark_properties( e ); entity_mark_properties( e ); };
+    world.m_properties_load = []( entity_t& e, const value_t& p ) { waypoint_load_properties( e, p ); nuisance_start_load_properties( e, p ); multi_delay_load_properties( e, p ); entity_load_properties( e, p ); };
+    world.m_properties_mark = []( entity_t& e ) { waypoint_mark_properties( e ); nuisance_start_mark_properties( e ); multi_delay_mark_properties( e ); entity_mark_properties( e ); };
     return world;
 }
 

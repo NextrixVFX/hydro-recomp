@@ -15,6 +15,7 @@
 #include <workspace/core/world/bodies.hxx>
 #include <workspace/core/world/dynamics.hxx>
 #include <workspace/core/world/kernel.hxx>
+#include <workspace/core/world/rules.hxx>
 #include <workspace/core/world/start.hxx>
 #include <workspace/core/world/tick.hxx>
 #include <workspace/utility/logger.hxx>
@@ -102,6 +103,11 @@ struct race_world_t
     // The "Triggers" tick 0x536460's trigger half: every listed trigger's vt+0x30 over the manager's
     // instigators (c_world's trigger list - world.hxx race_triggers), run after the instigator step.
     std::function< void( ) > triggers;
+    // The race HUD projects (VuRaceGame +0x738 / +0x73C / +0x740: 0 PreGame, 1 Game, 2 PostGame) - their load, gameInitialize,
+    // release and graph are the world's (c_world), their tick / draw the UI's; null: no HUD projects (UNKNOWN, logged).
+    std::function< void( int project, race_hud_verb_t verb, float dt ) > hud;
+    // A VuEventManager broadcast reaching the world's graph (the HUD's / the level's subscribers).
+    std::function< void( const char* name ) > broadcast;
     std::uint32_t viewports = 1;
     std::int32_t control_method = 0;
     std::int32_t display_w = 1280;
@@ -190,6 +196,19 @@ struct race_session_t
     // word 0 until written. The entity repository g 0x759080 (hash -> entity) is not recreated: a VuParams
     // entity's hash word is the token here, the repository's find the identity on a boat's token.
     std::map< std::uint32_t, std::uint32_t > words;
+    // THE RACE RULES (world/rules.hxx): VuRaceGame's +0x6F8 state machine and +0x744, the game fields they read, the game's
+    // boats as they see them (s.game.boats' order: the first game.boats.size( ) session boats - the nuisance boats are not
+    // the game's), whether the game's tick 0x482F10 still runs (slot 7 answered true) and its stopped paths.
+    race_rules_t rules;
+    race_rules_game_t rules_game;
+    std::vector< race_rules_boat_t > rules_boats;
+    bool rules_running = false;
+    int rules_frames = 0;
+    // THE TEST INPUT (ours, flagged - not retail): --input-script's per-frame pad states (world/drive.hxx race_input_script_t),
+    // answered by the platform input hook in place of the device; null: the device (game/input.hxx read_input). rames: the
+    // session frames run (race_session_frame), the script's clock.
+    std::shared_ptr< struct race_input_script_t > input_script;
+    int frames = 0;
 };
 
 // The model's entity / driver tokens (see race_session_t::words).
@@ -220,6 +239,8 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db );
 inline void race_drive_decision( race_session_t& s, std::size_t boat, float dt );
 inline void race_drive_viewports( race_session_t& s );
 inline void race_drive_build( race_session_t& s, std::size_t boat, float dt );
+// VuGame's tick 0x482F10 as the Decision phase reaches it (world/drive.hxx).
+inline void race_session_game_mode( void* user, float dt );
 
 // The graph object a boat-image pointer slot refers to (-1 none).
 inline int race_session_ref( const boat_graph_t& g, int object, int slot )
@@ -838,7 +859,9 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
                                 const c_archive& archive, entity_t& tree, const track_manager_t* track, fleet_random_t& random,
                                 const std::function< void( ) >& project_initialized = { } )
 {
+    race_world_t lent = std::move( s.world );   // the world's services, set by c_world before the start (the HUD projects)
     s = race_session_t{ };
+    s.world = std::move( lent );
     s.dynamics = std::make_unique< race_dynamics_t >( );   // the engine init's VuDynamicsImpl (0x4F8050) + 0x4024E0's gravity
     race_dynamics_init( *s.dynamics, &s.contact );
     s.random = &random;
@@ -928,6 +951,10 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     tick_register( s.ticks, { s.dynamics.get( ), race_session_dynamics_sync, &s }, "DynamicsSync" );   // 0x4F8050's registrations
     tick_register( s.ticks, { s.dynamics.get( ), race_session_dynamics_kick, &s }, "DynamicsKick" );
     tick_register( s.ticks, { &s.fleet, race_session_fleet, &s }, "Decision" );
+    // The game mode manager's Decision tick 0x4CBFD0 (its init 0x4CBCD0, slot 5; created by the game init 0x4024E0 after the
+    // AI manager - their inits' order taken as the creation order, the init loop not read): the action mode's Run state
+    // 0x4BAB50 -> VuGame's tick 0x482F10 (race_session_game_mode).
+    tick_register( s.ticks, { &s.rules, race_session_game_mode, &s }, "Decision" );
     tick_register( s.ticks, { &s.manager, race_session_viewports, &s }, "Viewports" );
     // VuWater's tick 0x529E30 in "Water" (VuWater made by the engine init, before the race: c_world's
     // water_tick - surface.hxx water_built_tick and the queries' view).
@@ -1035,7 +1062,48 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         fleet_start( s.fleet, *s.track, s.pilots, s.fleet_boats, *s.random );
     };
     sh.fleet_run = [ &s ] { fleet_run( s.fleet ); };
+    // VuRaceGame's own part (world/rules.hxx): the ctor 0x489030's state machine, built here (after the base fields above -
+    // the ctor ran before the boat load); its first state's enter is slot 5 0x4896A0's "state enter" step below, and its
+    // tick the game's slot 7, reached from VuGame's tick 0x482F10 in the Decision phase (race_session_game_mode).
+    race_rules_construct( s.rules );
+    s.rules.hooks.hud = [ &s ]( int project, race_hud_verb_t verb, float dt )
+    {
+        if ( s.world.hud )
+            s.world.hud( project, verb, dt );
+        else
+            race_unwired( s, "the race HUD projects (VuRaceGame +0x738 / +0x73C / +0x740) with no world to load them - not run (UNKNOWN)" );
+    };
+    s.rules.hooks.platform = [ &s ]( const char* what ) { race_unwired( s, std::string( "platform services: " ) + what + " (saves / online / achievements / audio - hooks)" ); };
+    for ( std::size_t k = 0; k < s.game.boats.size( ) && k < s.start_boats.size( ); ++k )
+    {
+        race_rules_boat_t rb;
+        rb.boat = s.start_boats[ k ].boat;
+        rb.transform = s.start_boats[ k ].transform;
+        rb.driver = s.start_boats[ k ].driver;
+        rb.human = s.start_boats[ k ].cls.slot[ 0 ];
+        s.rules_boats.push_back( rb );
+    }
+    s.rules.boats = &s.rules_boats;
+    s.rules.game = &s.rules_game;
+    sh.call = [ &s ]( const char* row )
+    {
+        // Slot 5 0x4896A0: "(whatever the track) the game's +0x6F8 state machine enters its first state" - PreGame's enter
+        // 0x48A7F0, before the +0x4CC loop (which it does not read).
+        if ( std::strcmp( row, "state enter fsm+0x704" ) == 0 )
+        {
+            s.rules_game.circuit = s.start.circuit;
+            s.rules_game.length = s.start.length;
+            s.rules_game.laps = s.start.laps;
+            race_rules_start( s.rules );
+        }
+    };
     race_begin( s.start, s.start_boats, s.manager, *track, *db.track_db, *db.constant_db, sh );
+    // The game's +0x720 order as slot 5 left it, and each boat's +0x4D8 (race_start_boat_t::checkpoint) as begin set it.
+    s.rules_game.order = s.start.order;
+    s.rules_game.order.resize( s.rules_boats.size( ) );
+    for ( std::size_t k = 0; k < s.rules_boats.size( ); ++k )
+        s.rules_boats[ k ].checkpoint = s.start_boats[ k ].checkpoint;
+    s.rules_running = true;
 
     // VuAiNuisanceDriverStartEntity's gameInitialize 0x42FDC0 (boat nuisance.hxx) on each one in the tree, in
     // pre-order: its child VuBoatEntity (operator new(0x520) + 0x41B710 + ctor 0x41B850 - the object the
@@ -1166,6 +1234,7 @@ inline void race_session_frame( race_session_t& s, float dt )
         return;
     s.clock += static_cast< double >( dt );
     tick_run( s.ticks, s.clock );
+    ++s.frames;
 }
 
 // VuBoatEntity's draw 0x41EAE0 (slot 12, behind the draw delegate 0x4077E3),
