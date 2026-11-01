@@ -8,6 +8,7 @@
 #include <workspace/core/collision/arena.hxx>
 #include <workspace/core/collision/rebuild.hxx>
 #include <workspace/core/assets/rtti.hxx>
+#include <workspace/core/assets/factory.hxx>
 #include <string>
 
 #include <array>
@@ -2619,5 +2620,127 @@ inline bool verify_asset_rtti( )
             static_cast< int >( g_golden_asset_rtti_count ), links );
     else
         LOG_ERROR( "asset rtti FAILED %d of %d", failed, static_cast< int >( g_golden_asset_rtti_count ) );
+    return failed == 0;
+}
+
+// verify_asset_factory (boat batch 24, the asset area): cases/boat.py asset_factory - engine assets/factory.hxx against
+// VuAssetFactoryImpl run in retail on a factory retail built: the registered type table (registerAllTypes 0x56B730),
+// the key hash 0x4ECB80 of every Base.apf name, and the script on the loaded-asset table / substitutes (createAsset,
+// addRef, release, the two finds, add / removeSubstitute). One failure per type row, per hash and per op (an op fails
+// when its answer, any asset's +0x4C, the delete log or the substitute vector differs).
+inline bool verify_asset_factory( )
+{
+    int failed = 0;
+    c_asset_factory f;
+    f.register_all_types( );
+    const std::vector< std::string >& types = f.types( );
+    for ( std::size_t i = 0; i < g_golden_asset_factory_type_count; ++i )
+    {
+        const golden_asset_factory_type_t& g = g_golden_asset_factory_types[ i ];
+        const c_asset_factory::record_t* r = i < types.size( ) && types[ i ] == g.m_name ? f.record( g.m_name ) : nullptr;
+        if ( !r || r->create != g.m_create || r->bake != g.m_bake || r->version != g.m_version || r->flag != ( g.m_flag != 0 ) )
+        {
+            ++failed;
+            LOG_ERROR( "asset factory type %d (%s): the record", static_cast< int >( i ), g.m_name );
+        }
+    }
+    if ( types.size( ) != g_golden_asset_factory_type_count )
+    {
+        ++failed;
+        LOG_ERROR( "asset factory: %d types registered, retail %d", static_cast< int >( types.size( ) ), static_cast< int >( g_golden_asset_factory_type_count ) );
+    }
+    int hash_bad = 0;
+    for ( std::size_t i = 0; i < g_golden_asset_factory_name_count; ++i )
+    {
+        const std::string full = g_golden_asset_factory_names[ i ].m_name;
+        const std::size_t slash = full.find( '/' );
+        const std::string type = full.substr( 0, slash );
+        const std::string name = slash == std::string::npos ? std::string( ) : full.substr( slash + 1 );
+        if ( asset_key_hash( type.c_str( ), name.c_str( ) ) != g_golden_asset_factory_names[ i ].m_hash )
+            ++hash_bad;
+    }
+    if ( hash_bad )
+        LOG_ERROR( "asset factory: %d of %d key hashes differ", hash_bad, static_cast< int >( g_golden_asset_factory_name_count ) );
+    failed += hash_bad;
+
+    const std::size_t n = g_golden_asset_factory_asset_count;
+    std::vector< vu_asset_t > assets( n );
+    std::vector< std::pair< unsigned, unsigned > > deletes;
+    struct log_t
+    {
+        vu_asset_t* base;
+        std::vector< std::pair< unsigned, unsigned > >* deletes;
+    } log{ assets.data( ), &deletes };
+    for ( std::size_t k = 0; k < n; ++k )
+    {
+        const golden_asset_factory_asset_t& g = g_golden_asset_factory_assets[ k ];
+        assets[ k ].type = g.m_type;
+        assets[ k ].name = g.m_name;
+        assets[ k ].hash = asset_key_hash( g.m_type, g.m_name );
+        if ( assets[ k ].hash != g.m_hash )
+        {
+            ++failed;
+            LOG_ERROR( "asset factory script asset %d: key hash", static_cast< int >( k ) );
+        }
+        if ( g.m_inserted )
+            f.insert( &assets[ k ] );
+    }
+    f.hooks.user = &log;
+    f.hooks.destroy = []( void* u, vu_asset_t* a )
+    {
+        log_t& l = *static_cast< log_t* >( u );
+        l.deletes->emplace_back( static_cast< unsigned >( a - l.base ), 1u );
+    };
+    const unsigned* w = g_golden_asset_factory_words;
+    const unsigned ops = *w++;
+    int op_bad = 0;
+    for ( unsigned i = 0; i < ops; ++i )
+    {
+        const unsigned code = *w++, k = *w++, target = *w++;
+        const int want = static_cast< int >( *w++ );
+        vu_asset_t* got = nullptr;
+        vu_asset_t& a = assets[ k < n ? k : 0 ];
+        switch ( code )
+        {
+        case 0: got = f.create( a.type, a.name ); break;
+        case 1: got = f.add_ref( &a ); break;
+        case 2: f.release( &a ); break;
+        case 3: f.release( nullptr ); break;
+        case 4: got = f.find( a.hash ); break;
+        case 5: got = f.find( a.type.c_str( ), a.name.c_str( ) ); break;
+        case 6: f.add_substitute( a.type, a.name, g_golden_asset_factory_strings[ target ] ); break;
+        default: f.remove_substitute( a.type, a.name ); break;
+        }
+        const int answer = code == 1 || code == 0 || code == 4 || code == 5 ? ( got ? static_cast< int >( got - assets.data( ) ) : -1 ) : -1;
+        bool bad = answer != want;
+        const unsigned nr = *w++;
+        for ( unsigned j = 0; j < nr; ++j )
+            bad = ( j >= n || assets[ j ].refs != static_cast< std::int32_t >( *w++ ) ) || bad;
+        const unsigned nd = *w++;
+        if ( nd != deletes.size( ) )
+            bad = true;
+        for ( unsigned j = 0; j < nd; ++j, w += 2 )
+            if ( j >= deletes.size( ) || deletes[ j ].first != w[ 0 ] || deletes[ j ].second != w[ 1 ] )
+                bad = true;
+        const unsigned ns = *w++;
+        const auto& subs = f.substitutes( );
+        if ( ns != subs.size( ) )
+            bad = true;
+        for ( unsigned j = 0; j < ns; ++j, w += 2 )
+            if ( j >= subs.size( ) || subs[ j ].first != w[ 0 ] || subs[ j ].second != g_golden_asset_factory_strings[ w[ 1 ] ] )
+                bad = true;
+        if ( bad )
+        {
+            if ( op_bad < 4 )
+                LOG_ERROR( "asset factory op %u (code %u, asset %u): answer %d, retail %d, or the refs / deletes / substitutes", i, code, k, answer, want );
+            ++op_bad;
+        }
+    }
+    failed += op_bad;
+    if ( failed == 0 )
+        LOG_SUCCESS( "the asset factory (assets/factory.hxx) matches retail's VuAssetFactoryImpl: %d types, %d key hashes, %u table / substitute ops, exact",
+            static_cast< int >( g_golden_asset_factory_type_count ), static_cast< int >( g_golden_asset_factory_name_count ), ops );
+    else
+        LOG_ERROR( "asset factory FAILED %d (%d ops of %u)", failed, op_bad, ops );
     return failed == 0;
 }
