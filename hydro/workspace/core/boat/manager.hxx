@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
+#include <functional>
 #include <vector>
 
 // VuBoatManager (g_vu_boat_manager 0x758FB8; ctor 0x4AAAA0, vtable 0x74533C
@@ -68,7 +70,11 @@ struct boat_manager_t
     std::int32_t viewport = 0;   // +0x58
     std::uint8_t debug_camera = 0; // +0x5C
     std::uint8_t draw_hud = 1;   // +0x2B8 ("Dev/Draw HUD")
-    std::uint8_t b2b9 = 0;       // +0x2B9
+    std::uint8_t b2b9 = 0;       // +0x2B9 (set: the lens scale stays 0.25)
+    // +0x2C0: a camera image (0x240 bytes) that overrides the boats' while
+    // set. Only the ctor / create 0x4AA980 write it (0) in what was read; who
+    // sets it is NOT ESTABLISHED.
+    const std::uint8_t* override_camera = nullptr;
 };
 
 // VuArray resize 0x415690 (thiscall n; retn 4): n > capacity -> the capacity
@@ -144,4 +150,103 @@ inline void boat_manager_remove( boat_manager_t& m, const void* boat )
     if ( v < 0 )
         v = 0;
     m.viewport = v;
+}
+
+// ---- The "Viewports" tick 0x4AB0A0 ---------------------------------------
+//
+// VuMethod1<VuBoatManager, void, float> registered by slot 5 0x4AAD70 in the
+// tick manager's "Viewports" phase (dt unused). The entries of the lists are
+// the boats' IMAGES here: the tick reads boat +0x3F8 and +0x3FC; boat +0x224
+// (its camera image's pointer) is the boat_camera hook's, +0x467 the local's.
+//   count (+0x10) != 0:
+//     override (+0x2C0) set -> its 0x240 bytes into the viewport (g
+//       0x759060 +0x28); the viewport boat stays none;
+//     else the debug-camera byte (+0x5C) -> the dev path (0x41B400, 0x52F690
+//       on dword_759430, the display size g 0x7590?? vt+0x40, VerticalFOV,
+//       0x50BBE0 with 0.5, tick manager vt+0x3C, 0x55A500) then the debug
+//       camera +0x60's bytes in - a HOOK (the dev keyboard's camera);
+//     else +0x58 >= count (signed) -> none; else the entry: null -> none;
+//       else its camera (*(boat +0x224), 0x240 bytes) in, viewport +0x278 =
+//       0.25 (when +0x2B9) or boat +0x3F8 * 0.25, then the lens-water manager
+//       g 0x759048 vt+0x2C (thiscall) with boat +0x3FC.
+//   every boat of +0x0C: +0x467 = (boat == the viewport boat) (sete).
+//   FMOD set3DListenerAttributes(0, vp +0x188, +0x48, +0x168, +0x178) (the
+//   audio device: a hook); the trigger entity's (+0x2BC) transform component
+//   (+0x50) position +0x80..+0x88 = vp +0x188..+0x190, 0x534830 then
+//   0x534C00(0) on it (the entity framework: hooks); then count != 0 ->
+//   0x531F50 on the trigger's +0x5C (register), else the trigger manager g
+//   0x759064's 0x5362A0(+0x5C) when its +0x28 byte is set, then +0x28 = 0.
+// A negative +0x58 reads before the list's block in retail: UNKNOWN (false;
+// nothing is called). 0x4AB040 / 0x4AAF60 never leave it negative.
+struct boat_viewport_hooks_t
+{
+    std::function< void( const std::uint8_t* camera ) > viewport_camera; // the override's 0x240 bytes into viewport +0x28
+    std::function< void( const void* boat ) > boat_camera;              // *(boat +0x224)'s 0x240 bytes into viewport +0x28
+    std::function< void( ) > debug_camera;                              // the +0x5C dev path, its copy included
+    std::function< void( float ) > lens_scale;                          // viewport +0x278
+    std::function< void( float ) > lens_water;                          // g 0x759048 vt+0x2C
+    std::function< void( const void* boat, std::uint8_t local ) > local; // boat +0x467
+    std::function< void( ) > listener;                                  // FMOD + the trigger's position + 0x534830 / 0x534C00(0)
+    std::function< void( bool registered ) > trigger;                   // 0x531F50 (true) / the 0x5362A0 branch (false)
+};
+
+// The source of the viewport camera the tick chose: 0 none, 1 the override,
+// 2 the debug camera, 3 the boat `boat`'s camera.
+struct boat_viewport_t
+{
+    int source = 0;
+    const void* boat = nullptr;
+};
+
+inline float boat_manager_f( const void* boat, int at )
+{
+    float v;
+    std::memcpy( &v, static_cast< const std::uint8_t* >( boat ) + at, 4 );
+    return v;
+}
+
+inline bool boat_manager_viewport_tick( const boat_manager_t& m, boat_viewport_t& out, const boat_viewport_hooks_t& hooks )
+{
+    out = {};
+    const std::int32_t count = static_cast< std::int32_t >( m.all.boats.size( ) );
+    if ( count != 0 )
+    {
+        if ( m.override_camera )
+        {
+            if ( hooks.viewport_camera )
+                hooks.viewport_camera( m.override_camera );
+            out.source = 1;
+        }
+        else if ( m.debug_camera )
+        {
+            if ( hooks.debug_camera )
+                hooks.debug_camera( );
+            out.source = 2;
+        }
+        else if ( m.viewport < 0 )
+            return false;
+        else if ( m.viewport < count && m.all.boats[ static_cast< std::size_t >( m.viewport ) ] )
+        {
+            const void* boat = m.all.boats[ static_cast< std::size_t >( m.viewport ) ];
+            if ( hooks.boat_camera )
+                hooks.boat_camera( boat );
+            float scale = 0.25f;
+            if ( !m.b2b9 )
+                scale = boat_manager_f( boat, 0x3F8 ) * 0.25f;
+            if ( hooks.lens_scale )
+                hooks.lens_scale( scale );
+            if ( hooks.lens_water )
+                hooks.lens_water( boat_manager_f( boat, 0x3FC ) );
+            out.source = 3;
+            out.boat = boat;
+        }
+    }
+    for ( const void* boat : m.all.boats )
+        if ( hooks.local )
+            hooks.local( boat, boat == out.boat ? 1 : 0 );
+    if ( hooks.listener )
+        hooks.listener( );
+    if ( hooks.trigger )
+        hooks.trigger( count != 0 );
+    return true;
 }
