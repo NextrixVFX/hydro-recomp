@@ -517,6 +517,83 @@ inline bool verify_asset_xml_dtor( )
     return failed == 0;
 }
 
+// asset_destroy( collision_mesh / fluids_mesh ) (engine assets/factory.hxx) against retail's 0x518D60 (+ unload 0x51B140) /
+// 0x5226D0 run whole on images (case asset_dtors3, cases/package.py).
+inline bool verify_asset_dtors3( )
+{
+    const unsigned* g = g_golden_asset_dtors3_words;
+    const std::uint32_t obj = 0x100, bvh = 0x400;
+    auto text_at = []( unsigned k ) { return 0x800u + 0x40u * k; };
+    auto sym = [ & ]( std::uint32_t x ) -> unsigned {
+        if ( x == 0 ) return 0;
+        if ( x == obj ) return 1;
+        if ( x == bvh ) return 2;
+        if ( x == obj + 0x38 ) return 4;
+        if ( x == text_at( 0 ) ) return 6;
+        if ( x == text_at( 1 ) ) return 7;
+        for ( unsigned k = 0; k < 8; ++k )
+            if ( x == 0x1000u + 0x100u * k ) return 0x20u + k;
+        return 0x100 + ( x & 0xFF );
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned kind = *g++, flags = *g++, clear = *g++, counter = *g++, untouched = *g++;
+        std::map< std::uint32_t, std::uint32_t > mem;
+        asset_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0x5A5A5A5Au : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        for ( std::uint32_t o = 0x58; o < 0xAC; o += 4 )
+            mem[ obj + o ] = *g++;
+        mem[ 0x759050u ] = counter;
+        const unsigned nt = *g++;
+        const std::uint32_t at[ 2 ] = { obj + 0x20, obj + 0x8 };
+        for ( unsigned k = 0; k < nt && k < 2; ++k )
+        {
+            const unsigned len = *g++;
+            const unsigned first = len != 0 ? *g : 0u;
+            g += ( len + 3 ) / 4;
+            mem[ at[ k ] ] = len < 16 ? first : text_at( k );
+            mem[ at[ k ] + 0x10 ] = len;
+            mem[ at[ k ] + 0x14 ] = len < 16 ? 15u : ( len | 15u );
+        }
+        std::vector< std::vector< unsigned > > glog( *g++ ), log;
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        const unsigned* after = g;
+        g += 3 * nt + 8;
+        asset_dtor_hooks_t h;
+        h.free_block = [ & ]( std::uint32_t a ) { log.push_back( { 1u, sym( a ) } ); };
+        h.json_clear = [ & ]( std::uint32_t a ) { log.push_back( { 2u, sym( a ) } ); };
+        h.aligned_free = [ & ]( std::uint32_t a ) { log.push_back( { 13u, sym( a ) } ); };
+        h.bt_free = [ & ]( std::uint32_t a ) { log.push_back( { 14u, sym( a ) } ); };
+        h.object_delete = [ & ]( std::uint32_t a, std::uint32_t f ) {
+            log.push_back( { 6u, sym( a ), f } );
+            if ( clear )
+                mem[ obj + 0xA8 ] = 0;
+        };
+        const std::uint32_t r = asset_destroy( static_cast< asset_dtor_kind_t >( kind ), w, obj, flags, h );
+        bool ok = log == glog && untouched == 1 && nt == 2;
+        for ( unsigned s = 0; s < nt && ok; ++s )
+            ok = ( w.get( at[ s ] ) & 0xFFu ) == after[ 3 * s ] && w.get( at[ s ] + 0x10 ) == after[ 3 * s + 1 ] && w.get( at[ s ] + 0x14 ) == after[ 3 * s + 2 ];
+        const unsigned* tail = after + 3 * nt;
+        ok = ok && w.get( obj ) == tail[ 0 ] && w.get( obj + 0x5C ) == tail[ 1 ] && w.get( obj + 0x68 ) == tail[ 2 ] && w.get( obj + 0x74 ) == tail[ 3 ]
+            && w.get( obj + 0x80 ) == tail[ 4 ] && sym( w.get( obj + 0xA8 ) ) == tail[ 5 ] && w.get( 0x759050u ) == tail[ 6 ] && ( r == obj ? 1u : 0u ) == tail[ 7 ];
+        if ( !ok && ++failed <= 4 )
+            LOG_ERROR( "mesh asset dtor vector %u (kind %u flags %u) differs from retail: %d log entries, retail %d", v, kind, flags,
+                static_cast< int >( log.size( ) ), static_cast< int >( glog.size( ) ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "asset_destroy matches retail's 0x518D60 (+ 0x51B140) / 0x5226D0 on %u images: the hook log, every string, the counts, +0xA8, gNumAlignedFree, eax", nv );
+    else
+        LOG_ERROR( "asset_destroy (mesh dtors) FAILED %d of %u against 0x518D60 / 0x5226D0", failed, nv );
+    return failed == 0;
+}
+
 // The asset properties' virtuals (engine assets/factory.hxx) against retail's 0x423860 / 0x423870 / 0x423890 / 0x506BB0 /
 // 0x506BE0 / 0x506B30 run whole (case asset_props, cases/package.py): eax, the hook log, +0 after the dtor.
 inline bool verify_asset_props( )

@@ -561,6 +561,8 @@ struct asset_dtor_hooks_t
     std::function< void( std::uint32_t, std::uint32_t ) > object_delete;   // an object's slot 0 ( object, flags )
     std::function< void( std::uint32_t ) > free_array;        // operator delete[] (0x64C148's import)
     std::function< void( std::uint32_t ) > xml_node_dtor;     // TiXmlNode's dtor 0x5AA280 ( node )
+    std::function< void( std::uint32_t ) > aligned_free;      // _aligned_free (0x64C15C's import)
+    std::function< void( std::uint32_t ) > bt_free;           // the btAlignedFree pointer [0x7358AC] ( block )
 };
 
 enum class asset_dtor_kind_t
@@ -574,6 +576,8 @@ enum class asset_dtor_kind_t
     db,                  // 0x55C230
     timed_event,         // 0x5C8C70
     xml,                 // 0x5C78F0
+    collision_mesh,      // 0x518D60
+    fluids_mesh,         // 0x5226D0
 };
 
 inline void asset_string_reset( const asset_words_t& w, std::uint32_t at, const asset_dtor_hooks_t& h )
@@ -630,6 +634,9 @@ inline void substitute_entity_dtor( const asset_words_t& w, std::uint32_t self, 
 //            next each node's +0x28, read before the delete - deleted through their slot 0 ( 1 ); +0x70 / +0x74 = 0;
 //            +0x58 = 0x750F2C; the +0x8C TiXmlString's rep freed (operator delete[]) unless it is the null rep 0x759104
 //            (+0x8C is left as it was); TiXmlNode's dtor 0x5AA280 on +0x58 (TinyXML: a hook).
+//   0x518D60 VuCollisionMeshAsset: +0 = 0x74CC3C; its unload 0x51B140 (collision_mesh_unload_words - the word twin of
+//            boat meshes.hxx's); _aligned_free of +0x7C, +0x70, +0x64, +0x58 (the pointers are not cleared).
+//   0x5226D0 VuFluidsMeshAsset: +0 = 0x74CDDC; _aligned_free of +0x90, +0x84, +0x78.
 inline void asset_events_destroy( const asset_words_t& w, std::uint32_t first, std::uint32_t last, const asset_dtor_hooks_t& h )
 {
     for ( std::uint32_t e = first; e != last; e += 0x30 )   // 0x5C9D20 (fastcall first, last)
@@ -637,6 +644,27 @@ inline void asset_events_destroy( const asset_words_t& w, std::uint32_t first, s
         if ( h.json_clear )
             h.json_clear( e + 0x20 );
         asset_string_reset( w, e + 4, h );
+    }
+}
+
+// 0x51B140: VuCollisionMeshAsset's unload (slot 6) - the four array counts +0x5C / +0x68 / +0x74 / +0x80 = 0; a +0xA8
+// VuOptimizedBvh deleted through its slot 0 ( 0 ), then +0xA8 READ AGAIN and, when still set, gNumAlignedFree 0x759050
+// += 1 and the btAlignedFree pointer [0x7358AC] called on it; +0xA8 = 0 (only when it was set at first).
+inline void collision_mesh_unload_words( const asset_words_t& w, std::uint32_t self, const asset_dtor_hooks_t& h )
+{
+    for ( std::uint32_t at : { 0x5Cu, 0x68u, 0x74u, 0x80u } )
+        w.put( self + at, 0u );
+    if ( const std::uint32_t bvh = w.get( self + 0xA8 ) )
+    {
+        if ( h.object_delete )
+            h.object_delete( bvh, 0u );
+        if ( const std::uint32_t again = w.get( self + 0xA8 ) )
+        {
+            w.put( 0x759050u, w.get( 0x759050u ) + 1u );
+            if ( h.bt_free )
+                h.bt_free( again );
+        }
+        w.put( self + 0xA8, 0u );
     }
 }
 
@@ -683,6 +711,19 @@ inline void asset_class_dtor( asset_dtor_kind_t kind, const asset_words_t& w, st
                 w.put( self + at, 0u );
         }
         break;
+    case asset_dtor_kind_t::collision_mesh:
+        w.put( self, 0x74CC3Cu );
+        collision_mesh_unload_words( w, self, h );
+        for ( std::uint32_t at : { 0x7Cu, 0x70u, 0x64u, 0x58u } )
+            if ( h.aligned_free )
+                h.aligned_free( w.get( self + at ) );
+        break;
+    case asset_dtor_kind_t::fluids_mesh:
+        w.put( self, 0x74CDDCu );
+        for ( std::uint32_t at : { 0x90u, 0x84u, 0x78u } )
+            if ( h.aligned_free )
+                h.aligned_free( w.get( self + at ) );
+        break;
     case asset_dtor_kind_t::xml:
         w.put( self, 0x752458u );
         for ( std::uint32_t n = w.get( self + 0x70 ); n != 0; )
@@ -706,7 +747,8 @@ inline void asset_class_dtor( asset_dtor_kind_t kind, const asset_words_t& w, st
     asset_base_dtor( w, self, h );
 }
 
-// 0x515D70 / 0x53FD10 / 0x5F4AB0 / 0x515E10 / 0x554E90 / 0x55C1E0 / 0x55C230 / 0x5C8C70 / 0x5C78F0: the scalar-deleting dtors.
+// 0x515D70 / 0x53FD10 / 0x5F4AB0 / 0x515E10 / 0x554E90 / 0x55C1E0 / 0x55C230 / 0x5C8C70 / 0x5C78F0 / 0x518D60 / 0x5226D0: the
+// scalar-deleting dtors.
 inline std::uint32_t asset_destroy( asset_dtor_kind_t kind, const asset_words_t& w, std::uint32_t self, std::uint32_t flags,
                                     const asset_dtor_hooks_t& h )
 {
