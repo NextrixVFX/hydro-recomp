@@ -184,6 +184,7 @@
     <ClInclude Include="workspace\core\ui\screen.hxx" />
     <ClInclude Include="workspace\core\ui\select.hxx" />
     <ClInclude Include="workspace\core\ui\slider.hxx" />
+    <ClInclude Include="workspace\core\ui\split.hxx" />
     <ClInclude Include="workspace\core\ui\ticker.hxx" />
     <ClInclude Include="workspace\core\ui\wiring.hxx" />
     <ClInclude Include="workspace\core\world\animate.hxx" />
