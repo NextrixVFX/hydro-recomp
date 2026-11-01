@@ -273,6 +273,12 @@ inline void c_world::race_broadcast( const char* name, const ui_params_t* params
         LOG_INFO( "race: OnStartLightsOut broadcast (sync %d) - the race starts on the next game tick", m_race.dynamics ? m_race.dynamics->syncs : -1 );
         return;
     }
+    if ( std::strcmp( name, k_buoy_hit_event ) == 0 )
+    {
+        // VuRaceGame's subscriber 0x48A7B0 (world/rules.hxx race_rules_on_buoy_hit) on the VuParams 0x4350B0 built.
+        race_rules_on_buoy_hit( m_race.rules, p.m_bytes, p.m_size );
+        return;
+    }
     race_unwired( m_race, std::string( "a broadcast with no subscriber recreated: " ) + name );
 }
 

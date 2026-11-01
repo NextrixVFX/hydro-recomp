@@ -18,6 +18,8 @@
 #include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/pfxmgr.hxx>
 #include <workspace/core/world/pfxsim.hxx>
+#include <workspace/core/world/dynprop.hxx>
+#include <workspace/core/world/race.hxx>
 #include <workspace/core/world/rules.hxx>
 #include <workspace/core/world/start.hxx>
 #include <workspace/core/world/tick.hxx>
@@ -183,6 +185,23 @@ struct race_session_t
     // The level's static bodies (world/bodies.hxx) and their collision mesh assets.
     boat_mesh_library_t level_meshes;
     std::vector< std::unique_ptr< level_body_t > > level_bodies;
+    // The level's dynamic game props made live (world/dynprop.hxx): their bodies are in level_bodies too.
+    struct dyn_prop_t
+    {
+        entity_t* entity = nullptr;
+        dynamic_prop_t* p = nullptr;
+        rigid_component_t* c = nullptr;
+        level_body_t* body = nullptr;
+        dynamic_prop_live_t live;
+        dynamic_prop_motion_t motion;
+        dynamic_prop_init_t init;
+        bool buoy = false;
+        float timer = 0.0f;              // +0x17C (the Decision tick's)
+        std::uint8_t step_tag = 0;       // the entity's +0xB0 part: the step callback's identity in +0x48
+        race_session_t* session = nullptr;
+    };
+    std::vector< std::unique_ptr< dyn_prop_t > > dyn_props;
+    int buoy_hits = 0;                   // dev count (not retail): OnCheckPointBuoyHit broadcasts made
     // The gfx-settings blender g 0x759430 (world/blend.hxx; 0x52F620 at the session's start) and the level's gfx-settings
     // entities' blend views (the zones in its list; the global's not listed - its timer only), made by their gameInitialize.
     gfx_blender_t blender;
@@ -567,6 +586,115 @@ inline bool race_session_gfx_game_initialize( race_session_t& s, entity_t& e )
     return true;
 }
 
+// The Decision tick of a dynamic game prop (0x4077E8 -> vt+0x40 slot 16 0x438260, READ from the disassembly):
+// +0x17C += dt; a pending hit (+0x164 - set only by the base contact callback 0x437F40, not recreated: never set
+// here) would send its +0x174 target the camera-shake / rumble events (0x5155C0) and play the Sfx Name (FMOD - an
+// audio hook); a pending splash (+0x181) is cleared and the Splash Pfx Name created by g 0x75905C's 0x52BCD0 at the
+// transform's position - the particle create is not wired here (logged, UNKNOWN).
+inline void race_session_dyn_prop_decision( void* user, float dt )
+{
+    race_session_t::dyn_prop_t& d = *static_cast< race_session_t::dyn_prop_t* >( user );
+    d.timer = sse_add( dt, d.timer );
+    if ( d.live.splash )
+    {
+        d.live.splash = 0;
+        race_unwired( *d.session, "a dynamic prop's splash pfx (g 0x75905C 0x52BCD0, '" + d.p->splash_pfx + "') - not wired, not created (UNKNOWN)" );
+    }
+}
+
+// One dynamic game prop's gameInitialize (world/dynprop.hxx, verified by the cases dynamic_prop_bodies /
+// dynamic_prop_step) made live: postLoad 0x5459F0's component step (retail runs it at load; nothing reads the
+// component in between), 0x437580, the body into the dynamics world (vt+0x3C), the motion state's
+// setWorldTransform (vt+8 0x545CF0: world = translation(-centre) x 0x410B40(the body) -> the transform's
+// setWorldTransform steps, entity_set_world; its last call, the +0x68 attach component's vt+0x38, is a hook not
+// run), the step callback (vt+0x2C: slot 0 0x410B30 a ret 8, slot 1 0x437730 with the world's water) and the
+// Decision tick. The show's anchor (+0x144 = the world's translation, +0x154 = 0x531000 of it). The Build tick
+// 0x546130 (the draw matrix for the renderer) is not registered: the renderer is not fed from it (a hook).
+inline bool race_session_dynamic_prop( race_session_t& s, entity_t& e, const bodies_hooks_t& hooks, std::uint32_t& id )
+{
+    race_dynamics_t& dyn = *s.dynamics;
+    rigid_component_state_t* rs = nullptr;
+    for ( entity_component_t& c : e.m_components )
+        if ( c.m_vtable == k_rigid_body_component_vtable )
+            rs = static_cast< rigid_component_state_t* >( c.m_state.get( ) );
+    transform_component_t* t = entity_transform( e );
+    if ( !rs || !t || !e.m_state || e.m_world_unknown )
+    {
+        race_unwired( s, "a dynamic game prop without its component state / known world - gameInitialize 0x437580 not run (UNKNOWN)" );
+        return false;
+    }
+    auto d = std::make_unique< race_session_t::dyn_prop_t >( );
+    d->entity = &e;
+    d->session = &s;
+    d->p = &static_cast< dynamic_prop_state_t* >( e.m_state.get( ) )->value;
+    d->buoy = static_cast< dynamic_prop_state_t* >( e.m_state.get( ) )->buoy;
+    d->c = &rs->value;
+    dynamic_prop_post_load( *d->p, *d->c );
+    const collision_mesh_asset_t* asset = nullptr;
+    if ( ( d->c->collision_type == 6 || d->c->collision_type == 7 ) && !d->c->mesh_asset.empty( ) &&
+         boat_mesh_exists( &s.level_meshes, "VuCollisionMeshAsset", d->c->mesh_asset ) )
+        asset = s.level_meshes.collision_of( boat_mesh_create( &s.level_meshes, "VuCollisionMeshAsset", d->c->mesh_asset ) );
+    auto b = std::make_unique< level_body_t >( );
+    b->name = e.m_name;
+    d->body = b.get( );
+    std::string why;
+    if ( !dynamic_prop_game_initialize( *b, *d->c, *d->p, *t, asset, id, hooks, d->motion, d->init, why ) )
+    {
+        race_unwired( s, e.m_type + " '" + e.m_name + "': " + why + " (UNKNOWN, no body)" );
+        return false;
+    }
+    std::memcpy( d->live.anchor, t->world + 12, 12 );
+    quat_from_rows( d->live.anchor_q, t->world );
+    level_body_t* lb = b.get( );
+    race_session_t::dyn_prop_t* dp = d.get( );
+    if ( d->init.added )
+    {
+        dyn.objects[ &lb->body ] = &lb->collision;
+        if ( !vu_dynamics_add_rigid_body( dyn.impl, lb->body ) )
+            race_unwired( s, "addRigidBody (g_vudynamicsimpl vt+0x3C) refused a dynamic prop's body" );
+    }
+    dyn.motion[ &lb->body.body ] = [ &s, dp ]( const float* basis, const float* origin ) {
+        float m[ 16 ], tr[ 16 ], world[ 16 ];
+        for ( int row = 0; row < 3; ++row )
+        {
+            for ( int k = 0; k < 3; ++k )
+                m[ 4 * row + k ] = basis[ 4 * k + row ];
+            m[ 4 * row + 3 ] = 0.0f;
+        }
+        std::memcpy( m + 12, origin, 12 );
+        m[ 15 ] = 1.0f;
+        vu_identity( tr );
+        tr[ 12 ] = dp_neg( dp->c->centre[ 0 ] );
+        tr[ 13 ] = dp_neg( dp->c->centre[ 1 ] );
+        tr[ 14 ] = dp_neg( dp->c->centre[ 2 ] );
+        hull_multiply( tr, world, m );
+        if ( !entity_set_world( *dp->entity, world, false, { } ) )
+            race_unwired( s, "a dynamic prop's setWorldTransform 0x545CF0 on an entity whose world is not modelled - UNKNOWN, not written" );
+    };
+    if ( d->init.step_callback )
+    {
+        void* tag = &dp->step_tag;
+        race_step_callback_t cb;
+        cb.slot0 = []( float, bool ) {};   // 0x410B30: ret 8
+        cb.slot1 = [ &s, dp ]( float ) {
+            const dynamic_prop_water_fn water = [ &s ]( const float* point, water_vertex_t& out ) {
+                out = water_vertex_t{ };
+                return s.world.view && water_point_height( s.world.view->water, point, water_view_kernel, const_cast< water_view_t* >( s.world.view ), out );
+            };
+            if ( !dynamic_prop_step( *dp->p, dp->live, dp->c->centre, reinterpret_cast< std::uint8_t* >( &dp->body->body ), water ) )
+                race_unwired( s, "a dynamic prop's step callback 0x437730: the water query 0x529140 reached a path not recreated / no VuWater view - its forces UNKNOWN" );
+        };
+        dyn.callbacks[ tag ] = cb;
+        if ( !vu_dynamics_add_step_callback( dyn.impl, tag ) )
+            race_unwired( s, "g_vudynamicsimpl vt+0x2C refused a dynamic prop's step callback" );
+    }
+    if ( d->init.decision_tick )
+        tick_register( s.ticks, { dp, race_session_dyn_prop_decision, dp }, "Decision" );
+    s.level_bodies.push_back( std::move( b ) );
+    s.dyn_props.push_back( std::move( d ) );
+    return true;
+}
+
 inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const c_archive& archive )
 {
     if ( !s.dynamics )
@@ -586,13 +714,19 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
     hooks.gravity = []( void* u, float* g ) { std::memcpy( g, static_cast< race_session_t* >( u )->dynamics->world.gravity, 12 ); };
     std::uint32_t id = static_cast< std::uint32_t >( s.boats.size( ) );
     std::map< std::string, int > unknown;
-    int added = 0;
+    int added = 0, dynamic = 0;
     const auto walk = [ & ]( const auto& self, entity_t& e ) -> void
     {
         for ( auto& c : e.m_children )
             self( self, *c );
         if ( race_session_gfx_game_initialize( s, e ) )
             return;
+        if ( dynamic_prop_class( e.m_type ) )
+        {
+            if ( race_session_dynamic_prop( s, e, hooks, id ) )
+                ++dynamic;
+            return;
+        }
         if ( e.m_type != "VuPropEntity" )
         {
             ++unknown[ e.m_type.empty( ) ? std::string( "(UNKNOWN node)" ) : e.m_type ];
@@ -630,7 +764,7 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
         s.level_bodies.push_back( std::move( b ) );
     };
     walk( walk, tree );
-    LOG_INFO( "race: the level's gameInitialize: %d static bodies added to the dynamics world (VuPropEntity 0x546910)", added );
+    LOG_INFO( "race: the level's gameInitialize: %d static bodies added to the dynamics world (VuPropEntity 0x546910), %d dynamic game props live (0x437580)", added, dynamic );
     std::string rest;
     for ( const auto& u : unknown )
         rest += ( rest.empty( ) ? "" : ", " ) + u.first + " x" + std::to_string( u.second );
@@ -693,6 +827,11 @@ inline void race_session_dev_trace( const race_session_t& s, int before )
         LOG_VERBOSE( "race (dev trace): sync %d: VuWater holds %d wave record(s), %d live wake / flat wake (water_live_wakes)", n,
                      static_cast< int >( s.world.water->waves.size( ) ), wakes );
     }
+    // The live dynamic props (dev trace): each one's transform world position, in water, OnCheckPointBuoyHit so far.
+    for ( const auto& dp : s.dyn_props )
+        if ( const transform_component_t* t = entity_transform( *dp->entity ) )
+            LOG_VERBOSE( "race (dev trace): sync %d: dynamic prop '%s' at (%.3f, %.3f, %.3f) in water %d (buoy hits so far %d)", n,
+                         dp->entity->m_name.c_str( ), t->world[ 12 ], t->world[ 13 ], t->world[ 14 ], dp->live.in_water, s.buoy_hits );
     for ( const auto& b : s.boats )
     {
         const std::uint8_t* t = race_session_image( *b, 0, 0x50 );
