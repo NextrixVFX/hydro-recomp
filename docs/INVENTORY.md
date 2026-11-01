@@ -18,10 +18,10 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 2477 | 910233 |
-| callee | 717 | 172977 |
-| cited | 561 | 165544 |
-| absent | 4883 | 977506 |
+| verified | 2489 | 913867 |
+| callee | 716 | 172690 |
+| cited | 555 | 163138 |
+| absent | 4878 | 976565 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -30,14 +30,14 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 
 | subsystem | functions | verified | callee | cited | absent | verified bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| unattributed | 1845 | 488 | 247 | 136 | 974 | 291777 of 695394 |
+| unattributed | 1845 | 492 | 247 | 132 | 974 | 293970 of 695394 |
 | physics (Bullet) | 646 | 436 | 17 | 48 | 145 | 127640 of 256657 |
 | entity / component / script framework | 1094 | 372 | 133 | 67 | 522 | 101834 of 207438 |
-| HUD / UI / fonts | 648 | 181 | 79 | 49 | 339 | 77816 of 184315 |
+| HUD / UI / fonts | 648 | 188 | 79 | 47 | 334 | 78970 of 184315 |
 | game modes / race | 766 | 123 | 40 | 50 | 553 | 61113 of 179957 |
 | rendering / gfx | 552 | 98 | 35 | 44 | 375 | 32671 of 126915 |
 | water | 325 | 207 | 31 | 38 | 49 | 59497 of 96416 |
-| boat | 264 | 187 | 23 | 22 | 32 | 69005 of 87400 |
+| boat | 264 | 188 | 22 | 22 | 32 | 69292 of 87400 |
 | engine core / math / containers | 391 | 45 | 13 | 24 | 309 | 9926 of 76072 |
 | other classes | 731 | 12 | 3 | 3 | 713 | 6660 of 67698 |
 | assets | 286 | 64 | 30 | 24 | 168 | 9812 of 61239 |
@@ -58,8 +58,8 @@ Over-approximate (a referenced vtable brings every slot) and under-approximate (
 
 | tier | functions | verified | callee | cited | absent | runtime / STL / thunk | platform layer | game + engine logic not verified |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| race | 4905 | 1959 | 507 | 443 | 1996 | 68 | 610 | 2403 |
-| game | 2431 | 516 | 208 | 116 | 1591 | 77 | 313 | 1537 |
+| race | 4905 | 1960 | 506 | 443 | 1996 | 68 | 610 | 2402 |
+| game | 2431 | 527 | 208 | 110 | 1586 | 77 | 313 | 1526 |
 | service | 452 | 0 | 0 | 0 | 452 | 45 | 98 | 309 |
 | dead | 850 | 2 | 2 | 2 | 844 | 61 | 126 | 661 |
 

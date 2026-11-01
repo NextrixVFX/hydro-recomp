@@ -727,7 +727,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4300C0,150,sub_4300C0,,,boat (by address),verified,hydro/workspace/core/boat/nuisance.hxx,False,False,race
 0x430160,235,sub_430160,,,boat (by address),verified,hydro/workspace/core/boat/nuisance.hxx,False,False,race
 0x430250,54,sub_430250,,,boat (by address),callee,,False,False,race
-0x430290,287,sub_430290,,,boat (by address),callee,,False,False,race
+0x430290,287,sub_430290,,,boat (by address),verified,hydro/workspace/core/ui/ladder.hxx,False,False,race
 0x4303B0,100,sub_4303B0,,,boat (by address),callee,,False,False,race
 0x430420,237,sub_430420,,,boat (by address),verified,hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
 0x430510,6,sub_430510,VuAIUIDriverStartEntity,VuAIUIDriverStartEntity+1,boat,verified,hydro/workspace/core/boat/rtti.hxx,False,False,game
@@ -1710,25 +1710,25 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x477DC0,6,sub_477DC0,VuUILeaderboardEntity,VuUILeaderboardEntity+1,HUD / UI / fonts,absent,,False,False,game
 0x477DD0,117,sub_477DD0,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/game/types.hxx,False,False,game
 0x477E50,384,sub_477E50,,,HUD / UI / fonts (by address),callee,,False,False,game
-0x477FD0,6874,VuDBAsset_load_References_0,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
+0x477FD0,6874,VuDBAsset_load_References_0,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
 0x479AB0,34,sub_479AB0,VuUILeaderboardEntity,VuUILeaderboardEntity+0,HUD / UI / fonts,absent,,False,False,game
 0x479AE0,363,sub_479AE0,,,HUD / UI / fonts (by address),absent,,False,False,game
-0x479C50,150,sub_479C50,VuUILeaderboardEntity,VuUILeaderboardEntity+6,HUD / UI / fonts,cited,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/ladder.hxx,False,False,game
-0x479CF0,63,sub_479CF0,VuUILeaderboardEntity,VuUILeaderboardEntity+7,HUD / UI / fonts,cited,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/ladder.hxx,False,False,game
-0x479D30,244,sub_479D30,VuUILeaderboardEntity,VuUILeaderboardEntity+0,HUD / UI / fonts,absent,,False,False,game
-0x479E30,10,sub_479E30,VuUILeaderboardEntity,VuUILeaderboardEntity+1,HUD / UI / fonts,absent,,False,False,game
-0x479E40,255,sub_479E40,VuUILeaderboardEntity,VuUILeaderboardEntity+2,HUD / UI / fonts,absent,,False,False,game
+0x479C50,150,sub_479C50,VuUILeaderboardEntity,VuUILeaderboardEntity+6,HUD / UI / fonts,verified,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
+0x479CF0,63,sub_479CF0,VuUILeaderboardEntity,VuUILeaderboardEntity+7,HUD / UI / fonts,verified,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
+0x479D30,244,sub_479D30,VuUILeaderboardEntity,VuUILeaderboardEntity+0,HUD / UI / fonts,verified,hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
+0x479E30,10,sub_479E30,VuUILeaderboardEntity,VuUILeaderboardEntity+1,HUD / UI / fonts,verified,hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
+0x479E40,255,sub_479E40,VuUILeaderboardEntity,VuUILeaderboardEntity+2,HUD / UI / fonts,verified,hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
 0x479F40,504,sub_479F40,VuUILeaderboardEntity,VuUILeaderboardEntity+12,HUD / UI / fonts,absent,,False,False,game
 0x47A140,100,sub_47A140,,,HUD / UI / fonts (by address),absent,,False,False,game
-0x47A1B0,208,sub_47A1B0,,,HUD / UI / fonts (by address),absent,,False,False,game
-0x47A280,224,sub_47A280,,,HUD / UI / fonts (by address),absent,,False,False,game
+0x47A1B0,208,sub_47A1B0,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
+0x47A280,224,sub_47A280,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
 0x47A360,1451,sub_47A360,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/frame.hxx; hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
 0x47A910,3159,sub_47A910,,,unattributed,absent,,False,False,game
 0x47B570,201,sub_47B570,,,unattributed,verified,hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
-0x47B640,1613,sub_47B640,,,unattributed,cited,hydro/workspace/core/ui/ladder.hxx,False,False,game
-0x47BC90,474,VuDBAsset_load_Choices,,,unattributed,cited,hydro/workspace/core/ui/ladder.hxx,False,False,game
-0x47BE70,41,sub_47BE70,,,unattributed,cited,hydro/workspace/core/ui/ladder.hxx,False,False,game
-0x47BEA0,65,sub_47BEA0,,,unattributed,cited,hydro/workspace/core/ui/ladder.hxx,False,False,game
+0x47B640,1613,sub_47B640,,,unattributed,verified,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
+0x47BC90,474,VuDBAsset_load_Choices,,,unattributed,verified,hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
+0x47BE70,41,sub_47BE70,,,unattributed,verified,hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
+0x47BEA0,65,sub_47BEA0,,,unattributed,verified,hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
 0x47BEF0,153,sub_47BEF0,,,unattributed,verified,hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
 0x47BF90,1932,sub_47BF90,,,unattributed,verified,hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
 0x47C720,153,sub_47C720,,,unattributed,verified,hydro/workspace/core/ui/ladder.hxx; hydro/workspace/utility/checks/results.hxx,False,False,game
@@ -5477,10 +5477,10 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x53F5E0,501,sub_53F5E0,,,unattributed,verified,hydro/workspace/core/ui/hud.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x53F800,279,sub_53F800,,,unattributed,absent,,False,False,game
 0x53F920,318,sub_53F920,,,unattributed,absent,,False,False,game
-0x53FA60,122,sub_53FA60,,,unattributed,verified,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/chooser.hxx; hydro/workspace/core/ui/controls.hxx; hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/update.hxx,False,False,race
+0x53FA60,122,sub_53FA60,,,unattributed,verified,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/chooser.hxx; hydro/workspace/core/ui/controls.hxx; hydro/workspace/core/ui/ladder.hxx; hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/update.hxx,False,False,race
 0x53FAE0,81,sub_53FAE0,,,unattributed,verified,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/controls.hxx; hydro/workspace/utility/checks/results.hxx,False,False,race
 0x53FB40,66,sub_53FB40,,,unattributed,absent,,False,False,game
-0x53FB90,112,sub_53FB90,,,unattributed,verified,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/chooser.hxx; hydro/workspace/core/ui/controls.hxx; hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/update.hxx,False,False,race
+0x53FB90,112,sub_53FB90,,,unattributed,verified,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/chooser.hxx; hydro/workspace/core/ui/controls.hxx; hydro/workspace/core/ui/ladder.hxx; hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/update.hxx,False,False,race
 0x53FC00,101,sub_53FC00,,,unattributed,callee,,False,False,race
 0x53FC70,154,sub_53FC70,,,unattributed,callee,,False,False,race
 0x53FD10,34,sub_53FD10,VuBaseAssetProperty,VuBaseAssetProperty+0,assets,absent,,False,False,race
@@ -5798,7 +5798,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x555740,265,sub_555740,,,rendering / gfx (by address),absent,,False,False,race
 0x555850,194,sub_555850,,,rendering / gfx (by address),verified,hydro/workspace/core/ui/fsm.hxx; hydro/workspace/core/world/rules.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x555920,424,sub_555920,,,rendering / gfx (by address),verified,hydro/workspace/core/ui/fsm.hxx; hydro/workspace/core/world/rules.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
-0x555AD0,239,sub_555AD0,,,rendering / gfx (by address),verified,hydro/workspace/core/ui/board.hxx; hydro/workspace/core/ui/fsm.hxx; hydro/workspace/core/world/action.hxx; hydro/workspace/core/world/rules.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
+0x555AD0,239,sub_555AD0,,,rendering / gfx (by address),verified,hydro/workspace/core/ui/board.hxx; hydro/workspace/core/ui/fsm.hxx; hydro/workspace/core/ui/ladder.hxx; hydro/workspace/core/world/action.hxx; hydro/workspace/core/world/rules.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x555BC0,51,sub_555BC0,,,rendering / gfx (by address),cited,hydro/workspace/core/ui/fsm.hxx,False,False,race
 0x555C00,96,sub_555C00,,,rendering / gfx (by address),verified,hydro/workspace/core/ui/fsm.hxx,False,False,race
 0x555C60,85,sub_555C60,,,rendering / gfx (by address),verified,hydro/workspace/core/ui/fsm.hxx; hydro/workspace/core/ui/split.hxx; hydro/workspace/core/world/rules.hxx; hydro/workspace/utility/checks/update.hxx,False,False,race
