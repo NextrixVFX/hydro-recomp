@@ -1796,9 +1796,59 @@ inline bool verify_ui_minimap_draw( )
     return failed == 0;
 }
 
+// ui_container_draw (core/ui compose.hxx) against retail's VuUIContainerEntity
+// draw 0x62F7E0 (oracle case container_draw) on every container of OUR loaded
+// trees (same project, pre-order index): the child draws reached in order -
+// child, component index, alpha bits.
+inline bool verify_ui_container_draw( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0, calls = 0;
+    for ( std::size_t r = 0; r < g_golden_con_runs_count; ++r )
+    {
+        const golden_con_run_t& run = g_golden_con_runs[ r ];
+        const entity_t* e = nullptr;
+        for ( std::size_t p = 0; p < g_golden_ui_projects_count && !e; ++p )
+            if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, run.m_project ) == 0 && run.m_index < static_cast< int >( loaded.trees[ p ].size( ) ) )
+                e = loaded.trees[ p ][ static_cast< std::size_t >( run.m_index ) ].second;
+        bool same = e && e->m_children.size( ) == static_cast< std::size_t >( run.m_children );
+        int at = 0;
+        float alpha;
+        std::memcpy( &alpha, &run.m_alpha, 4 );
+        if ( same )
+            ui_container_draw( *e, alpha, [ & ]( const entity_t& child, int component, float a )
+            {
+                if ( at >= run.m_calls )
+                {
+                    same = false;
+                    return;
+                }
+                const golden_con_call_t& want = g_golden_con_calls[ run.m_first + at++ ];
+                int index = -1;
+                for ( std::size_t k = 0; k < e->m_children.size( ); ++k )
+                    if ( e->m_children[ k ].get( ) == &child )
+                        index = static_cast< int >( k );
+                std::uint32_t bits;
+                std::memcpy( &bits, &a, 4 );
+                same = same && index == want.m_child && component == want.m_component && bits == want.m_alpha;
+                ++calls;
+            } );
+        if ( !( same && at == run.m_calls ) && ++failed <= 8 )
+            LOG_ERROR( "ui container draw: %s entity %d reached %d child draws, retail %d - or a call differs", run.m_project, run.m_index, at, run.m_calls );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_container_draw matches retail's VuUIContainerEntity draw 0x62F7E0 (0x628070) on %d runs over the loaded containers: "
+                     "%d child draws - child, component, alpha",
+            static_cast< int >( g_golden_con_runs_count ), calls );
+    else
+        LOG_ERROR( "the container draw FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_container_draw( ) && ok;
     ok = verify_ui_font_params( ) && ok;
     ok = verify_ui_minimap_draw( ) && ok;
     ok = verify_ui_speedometer_draw( ) && ok;

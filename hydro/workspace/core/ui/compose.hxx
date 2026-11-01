@@ -59,6 +59,14 @@ inline void ui_draw_children( const entity_t& e, float alpha, const std::functio
     }
 }
 
+// VuUIContainerEntity's draw (ctor 0x62F880, vtable 0x6F74F0; its draw
+// component's delegate 0x6F7524 -> 0x404A00) 0x62F7E0: the alpha into xmm1,
+// then the child walk 0x628070 - nothing else.
+inline void ui_container_draw( const entity_t& e, float alpha, const std::function< void( const entity_t&, int, float ) >& draw )
+{
+    ui_draw_children( e, alpha, draw );
+}
+
 // 0x423A70's key bits on VuGfxSort +0x74 (+0x70 re-stored unchanged).
 inline std::uint32_t ui_hud_key_hi( std::uint32_t hi )
 {
