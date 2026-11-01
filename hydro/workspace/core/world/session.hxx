@@ -1229,6 +1229,7 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
             asset = s.level_meshes.collision_of( boat_mesh_create( &s.level_meshes, "VuCollisionMeshAsset", c.mesh_asset ) );
         auto b = std::make_unique< level_body_t >( );
         b->name = e.m_name;
+        b->owner = &e;
         level_body_t* bp = b.get( );
         std::string why;
         const std::uint8_t visible = breakable ? static_cast< breakable_state_t* >( e.m_state.get( ) )->value.visible

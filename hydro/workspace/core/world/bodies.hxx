@@ -53,6 +53,8 @@ struct level_body_t
     collision_object_t collision{ };
     std::uint32_t flags_d8 = 0;                      // component +0xD8 after the build
     bool in_world = false;                           // component +0x104
+    const void* owner = nullptr;                     // the owning entity (the session's: its Show / Hide plugs)
+    bool built = false;                              // a body exists (component +0x100 non-null)
     level_body_t( ) = default;
     level_body_t( const level_body_t& ) = delete;    // the compound holds a pointer to its own child
     level_body_t& operator=( const level_body_t& ) = delete;
@@ -393,6 +395,7 @@ inline bool bodies_prop_game_initialize( level_body_t& b, rigid_component_t& c, 
     bool built = false;
     if ( !bodies_create( b, c, asset, world, scale, unique_id, hooks, why, built ) )
         return false;
+    b.built = built;
     if ( visible )
     {
         draw( );

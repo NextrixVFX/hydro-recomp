@@ -1195,6 +1195,32 @@ inline void race_drive_sync_target( race_session_t& s, int child )
 // True when the plug is one of these (consumed); false: not a race-side receiver.
 inline bool race_event_dispatch( race_session_t& s, const std::string& entity, const std::string& plug, const std::uint8_t* params )
 {
+    // VuPropEntity's inputs (ctor 0x5464C0, plug inits 0x546EE0): "Show" 0x546380 - the static model component (+0x70) onto
+    // the 3D draw manager unless its +0x1E, the body (+0x74 -> +0x100) into the dynamics world unless added (+0x104);
+    // "Hide" 0x5463E0 - the reverse. VuRetVal 0. (The draw manager is the renderer's: prop_drawn.)
+    if ( plug == "Show" || plug == "Hide" )
+        for ( const auto& lb : s.level_bodies )
+        {
+            const entity_t* o = static_cast< const entity_t* >( lb->owner );
+            if ( !o || ( o->m_type != "VuPropEntity" && o->m_type != "VuBreakablePropEntity" ) )
+                continue;
+            std::string path;
+            for ( const entity_t* e = o; e && e->m_parent; e = e->m_parent )
+                path = path.empty( ) ? e->m_name : e->m_name + "/" + path;
+            if ( path != entity )
+                continue;
+            const bool show = plug == "Show";
+            if ( s.world.prop_drawn )
+                s.world.prop_drawn( *o, show );
+            if ( show && !lb->in_world && lb->built )
+                lb->in_world = vu_dynamics_add_rigid_body( s.dynamics->impl, lb->body );
+            else if ( !show && lb->in_world )
+            {
+                vu_dynamics_remove_rigid_body( s.dynamics->impl, lb->body );
+                lb->in_world = false;
+            }
+            return true;
+        }
     // VuKeyframeMotionEntity's (VuMotionEntity's) inputs "Activate" 0x61A4F0 / "Deactivate" 0x61A5D0 (world/keymotion.hxx).
     if ( plug == "Activate" || plug == "Deactivate" )
         for ( const auto& kp : s.key_motions )
