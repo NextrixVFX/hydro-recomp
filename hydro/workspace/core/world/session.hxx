@@ -295,7 +295,7 @@ inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb
     io.boat = boat;
     io.boat_address = 0;   // retail's allocation address: read only by the shape (after the mesh - not reached)
     if ( body )
-        std::memcpy( &b.body, body, sizeof( b.body ) );
+        std::memcpy( &b.body, body, 0x2D4 );   // retail's VuRigidBody is 0x2D4 bytes (sizeof is 0x2E0: alignment padding)
     if ( engine )
         std::memcpy( b.engine.object.image, engine, sizeof( b.engine.object.image ) );
     io.body = &b.body;
@@ -641,6 +641,33 @@ inline void race_contact_counts( const race_session_t& s, int& calls, int& ran, 
 inline void race_session_dev_trace( const race_session_t& s, int before )
 {
     const int n = s.dynamics->syncs;
+    // Ours (dev trace, a test aid): --trace-boat N prints the human boats' transform position and forward row
+    // (world +16) every N syncs - the input a waypoint-following --input-script is generated from.
+    static const int every = [ ]( ) {
+        const char* v = c_engine::option( "trace-boat" );
+        return v ? std::atoi( v ) : 0;
+    }( );
+    if ( every > 0 && n != before && n == every && s.track )
+        for ( std::size_t w = 0; w < s.track->waypoints.size( ); ++w )
+        {
+            const track_waypoint_t& p = s.track->waypoints[ w ];
+            LOG_INFO( "boat trace: waypoint %d pos %.4f %.4f %.4f next %d %d width %.3f checkpoint %d", static_cast< int >( w ), p.position[ 0 ],
+                      p.position[ 1 ], p.position[ 2 ], p.next_a, p.next_b, p.p.width, track_checkpoint_index( *s.track, static_cast< int >( w ) ) );
+        }
+    if ( every > 0 && n != before && n % every == 0 )
+        for ( std::size_t k = 0; k < s.boats.size( ); ++k )
+        {
+            const std::uint8_t* t = race_session_image( *s.boats[ k ], 0, 0x50 );
+            bool human = false;
+            for ( const void* h : s.manager.lists.humans.boats )
+                human = human || h == s.boats[ k ]->graph.objects[ 0 ].image.data( );
+            if ( !t || !human )
+                continue;
+            float m[ 16 ];
+            std::memcpy( m, t + 0x50, 64 );
+            LOG_INFO( "boat trace: sync %d frame %d %s pos %.4f %.4f %.4f fwd %.5f %.5f %.5f", n, s.frames, s.boats[ k ]->name.c_str( ), m[ 12 ], m[ 13 ], m[ 14 ],
+                      m[ 4 ], m[ 5 ], m[ 6 ] );
+        }
     if ( !g_verbose || n == before ||
          !( n == 1 || n == 10 || n == 30 || n == 60 || n == 120 || n == 240 || n == 480 || n == 960 || n == 1920 || n == 3840 ) )
         return;
@@ -957,9 +984,12 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     tick_register( s.ticks, { s.dynamics.get( ), race_session_dynamics_sync, &s }, "DynamicsSync" );   // 0x4F8050's registrations
     tick_register( s.ticks, { s.dynamics.get( ), race_session_dynamics_kick, &s }, "DynamicsKick" );
     tick_register( s.ticks, { &s.fleet, race_session_fleet, &s }, "Decision" );
-    // The game mode manager's Decision tick 0x4CBFD0 (its init 0x4CBCD0, slot 5; created by the game init 0x4024E0 after the
-    // AI manager - their inits' order taken as the creation order, the init loop not read): the action mode's Run state
-    // 0x4BAB50 -> VuGame's tick 0x482F10 (race_session_game_mode).
+    // The game mode manager's Decision tick 0x4CBFD0 (its init 0x4CBCD0, slot 5): the action mode's Run state 0x4BAB50 ->
+    // VuGame's tick 0x482F10 (race_session_game_mode). The order is read (world batch 21): the game init 0x4024E0 creates
+    // each system, pushes it on the back of its list (0x403120) and calls its init vt+0x14 AT ONCE - the AI manager (g
+    // 0x758F8C, 0x403310 at 0x402808, init 0x4042E0 at 0x402828: 'Decision' -> 0x404331's handler) long before the game
+    // mode manager (g 0x758FF0, 0x4CBA30 at 0x402A6C, init 0x4CBCD0 at 0x402A90: 'Decision' at 0x4CBE4C); the list's
+    // later walk (0x402AB2) calls each one's vt+4 - 0x401560 (nothing) for both. So the AI's Decision tick runs first.
     tick_register( s.ticks, { &s.rules, race_session_game_mode, &s }, "Decision" );
     tick_register( s.ticks, { &s.manager, race_session_viewports, &s }, "Viewports" );
     // VuWater's tick 0x529E30 in "Water" (VuWater made by the engine init, before the race: c_world's
@@ -1086,6 +1116,12 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     };
     s.rules.hooks.platform = [ &s ]( const std::string& call ) { race_unwired( s, "platform services: " + call + " (saves / online / achievements / audio - hooks)" ); };
     s.rules.track = s.game.track;
+    {
+        // VuGame's ctor 0x481630: +0x674 = ConstantDB VuDBAsset / HUD / ChallengeTextDuration - an int (1, cvtdq2ps), a float (2), an int64
+        // (7, fild / fstp), else 0.
+        const value_t& v = member( member( member( *db.constant_db, "VuDBAsset" ), "HUD" ), "ChallengeTextDuration" );
+        s.rules.split_duration = v.tag == 1 ? static_cast< float >( v.integer ) : v.tag == 2 ? v.real : v.tag == 7 ? static_cast< float >( v.int64 ) : 0.0f;
+    }
     s.rules.unrecreated = [ &s ]( std::uint32_t address, const char* what )
     {
         char text[ 160 ];

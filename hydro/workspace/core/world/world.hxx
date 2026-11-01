@@ -6,6 +6,7 @@
 #include <workspace/core/assets/skin.hxx>
 #include <workspace/core/entity/bind.hxx>
 #include <workspace/core/entity/schema.hxx>
+#include <workspace/core/ui/overlay.hxx>
 #include <workspace/core/light/rig.hxx>
 #include <workspace/core/trigger/set.hxx>
 #include <workspace/core/assets/reader.hxx>
@@ -718,10 +719,12 @@ private:
 
     // SCAFFOLD - ours, no retail counterpart.
     //
-    // A vantage for looking at a loaded scene. Retail has nothing like it:
-    // every camera in the game is either VuBoatCamera, which needs a boat, or
-    // a VuSetFrontEndCameraEntity authored into a screen project, and a race
-    // project authors neither. So this orbits the bounding box of whatever the
+    // A vantage for looking at a loaded scene. Retail has nothing like it: a
+    // race's camera is VuBoatCamera (it needs a boat); the front end's is set by
+    // VuFrontEndGameMode's SetFrontEndCamera* handlers answering the events a
+    // VuSetFrontEndCameraEntity in a screen project broadcasts (no project
+    // authors a VuFrontEndCameraEntity; the water agent is recreating those
+    // handlers, world/frontcam.hxx). A race project authors none of them. So this orbits the bounding box of whatever the
     // entity walk actually placed. It is a measuring instrument, not a
     // recreation, and no part of it may be taken as retail behaviour.
     // SCAFFOLD - ours. A free camera for looking around a loaded level: F
@@ -1508,8 +1511,15 @@ private:
         std::vector< std::string > initialized;
         std::vector< std::string > delays;
         bool live = false;
+        // The UI agent's driver (core/ui overlay.hxx): the same project loaded through the UI's scripted world; when it
+        // loads, ITS graph runs the HUD (the project's edges are then not merged into m_graph).
+        std::unique_ptr< entity_t > ui_tree;
+        std::unique_ptr< c_ui_race_hud > ui;
+        std::map< const entity_t*, std::string > ui_trail;   // a UI-tree entity -> its path below the root
+        std::vector< ui_hud_boat_t > boats;                  // ui_hud_env_fill's storage
     };
     hud_project_t m_huds[ 3 ];
+    void hud_env( hud_project_t& h );   // huds.hxx: ui_hud_env_fill before a HUD call
     struct multi_delay_node_t
     {
         multi_delay_t state;
