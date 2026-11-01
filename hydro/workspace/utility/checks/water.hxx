@@ -2531,6 +2531,36 @@ inline bool verify_water_template_maps( )
     return bad == 0;
 }
 
+// query.hxx water_surface_distance against retail's 0x594BD0 (case water_surface_distance): every answer word for word.
+inline bool verify_water_surface_distance( )
+{
+    const unsigned* w = g_golden_wsdist_words;
+    const unsigned n = *w++;
+    int bad = 0;
+    auto f = []( unsigned x ) { float r; std::memcpy( &r, &x, 4 ); return r; };
+    for ( unsigned v = 0; v < n; ++v, w += 24 )
+    {
+        water_surface_t s{ };
+        s.below = f( w[ 0 ] );
+        s.above = f( w[ 1 ] );
+        for ( int k = 0; k < 16; ++k )
+            s.inverse[ k ] = f( w[ 2 + k ] );
+        s.half_x = f( w[ 18 ] );
+        s.half_y = f( w[ 19 ] );
+        const float p[ 3 ] = { f( w[ 20 ] ), f( w[ 21 ] ), f( w[ 22 ] ) };
+        const float d = water_surface_distance( s, p );
+        unsigned got;
+        std::memcpy( &got, &d, 4 );
+        if ( got != w[ 23 ] && bad++ < 4 )
+            LOG_ERROR( "water_surface_distance vector %u: 0x%08X, retail 0x%08X", v, got, w[ 23 ] );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuWaterSurface's point-to-box distance (0x594BD0) matches retail: %u points", n );
+    else
+        LOG_ERROR( "water_surface_distance FAILED %d", bad );
+    return bad == 0;
+}
+
 #include <workspace/utility/checks/pfx.hxx>
 #include <workspace/utility/checks/wake.hxx>
 #include <workspace/utility/checks/watchers.hxx>
@@ -2571,6 +2601,8 @@ inline bool verify_water_all( )
     ok = verify_force_affector( ) && ok;
     ok = verify_settings_triggers( ) && ok;
     ok = verify_key_motion( ) && ok;
+    ok = verify_key_curve( ) && ok;
+    ok = verify_water_surface_distance( ) && ok;
     ok = verify_ocean_kernels96( ) && ok;
     ok = verify_water_built_tick( ) && ok;
     ok = verify_water_query96( ) && ok;
