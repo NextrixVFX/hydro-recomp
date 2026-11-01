@@ -58,7 +58,9 @@ struct water_node_t
 // byte arrays, then a u32 count, the pointer array +0x84 sized to it by
 // 0x415690, and per entry a new 0x14-byte record (+8 / +0xC / +0x10 zeroed):
 // +0 and +4 a u32 each, +8 a byte array. Only the map (+0x60, its size +0x64)
-// is read by anything recreated (0x535E10). The arrays' capacity growth
+// is read by anything recreated (0x535E10). Its ctor 0x5C7DC0 (vtable
+// 0x752498; the VuAsset base words +8 .. +0x50, +0x4C = 1) zeroes +0x60 ..
+// +0x8C and leaves +0x58 / +0x5C to the load: water_map_t{}. The arrays' capacity growth
 // (0x5AC7F0: max( n, cap + cap / 2 ), 16-byte aligned) is allocation only.
 struct water_map_t
 {

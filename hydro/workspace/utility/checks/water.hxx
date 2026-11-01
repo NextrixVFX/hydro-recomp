@@ -2,6 +2,7 @@
 
 #include <workspace/core/world/tree.hxx>
 #include <workspace/core/world/kernel.hxx>
+#include <workspace/core/world/spray.hxx>
 
 #include <map>
 #include <string>
@@ -1989,9 +1990,56 @@ inline bool verify_water_point( )
     return failed == 0;
 }
 
+// pfx_boat_thrust_rate (world/spray.hxx) against VuPfxEmitBoatThrustQuadFountainInstance's emit 0x4CD5B0 (case
+// boat_thrust): fake nodes and boats, the fountain 0x55D030 a recorded hook. Compared: the rate scale (+0x20) the
+// fountain receives, bit for bit, and that it received dt.
+inline bool verify_boat_thrust( )
+{
+    int failed = 0, zeroed = 0, live = 0, boatless = 0;
+    for ( std::size_t index = 0; index < g_golden_bth_count; ++index )
+    {
+        const unsigned* s = g_golden_bth_words + 24 * index;
+        static solver_rigid_t b;
+        boat_view_t c{ water_bits( s[ 1 ] ), s[ 2 ], static_cast< uint8_t >( s[ 3 ] ), static_cast< uint8_t >( s[ 4 ] ), { }, 0, 0, 0, b };
+        for ( int k = 0; k < 3; ++k )
+            c.o50_60[ k ] = water_bits( s[ 5 + k ] );
+        c.o22C_04 = water_bits( s[ 8 ] );
+        c.o22C_0C = water_bits( s[ 9 ] );
+        c.o22C0_470 = water_bits( s[ 10 ] );
+        for ( int k = 0; k < 4; ++k )
+            b.linear_velocity[ k ] = water_bits( s[ 11 + k ] );
+        std::uint8_t params[ 0x100 ]{};
+        std::memcpy( params + 0xC8, &s[ 15 ], 4 );
+        std::uint8_t records[ 32 ]{};
+        for ( int k = 0; k < 4; ++k )
+            records[ 8 * k ] = static_cast< std::uint8_t >( s[ 16 + k ] );
+        pfx_fountain_node_t node{};
+        node.rate_scale = water_bits( s[ 20 ] );
+        pfx_boat_thrust_rate( node, params, s[ 0 ] ? &c : nullptr, s[ 0 ] ? records : nullptr );
+        unsigned o;
+        std::memcpy( &o, &node.rate_scale, 4 );
+        boatless += s[ 0 ] ? 0 : 1;
+        zeroed += o == 0u ? 1 : 0;
+        live += o != 0u && s[ 0 ] ? 1 : 0;
+        if ( o != s[ 22 ] || s[ 23 ] != s[ 21 ] )
+        {
+            ++failed;
+            LOG_ERROR( "boat_thrust vector %d: rate 0x%08X, retail 0x%08X", static_cast< int >( index ), o, s[ 22 ] );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "pfx_boat_thrust_rate matches VuPfxEmitBoatThrustQuadFountainInstance 0x4CD5B0 on %d vectors (%d with a live "
+                     "rate, %d zero, %d boatless), the rate scale bit for bit",
+            static_cast< int >( g_golden_bth_count ), live, zeroed, boatless );
+    else
+        LOG_ERROR( "boat_thrust FAILED %d of %d", failed, static_cast< int >( g_golden_bth_count ) );
+    return failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
+    ok = verify_boat_thrust( ) && ok;
     ok = verify_water_point( ) && ok;
     ok = verify_wake_kernels96( ) && ok;
     ok = verify_ocean_field( ) && ok;
