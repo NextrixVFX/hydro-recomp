@@ -1644,6 +1644,136 @@ inline bool verify_framework_dtors( )
     return bad == 0;
 }
 
+// entity/broadcast.hxx against retail's VuEventManager (case event_manager): the same op sequence on the model; per op
+// the calls out in order (fires with their params, locks, the platform calls), the queue (record words; the real-time
+// word's low byte only - its other three bytes are the resize's fill, never written), the subscriber sets.
+#include <workspace/core/entity/broadcast.hxx>
+
+inline bool verify_event_manager( )
+{
+    logic_check_t c{ g_golden_evm_words };
+    const std::uint32_t self = c.next( );
+    const unsigned n = c.next( );
+    event_manager_t m;
+    std::uint32_t mutex = 0;
+    std::vector< std::vector< std::uint32_t > > got;
+    float real = 0.0f;
+    event_manager_hooks_t h;
+    h.fire = [ & ]( std::uint32_t handler, const std::uint32_t* p )
+    {
+        std::vector< std::uint32_t > e{ 1u, handler };
+        e.insert( e.end( ), p, p + 33 );
+        got.push_back( e );
+    };
+    h.real_delta = [ & ]( ) { return real; };
+    h.lock = [ & ]( bool on ) { got.push_back( { on ? 6u : 7u, mutex } ); };
+    int bad = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = c.next( );
+        std::vector< std::uint32_t > args( c.next( ) );
+        for ( auto& a : args )
+            a = c.next( );
+        const std::string name = c.str( );
+        std::vector< std::uint32_t > params( c.next( ) );
+        for ( auto& p : params )
+            p = c.next( );
+        params.resize( 33 );
+        const std::uint32_t poke = c.next( ), poke_delay = c.next( ), poke_handler = c.next( ), real_bits = c.next( ), g = c.next( );
+        std::memcpy( &real, &real_bits, 4 );
+        got.clear( );
+        switch ( kind )
+        {
+        case 0:
+            event_manager_init( self, mutex,
+                                [ & ]( std::uint32_t vt, std::uint32_t s, std::uint32_t fn, const char* phase )
+                                {
+                                    std::vector< std::uint32_t > e{ 2u, vt, s, fn, 0u };
+                                    for ( const char* q = phase; *q; ++q )
+                                        e.push_back( static_cast< unsigned char >( *q ) );
+                                    got.push_back( e );
+                                },
+                                [ & ]( ) { got.push_back( { 4u } ); return 0x4D555458u; } );
+            break;
+        case 1: event_manager_subscribe( m, event_hash( name.c_str( ) ), args[ 0 ] ); break;
+        case 2: event_manager_broadcast( m, args[ 0 ], params.data( ), h ); break;
+        case 3: event_manager_broadcast( m, name.c_str( ), params.data( ), h ); break;
+        case 4:
+        {
+            float f;
+            std::memcpy( &f, &args[ 0 ], 4 );
+            event_manager_queue( m, f, ( args[ 1 ] & 0xFFu ) != 0, name.c_str( ), params.data( ), h );   // retail's bool: the word's low byte
+            if ( poke & 1u )
+                std::memcpy( &m.queue.back( ).delay, &poke_delay, 4 );
+            if ( poke & 2u )
+                m.queue.back( ).handler = poke_handler;
+            break;
+        }
+        case 5:
+        {
+            float dt;
+            std::memcpy( &dt, &args[ 0 ], 4 );
+            event_manager_tick( m, dt, h );
+            break;
+        }
+        case 6: event_manager_remove( m, args[ 0 ], args[ 1 ], h ); break;
+        default:
+            event_manager_release( self, mutex, [ & ]( std::uint32_t s ) { got.push_back( { 3u, s } ); },
+                                   [ & ]( std::uint32_t x ) { got.push_back( { 5u, x } ); } );
+            break;
+        }
+        std::vector< std::vector< std::uint32_t > > want( c.next( ) );
+        for ( auto& e : want )
+        {
+            e.resize( c.next( ) );
+            for ( auto& x : e )
+                x = c.next( );
+        }
+        bool same = got == want && ( kind != 7 || g == 0 );
+        const unsigned nq = c.next( );
+        same = nq == m.queue.size( ) && same;
+        for ( unsigned q = 0; q < nq; ++q )
+        {
+            std::uint32_t w[ 37 ];
+            for ( auto& x : w )
+                x = c.next( );
+            if ( q >= m.queue.size( ) )
+                continue;
+            const event_record_t& r = m.queue[ q ];
+            std::uint32_t delay;
+            std::memcpy( &delay, &r.delay, 4 );
+            same = same && w[ 0 ] == r.handler && w[ 1 ] == delay && ( w[ 2 ] & 0xFFu ) == r.real_time && w[ 3 ] == r.hash
+                && std::memcmp( w + 4, r.params, sizeof( r.params ) ) == 0;
+        }
+        const unsigned ns = c.next( );
+        same = ns == m.subscribers.size( ) && same;
+        auto it = m.subscribers.begin( );
+        for ( unsigned s = 0; s < ns; ++s )
+        {
+            std::vector< std::uint32_t > e( c.next( ) );
+            for ( auto& x : e )
+                x = c.next( );
+            if ( it == m.subscribers.end( ) )
+            {
+                same = false;
+                continue;
+            }
+            std::vector< std::uint32_t > mine{ it->first };
+            mine.insert( mine.end( ), it->second.begin( ), it->second.end( ) );
+            same = same && mine == e;
+            ++it;
+        }
+        if ( !same && bad++ < 6 )
+            LOG_ERROR( "event_manager op %u (kind %u) differs: calls %s (%u, retail %u), queue %u (retail %u)", v, kind, got == want ? "ok" : "differ",
+                       static_cast< unsigned >( got.size( ) ), static_cast< unsigned >( want.size( ) ), static_cast< unsigned >( m.queue.size( ) ), nq );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuEventManager matches retail (0x505690 0x505650 0x505720 0x5057E0 0x505950 0x5055C0 0x505610 0x505430): %u ops", n );
+    else
+        LOG_ERROR( "event_manager FAILED %d", bad );
+    return bad == 0;
+}
+
 // world/logic.hxx tick_is_paused / tick_delta / tick_real_delta against VuTickManagerImpl slots 14 / 15 / 16 (case
 // tick_slots: retail's ctor, the four fields poked per vector).
 inline bool verify_tick_slots( )
