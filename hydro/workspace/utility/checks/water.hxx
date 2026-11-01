@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/world/tree.hxx>
+#include <workspace/core/world/kernel.hxx>
 
 // The water area's oracle-backed checks (one file per parallel agent; included by check.hxx after every
 // shared check, so anything above is usable here). verify_water_all runs them all.
@@ -890,7 +891,7 @@ inline bool verify_wake_lookup( )
 // gameInitialize order (oracle case water_build). Compared: each water entity's loaded property words and
 // transform words (+ the world euler of 0x534AA0), every surface's and wave's recreated words, the surface tree
 // and every surface's wave tree node for node, the wave list, each wave's entry list and the pool.
-inline bool verify_water_build( )
+inline std::unique_ptr< entity_t > water_build_document_tree( )
 {
     const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_water_build_document );
     static const value_t document =
@@ -906,7 +907,12 @@ inline bool verify_water_build( )
     world.m_state_for = entity_state_for;
     world.m_properties_load = entity_load_properties;
     world.m_properties_mark = entity_mark_properties;
-    const std::unique_ptr< entity_t > tree = entity_load_project( member( document, "VuProject" ), "Data/Projects/Water.vuprj", world );
+    return entity_load_project( member( document, "VuProject" ), "Data/Projects/Water.vuprj", world );
+}
+
+inline bool verify_water_build( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
     if ( !tree )
     {
         LOG_ERROR( "water_build: the document did not load" );
@@ -1048,10 +1054,231 @@ inline bool verify_water_build( )
     return false;
 }
 
+struct water_query_stats_t
+{
+    int vertices = 0, moved = 0, calls = 0, tagged = 0;
+};
+
+// The queries of one golden stream (emit/water.py _wq_stream) through query.hxx's water_query on `view`, its kernel
+// hook water_view_kernel with the calls logged; returns the queries that differ.
+inline int water_query_vectors( const water_view_t& view, const unsigned* words, const unsigned* offsets, std::size_t count, const char* name,
+    water_query_stats_t& st )
+{
+    struct logged_t
+    {
+        const water_view_t* view;
+        std::vector< std::uint32_t > log;
+    } logged{ &view, {} };
+    const water_kernel_fn kernel = []( void* user, int wave, water_query_t& ctx ) {
+        logged_t& l = *static_cast< logged_t* >( user );
+        l.log.push_back( static_cast< std::uint32_t >( wave ) );
+        l.log.push_back( ctx.tag );
+        l.log.push_back( ctx.flag100 );
+        return water_view_kernel( const_cast< water_view_t* >( l.view ), wave, ctx );
+    };
+    int failed = 0;
+    for ( std::size_t index = 0; index < count; ++index )
+    {
+        const unsigned* s = words + offsets[ index ];
+        auto u = [ & ]( ) { return *s++; };
+        water_query_t ctx{};
+        ctx.count = static_cast< int >( u( ) );
+        for ( float& x : ctx.aabb )
+            x = water_bits( u( ) );
+        for ( float& x : ctx.centre )
+            x = water_bits( u( ) );
+        ctx.radius = water_bits( u( ) );
+        ctx.exclude_count = static_cast< int >( u( ) );
+        for ( int k = 0; k < ctx.exclude_count; ++k )
+            ctx.exclude[ k ] = static_cast< int >( u( ) );
+        ctx.forced = -1;
+        std::vector< water_vertex_t > v( ctx.count );
+        std::memset( v.data( ), 0x77, v.size( ) * sizeof( water_vertex_t ) );
+        for ( water_vertex_t& x : v )
+        {
+            for ( float& p : x.pos )
+                p = water_bits( u( ) );
+            x.pos_w = 0x3F800000u;
+        }
+        ctx.vertices = v.data( );
+        logged.log.clear( );
+        std::vector< std::uint32_t > tags;
+        const char* what = nullptr;
+        int bad = -1;
+        if ( !water_query( view.water, ctx, kernel, &logged, tags ) )
+            what = "a path not recreated was reached";
+        const std::uint32_t* ours = reinterpret_cast< const std::uint32_t* >( v.data( ) );
+        for ( int k = 0; k < 10 * ctx.count; ++k )
+        {
+            const unsigned r = u( );
+            if ( !what && k % 10 != 7 && ours[ k ] != r )
+            {
+                what = "a vertex record word";
+                bad = k;
+            }
+            if ( k % 10 == 4 && r != 0u )
+                ++st.moved;
+        }
+        st.vertices += ctx.count;
+        if ( u( ) != ctx.flag100 && !what )
+            what = "ctx+0x64";
+        st.tagged += ctx.flag100 ? 1 : 0;
+        const unsigned n = u( );
+        st.calls += static_cast< int >( n );
+        if ( logged.log.size( ) != 3 * n && !what )
+            what = "the number of slot 3 calls";
+        for ( unsigned k = 0; k < 3 * n; ++k )
+        {
+            const unsigned r = u( );
+            if ( !what && k < logged.log.size( ) && logged.log[ k ] != r )
+            {
+                what = "a slot 3 call";
+                bad = static_cast< int >( k );
+            }
+        }
+        if ( what )
+        {
+            ++failed;
+            LOG_ERROR( "%s vector %d: %s (%d)", name, static_cast< int >( index ), what, bad );
+        }
+    }
+    return failed;
+}
+
+// The water query 0x528FC0 on Hydroelectric's built water against retail (case water_query): query.hxx's water_query
+// over world/kernel.hxx's water_view_build of water_build_world's result, every wave's slot 3 the kernel hook
+// water_view_kernel (the five kinds' verified kernels and their tag variants) - retail's own slot 3s under the
+// oracle. Compared: every vertex record word except +28 (0x529ED0's / 0x529F70's stale stack), ctx+0x64 after, and
+// the slot 3 calls in order (wave, ctx+0x5C, ctx+0x64).
+inline bool verify_water_query( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "water_query: the document did not load" );
+        return false;
+    }
+    water_built_t built{};
+    water_build_world( *tree, built, []( entity_t& e ) { return entity_transform( e ); } );
+    water_view_t view{};
+    water_view_build( built, view );
+    water_query_stats_t st{};
+    const int failed = water_query_vectors( view, g_golden_water_query_words, g_golden_water_query_offsets, g_golden_water_query_count,
+        "water query", st );
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_query + water_view_kernel match retail's 0x528FC0 on Hydroelectric's built water over %d queries (%d vertices, %d "
+                     "with disp x moved; %d slot 3 calls, %d queries tagged), every record word, the calls in order",
+            static_cast< int >( g_golden_water_query_count ), st.vertices, st.moved, st.calls, st.tagged );
+    else
+        LOG_ERROR( "water_query FAILED %d of %d queries against 0x528FC0", failed, static_cast< int >( g_golden_water_query_count ) );
+    return failed == 0;
+}
+
+// VuWater_createPointWave 0x528E10 on Hydroelectric's built water against retail (case point_waves): 24 point waves'
+// words after water_create_point_wave and after point_wave_tick (0x5A34B0; no expiry callback), except +24 / +40
+// (stack), +0x40 (a pointer: the entry list is compared instead) and +0x91 .. +0x93 (heap); each wave's entry list;
+// the wave list; then the queries around them (verify_water_query's comparison, the point kernel 0x5A36A0 / 0x5A3820
+// among the slot 3s).
+inline bool verify_point_waves( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "point_waves: the document did not load" );
+        return false;
+    }
+    water_built_t built{};
+    water_build_world( *tree, built, []( entity_t& e ) { return entity_transform( e ); } );
+    int failed = 0, compared = 0, entries = 0;
+    auto cmp = [ & ]( const char* what, int a, int b, std::uint32_t ours, std::uint32_t theirs ) {
+        ++compared;
+        if ( ours != theirs && ++failed <= 12 )
+            LOG_ERROR( "point_waves %s %d word %d: ours 0x%08X retail 0x%08X", what, a, b, ours, theirs );
+    };
+    auto words = [ & ]( const char* what, int i, const water_words_t& w, const unsigned* r ) {
+        for ( int k = 0; k < 37; ++k )
+        {
+            const int at = 4 * k;
+            if ( at == 24 || at == 40 || at == 64 )
+                continue;
+            cmp( what, i, at, at == 144 ? ( w.word[ k ] & 0xFFu ) : w.word[ k ], at == 144 ? ( r[ k ] & 0xFFu ) : r[ k ] );
+        }
+    };
+    std::vector< const unsigned* > after( g_golden_pw_wave_count );
+    std::vector< int > index( g_golden_pw_wave_count );
+    for ( std::size_t i = 0; i < g_golden_pw_wave_count; ++i )
+    {
+        const unsigned* s = g_golden_pw_wave_words + g_golden_pw_wave_offsets[ i ];
+        index[ i ] = water_create_point_wave( built, s );
+        water_words_t& w = built.waves[ static_cast< std::size_t >( index[ i ] ) ];
+        words( "created", static_cast< int >( i ), w, s + 12 );
+        point_wave_life_t life{};
+        life.tail_width = w.f( 92 );
+        life.outer_radius = w.f( 104 );
+        life.elapsed = w.f( 120 );
+        life.rate = w.f( 124 );
+        life.has_callback = w.word[ 140 / 4 ] != 0;
+        life.expired = ( w.word[ 144 / 4 ] & 0xFFu ) != 0;
+        point_wave_tick( life, static_cast< int >( w.word[ 1 ] ), water_bits( s[ 11 ] ), nullptr, nullptr );
+        w.setf( 120, life.elapsed );
+        w.word[ 144 / 4 ] = ( w.word[ 144 / 4 ] & ~0xFFu ) | ( life.expired ? 1u : 0u );
+        after[ i ] = s + 12 + 37;
+    }
+    // The entry lists and the wave list once every wave is made (retail's dump order).
+    for ( std::size_t i = 0; i < g_golden_pw_wave_count; ++i )
+    {
+        const unsigned* s = after[ i ];
+        words( "ticked", static_cast< int >( i ), built.waves[ static_cast< std::size_t >( index[ i ] ) ], s );
+        s += 37;
+        const unsigned n = *s++;
+        int e = built.hold.waves[ static_cast< std::size_t >( index[ i ] ) ].entries;
+        for ( unsigned k = 0; k < n; ++k, s += 3 )
+        {
+            cmp( "entry pool", static_cast< int >( i ), static_cast< int >( k ), static_cast< std::uint32_t >( e ), s[ 0 ] );
+            if ( e < 0 )
+                break;
+            cmp( "entry surface", static_cast< int >( i ), static_cast< int >( k ), static_cast< std::uint32_t >( built.hold.pool[ e ].surface ), s[ 1 ] );
+            cmp( "entry leaf", static_cast< int >( i ), static_cast< int >( k ), static_cast< std::uint32_t >( built.hold.pool[ e ].leaf ), s[ 2 ] );
+            e = built.hold.pool[ e ].next;
+            ++entries;
+        }
+        cmp( "entries end", static_cast< int >( i ), 0, static_cast< std::uint32_t >( e ), 0xFFFFFFFFu );
+    }
+    int e = built.hold.list;
+    for ( std::size_t k = 0; k < g_golden_pw_wave_list_count; ++k )
+    {
+        cmp( "list pool", static_cast< int >( k ), 0, static_cast< std::uint32_t >( e ), static_cast< std::uint32_t >( g_golden_pw_wave_list[ k ][ 0 ] ) );
+        if ( e < 0 )
+            break;
+        cmp( "list wave", static_cast< int >( k ), 0, static_cast< std::uint32_t >( built.hold.pool[ e ].leaf ),
+            static_cast< std::uint32_t >( g_golden_pw_wave_list[ k ][ 1 ] ) );
+        e = built.hold.pool[ e ].next;
+    }
+    cmp( "list end", 0, 0, static_cast< std::uint32_t >( e ), 0xFFFFFFFFu );
+    water_view_t view{};
+    water_view_build( built, view );
+    water_query_stats_t st{};
+    const int qfailed = water_query_vectors( view, g_golden_pw_query_words, g_golden_pw_query_offsets, g_golden_pw_query_count,
+        "point query", st );
+    if ( failed == 0 && qfailed == 0 )
+    {
+        LOG_SUCCESS( "water_create_point_wave / point_wave_tick / the point kernel match retail's 0x528E10 / 0x5A3340 / 0x5A34B0 / 0x5A36A0 "
+                     "on Hydroelectric's built water: %d waves (%d values, %d entries, the wave list), %d queries (%d vertices, %d slot 3 "
+                     "calls, %d tagged), bit for bit",
+            static_cast< int >( g_golden_pw_wave_count ), compared, entries, static_cast< int >( g_golden_pw_query_count ), st.vertices,
+            st.calls, st.tagged );
+        return true;
+    }
+    LOG_ERROR( "point_waves FAILED %d of %d values, %d of %d queries", failed, compared, qfailed, static_cast< int >( g_golden_pw_query_count ) );
+    return false;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
     ok = verify_water_build( ) && ok;
+    ok = verify_water_query( ) && ok;
+    ok = verify_point_waves( ) && ok;
     ok = verify_ocean_kernels( ) && ok;
     ok = verify_wake_kernels( ) && ok;
     ok = verify_wave_bridges( ) && ok;
