@@ -50,11 +50,76 @@ struct water_node_t
     uint32_t tag;
 };
 
+// VuWaterMapAsset (vtable 0x752498), as its load 0x5C8650 (slot 5, thiscall
+// asset; VuBinaryDataReader& {+0 data, +8 offset}; retn 4; returns 1) reads
+// it - every field a 4-byte memcpy_s or a byte array 0x5AC7F0 (a u32 count,
+// then that many bytes) in this order: +0x58 width, +0x5C height, +0x60 /
+// +0x64 / +0x68 the map (data, size, capacity), +0x6C and +0x78 two more
+// byte arrays, then a u32 count, the pointer array +0x84 sized to it by
+// 0x415690, and per entry a new 0x14-byte record (+8 / +0xC / +0x10 zeroed):
+// +0 and +4 a u32 each, +8 a byte array. Only the map (+0x60, its size +0x64)
+// is read by anything recreated (0x535E10). Its ctor 0x5C7DC0 (vtable
+// 0x752498; the VuAsset base words +8 .. +0x50, +0x4C = 1) zeroes +0x60 ..
+// +0x8C and leaves +0x58 / +0x5C to the load: water_map_t{}. The arrays' capacity growth
+// (0x5AC7F0: max( n, cap + cap / 2 ), 16-byte aligned) is allocation only.
+struct water_map_t
+{
+    std::uint32_t width = 0;    // +0x58
+    std::uint32_t height = 0;   // +0x5C
+    std::vector< std::uint8_t > map;      // +0x60 / +0x64
+    std::vector< std::uint8_t > second;   // +0x6C
+    std::vector< std::uint8_t > third;    // +0x78
+    struct entry_t
+    {
+        std::uint32_t a = 0;
+        std::uint32_t b = 0;
+        std::vector< std::uint8_t > bytes;
+    };
+    std::vector< entry_t > entries;   // +0x84 / +0x88
+};
+
+// 0x5C8650 on a blob (the asset's bytes as the pack holds them). Retail's
+// reader has no bounds check: a blob too short for what it declares is read
+// past its end there; here it returns false (not recreated).
+inline bool water_map_load( const std::uint8_t* data, std::size_t size, water_map_t& out )
+{
+    out = water_map_t{};
+    std::size_t at = 0;
+    auto u32 = [ & ]( std::uint32_t& v ) {
+        if ( size - at < 4 || at > size )
+            return false;
+        std::memcpy( &v, data + at, 4 );
+        at += 4;
+        return true;
+    };
+    auto bytes = [ & ]( std::vector< std::uint8_t >& v ) {
+        std::uint32_t n = 0;
+        if ( !u32( n ) || size - at < n )
+            return false;
+        v.assign( data + at, data + at + n );
+        at += n;
+        return true;
+    };
+    std::uint32_t count = 0;
+    if ( !u32( out.width ) || !u32( out.height ) || !bytes( out.map ) || !bytes( out.second ) || !bytes( out.third ) || !u32( count ) )
+        return false;
+    for ( std::uint32_t k = 0; k < count; ++k )
+    {
+        water_map_t::entry_t e{};
+        if ( !u32( e.a ) || !u32( e.b ) || !bytes( e.bytes ) )
+            return false;
+        out.entries.push_back( std::move( e ) );
+    }
+    return true;
+}
+
 // The VuWaterSurface fields the query reads: +20 the height, +40 / +44 the
 // depth below / above, +144 .. +200 the world-to-surface transform (rows of
 // a row-vector 4x4: +144 row 0, +160 row 1, +176 row 2, +192 the
 // translation), +216 the floor the one-surface test compares the query's max
-// z against, +240 / +244 the half extents; +0xFC's tree root (-1 none).
+// z against, +240 / +244 the half extents; +0xFC's tree root (-1 none); +72 /
+// +76 the sizes (ints: 1 << the log2s) and +0x100 the VuWaterMapAsset (the
+// entity's WaterMap; null when it names none or no asset) 0x535E10 samples.
 struct water_surface_t
 {
     float height;
@@ -65,7 +130,39 @@ struct water_surface_t
     float half_x;
     float half_y;
     int wave_root;
+    std::int32_t size_x = 0;
+    std::int32_t size_y = 0;
+    const water_map_t* map = nullptr;
 };
+
+// 0x535E10 (thiscall surface; const VuVector3* point; retn 4; float in xmm0):
+// 1.0 (0x6F76B8) without a map or with an empty one (+0x64 == 0); else the
+// point in the surface's space (x, y as water_local's), the map cell
+// u = (int)( ( ( half_x + lx ) / (float) size_x ) * (float)(int)( width - 1 ) ),
+// v the same over y / height, both truncated (cvttss2si), and the byte at
+// v * width + u times 0x3B808081 (1 / 255). Retail has no bounds check; a cell
+// outside the map (a point outside the surface - its one caller 0x5292D0 asks
+// only inside) returns false here (not recreated).
+inline bool water_map_sample( const water_surface_t& s, const float* p, float& out )
+{
+    out = 1.0f;
+    if ( !s.map || s.map->map.empty( ) )
+        return true;
+    const float* m = s.inverse;
+    const float lx = ( ( m[ 4 ] * p[ 1 ] + p[ 0 ] * m[ 0 ] ) + m[ 8 ] * p[ 2 ] ) + m[ 12 ];
+    const float ly = ( ( m[ 1 ] * p[ 0 ] + m[ 5 ] * p[ 1 ] ) + m[ 9 ] * p[ 2 ] ) + m[ 13 ];
+    const float fu = ( ( s.half_x + lx ) / static_cast< float >( s.size_x ) ) *
+                     static_cast< float >( static_cast< std::int32_t >( s.map->width - 1u ) );
+    const float fv = ( ( s.half_y + ly ) / static_cast< float >( s.size_y ) ) *
+                     static_cast< float >( static_cast< std::int32_t >( s.map->height - 1u ) );
+    const std::int32_t u = _mm_cvttss_si32( _mm_set_ss( fu ) );
+    const std::int32_t v = _mm_cvttss_si32( _mm_set_ss( fv ) );
+    const std::uint32_t at = static_cast< std::uint32_t >( v ) * s.map->width + static_cast< std::uint32_t >( u );
+    if ( at >= s.map->map.size( ) )
+        return false;
+    out = static_cast< float >( static_cast< std::int32_t >( s.map->map[ at ] ) ) * 0.003921568859368563f;
+    return true;
+}
 
 // A wave as the walk sees it: +44 / +48 its centre, +52 its radius; the
 // kernel itself is the hook.
@@ -390,4 +487,106 @@ inline bool water_query( const water_t& w, water_query_t& ctx, water_kernel_fn k
             return false;
     }
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// THE ONE-POINT QUERY.
+//
+// 0x52AEC0 (fastcall root, const float* xy; struct { VuVector4 point; surface*
+// found }*): the surface-tree walk at (x, y) - point-in-node (x >= min x, y >=
+// min y, max x >= x, max y >= y, comiss / jb), the second child popped first,
+// the same 256-entry stack - keeping the LAST leaf whose space holds the point
+// (half_x >= |lx|, half_y >= |ly|, above >= lz >= -below). -1 none.
+inline int water_point_surface( const water_t& w, const float* p )
+{
+    if ( w.surface_root < 0 )
+        return -1;
+    int found = -1;
+    int stack[ 257 ];
+    int top = 1;
+    stack[ 1 ] = w.surface_root;
+    while ( top )
+    {
+        const water_node_t& node = w.nodes[ stack[ top-- ] ];
+        if ( !water_ge( p[ 0 ], node.rect[ 0 ] ) || !water_ge( p[ 1 ], node.rect[ 1 ] ) || !water_ge( node.rect[ 2 ], p[ 0 ] ) ||
+             !water_ge( node.rect[ 3 ], p[ 1 ] ) )
+            continue;
+        if ( node.second >= 0 )
+        {
+            if ( top + 2 > 256 )
+                return -2;   // retail's stack overflows: not recreated
+            stack[ ++top ] = node.first;
+            stack[ ++top ] = node.second;
+            continue;
+        }
+        const water_surface_t& s = w.surfaces[ node.first ];
+        float lx, ly, lz;
+        water_local( s, p, lx, ly, lz );
+        if ( water_ge( s.half_x, water_abs( lx ) ) && water_ge( s.half_y, water_abs( ly ) ) && water_ge( s.above, lz ) &&
+             water_ge( lz, -s.below ) )
+            found = node.first;
+    }
+    return found;
+}
+
+// 0x5292D0 (thiscall water; out*, const VuVector4* point; retn 8; returns out):
+// VuWater's height at ONE point, in the renderer's +96 record form (32 bytes;
+// see world/wave.hxx's +96 kernels):
+//   out +0 / +4 = x, y; +8 = 0xFEFFFFFF; +0xC / +0x10 / +0x14 = 0; +0x18 = 1.0;
+//   +0x1C = 0 (stored in that order: +0x10 last).
+//   0x52AEC0 finds the surface; none: done. Else +8 = its height (+0x14) and
+//   +0x18 = 0x535E10's map sample; then, unless water +0x18 (skip waves) is set,
+//   a query ctx on the stack - 0x413500( 1 ) (aabb +-FLT_MAX, +0x60 = 1, +0x38 /
+//   +0x4C / +0x58 / +0x5C / +0x64 = 0), count 1, aabb min = max = centre = the
+//   point (all four lanes), radius 0, +0x50 = out (the stride +0x54 is never
+//   written: one record, index 0, so it is never used) - and 0x52B0E0 walks that
+//   surface's wave tree with it.
+// 0x52B0E0 (fastcall root, const float* xy; ctx**) is 0x52A8D0 with the rect
+// test made point-in-node: the same four ordered comparisons as water_overlap
+// on the degenerate rect (x, y, x, y), so water_waves on that rect IS it (the
+// exclusion list, the circle test against ctx +0x24 / +0x28 / +0x34, ctx+0x5C =
+// the node's tag, slot 3).
+// False when a path not recreated is reached (a kernel hook answering false, a
+// stack overflow, a map cell outside the map).
+inline bool water_point_query( const water_t& w, const float* point, water_kernel_fn kernel, void* user, float* out )
+{
+    out[ 0 ] = point[ 0 ];
+    out[ 1 ] = point[ 1 ];
+    out[ 2 ] = water_bits( 0xFEFFFFFFu );
+    out[ 3 ] = 0.0f;
+    out[ 5 ] = 0.0f;
+    out[ 6 ] = 1.0f;
+    out[ 7 ] = 0.0f;
+    out[ 4 ] = 0.0f;
+    const int found = water_point_surface( w, point );
+    if ( found == -2 )
+        return false;
+    if ( found < 0 )
+        return true;
+    const water_surface_t& s = w.surfaces[ found ];
+    out[ 2 ] = s.height;
+    if ( !water_map_sample( s, point, out[ 6 ] ) )
+        return false;
+    if ( w.skip_waves )
+        return true;
+    water_query_t ctx{};
+    ctx.count = 1;
+    for ( int k = 0; k < 4; ++k )
+    {
+        ctx.aabb[ k ] = point[ k ];
+        ctx.aabb[ 4 + k ] = point[ k ];
+        ctx.centre[ k ] = point[ k ];
+    }
+    ctx.radius = 0.0f;
+    ctx.exclude_count = 0;
+    ctx.forced = -1;
+    ctx.vertices = nullptr;
+    ctx.tags = nullptr;
+    ctx.tag = 0;
+    ctx.flag96 = 1;
+    ctx.flag100 = 0;
+    ctx.records = reinterpret_cast< unsigned char* >( out );
+    ctx.stride = 32;
+    const float rect[ 4 ] = { point[ 0 ], point[ 1 ], point[ 0 ], point[ 1 ] };
+    return water_waves( w, s.wave_root, ctx, rect, kernel, user );
 }

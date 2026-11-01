@@ -6,6 +6,7 @@
 #include <workspace/core/world/transform.hxx>
 #include <workspace/core/world/tree.hxx>
 #include <workspace/core/world/field.hxx>
+#include <workspace/core/world/query.hxx>
 
 #include <cmath>
 #include <cstdint>
@@ -170,6 +171,14 @@ struct water_entity_state_t
     water_kind_t kind = water_kind_none;
     water_entity_props_t value;
     water_entity_props_t defaults;
+    // The surface / ramp "WaterMap" (+0x8C, a VuAssetProperty<VuWaterMapAsset>
+    // 0x5DC3D0, vtable 0x753ECC): its load and value read are the string
+    // property's (0x406C20 / 0x406CD0, property_string; default the entity's
+    // +0x8C, empty from the ctor); its change hook 0x5DC4B0 releases the old
+    // asset and, when the asset manager has the name (0x5DC730), loads it
+    // (0x5DC7E0) into the node's +0x4C - the asset manager is a hook here
+    // (water_build_maps).
+    std::string water_map;
 };
 
 inline void water_props_rows( water_kind_t kind, const water_prop_row_t* rows[ 3 ] )
@@ -215,6 +224,8 @@ inline std::shared_ptr< water_entity_state_t > water_entity_state_for( const std
 // turn (reset to its default, then the value read).
 inline void water_entity_load( water_entity_state_t& s, const value_t& properties )
 {
+    if ( s.kind == water_kind_surface || s.kind == water_kind_ramp )
+        property_string( properties, "WaterMap", s.water_map, std::string( ) );
     const water_prop_row_t* rows[ 3 ];
     water_props_rows( s.kind, rows );
     for ( const water_prop_row_t* table : rows )
@@ -313,6 +324,7 @@ struct water_input_t
 {
     const std::uint32_t* entity = nullptr;
     const std::uint32_t* transform = nullptr;
+    const char* water_map = nullptr;   // a surface's / ramp's WaterMap name (null: none)
     std::uint32_t e( int offset ) const { return entity[ ( offset - 0x60 ) / 4 ]; }
     std::uint32_t t( int offset ) const { return transform[ ( offset - 0x10 ) / 4 ]; }
     wave_source_t source( ) const
@@ -681,6 +693,10 @@ struct water_built_t
         ocean_field_t field{};
     };
     std::vector< ocean_t > oceans;
+    // Per surface (as `surfaces`): its WaterMap name ("" none) and the
+    // VuWaterMapAsset at its +0x100 (null until water_build_maps finds it).
+    std::vector< std::string > map_names;
+    std::vector< std::shared_ptr< water_map_t > > maps;
 };
 
 // The field of ocean wave `wave`, or null (not an ocean wave / not built).
@@ -751,6 +767,8 @@ inline void water_build_entity( water_built_t& b, water_kind_t kind, const water
     case water_kind_ramp:
     {
         b.surfaces.push_back( water_surface_create( in ) );
+        b.map_names.push_back( in.water_map ? in.water_map : "" );
+        b.maps.push_back( nullptr );
         water_hold_surface( b.hold, b.surfaces.back( ) );
         if ( kind == water_kind_ramp )
             add_wave( ramp_wave_create( in ), kind );
@@ -1124,7 +1142,39 @@ inline void water_build_world( entity_t& root, water_built_t& out, water_transfo
         water_input_t in{};
         in.entity = s->value.word;
         in.transform = transform;
+        in.water_map = s->water_map.c_str( );
         water_build_entity( out, kind, in );
     };
     visit( visit, root );
+}
+
+// THE WATER MAPS (each surface's +0x100, what 0x535E10 samples): retail
+// resolves them while the entity loads (the WaterMap property's change hook
+// 0x5DC4B0 - asset manager exists 0x5DC730, load 0x5DC7E0); the asset manager
+// / file system is the platform layer, so `fetch` is the hook: true with the
+// asset's bytes when the pack holds "VuWaterMapAsset/<name>". Each blob goes
+// through VuWaterMapAsset's load 0x5C8650 (water_map_load). Call after
+// water_build_world, before water_view_build. Returns the names given but not
+// fetched or not loadable (their surfaces keep a null map, as retail's would
+// when the manager lacks the asset).
+using water_map_fetch_fn = bool ( * )( void* user, const std::string& asset, std::vector< std::uint8_t >& blob );
+
+inline int water_build_maps( water_built_t& b, water_map_fetch_fn fetch, void* user )
+{
+    int missing = 0;
+    for ( std::size_t i = 0; i < b.map_names.size( ) && i < b.maps.size( ); ++i )
+    {
+        b.maps[ i ] = nullptr;
+        if ( b.map_names[ i ].empty( ) )
+            continue;
+        std::vector< std::uint8_t > blob;
+        auto map = std::make_shared< water_map_t >( );
+        if ( !fetch || !fetch( user, "VuWaterMapAsset/" + b.map_names[ i ], blob ) || !water_map_load( blob.data( ), blob.size( ), *map ) )
+        {
+            ++missing;
+            continue;
+        }
+        b.maps[ i ] = map;
+    }
+    return missing;
 }

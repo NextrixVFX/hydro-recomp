@@ -2,6 +2,7 @@
 
 #include <workspace/core/world/tree.hxx>
 #include <workspace/core/world/kernel.hxx>
+#include <workspace/core/world/spray.hxx>
 
 #include <map>
 #include <string>
@@ -1828,9 +1829,268 @@ inline bool verify_wake_kernels96( )
     return failed == 0;
 }
 
+// The water maps and VuWater's one-point query against retail (case water_point). Hydroelectric's water built by
+// water_build_world, its maps fetched from Base.apf by name through water_build_maps (the fetch is the asset manager
+// hook) and loaded by water_map_load (0x5C8650); then
+//   1. per surface: the WaterMap name, the asset's +0x58 / +0x5C / +0x64, each byte array's size and FNV-1a 64, every
+//      entry's +0 / +4 / size / FNV - against retail's own load of the same bytes;
+//   2. water_map_sample (0x535E10) at points inside every mapped surface - the float bits;
+//   3. water_point_query (0x5292D0 over 0x52AEC0 / 0x535E10 / 0x52B0E0, kernels water_view_kernel): all 8 out words
+//      and the slot 3 calls in order; the last queries with water +0x18 set.
+inline std::uint64_t water_check_fnv( const std::vector< std::uint8_t >& v )
+{
+    std::uint64_t x = 0xCBF29CE484222325ull;
+    for ( std::uint8_t b : v )
+        x = ( x ^ b ) * 0x100000001B3ull;
+    return x;
+}
+
+inline bool verify_water_point( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    if ( !tree || pack.empty( ) || !archive.open( pack.c_str( ) ) )
+    {
+        LOG_ERROR( "water_point: the document or Base.apf did not load" );
+        return false;
+    }
+    water_built_t built{};
+    water_build_world( *tree, built, []( entity_t& e ) { return entity_transform( e ); } );
+    const int missing = water_build_maps(
+        built,
+        []( void* user, const std::string& asset, std::vector< std::uint8_t >& blob ) {
+            return static_cast< c_archive* >( user )->read( asset.c_str( ), blob );
+        },
+        &archive );
+    int failed = 0;
+    // 1. the loads
+    int words = 0;
+    if ( built.map_names.size( ) != g_golden_wpt_surfaces )
+    {
+        LOG_ERROR( "water_point: %d surfaces built, retail %d", static_cast< int >( built.map_names.size( ) ), static_cast< int >( g_golden_wpt_surfaces ) );
+        return false;
+    }
+    const unsigned* m = g_golden_wpt_maps;
+    for ( std::size_t k = 0; k < g_golden_wpt_surfaces; ++k )
+    {
+        const char* what = nullptr;
+        if ( built.map_names[ k ] != g_golden_wpt_names[ k ] )
+            what = "the WaterMap name";
+        const water_map_t* map = built.maps[ k ].get( );
+        const unsigned loaded = *m++;
+        if ( !what && ( loaded != 0 ) != ( map != nullptr ) )
+            what = "loaded or not";
+        if ( loaded )
+        {
+            std::vector< unsigned > ours;
+            if ( map )
+            {
+                ours = { map->width, map->height, static_cast< unsigned >( map->map.size( ) ) };
+                for ( const std::vector< std::uint8_t >* a : { &map->map, &map->second, &map->third } )
+                {
+                    const std::uint64_t h = water_check_fnv( *a );
+                    ours.insert( ours.end( ), { static_cast< unsigned >( a->size( ) ), static_cast< unsigned >( h ), static_cast< unsigned >( h >> 32 ) } );
+                }
+                ours.push_back( static_cast< unsigned >( map->entries.size( ) ) );
+                for ( const water_map_t::entry_t& e : map->entries )
+                {
+                    const std::uint64_t h = water_check_fnv( e.bytes );
+                    ours.insert( ours.end( ), { e.a, e.b, static_cast< unsigned >( e.bytes.size( ) ), static_cast< unsigned >( h ),
+                                                  static_cast< unsigned >( h >> 32 ) } );
+                }
+            }
+            const std::size_t n = 13 + 5 * static_cast< std::size_t >( m[ 12 ] );
+            if ( !what && ours.size( ) != n )
+                what = "the entry count";
+            for ( std::size_t i = 0; i < n; ++i )
+                if ( !what && ours[ i ] != m[ i ] )
+                    what = "an asset word";
+            words += static_cast< int >( n );
+            m += n;
+        }
+        if ( what )
+        {
+            ++failed;
+            LOG_ERROR( "water_point: surface %d (%s): %s", static_cast< int >( k ), g_golden_wpt_names[ k ], what );
+        }
+    }
+    water_view_t view{};
+    water_view_build( built, view );
+    // 2. the samples
+    int nonzero = 0;
+    for ( std::size_t k = 0; k < g_golden_wpt_sample_count; ++k )
+    {
+        const unsigned* s = g_golden_wpt_samples + 5 * k;
+        const float p[ 3 ] = { water_bits( s[ 1 ] ), water_bits( s[ 2 ] ), water_bits( s[ 3 ] ) };
+        float r = 0.0f;
+        const bool reached = water_map_sample( view.water.surfaces[ s[ 0 ] ], p, r );
+        std::uint32_t bits;
+        std::memcpy( &bits, &r, 4 );
+        nonzero += s[ 4 ] != 0u ? 1 : 0;
+        if ( !reached || bits != s[ 4 ] )
+        {
+            ++failed;
+            LOG_ERROR( "water_point: sample %d on surface %u: 0x%08X, retail 0x%08X", static_cast< int >( k ), s[ 0 ], bits, s[ 4 ] );
+        }
+    }
+    // 3. the point queries
+    struct logged_t
+    {
+        const water_view_t* view;
+        std::vector< std::uint32_t > log;
+    } logged{ &view, {} };
+    const water_kernel_fn kernel = []( void* user, int wave, water_query_t& ctx ) {
+        logged_t& l = *static_cast< logged_t* >( user );
+        l.log.push_back( static_cast< std::uint32_t >( wave ) );
+        l.log.push_back( ctx.tag );
+        l.log.push_back( ctx.flag100 );
+        return water_view_kernel( const_cast< water_view_t* >( l.view ), wave, ctx );
+    };
+    int found = 0, calls = 0, skipped = 0;
+    for ( std::size_t index = 0; index < g_golden_wpt_count; ++index )
+    {
+        const unsigned* s = g_golden_wpt_words + g_golden_wpt_offsets[ index ];
+        view.water.skip_waves = s[ 0 ] != 0u;
+        skipped += s[ 0 ] ? 1 : 0;
+        float point[ 4 ];
+        for ( int k = 0; k < 4; ++k )
+            point[ k ] = water_bits( s[ 1 + k ] );
+        std::uint32_t out[ 8 ];
+        std::memset( out, 0x77, sizeof( out ) );
+        logged.log.clear( );
+        const bool reached = water_point_query( view.water, point, kernel, &logged, reinterpret_cast< float* >( out ) );
+        const char* what = reached ? nullptr : "a path not recreated was reached";
+        for ( int k = 0; k < 8; ++k )
+            if ( !what && out[ k ] != s[ 5 + k ] )
+                what = "an out word";
+        found += s[ 5 + 2 ] != 0xFEFFFFFFu ? 1 : 0;
+        const unsigned n = s[ 13 ];
+        calls += static_cast< int >( n );
+        if ( !what && logged.log.size( ) != 3 * n )
+            what = "the number of slot 3 calls";
+        for ( unsigned k = 0; k < 3 * n && !what; ++k )
+            if ( logged.log[ k ] != s[ 14 + k ] )
+                what = "a slot 3 call";
+        if ( what )
+        {
+            ++failed;
+            LOG_ERROR( "water_point: query %d: %s", static_cast< int >( index ), what );
+        }
+    }
+    view.water.skip_waves = false;
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_build_maps / water_map_load (VuWaterMapAsset 0x5C8650: %d surfaces, %d asset words incl. FNV-1a of every "
+                     "array, %d names unfetched), water_map_sample (0x535E10: %d samples, %d non-zero) and water_point_query (0x5292D0 / "
+                     "0x52AEC0 / 0x52B0E0: %d queries, %d on a surface, %d slot 3 calls, %d with waves skipped) match retail",
+            static_cast< int >( g_golden_wpt_surfaces ), words, missing, static_cast< int >( g_golden_wpt_sample_count ), nonzero,
+            static_cast< int >( g_golden_wpt_count ), found, calls, skipped );
+    else
+        LOG_ERROR( "water_point FAILED %d", failed );
+    return failed == 0;
+}
+
+// pfx_boat_thrust_rate (world/spray.hxx) against VuPfxEmitBoatThrustQuadFountainInstance's emit 0x4CD5B0 (case
+// boat_thrust): fake nodes and boats, the fountain 0x55D030 a recorded hook. Compared: the rate scale (+0x20) the
+// fountain receives, bit for bit, and that it received dt.
+inline bool verify_boat_thrust( )
+{
+    int failed = 0, zeroed = 0, live = 0, boatless = 0;
+    for ( std::size_t index = 0; index < g_golden_bth_count; ++index )
+    {
+        const unsigned* s = g_golden_bth_words + 24 * index;
+        static solver_rigid_t b;
+        boat_view_t c{ water_bits( s[ 1 ] ), s[ 2 ], static_cast< uint8_t >( s[ 3 ] ), static_cast< uint8_t >( s[ 4 ] ), { }, 0, 0, 0, b };
+        for ( int k = 0; k < 3; ++k )
+            c.o50_60[ k ] = water_bits( s[ 5 + k ] );
+        c.o22C_04 = water_bits( s[ 8 ] );
+        c.o22C_0C = water_bits( s[ 9 ] );
+        c.o22C0_470 = water_bits( s[ 10 ] );
+        for ( int k = 0; k < 4; ++k )
+            b.linear_velocity[ k ] = water_bits( s[ 11 + k ] );
+        std::uint8_t params[ 0x100 ]{};
+        std::memcpy( params + 0xC8, &s[ 15 ], 4 );
+        std::uint8_t records[ 32 ]{};
+        for ( int k = 0; k < 4; ++k )
+            records[ 8 * k ] = static_cast< std::uint8_t >( s[ 16 + k ] );
+        pfx_fountain_node_t node{};
+        node.rate_scale = water_bits( s[ 20 ] );
+        pfx_boat_thrust_rate( node, params, s[ 0 ] ? &c : nullptr, s[ 0 ] ? records : nullptr );
+        unsigned o;
+        std::memcpy( &o, &node.rate_scale, 4 );
+        boatless += s[ 0 ] ? 0 : 1;
+        zeroed += o == 0u ? 1 : 0;
+        live += o != 0u && s[ 0 ] ? 1 : 0;
+        if ( o != s[ 22 ] || s[ 23 ] != s[ 21 ] )
+        {
+            ++failed;
+            LOG_ERROR( "boat_thrust vector %d: rate 0x%08X, retail 0x%08X", static_cast< int >( index ), o, s[ 22 ] );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "pfx_boat_thrust_rate matches VuPfxEmitBoatThrustQuadFountainInstance 0x4CD5B0 on %d vectors (%d with a live "
+                     "rate, %d zero, %d boatless), the rate scale bit for bit",
+            static_cast< int >( g_golden_bth_count ), live, zeroed, boatless );
+    else
+        LOG_ERROR( "boat_thrust FAILED %d of %d", failed, static_cast< int >( g_golden_bth_count ) );
+    return failed == 0;
+}
+
+// pfx_tick_spring (world/pfx.hxx) and pfx_tick_boat_spring (world/spray.hxx) against the spring constraints' slot 1
+// 0x58E1C0 / 0x4CD980 (case pfx_springs): 12 linked particles per vector, every particle word after the tick.
+inline bool verify_pfx_springs( )
+{
+    int failed = 0, moved = 0;
+    const unsigned* s = g_golden_psp_words;
+    for ( std::size_t index = 0; index < g_golden_psp_count; ++index )
+    {
+        const bool boat = s[ 0 ] != 0u;
+        const bool present = s[ 1 ] != 0u;
+        const float dt = water_bits( s[ 2 ] );
+        float params[ 6 ], offset[ 3 ], pos[ 3 ], vel[ 3 ];
+        for ( int k = 0; k < 6; ++k )
+            params[ k ] = water_bits( s[ 3 + k ] );
+        for ( int k = 0; k < 3; ++k )
+        {
+            offset[ k ] = water_bits( s[ 9 + k ] );
+            pos[ k ] = water_bits( s[ 12 + k ] );
+            vel[ k ] = water_bits( s[ 15 + k ] );
+        }
+        s += 18;
+        int bad = 0;
+        for ( int i = 0; i < 12; ++i, s += 64 )
+        {
+            std::uint32_t w[ 32 ];
+            std::memcpy( w, s, sizeof( w ) );
+            float* p = reinterpret_cast< float* >( w );
+            if ( boat )
+                pfx_tick_boat_spring( p, params, present ? pos : nullptr, present ? vel : nullptr, dt );
+            else
+                pfx_tick_spring( p, params, offset, dt );
+            moved += std::memcmp( s, s + 32, 128 ) != 0 ? 1 : 0;
+            bad += std::memcmp( w, s + 32, 128 ) != 0 ? 1 : 0;
+        }
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "pfx_springs vector %d (%s): %d particles differ", static_cast< int >( index ), boat ? "boat" : "spring", bad );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "pfx_tick_spring / pfx_tick_boat_spring match VuPfxSpringConstraintInstance 0x58E1C0 and "
+                     "VuPfxBoatSpringConstraintInstance 0x4CD980 on %d vectors x 12 particles (%d moved), every word",
+            static_cast< int >( g_golden_psp_count ), moved );
+    else
+        LOG_ERROR( "pfx_springs FAILED %d of %d", failed, static_cast< int >( g_golden_psp_count ) );
+    return failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
+    ok = verify_pfx_springs( ) && ok;
+    ok = verify_boat_thrust( ) && ok;
+    ok = verify_water_point( ) && ok;
     ok = verify_wake_kernels96( ) && ok;
     ok = verify_ocean_field( ) && ok;
     ok = verify_ocean_kernels96( ) && ok;
