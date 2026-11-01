@@ -2033,6 +2033,84 @@ inline bool verify_hidden_package( )
     return false;
 }
 
+// VuBoatManager's draw 0x4AB300 / slot 5 0x4AAD70 / slot 3 0x4AAF10 against retail (oracle case boat_manager_game):
+// the sort word, the driver draw's boat, the hook order and arguments, the trigger's name and reference count.
+inline bool verify_boat_manager_game( )
+{
+    const unsigned* g = g_golden_boat_manager_game_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    std::vector< std::uint8_t > images( 8 * 0x400, 0 );
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++, n = *g++, b5c = *g++, b2b8 = *g++, vp = *g++;
+        std::vector< unsigned > flags( *g++ );
+        for ( unsigned& f : flags )
+            f = *g++;
+        const unsigned w70 = *g++, w74 = *g++, refs = *g++, ret = *g++, a70 = *g++, a74 = *g++, refs_after = *g++;
+        const unsigned nn = *g++;
+        const std::string name( reinterpret_cast< const char* >( g ), nn );
+        g += ( nn + 3 ) / 4;
+        std::vector< std::vector< unsigned > > glog( *g++ );
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        std::vector< std::vector< unsigned > > log;
+        std::uint32_t sort = w74;
+        std::int32_t references = static_cast< std::int32_t >( refs );
+        std::string trigger_name;
+        unsigned mine_ret = 0;
+        if ( fn == 0 )
+        {
+            boat_manager_t m;
+            for ( unsigned j = 0; j < n && j < 8; ++j )
+            {
+                images[ 0x400 * j + 0x32F ] = static_cast< std::uint8_t >( flags[ j ] );
+                m.all.boats.push_back( images.data( ) + 0x400 * j );
+            }
+            m.debug_camera = static_cast< std::uint8_t >( b5c );
+            m.draw_hud = static_cast< std::uint8_t >( b2b8 );
+            m.viewport = static_cast< std::int32_t >( vp );
+            boat_manager_draw( m, sort, [ & ]( const void* boat ) {
+                log.push_back( { 1u, static_cast< unsigned >( ( static_cast< const std::uint8_t* >( boat ) - images.data( ) ) / 0x400 ), 1u } );
+            } );
+        }
+        else
+        {
+            boat_manager_game_hooks_t h;
+            h.register_tick = [ & ]( ) { log.push_back( { 2u, 1u, 1u } ); };
+            h.register_draw = [ & ]( ) { log.push_back( { 3u, 1u } ); };
+            h.create_trigger = [ & ]( ) { log.push_back( { 4u, 1u } ); log.push_back( { 5u } ); };
+            h.name_trigger = [ & ]( const std::string& s ) { trigger_name = s; };
+            h.load_trigger = [ & ]( ) { log.push_back( { 6u, 1u } ); };
+            h.hash_trigger = [ & ]( std::uint32_t x ) { log.push_back( { 7u, 1u, x } ); };
+            h.add_trigger = [ & ]( ) { log.push_back( { 8u, 1u } ); };
+            h.remove_trigger = [ & ]( ) { log.push_back( { 9u, 1u } ); };
+            h.delete_trigger = [ & ]( ) { log.push_back( { 10u, 1u } ); };
+            h.unregister_component = [ & ]( ) { log.push_back( { 11u, 1u } ); };
+            h.unregister_draw = [ & ]( ) { log.push_back( { 12u, 1u } ); };
+            h.unregister_tick = [ & ]( ) { log.push_back( { 13u, 1u } ); };
+            if ( fn == 5 )
+                mine_ret = boat_manager_game_initialize( h ) ? 1u : 0u;
+            else
+                boat_manager_game_release( references, h );
+        }
+        const bool same = log == glog && sort == a74 && a70 == w70 && mine_ret == ret &&
+                          static_cast< unsigned >( references ) == refs_after && ( fn != 5 || trigger_name == name );
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "boat_manager_game vector %u (function %u): sort 0x%X (retail 0x%X), %zu calls (%zu)", v, fn, sort, a74, log.size( ), glog.size( ) );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuBoatManager's draw 0x4AB300 / slot 5 0x4AAD70 / slot 3 0x4AAF10 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "boat_manager_game FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -2057,5 +2135,6 @@ inline bool verify_race_all( )
     ok = verify_powerup_db( ) && ok;
     ok = verify_surface_table( ) && ok;
     ok = verify_hidden_package( ) && ok;
+    ok = verify_boat_manager_game( ) && ok;
     return ok;
 }
