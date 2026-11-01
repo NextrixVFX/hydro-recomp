@@ -5,6 +5,7 @@
 #include <workspace/core/world/pfxload.hxx>
 #include <workspace/core/world/pfxmgr.hxx>
 #include <workspace/core/world/pfxsim.hxx>
+#include <workspace/core/world/pfxstatic.hxx>
 #include <workspace/utility/logger.hxx>
 
 #include <cmath>
@@ -127,6 +128,35 @@ public:
     int systems( ) const
     {
         return static_cast< int >( m_statics.size( ) );
+    }
+
+    // VuStaticPfxEntity's three input plugs on the entity's +0x94 instance (world/pfxstatic.hxx, the water agent's
+    // verified handlers; 0 = none -> nothing, as retail's guard): Start 0x5EB200 = slot 11 start; Stop 0x5EB220 =
+    // slot 12 stop(not immediate); Kill 0x5EB250 = slot 12 stop(immediate), then the draw component removed from the
+    // 3D draw manager (+0x1E cleared) - here: not drawn until the next Build tick re-adds it.
+    void plug( std::uint32_t instance, int which )
+    {
+        if ( !m_ready || m_random == nullptr )
+            return;
+        static_t* s = nullptr;
+        for ( static_t& each : m_statics )
+            if ( each.instance == instance )
+                s = &each;
+        if ( s == nullptr )
+            return;
+        shared_t shared( *this );
+        pfx_static_entity_t e;
+        e.instance = s->instance;
+        e.drawn = s->drawn ? 1 : 0;
+        pfx_static_ops_t o = pfx_static_runtime_ops( m_binding );
+        o.draw_remove = []( void*, void* ) { };   // the 3D draw manager: the platform's (a hook); +0x1E is s->drawn
+        if ( which == 0 )
+            pfx_static_start( e, o );
+        else if ( which == 1 )
+            pfx_static_stop( e, o );
+        else
+            pfx_static_kill( e, o );
+        s->drawn = e.drawn != 0;
     }
 
     // One frame: every static pfx's Build tick 0x5EB290, then the "Final" phase.

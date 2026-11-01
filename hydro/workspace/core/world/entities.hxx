@@ -64,6 +64,7 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     std::vector< trigger_t > fresh_triggers;
     int pfx_placed = 0;
     int pfx_unplaced = 0;
+    std::map< std::string, std::uint32_t > fresh_static_pfx;
     int triggers_unplaced = 0;
     // The logic / action / motion / settings consumers (engine entity/actions.hxx).
     std::vector< rotator_t > fresh_rotators;
@@ -294,7 +295,9 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
             {
                 float color[ 4 ];
                 static_pfx_color( p, color );
-                m_pfx.add_static( m_archive, p.effect_name, t->world, p.pfx_scale, color, p.initially_active != 0 );
+                // +0x94 for its Start / Stop / Kill plugs (graph.hxx): 0 when the create answered none - then
+                // each plug's guard does nothing, as retail's.
+                fresh_static_pfx[ trail ] = m_pfx.add_static( m_archive, p.effect_name, t->world, p.pfx_scale, color, p.initially_active != 0 );
                 ++pfx_placed;
             }
         }
@@ -470,6 +473,7 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     m_initialized = std::move( fresh_initialized );
     m_ifs = std::move( fresh_ifs );
     m_logic = std::move( fresh_logic );
+    m_static_pfx = std::move( fresh_static_pfx );
     // Dev trace: each logic entity's links (both ends are recorded, so its inputs' senders are here too).
     for ( const auto& pair : m_graph )
         if ( m_logic.count( pair.first.first ) != 0 )

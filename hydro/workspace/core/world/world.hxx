@@ -1622,6 +1622,7 @@ private:
     // The engine's logic entities (world/logic.hxx) by path: their tree state (race.hxx logic_state_t), dispatched
     // by graph.hxx; m_logic_fired counts their handlers run.
     std::map< std::string, entity_t* > m_logic;
+    std::map< std::string, std::uint32_t > m_static_pfx;   // VuStaticPfxEntity path -> its +0x94 instance (0: none)
     int m_logic_fired = 0;
     // Their game environment: the gameutil +0x50 root (load_scene's), no SKU (the asset manager's vt+0x7C: a platform
     // answer, not supplied) and no entity repository (find / word: not wired) - those filters count unrecreated.

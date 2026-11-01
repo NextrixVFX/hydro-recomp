@@ -129,6 +129,22 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
         return retval_t{};
     }
 
+    // VuStaticPfxEntity's input plugs (ctor 0x5EAA40): Start 0x5EB200, Stop 0x5EB220, Kill 0x5EB250 on its +0x94
+    // system (world/pfxstatic.hxx, via c_effects::plug); each returns the empty VuRetVal.
+    const auto effect = m_static_pfx.find( entity );
+    if ( effect != m_static_pfx.end( ) )
+    {
+        const int which = plug == "Start" ? 0 : plug == "Stop" ? 1 : plug == "Kill" ? 2 : -1;
+        if ( which < 0 )
+        {
+            count_unhandled( entity, plug );
+            return retval_t{};
+        }
+        m_pfx.plug( effect->second, which );
+        ++m_fired;
+        return retval_t{};
+    }
+
     // VuSetFrontEndCameraEntity. "Trigger" is its ONE input plug, named
     // inside the init helper @0x409570 which binds
     // VuMethod1<VuSetFrontEndCameraEntity,VuRetVal,VuParams const&> to the
