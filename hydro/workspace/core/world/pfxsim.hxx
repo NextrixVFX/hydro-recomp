@@ -995,11 +995,9 @@ inline void pfx_heap_pattern_tick( pfx_heap_t& h, std::uint32_t r, std::uint32_t
 // pattern instances on the instance's +0x10 list - pfx_geom_draw_matrix /
 // pfx_geom_draw_colour per geom particle, the particle list itself for the
 // quad / trail renderers (0x58BD60 / 0x58D030, GPU: hooks).
-// NOT RECREATED (the caller's, or UNKNOWN): the effect asset's node load
-// (VuPfxNode slot 2 0x563D40 - "Properties" through each node class's property
-// list, "ChildNodes" through the node registry 0x51C840) - the caller places
-// nodes with pfx_runtime_node at their params' retail offsets; the project map
-// lookup 0x51DBD0; the VuRand's seeding.
+// The effect asset's node load and the path lookup are world/pfxload.hxx's
+// (pfx_load_asset, pfx_find, pfx_runtime_create_path); the VuPfxManager pool
+// is world/pfxmgr.hxx's. NOT RECREATED: the VuRand's seeding.
 struct pfx_runtime_t
 {
     pfx_heap_t heap;
