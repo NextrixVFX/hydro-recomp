@@ -303,3 +303,179 @@ inline void ai_path_follow( const std::uint8_t* const* points, std::int32_t coun
         rem = rem - state_f( q, 0xB0 );
     }
 }
+// One hit the dynamics world's ray test reports (Bullet's traversal and
+// narrow phase - a HOOK): the collision object (a rigid body image: +0x10
+// its world transform, +0xCC its shape, +0xF4 its internal type, +0x140 its
+// linear velocity, +0x2CA its group, +0x2D0 its flags), the hit fraction,
+// the normal (16 b) and whether it is in world space (else in the object's).
+struct ai_ray_hit_t
+{
+    const std::uint8_t* body = nullptr;
+    float fraction = 0.0f;
+    float normal[ 4 ] = { };
+    bool world = true;
+};
+
+// What 0x40C750 calls that is not recreated: g_vudynamicsimpl (0x75900C)
+// vt+0x6C's collision world vt+0x18 rayTest (its hits, in Bullet's order),
+// and the hit body's shape (+0xCC) vt+4 getAabb(body +0x10, min, max).
+struct ai_avoid_hooks_t
+{
+    void* user = nullptr;
+    int ( *ray )( void* user, const float* from, const float* to, const ai_ray_hit_t** hits ) = nullptr;
+    void ( *aabb )( void* user, const std::uint8_t* body, float* min, float* max ) = nullptr;
+};
+
+// VuAiRayTestResult (vtable 0x736F7C; built on 0x40C750's stack): +4 hit,
+// +8 body, +0xC fraction (1.0 first), +0x14 normal, +0x24 the body to
+// ignore (the boat's), +0x28 group mask 0x11, +0x2C flag mask 0x10. (+0x10,
+// the part id 0x50CE20 passes, is never read here.)
+struct ai_ray_result_t
+{
+    bool hit = false;
+    const std::uint8_t* body = nullptr;
+    float fraction = 1.0f;
+    float normal[ 4 ] = { };
+};
+
+// One ray through VuDynamicsRayTest's wrapper (vtable 0x74C5B4): for each
+// hit, needsCollision 0x50CDF0 (internal type +0xF4 == 2, then the result's
+// slot 0 0x404B60: not the ignored body, sign-extended +0x2CA & 0x11, and
+// not +0x2D0 & 0x10) and addSingleResult 0x50CE20 (a local normal turned by
+// the body's basis rows +0x10 / +0x20 / +0x30, w 0; the result's slot 1
+// 0x404B20 keeps it when its fraction is ordered <= the kept one; hit = 1
+// either way). The hit flag alone is cleared between rays.
+inline void ai_ray( ai_ray_result_t& r, const std::uint8_t* ignore, const float* from, const float* to, const ai_avoid_hooks_t& hooks )
+{
+    const ai_ray_hit_t* hits = nullptr;
+    const int n = hooks.ray ? hooks.ray( hooks.user, from, to, &hits ) : 0;
+    for ( int k = 0; k < n; ++k )
+    {
+        const ai_ray_hit_t& h = hits[ k ];
+        std::int32_t type, flags;
+        std::int16_t group;
+        std::memcpy( &type, h.body + 0xF4, 4 );
+        std::memcpy( &group, h.body + 0x2CA, 2 );
+        std::memcpy( &flags, h.body + 0x2D0, 4 );
+        if ( type != 2 || h.body == ignore || ( 0x11 & static_cast< std::int32_t >( group ) ) == 0 || ( 0x10 & flags ) != 0 )
+            continue;
+        float n4[ 4 ];
+        std::memcpy( n4, h.normal, 16 );
+        if ( !h.world )
+        {
+            const float nx = h.normal[ 0 ], ny = h.normal[ 1 ], nz = h.normal[ 2 ];
+            for ( int row = 0; row < 3; ++row )
+            {
+                const std::uint8_t* b = h.body + 0x10 + 0x10 * row;
+                n4[ row ] = ( state_f( b, 4 ) * ny + state_f( b, 0 ) * nx ) + state_f( b, 8 ) * nz;
+            }
+            n4[ 3 ] = 0.0f;
+        }
+        if ( _mm_comige_ss( _mm_set_ss( r.fraction ), _mm_set_ss( h.fraction ) ) )
+        {
+            r.body = h.body;
+            r.fraction = h.fraction;
+            std::memcpy( r.normal, n4, 16 );
+        }
+        r.hit = true;
+    }
+}
+
+// 0x40C750 (thiscall, the driver; pos*, target*; retn 8), VuAiDriver's
+// obstacle avoidance. A ray from pos to (target x, target y, pos z), then
+// while it hits (at most three steps, a fresh ray to the target after each):
+// the hit body's aabb (its shape's getAabb) gives the centre c and r =
+// maxss(half x, half y); the hit point H = pos + (to - pos) x fraction.
+// Only a body whose velocity differs from the boat's (+0x21C +0x140) by
+// more than 10 (VuMath_sqrt, ordered) is avoided. r <= 40 (0x6F77BC): the
+// two points c +/- s x (+0x98 + r), s = the unit of (u_y - 0 u_z, 0 u_z -
+// u_x, 0 u_x - 0 u_y) for u = the unit of pos - c; the target becomes the
+// one whose direction from pos agrees more with the boat's velocity (P1
+// when ordered greater, else P2). r > 40 (or NaN): with |(n_x + n_y) x 0 +
+// n_z| < 0.707 (0x6F7674; the hit normal) the target becomes to - n k, k =
+// n . (to - (H + +0x98 x the unit of pos - to)). Either way the target's w
+// is a stale stack word (UNKNOWN: left).
+inline void ai_avoid( float margin, const std::uint8_t* body, const float* pos, float* target, const ai_avoid_hooks_t& hooks )
+{
+    auto gt = []( float a, float b ) { return _mm_comigt_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) != 0; };   // ordered a > b
+    ai_ray_result_t res;
+    float to[ 3 ] = { target[ 0 ], target[ 1 ], pos[ 2 ] };
+    {
+        const float from4[ 4 ] = { pos[ 0 ], pos[ 1 ], pos[ 2 ], 0.0f };
+        const float to4[ 4 ] = { to[ 0 ], to[ 1 ], to[ 2 ], 0.0f };
+        ai_ray( res, body, from4, to4, hooks );
+    }
+    if ( !res.hit )
+        return;
+    for ( int step = 0;; ++step )
+    {
+        float mn[ 4 ] = { }, mx[ 4 ] = { };
+        if ( hooks.aabb )
+            hooks.aabb( hooks.user, res.body, mn, mx );
+        const float hx = ( mx[ 0 ] - mn[ 0 ] ) * 0.5f, hy = ( mx[ 1 ] - mn[ 1 ] ) * 0.5f, hz = ( mx[ 2 ] - mn[ 2 ] ) * 0.5f;
+        const float cx = mn[ 0 ] + hx, cy = mn[ 1 ] + hy, cz = mn[ 2 ] + hz;
+        const float r = ai_maxss( hx, hy );
+        const float px = pos[ 0 ], py = pos[ 1 ], pz = pos[ 2 ];
+        const float f = res.fraction;
+        const float Hx = px + ( to[ 0 ] - px ) * f, Hy = py + ( to[ 1 ] - py ) * f, Hz = pz + ( to[ 2 ] - pz ) * f;
+        const float dvx = state_f( res.body, 0x140 ) - state_f( body, 0x140 );
+        const float dvy = state_f( res.body, 0x144 ) - state_f( body, 0x144 );
+        const float dvz = state_f( res.body, 0x148 ) - state_f( body, 0x148 );
+        if ( gt( hull_sqrt( ( dvx * dvx + dvy * dvy ) + dvz * dvz ), 10.0f ) )
+        {
+            if ( _mm_comige_ss( _mm_set_ss( 40.0f ), _mm_set_ss( r ) ) )
+            {
+                const float dx = px - cx, dy = py - cy, dz = pz - cz;
+                const float n = 1.0f / hull_sqrt( ( dx * dx + dy * dy ) + dz * dz );
+                const float ux = n * dx, uy = n * dy, uz0 = n * dz * 0.0f;
+                const float a = uy - uz0, b = uz0 - ux, c = ux * 0.0f - uy * 0.0f;
+                const float m = 1.0f / hull_sqrt( ( b * b + a * a ) + c * c );
+                const float R = margin + r;
+                const float A = a * m, B = b * m, C = c * m;
+                const float p1[ 3 ] = { A * R + cx, B * R + cy, C * R + cz };
+                const float p2[ 3 ] = { cx - A * R, cy - B * R, cz - C * R };
+                float e1[ 3 ] = { p1[ 0 ] - px, p1[ 1 ] - py, p1[ 2 ] - pz };
+                const float n1 = 1.0f / hull_sqrt( ( e1[ 0 ] * e1[ 0 ] + e1[ 1 ] * e1[ 1 ] ) + e1[ 2 ] * e1[ 2 ] );
+                float e2[ 3 ] = { p2[ 0 ] - px, p2[ 1 ] - py, p2[ 2 ] - pz };
+                const float n2 = 1.0f / hull_sqrt( ( e2[ 0 ] * e2[ 0 ] + e2[ 1 ] * e2[ 1 ] ) + e2[ 2 ] * e2[ 2 ] );
+                for ( int k = 0; k < 3; ++k )
+                {
+                    e1[ k ] = e1[ k ] * n1;
+                    e2[ k ] = e2[ k ] * n2;
+                }
+                const float vx = state_f( body, 0x140 ), vy = state_f( body, 0x144 ), vz = state_f( body, 0x148 );
+                const float iv = 1.0f / hull_sqrt( ( vx * vx + vy * vy ) + vz * vz );
+                const float wx = vx * iv, wy = vy * iv, wz = vz * iv;
+                const float dot1 = ( e1[ 0 ] * wx + e1[ 1 ] * wy ) + e1[ 2 ] * wz;
+                const float dot2 = ( e2[ 0 ] * wx + e2[ 1 ] * wy ) + e2[ 2 ] * wz;
+                const float* pick = gt( dot1, dot2 ) ? p1 : p2;
+                std::memcpy( target, pick, 12 );
+            }
+            else
+            {
+                const float nx = res.normal[ 0 ], ny = res.normal[ 1 ], nz = res.normal[ 2 ];
+                if ( gt( 0.70700002f, std::fabs( ( nx + ny ) * 0.0f + nz ) ) )
+                {
+                    const float dx = px - to[ 0 ], dy = py - to[ 1 ], dz = pz - to[ 2 ];
+                    const float il = 1.0f / hull_sqrt( ( dx * dx + dy * dy ) + dz * dz );
+                    const float qx = Hx + margin * ( dx * il ), qy = Hy + margin * ( dy * il ), qz = Hz + margin * ( dz * il );
+                    const float k = ( nx * ( to[ 0 ] - qx ) + ny * ( to[ 1 ] - qy ) ) + nz * ( to[ 2 ] - qz );
+                    target[ 0 ] = to[ 0 ] - nx * k;
+                    target[ 1 ] = to[ 1 ] - ny * k;
+                    target[ 2 ] = to[ 2 ] - nz * k;
+                }
+            }
+        }
+        to[ 0 ] = target[ 0 ];
+        to[ 1 ] = target[ 1 ];
+        to[ 2 ] = target[ 2 ];
+        res.hit = false;
+        {
+            const float from4[ 4 ] = { pos[ 0 ], pos[ 1 ], pos[ 2 ], 0.0f };
+            const float to4[ 4 ] = { to[ 0 ], to[ 1 ], to[ 2 ], 0.0f };
+            ai_ray( res, body, from4, to4, hooks );
+        }
+        if ( !res.hit || step >= 2 )
+            return;
+    }
+}

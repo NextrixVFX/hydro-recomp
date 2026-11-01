@@ -1512,6 +1512,114 @@ inline bool verify_ai_path_follow( )
     return failed == 0;
 }
 
+// ai_avoid (boat/ai.hxx) against retail's 0x40C750 (oracle case ai_avoid):
+// the hooks replay the case's scripted world - each ray call returns its
+// table, getAabb its body's box - and record what they were asked; the
+// target words after (but the stale ones), the ray calls' from / to and the
+// getAabb bodies must all be retail's.
+struct ai_avoid_world_t
+{
+    std::vector< std::vector< std::uint8_t > > bodies;
+    std::vector< std::array< float, 6 > > boxes;
+    std::vector< std::vector< ai_ray_hit_t > > rays;
+    std::vector< std::array< unsigned, 8 > > calls;
+    std::vector< unsigned > aabbs;
+};
+
+inline bool verify_ai_avoid( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_ai_avoid_count; ++index )
+    {
+        const unsigned* s = g_golden_ai_avoid_words + g_golden_ai_avoid_offsets[ index ];
+        float margin, pos[ 4 ], target[ 4 ];
+        std::memcpy( &margin, s++, 4 );
+        std::memcpy( pos, s, 16 );
+        std::memcpy( target, s + 4, 16 );
+        s += 8;
+        ai_avoid_world_t w;
+        const unsigned nb = *s++;
+        for ( unsigned k = 0; k < nb; ++k )
+        {
+            w.bodies.emplace_back( reinterpret_cast< const std::uint8_t* >( s ), reinterpret_cast< const std::uint8_t* >( s ) + 0x300 );
+            s += 0x300 / 4;
+            std::array< float, 6 > box;
+            std::memcpy( box.data( ), s, 24 );
+            s += 6;
+            w.boxes.push_back( box );
+        }
+        const unsigned nr = *s++;
+        for ( unsigned r = 0; r < nr; ++r )
+        {
+            std::vector< ai_ray_hit_t > hits( *s++ );
+            for ( ai_ray_hit_t& h : hits )
+            {
+                h.body = w.bodies[ *s++ ].data( );
+                std::memcpy( &h.fraction, s++, 4 );
+                std::memcpy( h.normal, s, 16 );
+                s += 4;
+                h.world = *s++ != 0;
+            }
+            w.rays.push_back( hits );
+        }
+        ai_avoid_hooks_t hooks;
+        hooks.user = &w;
+        hooks.ray = []( void* u, const float* from, const float* to, const ai_ray_hit_t** hits ) -> int
+        {
+            ai_avoid_world_t& w = *static_cast< ai_avoid_world_t* >( u );
+            std::array< unsigned, 8 > c;
+            std::memcpy( c.data( ), from, 16 );
+            std::memcpy( c.data( ) + 4, to, 16 );
+            const std::size_t k = w.calls.size( );
+            w.calls.push_back( c );
+            if ( k >= w.rays.size( ) )
+                return 0;
+            *hits = w.rays[ k ].data( );
+            return static_cast< int >( w.rays[ k ].size( ) );
+        };
+        hooks.aabb = []( void* u, const std::uint8_t* body, float* mn, float* mx )
+        {
+            ai_avoid_world_t& w = *static_cast< ai_avoid_world_t* >( u );
+            for ( std::size_t k = 0; k < w.bodies.size( ); ++k )
+                if ( w.bodies[ k ].data( ) == body )
+                {
+                    std::memcpy( mn, w.boxes[ k ].data( ), 12 );
+                    std::memcpy( mx, w.boxes[ k ].data( ) + 3, 12 );
+                    w.aabbs.push_back( static_cast< unsigned >( k ) );
+                }
+        };
+        ai_avoid( margin, w.bodies[ 0 ].data( ), pos, target, hooks );
+        unsigned out[ 4 ];
+        std::memcpy( out, target, 16 );
+        const unsigned* want = s;
+        const unsigned stale = s[ 4 ];
+        s += 5;
+        int bad = -1;
+        for ( int k = 0; k < 4 && bad < 0; ++k )
+            if ( !( stale & ( 1u << k ) ) && out[ k ] != want[ k ] )
+                bad = k;
+        const unsigned nc = *s++;
+        if ( bad < 0 && nc != w.calls.size( ) )
+            bad = 0x100;
+        for ( unsigned k = 0; k < nc && bad < 0; ++k )
+            if ( std::memcmp( w.calls[ k ].data( ), s + 8 * k, 32 ) != 0 )
+                bad = 0x100 + 1 + static_cast< int >( k );
+        s += 8 * nc;
+        const unsigned na = *s++;
+        if ( bad < 0 && ( na != w.aabbs.size( ) || std::memcmp( s, w.aabbs.data( ), 4 * na ) != 0 ) )
+            bad = 0x200;
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "ai avoid vector %d differs from retail at %d (0..3 target word, 0x100 + k ray call k, 0x200 the getAabb calls)",
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuAiDriver's obstacle avoidance 0x40C750 (its ray-test result logic; the world's traversal hooked) matches retail: %d vectors",
+                     static_cast< int >( g_golden_ai_avoid_count ) );
+    else
+        LOG_ERROR( "ai avoid FAILED %d of %d vectors", failed, static_cast< int >( g_golden_ai_avoid_count ) );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
@@ -1535,5 +1643,6 @@ inline bool verify_boat_all( )
     ok = verify_ai_controls( ) && ok;
     ok = verify_ai_steer( ) && ok;
     ok = verify_ai_path_follow( ) && ok;
+    ok = verify_ai_avoid( ) && ok;
     return ok;
 }
