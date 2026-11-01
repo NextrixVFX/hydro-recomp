@@ -18,10 +18,10 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 1810 | 747082 |
+| verified | 1814 | 747413 |
 | callee | 1013 | 218084 |
-| cited | 366 | 124496 |
-| absent | 5449 | 1136598 |
+| cited | 368 | 125984 |
+| absent | 5443 | 1134779 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -30,8 +30,8 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 
 | subsystem | functions | verified | callee | cited | absent | verified bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| unattributed | 1845 | 419 | 197 | 87 | 1142 | 251440 of 695394 |
-| physics (Bullet) | 646 | 332 | 89 | 47 | 178 | 112027 of 256657 |
+| unattributed | 1845 | 419 | 197 | 88 | 1141 | 251440 of 695394 |
+| physics (Bullet) | 646 | 336 | 89 | 48 | 173 | 112358 of 256657 |
 | entity / component / script framework | 1094 | 201 | 205 | 43 | 645 | 61293 of 207438 |
 | HUD / UI / fonts | 648 | 100 | 138 | 14 | 396 | 53572 of 184315 |
 | game modes / race | 766 | 81 | 60 | 22 | 603 | 40888 of 179957 |
@@ -58,7 +58,7 @@ Over-approximate (a referenced vtable brings every slot) and under-approximate (
 
 | tier | functions | verified | callee | cited | absent | runtime / STL / thunk | platform layer | game + engine logic not verified |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| race | 4905 | 1539 | 682 | 327 | 2357 | 68 | 610 | 2782 |
+| race | 4905 | 1543 | 682 | 329 | 2351 | 68 | 610 | 2778 |
 | game | 2431 | 269 | 329 | 37 | 1796 | 77 | 313 | 1781 |
 | service | 452 | 0 | 0 | 0 | 452 | 45 | 98 | 309 |
 | dead | 850 | 2 | 2 | 2 | 844 | 61 | 126 | 661 |

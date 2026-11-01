@@ -5136,9 +5136,9 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x526B40,176,sub_526B40,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x526BF0,846,sub_526BF0,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/compound.hxx; hydro/workspace/core/world/bodies.hxx,False,False,race
 0x526F40,227,sub_526F40,,,physics (Bullet) (by address),absent,,False,False,race
-0x527030,222,sub_527030,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/compound.hxx; hydro/workspace/core/boat/entity.hxx; hydro/workspace/utility/fluid.hxx,False,False,race
-0x527110,74,sub_527110,btCompoundShape,btCompoundShape+14,physics (Bullet),absent,,False,False,race
-0x527160,275,sub_527160,btCompoundShape,btCompoundShape+15,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
+0x527030,222,sub_527030,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/compound.hxx; hydro/workspace/core/boat/entity.hxx; hydro/workspace/utility/checks/rays.hxx; hydro/workspace/utility/fluid.hxx,False,False,race
+0x527110,74,sub_527110,btCompoundShape,btCompoundShape+14,physics (Bullet),verified,engine/workspace/core/collision/compound.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
+0x527160,275,sub_527160,btCompoundShape,btCompoundShape+15,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; engine/workspace/core/collision/compound.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x527280,874,sub_527280,btCompoundShape,btCompoundShape+1,physics (Bullet),verified,engine/workspace/core/collision/compound.hxx; engine/workspace/utility/broad.hxx,False,False,race
 0x5275F0,222,sub_5275F0,btCompoundShape,btCompoundShape+7,physics (Bullet),verified,engine/workspace/core/collision/compound.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
 0x5276D0,467,sub_5276D0,btCompoundShape,btCompoundShape+5,physics (Bullet),absent,,False,False,race
@@ -5673,10 +5673,10 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x54B230,388,sub_54B230,btPolyhedralConvexAabbCachingShape; btPolyhedralConvexShape,btPolyhedralConvexAabbCachingShape+15; btPolyhedralConvexShape+15,physics (Bullet),absent,,False,False,race
 0x54B3C0,243,sub_54B3C0,btPolyhedralConvexAabbCachingShape; btPolyhedralConvexShape,btPolyhedralConvexAabbCachingShape+17; btPolyhedralConvexShape+17,physics (Bullet),absent,,False,False,race
 0x54B4C0,281,sub_54B4C0,btConvexTriangleMeshShape; btPolyhedralConvexAabbCachingShape; btPolyhedralConvexShape,btConvexTriangleMeshShape+7; btPolyhedralConvexAabbCachingShape+7; btPolyhedralConvexShape+7,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
-0x54B5E0,100,sub_54B5E0,btPolyhedralConvexAabbCachingShape,btPolyhedralConvexAabbCachingShape+5,physics (Bullet),absent,,False,False,race
+0x54B5E0,100,sub_54B5E0,btPolyhedralConvexAabbCachingShape,btPolyhedralConvexAabbCachingShape+5,physics (Bullet),verified,engine/workspace/core/collision/support.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x54B650,125,sub_54B650,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/support.hxx; hydro/workspace/core/boat/load.hxx,False,False,race
 0x54B6D0,38,sub_54B6D0,btConvexTriangleMeshShape; btPolyhedralConvexAabbCachingShape,btConvexTriangleMeshShape+1; btPolyhedralConvexAabbCachingShape+1,physics (Bullet),verified,engine/workspace/core/collision/concave.hxx; engine/workspace/core/collision/support.hxx,False,False,race
-0x54B700,292,sub_54B700,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/support.hxx; hydro/workspace/core/boat/load.hxx,False,False,race
+0x54B700,292,sub_54B700,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/support.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x54B830,172,sub_54B830,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/teardown.hxx,False,False,race
 0x54B8E0,240,sub_54B8E0,,,physics (Bullet) (by address),absent,,False,False,race
 0x54B9D0,647,sub_54B9D0,,,physics (Bullet) (by address),absent,,False,False,race
@@ -6298,7 +6298,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5828A0,506,sub_5828A0,,,unattributed,absent,,False,False,race
 0x582AA0,446,sub_582AA0,,,unattributed,absent,,False,False,race
 0x582C60,65,sub_582C60,,,unattributed,absent,,False,False,race
-0x582CB0,1374,sub_582CB0,,,unattributed,absent,,False,False,race
+0x582CB0,1374,sub_582CB0,,,unattributed,cited,engine/workspace/core/collision/concave.hxx,False,False,race
 0x583210,810,sub_583210,Z::2::_NABVbtVector3::QAEXPAVbtStridingMeshInterface::btOptimizedBvh::?1??build::.?AUNodeTriangleCallback,Z::2::_NABVbtVector3::QAEXPAVbtStridingMeshInterface::btOptimizedBvh::?1??build::.?AUNodeTriangleCallback+1,rendering / gfx,absent,,False,False,race
 0x583540,789,sub_583540,Z::2::_NABVbtVector3::QAEXPAVbtStridingMeshInterface::btOptimizedBvh::?2??build::.?AUQuantizedNodeTriangleCallback,Z::2::_NABVbtVector3::QAEXPAVbtStridingMeshInterface::btOptimizedBvh::?2??build::.?AUQuantizedNodeTriangleCallback+1,rendering / gfx,absent,,False,False,race
 0x583860,1388,sub_583860,,,rendering / gfx (by address),absent,,False,False,race
@@ -6851,8 +6851,8 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5AF050,152,sub_5AF050,,,physics (Bullet) (by address),absent,,False,False,race
 0x5AF0F0,134,sub_5AF0F0,btBvhTriangleMeshShape,btBvhTriangleMeshShape+14,physics (Bullet),verified,engine/workspace/core/collision/bvh.hxx; engine/workspace/core/collision/concave.hxx; engine/workspace/utility/meshes.hxx,False,False,race
 0x5AF180,382,sub_5AF180,Z::1::ABVbtVector3::UBEXPAVbtTriangleCallback::btBvhTriangleMeshShape::?1??processAllTriangles::.?AUMyNodeOverlapCallback,Z::1::ABVbtVector3::UBEXPAVbtTriangleCallback::btBvhTriangleMeshShape::?1??processAllTriangles::.?AUMyNodeOverlapCallback+1,rendering / gfx,verified,engine/workspace/core/collision/bvh.hxx; engine/workspace/utility/meshes.hxx,False,False,race
-0x5AF300,120,sub_5AF300,btBvhTriangleMeshShape,btBvhTriangleMeshShape+5,physics (Bullet),absent,,False,False,race
-0x5AF380,114,sub_5AF380,,,physics (Bullet) (by address),absent,,False,False,race
+0x5AF300,120,sub_5AF300,btBvhTriangleMeshShape,btBvhTriangleMeshShape+5,physics (Bullet),verified,engine/workspace/core/collision/concave.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
+0x5AF380,114,sub_5AF380,,,physics (Bullet) (by address),cited,engine/workspace/core/collision/concave.hxx,False,False,race
 0x5AF400,119,sub_5AF400,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/bvh.hxx; engine/workspace/core/collision/concave.hxx; hydro/workspace/core/world/bodies.hxx,False,False,race
 0x5AF480,356,sub_5AF480,btBvhTriangleMeshShape,btBvhTriangleMeshShape+12,physics (Bullet),cited,hydro/workspace/core/world/bodies.hxx,False,False,race
 0x5AF5F0,71,sub_5AF5F0,btBvhTriangleMeshShape,btBvhTriangleMeshShape+17,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
@@ -8106,7 +8106,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x60BED0,190,sub_60BED0,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/concave.hxx,False,False,race
 0x60BF90,321,sub_60BF90,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/concave.hxx,False,False,race
 0x60C0E0,215,sub_60C0E0,SupportVertexCallback,SupportVertexCallback+1,other classes,verified,engine/workspace/core/collision/concave.hxx,False,False,race
-0x60C1C0,37,sub_60C1C0,btTriangleMeshShape,btTriangleMeshShape+5,physics (Bullet),absent,,False,False,race
+0x60C1C0,37,sub_60C1C0,btTriangleMeshShape,btTriangleMeshShape+5,physics (Bullet),verified,engine/workspace/core/collision/concave.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x60C1F0,7,sub_60C1F0,btBvhTriangleMeshShape; btTriangleMeshShape,btBvhTriangleMeshShape+6; btTriangleMeshShape+6,physics (Bullet),callee,,False,False,race
 0x60C200,169,sub_60C200,btTriangleMeshShape,btTriangleMeshShape+14,physics (Bullet),verified,engine/workspace/core/collision/concave.hxx,False,False,race
 0x60C2B0,273,sub_60C2B0,Z::1::ABVbtVector3::UBEXPAVbtTriangleCallback::btTriangleMeshShape::?1??processAllTriangles::.?AUFilteredCallback,Z::1::ABVbtVector3::UBEXPAVbtTriangleCallback::btTriangleMeshShape::?1??processAllTriangles::.?AUFilteredCallback+1,rendering / gfx,verified,engine/workspace/core/collision/concave.hxx,False,False,race
