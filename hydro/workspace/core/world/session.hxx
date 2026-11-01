@@ -110,7 +110,7 @@ struct race_world_t
     // release and graph are the world's (c_world), their tick / draw the UI's; null: no HUD projects (UNKNOWN, logged).
     std::function< void( int project, race_hud_verb_t verb, float dt ) > hud;
     // A VuEventManager broadcast reaching the world's graph (the HUD's / the level's subscribers).
-    std::function< void( const char* name ) > broadcast;
+    std::function< void( const char* name, const ui_params_t* params ) > broadcast;   // params null: an empty VuParams
     // The world's VuPfx runtime / VuPfxManager g 0x75905C (c_effects; null: none - the boats' pfx calls are UNKNOWN).
     pfx_runtime_t* pfx = nullptr;
     pfx_manager_t* pfx_manager = nullptr;
@@ -1249,10 +1249,13 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         else
             race_unwired( s, "the race HUD projects (VuRaceGame +0x738 / +0x73C / +0x740) with no world to load them - not run (UNKNOWN)" );
     };
-    s.rules.hooks.broadcast = [ &s ]( const char* name, bool )
+    s.rules.hooks.broadcast = [ &s ]( const char* name, bool value )
     {
+        // The VuParams 0x48AB70 builds: one bool (0x4051A0: type 3, the byte - 5 bytes).
+        ui_params_t p;
+        ui_params_add_bool( p, value );
         if ( s.world.broadcast )
-            s.world.broadcast( name );
+            s.world.broadcast( name, &p );
     };
     s.rules.hooks.platform = [ &s ]( const std::string& call ) { race_unwired( s, "platform services: " + call + " (saves / online / achievements / audio - hooks)" ); };
     s.rules.track = s.game.track;

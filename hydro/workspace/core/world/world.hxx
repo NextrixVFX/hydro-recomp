@@ -552,7 +552,9 @@ private:
     // The race HUD projects and their countdown (world/huds.hxx).
     void load_huds( );
     void hud( int project, race_hud_verb_t verb, float dt );
-    void race_broadcast( const char* name );
+    void race_broadcast( const char* name, const ui_params_t* params = nullptr, int origin = -1 );
+    void hud_post( std::uint32_t hash, const ui_params_t& p, int origin );
+    bool m_hud_posting = false;
     static void multi_delay_ticked( void* user, float dt );
 
     // --front-end-defaults: the test profile through the recreated selector chain (world/front.hxx).
@@ -997,7 +999,7 @@ public:
         // VuRaceGame's ctor 0x489030 loads its three HUD projects (0x4B4360) - before the boat load.
         load_huds( );
         m_race.world.hud = [ this ]( int project, race_hud_verb_t verb, float step ) { hud( project, verb, step ); };
-        m_race.world.broadcast = [ this ]( const char* name ) { race_broadcast( name ); };
+        m_race.world.broadcast = [ this ]( const char* name, const ui_params_t* params ) { race_broadcast( name, params ); };
         const bool started = race_session_start( m_race, mode, game_data, dbs, m_archive, *m_tree, track( ), m_vurandom,
                                                  [ this ] { project_initialized( ); } );
         if ( !m_project_initialized )
