@@ -331,6 +331,270 @@ inline bool verify_ui_subtitles_combo( )
     return failed == 0;
 }
 
+// verify_ui_settings_combos (batch 24): the other five settings combos - units
+// 0x46D3E0 / 0x46D640, fidelity 0x46DA70 / 0x46DCD0 + the setter 0x4B50A0, flip
+// interval 0x46DE30 / 0x46E050, vibration 0x46CD70 / 0x46CF70, tilt steering
+// 0x46C780 / 0x46C9B0 - through one script per authored instance (oracle case
+// settings_combos): c_ui_combo_box::initialize_settings / apply_settings with the
+// base's tick / SetFocus / events / change / release. The fields from OUR loaded
+// entity (compared with retail's bytes first); the fake world per slot 6 (the
+// settings, g_vumetrosys's two answers, VuGfxSort +0xC) is the case's. Per step:
+// the state +0x2A0..+0x2BB, the choices, the touch entries and +0x1C, the settings
+// fields, VuWater +0x40..+0x47, display +0x11, VuGfxSort +0xC, the hook log.
+inline bool verify_ui_settings_combos( )
+{
+    int failed = 0, steps = 0, logs = 0;
+    for ( std::size_t k = 0; k < g_golden_stc_entities_count; ++k )
+    {
+        const golden_stc_entity_t& ge = g_golden_stc_entities[ k ];
+        const entity_t* e = ui_lv_entity( ge.m_project, ge.m_index );
+        const std::vector< std::uint8_t > raw = ui_unhex( ge.m_fields );
+        std::vector< std::string > log;
+        ui_settings_t settings;
+        ui_settings_platform_t platform;
+        ui_touch_device_t device;
+        ui_combo_box_hooks_t hooks;
+        char line[ 160 ];
+        int sys[ 2 ] = { 0, 0 };
+        const auto broadcast = [ & ]( std::uint32_t hash, const ui_params_t& p )
+        {
+            std::snprintf( line, sizeof line, "broadcast|0x%08X|%d", hash, p.m_size );
+            log.push_back( line );
+        };
+        hooks.m_broadcast = broadcast;
+        platform.m_broadcast = broadcast;
+        platform.m_sys_54 = [ & ] { log.push_back( "sys54" ); return sys[ 0 ] != 0; };
+        platform.m_sys_58 = [ & ] { log.push_back( "sys58" ); return sys[ 1 ] != 0; };
+        platform.m_flip = [ & ]( int v ) { log.push_back( "flip|" + std::to_string( v ) ); };
+        platform.m_flush = [ & ]
+        {
+            log.push_back( "gfx3C|0x5A5A0001|0xFFFFFFFF" );   // the case's +0xA0 handle, -1
+            log.push_back( "d3d30" );
+            log.push_back( "d3dD0|0" );                        // the byte already cleared
+        };
+        platform.m_lens = [ & ]( bool high ) { log.push_back( std::string( "lens|" ) + ( high ? "1" : "0" ) ); };
+        hooks.m_fire = [ & ]( const char* plug, const ui_params_t& p )
+        {
+            log.push_back( std::string( "find|" ) + plug );
+            log.push_back( "fire|" + std::to_string( p.m_size ) );
+        };
+        hooks.m_connections = [ & ]( const char* plug )
+        {
+            log.push_back( std::string( "find|" ) + plug );
+            return std::strcmp( plug, "NavUp" ) == 0 ? ge.m_links[ 0 ] : std::strcmp( plug, "NavDown" ) == 0 ? ge.m_links[ 1 ] : 0;
+        };
+        hooks.m_sound = [ & ]( const char* name ) { log.push_back( std::string( "sound|" ) + name ); };
+        hooks.m_delta = [ ] { return ui_lv_float( g_golden_stc_delta ); };
+        c_ui_combo_box c( 0u, ge.m_vtable, hooks );
+        bool faults = false;
+        hooks.m_apply = [ & ]( std::uint32_t, int ) { faults |= !c.apply_settings( settings, platform ); };
+        bool same = e && e->m_ctor && e->m_ctor->m_vtable == ge.m_vtable && raw.size( ) == 0x260;
+        if ( same )
+        {
+            ui_combo_box_fill( c, *e );
+            same = std::memcmp( c.m_scale, raw.data( ) + 0x08, 8 ) == 0 && std::memcmp( c.m_position, raw.data( ) + 0x10, 8 ) == 0 &&
+                   std::memcmp( c.m_left, raw.data( ) + 0x1F8, 16 ) == 0 && std::memcmp( c.m_right, raw.data( ) + 0x208, 16 ) == 0 &&
+                   std::memcmp( &c.m_scroll_time, raw.data( ) + 0x138, 4 ) == 0;
+        }
+        if ( !same )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "ui settings combos: %s entity %d: OUR loaded fields differ from retail's", ge.m_project, ge.m_index );
+            continue;
+        }
+        for ( int s = 0; s < ge.m_steps; ++s )
+        {
+            const golden_stc_step_t& st = g_golden_stc_steps[ ge.m_first + s ];
+            log.clear( );
+            std::uint32_t ret[ 2 ] = { 0xCCCCCCCCu, 0xCCCCCCCCu };
+            bool known = true;
+            switch ( st.m_op )
+            {
+            case 0:
+            {
+                const golden_stc_state_t& w = g_golden_stc_states[ st.m_state ];
+                settings.m_tilt = w.m_tilt != 0;
+                settings.m_vibration = w.m_vibration != 0;
+                settings.m_units = w.m_units;
+                settings.m_fidelity = w.m_fidelity;
+                settings.m_flip_interval = w.m_flip;
+                sys[ 0 ] = w.m_sys[ 0 ];
+                sys[ 1 ] = w.m_sys[ 1 ];
+                platform.m_gfx_pending = w.m_gfx != 0;
+                known = c.initialize_settings( device, settings, platform );
+                break;
+            }
+            case 1: c.on_tick( ); break;
+            case 2:
+                c.set_focus( );
+                ret[ 0 ] = 0u;
+                break;
+            case 3:
+            {
+                ui_params_t p;
+                p.add_string( st.m_event );
+                c.on_event( p );
+                break;
+            }
+            default: c.release( device ); break;
+            }
+            std::uint8_t state[ 0x1C ] = { };
+            state[ 0 ] = c.m_latched;
+            state[ 1 ] = c.m_left_pressed;
+            state[ 2 ] = c.m_right_pressed;
+            std::memcpy( state + 4, &c.m_current, 4 );
+            std::memcpy( state + 8, &c.m_shown, 4 );
+            state[ 0xC ] = c.m_focused;
+            state[ 0xD ] = c.m_down;
+            state[ 0xE ] = c.m_held;
+            state[ 0xF ] = c.m_up;
+            std::memcpy( state + 0x10, c.m_touch, 8 );
+            std::memcpy( state + 0x18, &c.m_press, 4 );
+            std::uint8_t water[ 8 ] = { };
+            std::memcpy( water, &platform.m_water_scale, 4 );
+            water[ 4 ] = platform.m_water_44;
+            water[ 5 ] = platform.m_water_45;
+            water[ 6 ] = platform.m_water_46;
+            const std::vector< std::uint8_t > want = ui_unhex( st.m_bytes );
+            const std::vector< std::uint8_t > want_water = ui_unhex( st.m_water );
+            bool ok = known && !faults && want.size( ) == sizeof state && std::memcmp( state, want.data( ), sizeof state ) == 0;
+            ok = ok && want_water.size( ) == sizeof water && std::memcmp( water, want_water.data( ), sizeof water ) == 0;
+            ok = ok && platform.m_display_11 == st.m_display && ( platform.m_gfx_pending ? 1 : 0 ) == st.m_gfx;
+            const golden_stc_settings_t& gs = st.m_settings;
+            ok = ok && ( settings.m_tilt ? 1 : 0 ) == gs.m_tilt && ( settings.m_vibration ? 1 : 0 ) == gs.m_vibration && settings.m_units == gs.m_units &&
+                 settings.m_fidelity == gs.m_fidelity && settings.m_flip_interval == gs.m_flip && ( settings.m_subtitles ? 1 : 0 ) == gs.m_subtitles;
+            ok = ok && static_cast< int >( c.m_choice_texts.size( ) ) == st.m_choices && c.m_choices == st.m_choices;
+            for ( int q = 0; ok && q < st.m_choices; ++q )
+            {
+                const golden_sc_choice_t& gc = g_golden_stc_choices[ st.m_first_choice + q ];
+                ok = c.m_choice_texts[ static_cast< std::size_t >( q ) ].first == gc.m_text &&
+                     c.m_choice_texts[ static_cast< std::size_t >( q ) ].second == gc.m_byte;
+            }
+            ok = ok && static_cast< int >( device.m_callbacks.size( ) ) == st.m_entries && device.m_priority == st.m_priority;
+            if ( ok && st.m_entries )
+                ok = device.m_callbacks[ 0 ].first == &c && st.m_entry_offset == 0x5C && device.m_callbacks[ 0 ].second == st.m_entry_priority;
+            ok = ok && ret[ 0 ] == st.m_ret[ 0 ] && static_cast< int >( log.size( ) ) == st.m_logs;
+            for ( int q = 0; ok && q < st.m_logs; ++q )
+            {
+                ok = log[ static_cast< std::size_t >( q ) ] == g_golden_stc_logs[ st.m_first_log + q ];
+                ++logs;
+            }
+            ++steps;
+            if ( !ok && ++failed <= 8 )
+                LOG_ERROR( "ui settings combos: %s entity %d (vtable 0x%X) step %d (op %d): the state / choices / settings / world / log differ (log %d, retail %d)",
+                    ge.m_project, ge.m_index, ge.m_vtable, s, st.m_op, static_cast< int >( log.size( ) ), st.m_logs );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_combo_box initialize_settings / apply_settings (+ ui_settings_set_fidelity) match retail's settings combos (units 0x46D3E0 / "
+                     "0x46D640, fidelity 0x46DA70 / 0x46DCD0 / 0x4B50A0, flip 0x46DE30 / 0x46E050, vibration 0x46CD70 / 0x46CF70, tilt 0x46C780 / "
+                     "0x46C9B0) on %d entities: %d steps, %d hook calls in order",
+            static_cast< int >( g_golden_stc_entities_count ), steps, logs );
+    else
+        LOG_ERROR( "the UI settings combos FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
+// verify_ui_touch_dispatch (batch 24): controls.hxx's touch device - ui_touch_dispatch_
+// down / up / move, ui_touch_count, ui_touch_point with ui_touch_add / set_priority /
+// remove - against retail's VuMetroTouch 0x5393E0 / 0x5394A0, VuTouch 0x53FB40, slots
+// 6 0x539210 / 7 0x539230, 0x53FB90 / 0x53FAE0 / 0x53FA60 (oracle case touch_dispatch)
+// on one script: the callbacks' slot calls in order (callback, slot, the point bits),
+// the first list, +0x1C, the count, the touches' first 8 entries, the answers.
+inline bool verify_ui_touch_dispatch( )
+{
+    ui_touch_device_t d;
+    std::vector< int > tokens( static_cast< std::size_t >( g_golden_tdc_callbacks ) );
+    const auto cb = [ &tokens ]( int k ) -> const void* { return &tokens[ static_cast< std::size_t >( k ) ]; };
+    const auto index_of = [ & ]( const void* p )
+    {
+        for ( int k = 0; k < g_golden_tdc_callbacks; ++k )
+            if ( cb( k ) == p )
+                return k;
+        return -1;
+    };
+    std::vector< std::string > log;
+    char line[ 96 ];
+    for ( int k = 0; k < g_golden_tdc_callbacks; ++k )
+    {
+        ui_touch_handler_t h;
+        const auto point_call = [ &log, &line, k ]( int slot, const float p[ 2 ] )
+        {
+            std::uint32_t x, y;
+            std::memcpy( &x, &p[ 0 ], 4 );
+            std::memcpy( &y, &p[ 1 ], 4 );
+            std::snprintf( line, sizeof line, "cb|%d|%d|0x%08X|0x%08X", k, slot, x, y );
+            log.push_back( line );
+        };
+        h.m_down = [ point_call ]( const float p[ 2 ] ) { point_call( 0, p ); };
+        h.m_up = [ point_call ]( const float p[ 2 ] ) { point_call( 1, p ); };
+        h.m_move = [ &log, k ] { log.push_back( "cb|" + std::to_string( k ) + "|2" ); };
+        d.m_handlers[ cb( k ) ] = h;
+    }
+    for ( std::size_t k = 0; k < g_golden_tdc_low_count; ++k )
+        d.m_low_level.push_back( { cb( g_golden_tdc_low[ k ].m_callback ), g_golden_tdc_low[ k ].m_priority } );
+    int failed = 0, logs = 0;
+    for ( std::size_t s = 0; s < g_golden_tdc_steps_count; ++s )
+    {
+        const golden_tdc_step_t& st = g_golden_tdc_steps[ s ];
+        log.clear( );
+        std::uint32_t answer[ 2 ] = { 0u, 0u };
+        int answers = 0;
+        bool known = true;
+        const float x = ui_lv_float( st.m_point[ 0 ] ), y = ui_lv_float( st.m_point[ 1 ] );
+        switch ( st.m_op )
+        {
+        case 0: ui_touch_add( d, cb( st.m_a ), static_cast< std::uint32_t >( st.m_b ) ); break;
+        case 1: ui_touch_set_priority( d, cb( st.m_a ), static_cast< std::uint32_t >( st.m_b ) ); break;
+        case 2: ui_touch_remove( d, cb( st.m_a ) ); break;
+        case 3: ui_touch_dispatch_down( d, static_cast< std::uint32_t >( st.m_a ), x, y ); break;
+        case 4: ui_touch_dispatch_up( d, static_cast< std::uint32_t >( st.m_a ), x, y ); break;
+        case 5: ui_touch_dispatch_move( d ); break;
+        case 6:
+            answer[ 0 ] = static_cast< std::uint32_t >( ui_touch_count( d, static_cast< std::uint32_t >( st.m_a ) ) );
+            answers = 1;
+            break;
+        default:
+        {
+            float p[ 2 ];
+            known = ui_touch_point( d, static_cast< std::uint32_t >( st.m_a ), p );
+            std::memcpy( answer, p, 8 );
+            answers = 2;
+            break;
+        }
+        }
+        // the array's first 8 entries as retail's bytes (entries never written: the case's zeroed storage)
+        std::vector< std::uint8_t > array( 12 * 8, 0u );
+        for ( std::size_t k = 0; k < d.m_touches.size( ) && k < 8; ++k )
+        {
+            std::memcpy( array.data( ) + 12 * k, &d.m_touches[ k ].m_id, 4 );
+            std::memcpy( array.data( ) + 12 * k + 4, d.m_touches[ k ].m_point, 8 );
+        }
+        bool ok = known && d.m_unhandled == 0 && array == ui_unhex( st.m_array ) && d.m_priority == st.m_priority && d.m_count == st.m_count &&
+                  answers == st.m_answers && ( answers < 1 || answer[ 0 ] == st.m_answer[ 0 ] ) && ( answers < 2 || answer[ 1 ] == st.m_answer[ 1 ] );
+        ok = ok && static_cast< int >( d.m_callbacks.size( ) ) == st.m_pairs;
+        for ( int k = 0; ok && k < st.m_pairs; ++k )
+            ok = index_of( d.m_callbacks[ static_cast< std::size_t >( k ) ].first ) == g_golden_tdc_pairs[ st.m_first_pair + k ].m_callback &&
+                 d.m_callbacks[ static_cast< std::size_t >( k ) ].second == g_golden_tdc_pairs[ st.m_first_pair + k ].m_priority;
+        ok = ok && static_cast< int >( log.size( ) ) == st.m_logs;
+        for ( int k = 0; ok && k < st.m_logs; ++k )
+        {
+            ok = log[ static_cast< std::size_t >( k ) ] == g_golden_tdc_logs[ st.m_first_log + k ];
+            ++logs;
+        }
+        if ( !ok && ++failed <= 8 )
+            LOG_ERROR( "ui touch dispatch: step %d (op %d) differs from retail's (log %d, retail %d)", static_cast< int >( s ), st.m_op,
+                static_cast< int >( log.size( ) ), st.m_logs );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_touch_dispatch_down / up / move, ui_touch_count / ui_touch_point (+ add / priority / remove) match retail's VuMetroTouch "
+                     "0x5393E0 / 0x5394A0, 0x53FB40, slots 6 0x539210 / 7 0x539230 on %d steps: %d callback calls in order, the lists / touches after each",
+            static_cast< int >( g_golden_tdc_steps_count ), logs );
+    else
+        LOG_ERROR( "the UI touch dispatch FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 // verify_ui_screen_game_init (batch 21): c_ui_binding::project_initialize /
 // project_release on OUR loaded Screens projects (the scripted world, as
 // verify_ui_frames) against retail's 0x500B10 + 0x501260 / 0x500B80 (oracle case
@@ -402,6 +666,16 @@ inline bool verify_ui_screen_game_init( )
         ladder.m_option_db = &option_db;
         ladder.m_total = [ ] { return 0; };
         hooks.m_ladder = &ladder;
+        // batch 24: the other five settings combos' slot 6 run live over the case's settings / g_vumetrosys answers
+        settings.m_tilt = g_golden_sgi_settings.m_tilt != 0;
+        settings.m_vibration = g_golden_sgi_settings.m_vibration != 0;
+        settings.m_units = g_golden_sgi_settings.m_units;
+        settings.m_fidelity = g_golden_sgi_settings.m_fidelity;
+        settings.m_flip_interval = g_golden_sgi_settings.m_flip;
+        ui_settings_platform_t platform;
+        platform.m_sys_54 = [ ] { return g_golden_sgi_settings.m_sys[ 0 ] != 0; };
+        platform.m_sys_58 = [ ] { return g_golden_sgi_settings.m_sys[ 1 ] != 0; };
+        hooks.m_settings_platform = &platform;
         c_ui_binding bind( *root, hooks );
         if ( static_cast< int >( bind.m_bound.size( ) ) != gp.m_count )
         {
@@ -569,7 +843,7 @@ inline bool verify_ui_screen_game_init( )
     }
     if ( failed == 0 )
         LOG_SUCCESS( "c_ui_binding project_initialize / project_release (+ VuUserNextUIAction's Trigger) match retail's 0x500B10 / 0x501260 / "
-                     "0x500B80 (button 0x4426E0 + 0x53FAE0, subtitles 0x46D7A0, 0x4253D0, mini leaderboard 0x47DAB0 / 0x47DB10, leaderboard 0x479C50 / 0x479CF0; 0x470E50) on %d Screens projects: %d phases, %d log "
+                     "0x500B80 (button 0x4426E0 + 0x53FAE0, subtitles 0x46D7A0, the five settings combos' slot 6, 0x4253D0, mini leaderboard 0x47DAB0 / 0x47DB10, leaderboard 0x479C50 / 0x479CF0; 0x470E50) on %d Screens projects: %d phases, %d log "
                      "lines in order (%d slot 6 / 7 entries), %d triggers, the touch device / combos / flags after each",
             static_cast< int >( g_golden_sgi_projects_count ), phases, logs, slots, triggers );
     else
@@ -902,7 +1176,7 @@ inline bool verify_ui_leaderboard_draw( )
                 LOG_ERROR( "ui leaderboard draw: %s entity %d: OUR loaded fields / block / fonts / ctor records differ from retail's", ge.m_project, ge.m_index );
             continue;
         }
-        for ( int r = 0; r < ge.m_runs; ++r )
+        for ( int r = 0; r < ge.m_runs + ge.m_layouts; ++r )   // batch 24: then the layout draw 0x47A910 runs
         {
             const golden_lb_run_t& run = g_golden_lb_runs[ ge.m_first + r ];
             const golden_txt_env_t& te = g_golden_txt_envs[ run.m_env ];
@@ -986,7 +1260,7 @@ inline bool verify_ui_leaderboard_draw( )
             sort.m_key_hi = te.m_key_hi;
             std::vector< ui_gfx_command_t >& list = sort.m_commands[ te.m_index ];
             const std::size_t before = list.size( );
-            const bool known = ui_leaderboard_draw( f, b, s, d );
+            const bool known = run.m_layout < 0 ? ui_leaderboard_draw( f, b, s, d ) : ui_leaderboard_layout_draw( f, b, s, d, run.m_layout != 0 );
             bool ok = known && list.size( ) - before == static_cast< std::size_t >( run.m_commands ) && static_cast< int >( log.size( ) ) == run.m_logs;
             for ( int q = 0; ok && q < run.m_logs; ++q )
             {
@@ -1013,7 +1287,7 @@ inline bool verify_ui_leaderboard_draw( )
         }
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "ui_leaderboard_draw matches retail's VuUILeaderboardEntity draw 0x47A360 (0x4578D0, 0x507360 / the solid rect, 0x47B570, "
+        LOG_SUCCESS( "ui_leaderboard_draw / ui_leaderboard_layout_draw match retail's VuUILeaderboardEntity draw 0x47A360 / layout draw 0x47A910 (0x4578D0, 0x507360 / the solid rect, 0x47B570, "
                      "Read 0x47BEF0 / Show 0x47BF90 / NotConnected 0x47C720) on %d entities (%d of OUR loaded fields / block / fonts, %d ctor "
                      "0x477FD0 choices from OUR builder): %d runs, %d commands byte for byte, %d hook calls in order",
             static_cast< int >( g_golden_lb_entities_count ), fields, choices, runs, commands, logs );
@@ -1161,6 +1435,8 @@ inline bool verify_ui_results_all( )
     ok = verify_ui_leaderboard_tick( ) && ok;
     ok = verify_ui_race_results( ) && ok;
     ok = verify_ui_subtitles_combo( ) && ok;
+    ok = verify_ui_settings_combos( ) && ok;
+    ok = verify_ui_touch_dispatch( ) && ok;
     ok = verify_ui_screen_game_init( ) && ok;
     ok = verify_ui_mini_board( ) && ok;
     return ok;
