@@ -2223,7 +2223,24 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     // VuRaceGame's own part (world/rules.hxx): the ctor 0x489030's state machine, built here (after the base fields above -
     // the ctor ran before the boat load); its first state's enter is slot 5 0x4896A0's "state enter" step below, and its
     // tick the game's slot 7, reached from VuGame's tick 0x482F10 in the Decision phase (race_session_game_mode).
-    race_rules_construct( s.rules );
+    // GameType "TimeTrial": VuTimeTrialGame's machine (rules.hxx timetrial_rules_construct, case timetrial_game_fsm), its
+    // slots 13 / 5 in race_begin (start.hxx), its Game exit's TrackDB and the human's boat class (+0x160).
+    s.start.timetrial = mode == "TimeTrial";
+    if ( s.start.timetrial )
+    {
+        timetrial_rules_construct( s.rules );
+        s.rules.track_db = db.track_db;
+        for ( std::size_t k = 0; k < s.start_boats.size( ); ++k )
+            if ( s.start_boats[ k ].cls.slot[ 0 ] )
+            {
+                const auto it = s.boats[ k ]->io.boat_strings.find( 0x160 );
+                s.rules.human_boat = it == s.boats[ k ]->io.boat_strings.end( ) ? std::string( ) : it->second;
+                break;
+            }
+        LOG_INFO( "race: VuTimeTrialGame - the human's +0x160 '%s' keys TrackDB [%s][TimeTrial]", s.rules.human_boat.c_str( ), s.game.track.c_str( ) );
+    }
+    else
+        race_rules_construct( s.rules );
     s.rules.hooks.hud = [ &s ]( int project, race_hud_verb_t verb, float dt )
     {
         if ( s.world.hud )
@@ -2258,6 +2275,11 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     // null container, type 0).
     s.rules.screen_hooks.game_results_tick = [ &s ]( float dt )
     {
+        if ( s.start.timetrial )
+        {
+            race_unwired( s, "VuTimeTrialGame slot 12 0x48F560 (its results writer, ~3.8 KB) - not recreated, not run (UNKNOWN)" );
+            return;
+        }
         std::vector< race_results_entry_t > entries( s.rules_boats.size( ) );
         for ( std::size_t k = 0; k < entries.size( ); ++k )
         {

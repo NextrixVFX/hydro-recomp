@@ -293,7 +293,26 @@ struct race_start_game_t
     std::string difficulty;     // +0x50
     std::string root_name;      // +0x34's +0xC +0x18
     std::vector< int > order;   // +0x720
+    bool timetrial = false;     // the game is a VuTimeTrialGame (vtable 0x73FB9C): its slots 13 / 5 below
 };
+
+// ---- VuTimeTrialGame slot 13 0x490CA0 (world batch 27; read, not oracle-measured) -----------------------------------
+//
+// With a game boat (+0x3C): boat [0] - whatever its driver - takes the grid's first entry (boat manager +0x48 count,
+// +0x50 data [0] non-null) through 0x5344A0(its world, notify 1); then (grid or not) its +0x310 = ConstantDB (gameutil
+// +4's +0x58) ["VuDBAsset"]["TimeTrial"]["InitialBoostEnergy"] - tag 1 cvtdq2ps, 2 the float, 7 fild / fstp, else 0.
+// Slot 5 0x48F310: current = states [0] (+0x704's first), its +0x20 enter - nothing else (no +0x720 order, no +0x4CC,
+// no AI manager start).
+inline void race_place_timetrial( std::vector< race_start_boat_t >& boats, const race_boat_manager_t& m, const value_t& constantdb,
+                                  const race_start_hooks_t& hooks )
+{
+    if ( boats.empty( ) )
+        return;
+    race_start_boat_t& b = boats[ 0 ];
+    if ( !m.grid.empty( ) )
+        race_set_world( b, 0, m.grid[ 0 ].world, true, hooks );
+    state_put_f( b.boat, 0x310, race_number( member( member( member( constantdb, "VuDBAsset" ), "TimeTrial" ), "InitialBoostEnergy" ), 0.0f ) );
+}
 
 inline void race_begin( race_start_game_t& game, std::vector< race_start_boat_t >& boats, race_boat_manager_t& m, const track_manager_t& tm,
                         const value_t& trackdb, const value_t& constantdb, const race_start_hooks_t& hooks )
@@ -306,7 +325,10 @@ inline void race_begin( race_start_game_t& game, std::vector< race_start_boat_t 
         game.circuit = track_is_circuit( tm ) ? 1 : 0;
         game.length = track_length( tm );
     }
-    race_place_boats( boats, m, tm, trackdb, game.root_name, hooks );
+    if ( game.timetrial )
+        race_place_timetrial( boats, m, constantdb, hooks );
+    else
+        race_place_boats( boats, m, tm, trackdb, game.root_name, hooks );
     for ( std::size_t k = 0; k < boats.size( ); ++k )
     {
         if ( built && boats[ k ].driver )
@@ -326,5 +348,8 @@ inline void race_begin( race_start_game_t& game, std::vector< race_start_boat_t 
     call( "state enter fsm+0x688" );
     call( "GameResults reset" );
     call( "analytics ana LevelStart" );   // its container {Difficulty: +0x50} is the service's
-    race_start_fleet( boats, m, tm, constantdb, game.difficulty, game.order, hooks );
+    if ( game.timetrial )
+        call( "state enter fsm+0x704" );   // VuTimeTrialGame's slot 5 0x48F310
+    else
+        race_start_fleet( boats, m, tm, constantdb, game.difficulty, game.order, hooks );
 }
