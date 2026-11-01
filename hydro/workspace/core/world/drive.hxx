@@ -742,6 +742,32 @@ inline void race_contact_added( void* user, solver_contact_point_t& cp, solver_r
     o0.handle = static_cast< std::uint32_t >( reinterpret_cast< std::uintptr_t >( object0 ) );
     o1.handle = static_cast< std::uint32_t >( reinterpret_cast< std::uintptr_t >( object1 ) );
     contact_hooks_t h;
+    // The manager's +4 listener list: VuCollisionManager's listener 0x4AD540 (world/collide.hxx collision_contact_added),
+    // added by its init. The record's bodies are object0 / object1; a boat body's owner (+0x2C0) is resolved by the
+    // session's boat list (the image's +0x2C0 is a 32-bit word, not a pointer here) - a flagged body (+0x2CA & 0x10)
+    // that is no session boat is UNKNOWN (the listener not run for it).
+    if ( s.collision_listening )
+        h.listeners.push_back( [ &s, object0, object1 ]( contact_record_t& r ) {
+            const auto owner = [ &s ]( const solver_rigid_t* o ) -> const std::uint8_t* {
+                for ( const auto& b : s.boats )
+                    if ( &b->body.body == o )
+                        return b->graph.objects[ 0 ].image.data( );
+                return nullptr;
+            };
+            const std::uint8_t* a = reinterpret_cast< const std::uint8_t* >( object0 );
+            const std::uint8_t* b = reinterpret_cast< const std::uint8_t* >( object1 );
+            std::uint16_t ga, gb;
+            std::memcpy( &ga, a + 0x2CA, 2 );
+            std::memcpy( &gb, b + 0x2CA, 2 );
+            const std::uint8_t* oa = ( ga & 0x10u ) ? owner( object0 ) : nullptr;
+            const std::uint8_t* ob = ( gb & 0x10u ) ? owner( object1 ) : nullptr;
+            if ( ( ( ga & 0x10u ) && !oa ) || ( ( gb & 0x10u ) && !ob ) )
+            {
+                race_unwired( s, "VuCollisionManager's listener 0x4AD540: a boat-flagged body that is no session boat - UNKNOWN, not run" );
+                return;
+            }
+            collision_contact_added( s.collision, a, b, oa, ob, r.pos, r.normal, r.surface0, r.surface1 );
+        } );
     ++c.ran;
     c.meshes += o1.mesh ? 1 : 0;
     if ( !contact_added( s.surfaces, reinterpret_cast< std::uint8_t* >( &cp ), o0, o1, index1, h ) )

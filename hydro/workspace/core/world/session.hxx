@@ -13,6 +13,7 @@
 #include <workspace/core/ui/config.hxx>
 #include <workspace/core/world/blend.hxx>
 #include <workspace/core/world/bodies.hxx>
+#include <workspace/core/world/collide.hxx>
 #include <workspace/core/world/dynamics.hxx>
 #include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/pfxmgr.hxx>
@@ -168,6 +169,13 @@ struct race_session_t
     // boat contact.hxx contact_added): built by race_drive_setup, installed by whatever steps the bodies.
     std::shared_ptr< race_contact_t > contact_user;
     contact_callbacks_t contact{};
+    // VuCollisionManager g 0x758FBC (world/collide.hxx, the water agent's): the manager, its surface-pair tables (from
+    // VuDBAsset/SurfaceTableDB, held here as the asset's document), whether its listener is in the contact manager's +4 list.
+    collision_manager_t collision;
+    collision_tables_t collision_tables;
+    value_t collision_db;
+    bool collision_listening = false;
+    int collision_impacts = 0;   // dev count (not retail): impact records the tick played
     // g_vudynamicsimpl 0x75900C: the dynamics world (world/dynamics.hxx), made before the boats as the engine
     // init 0x566230 makes it; its DynamicsSync / DynamicsKick ticks registered first in their phases.
     std::unique_ptr< race_dynamics_t > dynamics;
@@ -674,8 +682,9 @@ inline void race_session_dev_trace( const race_session_t& s, int before )
     {
         int calls = 0, ran = 0, meshes = 0;
         race_contact_counts( s, calls, ran, meshes );
-        LOG_VERBOSE( "race (dev trace): sync %d: contact-added callbacks %d, 0x5751F0 run %d (%d with obj1's collision mesh)", n, calls, ran,
-                     meshes );
+        LOG_VERBOSE( "race (dev trace): sync %d: contact-added callbacks %d, 0x5751F0 run %d (%d with obj1's collision mesh); "
+                     "VuCollisionManager impacts played %d (%d pending)", n, calls, ran, meshes, s.collision_impacts,
+                     static_cast< int >( s.collision.impacts.count ) );
     }
     if ( s.world.water )
     {
@@ -820,6 +829,34 @@ inline void race_session_fleet( void* user, float dt )
 {
     race_session_t& s = *static_cast< race_session_t* >( user );
     fleet_tick( s.fleet, *s.track, s.pilots, s.fleet_boats, *s.random, dt );
+}
+
+// VuCollisionManager's Decision tick 0x4AD970 (registered by its init 0x4AD110): the two FMOD event groups
+// "Global/Collisions/..." fetched once (+8 / +0xC: EventSystem::getGroup - audio, a platform hook), the impacts
+// 0x4ADA10 (world/collide.hxx collision_impact_tick: the sound hooks answer no event - audio; the effect on the
+// world's VuPfxManager and runtime), the scrapes 0x4ADC00 (NOT recreated - logged, not run), then the dev stats
+// page (g 0x759020 vt+0x20: a dev hook). With no VuPfx runtime / manager the impacts are not played (UNKNOWN):
+// the records stay, as nothing played them.
+inline void race_session_collision( void* user, float )
+{
+    race_session_t& s = *static_cast< race_session_t* >( user );
+    if ( !s.world.pfx || !s.world.pfx_manager || !s.world.pfx_ops )
+    {
+        if ( s.collision.impacts.count != 0 )
+            race_unwired( s, "VuCollisionManager's impacts 0x4ADA10 with no VuPfx runtime / manager - UNKNOWN, not run" );
+    }
+    else
+    {
+        collision_impact_hooks_t k;
+        k.user = &s;
+        k.get_event = []( void* u, const char*, std::uint32_t& ) {
+            race_unwired( *static_cast< race_session_t* >( u ), "audio: VuCollisionManager's impact sound (FMOD getEvent - platform) - no event made" );
+            return false;
+        };
+        s.collision_impacts += s.collision.impacts.count;
+        collision_impact_tick( s.collision, s.collision_tables, *s.world.pfx_manager, *s.world.pfx_ops, s.world.pfx->heap, k );
+    }
+    race_unwired( s, "VuCollisionManager's scrapes 0x4ADC00 (not recreated) - not run" );
 }
 
 // The Viewports phase's boat manager tick 0x4AB0A0 (boat_manager_viewport_tick,
@@ -983,6 +1020,33 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     tick_manager_init( s.ticks );
     tick_register( s.ticks, { s.dynamics.get( ), race_session_dynamics_sync, &s }, "DynamicsSync" );   // 0x4F8050's registrations
     tick_register( s.ticks, { s.dynamics.get( ), race_session_dynamics_kick, &s }, "DynamicsKick" );
+    // VuCollisionManager (g 0x758FBC): the game init 0x4024E0 creates it (0x4ACD30 at 0x4026B9: the ctor 0x4ACDF0) and calls
+    // its init 0x4AD110 at 0x4026D4 - before the AI manager's (0x402828), so its Decision tick precedes the AI's. The init's
+    // hooks: addContactListener (g_vudynamicsimpl slot 13) = this session's contact-added path hands every record to it
+    // (world/drive.hxx race_contact_added); the asset manager's "SurfaceTableDB" = VuDBAsset/SurfaceTableDB's document from
+    // the pack; the Decision registration. Its +0x14 = surface_count of the session's surface table (built above).
+    collision_manager_construct( s.collision, s.collision_tables );
+    {
+        std::vector< std::uint8_t > bytes;
+        if ( archive.read( "VuDBAsset/SurfaceTableDB", bytes ) )
+            s.collision_db = c_reader( bytes ).parse( );
+        else
+            LOG_WARNING( "race: VuDBAsset/SurfaceTableDB not in the pack - the collision manager's tables load from the null container" );
+        collision_init_hooks_t ch;
+        ch.user = &s;
+        ch.add_listener = []( void* u ) { static_cast< race_session_t* >( u )->collision_listening = true; };
+        ch.asset = []( void* u, const char* name ) -> const value_t* {
+            race_session_t& x = *static_cast< race_session_t* >( u );
+            return std::strcmp( name, "SurfaceTableDB" ) == 0 && x.collision_db.tag == 6 ? &x.collision_db : nullptr;
+        };
+        ch.register_tick = []( void* u, const char* phase ) {
+            race_session_t& x = *static_cast< race_session_t* >( u );
+            tick_register( x.ticks, { &x.collision, race_session_collision, &x }, phase );
+        };
+        collision_manager_init( s.collision_tables, s.surfaces, ch );
+        LOG_INFO( "race: VuCollisionManager init 0x4AD110 - %d surface types, the four SurfaceTableDB tables loaded, its Decision tick registered",
+                  static_cast< int >( s.collision_tables.types ) );
+    }
     tick_register( s.ticks, { &s.fleet, race_session_fleet, &s }, "Decision" );
     // The game mode manager's Decision tick 0x4CBFD0 (its init 0x4CBCD0, slot 5): the action mode's Run state 0x4BAB50 ->
     // VuGame's tick 0x482F10 (race_session_game_mode). The order is read (world batch 21): the game init 0x4024E0 creates
