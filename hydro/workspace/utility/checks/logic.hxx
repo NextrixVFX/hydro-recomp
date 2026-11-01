@@ -572,3 +572,187 @@ inline bool verify_lens_water( )
         LOG_ERROR( "lens_water FAILED %d", bad );
     return bad == 0;
 }
+
+// VuAudioEmitterEntity + 0x50FBB0 + VuAnimatedPropEntity's PlayAudioEvent (world/sound.hxx) against retail (case
+// audio_emitter): every step replayed with hooks that log what the case's FMOD recorder logged (getEvent answering FMOD_OK
+// and the next handle 0xE001.. unless the name holds "bad": 74 and 0xBAD0 + the low byte), compared entry for entry; the
+// VuRetVal / callback answer; the state bytes +0x84 / +0x88 / +0x89 and the event +0x8C after each step; the ctor's
+// defaults; the prop vectors' FMOD logs on documents parsed by c_reader (= 0x55B560).
+#include <workspace/core/world/sound.hxx>
+
+struct sound_check_log_t
+{
+    std::uint32_t handle = 0xE000u;
+    const void* holder = nullptr;
+    std::vector< std::vector< std::uint32_t > > log;
+
+    std::uint32_t holder_code( const void* p ) const { return p == nullptr ? 0u : ( p == holder ? 1u : 2u ); }
+
+    static void str( std::vector< std::uint32_t >& w, const std::string& s )
+    {
+        w.push_back( static_cast< std::uint32_t >( s.size( ) ) );
+        for ( std::size_t i = 0; i < s.size( ); i += 4 )
+        {
+            std::uint32_t x = 0;
+            std::memcpy( &x, s.data( ) + i, ( std::min )( std::size_t( 4 ), s.size( ) - i ) );
+            w.push_back( x );
+        }
+    }
+
+    sound_hooks_t hooks( )
+    {
+        sound_hooks_t h;
+        h.user = this;
+        h.get_event = []( void* u, const char* name, std::uint32_t mode, std::uint32_t* ev, const void* holder ) -> int
+        {
+            auto* l = static_cast< sound_check_log_t* >( u );
+            const std::string nm( name );
+            const bool ok = nm.find( "bad" ) == std::string::npos;
+            ++l->handle;
+            *ev = ok ? l->handle : 0xBAD0u + ( l->handle & 0xFFu );
+            std::vector< std::uint32_t > w{ 0u, 1u };
+            str( w, nm );
+            // getEvent's out pointer is the holder's +4, or (the prop) a stack local
+            w.push_back( mode );
+            w.push_back( holder != nullptr && holder == l->holder ? 1u : 2u );
+            w.push_back( *ev );
+            l->log.push_back( w );
+            return ok ? 0 : 74;
+        };
+        h.set_callback = []( void* u, std::uint32_t ev, std::uint32_t fn, const void* holder )
+        {
+            auto* l = static_cast< sound_check_log_t* >( u );
+            l->log.push_back( { 1u, ev, fn, l->holder_code( holder ) } );
+        };
+        h.stop = []( void* u, std::uint32_t ev, bool immediate ) { static_cast< sound_check_log_t* >( u )->log.push_back( { 2u, ev, immediate ? 1u : 0u } ); };
+        h.start = []( void* u, std::uint32_t ev ) { static_cast< sound_check_log_t* >( u )->log.push_back( { 3u, ev } ); };
+        h.attributes = []( void* u, std::uint32_t ev, const float* p, const float* v, const float* o )
+        {
+            std::vector< std::uint32_t > w{ 4u, ev };
+            for ( const float* x : { p, v, o } )
+            {
+                w.push_back( x ? 3u : 0u );
+                for ( int k = 0; x && k < 3; ++k )
+                    w.push_back( control_w( x[ k ] ) );
+            }
+            static_cast< sound_check_log_t* >( u )->log.push_back( w );
+        };
+        h.set_world = []( void* u, const float*, bool notify ) { static_cast< sound_check_log_t* >( u )->log.push_back( { 5u, 1u, 1u, notify ? 1u : 0u } ); };
+        return h;
+    }
+};
+
+inline bool verify_audio_emitter( )
+{
+    logic_check_t c{ g_golden_aem_words };
+    sound_check_log_t lg;
+    int bad = 0, steps = 0, entries = 0, reported = 0;
+    auto read_log = [ & ]( ) {
+        std::vector< std::vector< std::uint32_t > > want( c.next( ) );
+        for ( auto& e : want )
+        {
+            e.resize( c.next( ) );
+            for ( auto& x : e )
+                x = c.next( );
+        }
+        return want;
+    };
+    const unsigned n = c.next( );
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        audio_emitter_t e;
+        lg.holder = e.holder.image;
+        // the ctor's defaults: +0x5C the IF vtable 0x756EA0, the empty VuString (+0x80 cap 15, +0x7C size 0, +0x6C 0),
+        // Initially Active 0, the holder word 1, no event
+        const std::uint32_t defaults[ 7 ] = { 0x756EA0u, 15u, static_cast< std::uint32_t >( e.event_name.size( ) ), 0u, e.initially_active,
+                                              static_cast< std::uint32_t >( e.holder.image[ 0 ] | e.holder.image[ 1 ] << 8 ), e.holder.event( ) };
+        e.event_name = c.str( );
+        e.initially_active = static_cast< std::uint8_t >( c.next( ) );
+        float pos[ 3 ];
+        for ( float& x : pos )
+            x = control_f( c.next( ) );
+        for ( std::uint32_t d : defaults )
+            bad += c.next( ) == d ? 0 : 1;
+        const unsigned ns = c.next( );
+        for ( unsigned s = 0; s < ns; ++s )
+        {
+            const unsigned op = c.next( );
+            std::vector< std::uint32_t > arg( c.next( ) );
+            for ( auto& x : arg )
+                x = c.next( );
+            const std::string text = c.str( );
+            const std::uint32_t want_ret = c.next( );
+            const auto want = read_log( );
+            std::vector< std::uint32_t > want_state( c.next( ) );
+            for ( auto& x : want_state )
+                x = c.next( );
+            lg.log.clear( );
+            const sound_hooks_t h = lg.hooks( );
+            std::uint32_t ret = 0;
+            float m[ 20 ];
+            switch ( op )
+            {
+                case 0: audio_emitter_game_init( e, pos, h ); break;
+                case 1: audio_emitter_start( e, pos, h ); break;
+                case 2: audio_emitter_stop( e, h ); break;
+                case 3: audio_emitter_name_changed( e, pos, h ); break;
+                case 4:
+                    for ( int k = 0; k < 20; ++k )
+                        m[ k ] = control_f( arg[ k ] );
+                    audio_emitter_motion( e, m, h );
+                    break;
+                case 5: case 6: case 7: ret = sound_event_callback( e.holder, op == 5 ? 4u : ( op == 6 ? 2u : 0u ), h ); break;
+                case 8: e.event_name = text; break;
+                case 9: e.holder.image[ 1 ] = static_cast< std::uint8_t >( arg[ 0 ] ); break;
+                case 10:
+                    audio_emitter_destroy( e, h );
+                    lg.log.push_back( { 6u, 1u } );   // the base dtor 0x500870 follows
+                    break;
+                default: ++bad; break;
+            }
+            std::vector< std::uint32_t > state{ e.initially_active, e.holder.image[ 0 ], e.holder.image[ 1 ], e.holder.event( ) };
+            if ( op == 10 )
+                state.insert( state.end( ), { static_cast< std::uint32_t >( e.event_name.size( ) ), 15u,
+                                              e.event_name.empty( ) ? 0u : static_cast< std::uint8_t >( e.event_name[ 0 ] ) } );
+            const int diff = ( ret == want_ret ? 0 : 1 ) + ( lg.log == want ? 0 : 1 ) + ( state == want_state ? 0 : 1 );
+            if ( diff && reported++ < 6 )
+                LOG_ERROR( "audio_emitter scenario %u step %u (op %u): ret %d log %d (%d / %d entries) state %d", v, s, op, ret != want_ret,
+                           lg.log != want, static_cast< int >( lg.log.size( ) ), static_cast< int >( want.size( ) ), state != want_state );
+            bad += diff;
+            entries += static_cast< int >( want.size( ) );
+            ++steps;
+        }
+    }
+    const unsigned np = c.next( );
+    lg.holder = nullptr;
+    for ( unsigned v = 0; v < np; ++v )
+    {
+        const std::string name = c.str( );
+        const std::string raw = c.str( );
+        float m[ 16 ], s[ 3 ];
+        for ( float& x : m )
+            x = control_f( c.next( ) );
+        for ( float& x : s )
+            x = control_f( c.next( ) );
+        const auto want = read_log( );
+        const value_t doc = c_reader( std::vector< std::uint8_t >( raw.begin( ), raw.end( ) ) ).parse( );
+        lg.log.clear( );
+        if ( name == "PlayAudioEvent" )   // 0x5ED680's exact VuString compare picks the branch
+            prop_play_audio_event( doc, m, s, lg.hooks( ) );
+        if ( lg.log != want )
+        {
+            if ( reported++ < 6 )
+                LOG_ERROR( "audio_emitter prop vector %u (%s): %d / %d entries", v, name.c_str( ), static_cast< int >( lg.log.size( ) ),
+                           static_cast< int >( want.size( ) ) );
+            ++bad;
+        }
+        entries += static_cast< int >( want.size( ) );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuAudioEmitterEntity (slot 6, Start, Stop, the name hook, the motion IF, the dtor), FMOD's callback 0x50FBB0 and "
+                     "VuAnimatedPropEntity's PlayAudioEvent match retail: %u scenarios / %d steps, %u prop events, %d FMOD / transform calls",
+                     n, steps, np, entries );
+    else
+        LOG_ERROR( "audio_emitter FAILED %d", bad );
+    return bad == 0;
+}
