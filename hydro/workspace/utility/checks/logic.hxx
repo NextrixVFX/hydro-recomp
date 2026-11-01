@@ -1258,3 +1258,121 @@ inline bool verify_rotate_axis_angle( )
         LOG_ERROR( "rotate_axis_angle FAILED %d", bad );
     return bad == 0;
 }
+// entity/json.hxx against retail's VuJsonContainer (case json_access): on retail's own containers (its VUJB read
+// 0x55B560 of hand-built documents and two pack DBs; ours = assets/reader.hxx), every node in retail's pre-order -
+// asFloat 0x4FC470, asCString 0x4FC500, asInt64 0x4FC520, getValue( int64& ) 0x4FC5E0, getValue( int& ) 0x4FC550
+// (values.hxx property_int_value), vec4 0x4FDD30, matrix 0x4FDE40, getMemberKeys 0x4FBF30 - and append 0x4FBD30 on
+// every node of the hand-built documents (the element index, the node's dump afterwards).
+#include <workspace/core/entity/json.hxx>
+#include <workspace/utility/verify.hxx>
+
+inline void json_check_nodes( value_t& v, std::vector< value_t* >& out )
+{
+    out.push_back( &v );
+    if ( v.tag == 5 )
+        for ( value_t& e : v.list )
+            json_check_nodes( e, out );
+    else if ( v.tag == 6 )
+    {
+        std::vector< std::pair< std::string, value_t >* > sorted;
+        for ( auto& f : v.object )
+            sorted.push_back( &f );
+        std::sort( sorted.begin( ), sorted.end( ), []( const auto* a, const auto* b ) { return a->first < b->first; } );
+        for ( auto* f : sorted )
+            json_check_nodes( f->second, out );
+    }
+}
+
+inline std::vector< std::uint32_t > json_check_record( const value_t& j )
+{
+    auto w = []( float f ) { std::uint32_t u; std::memcpy( &u, &f, 4 ); return u; };
+    std::vector< std::uint32_t > r{ j.tag, w( json_as_float( j ) ) };
+    const char* s = json_as_cstring( j );
+    const std::string text = j.tag == 4 ? std::string( s ) : std::string( );
+    r.push_back( j.tag == 4 ? 0u : 1u );
+    r.push_back( static_cast< std::uint32_t >( text.size( ) ) );
+    for ( std::size_t i = 0; i < text.size( ); i += 4 )
+    {
+        std::uint32_t x = 0;
+        std::memcpy( &x, text.data( ) + i, std::min< std::size_t >( 4, text.size( ) - i ) );
+        r.push_back( x );
+    }
+    const std::uint64_t a = static_cast< std::uint64_t >( json_as_int64( j ) );
+    r.push_back( static_cast< std::uint32_t >( a ) ), r.push_back( static_cast< std::uint32_t >( a >> 32 ) );
+    std::int64_t g64 = 0x7777777777777777ll;
+    const bool ok64 = json_get_int64( j, g64 );
+    r.push_back( ok64 ? 1u : 0u ), r.push_back( static_cast< std::uint32_t >( g64 ) ), r.push_back( static_cast< std::uint32_t >( static_cast< std::uint64_t >( g64 ) >> 32 ) );
+    std::int32_t g32 = 0x77777777;
+    const bool ok32 = property_int_value( j, g32 );
+    r.push_back( ok32 ? 1u : 0u ), r.push_back( static_cast< std::uint32_t >( g32 ) );
+    float lanes[ 16 ];
+    std::memset( lanes, 0x77, sizeof( lanes ) );
+    r.push_back( json_vec4( j, lanes ) ? 1u : 0u );
+    for ( int k = 0; k < 4; ++k )
+        r.push_back( w( lanes[ k ] ) );
+    std::memset( lanes, 0x77, sizeof( lanes ) );
+    r.push_back( json_matrix( j, lanes ) ? 1u : 0u );
+    for ( int k = 0; k < 16; ++k )
+        r.push_back( w( lanes[ k ] ) );
+    r.push_back( 1u );   // getMemberKeys answers its out pointer
+    return r;
+}
+
+inline bool verify_json_access( )
+{
+    logic_check_t c{ g_golden_jsa_words };
+    const unsigned n = c.next( );
+    int bad = 0, nodes = 0, appends = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const std::string bytes = c.str( );
+        const std::vector< std::uint8_t > blob( bytes.begin( ), bytes.end( ) );
+        value_t root;
+        if ( !c_reader::read_at_start( blob, root ) )
+            ++bad;
+        std::vector< value_t* > ns;
+        json_check_nodes( root, ns );
+        const unsigned nn = c.next( );
+        if ( nn != ns.size( ) )
+        {
+            LOG_ERROR( "json_access document %u: %u nodes, retail %u", v, static_cast< unsigned >( ns.size( ) ), nn );
+            return false;
+        }
+        for ( unsigned k = 0; k < nn; ++k, ++nodes )
+        {
+            std::vector< std::uint32_t > want( c.next( ) );
+            for ( auto& x : want )
+                x = c.next( );
+            const std::vector< std::uint32_t > got = json_check_record( *ns[ k ] );
+            std::vector< std::string > wk( c.next( ) );
+            for ( auto& s : wk )
+                s = c.str( );
+            const bool same = got == want && json_member_keys( *ns[ k ] ) == wk;
+            if ( !same && bad++ < 6 )
+                LOG_ERROR( "json_access document %u node %u (tag %u) differs", v, k, ns[ k ]->tag );
+        }
+        const unsigned na = c.next( );
+        for ( unsigned k = 0; k < na; ++k, ++appends )
+        {
+            const std::int32_t index = static_cast< std::int32_t >( c.next( ) );
+            const std::string dump = c.str( );
+            value_t fresh;
+            c_reader::read_at_start( blob, fresh );
+            std::vector< value_t* > fs;
+            json_check_nodes( fresh, fs );
+            value_t& node = *fs[ k ];
+            const bool was_array = node.tag == 5;
+            value_t& e = json_append( node );
+            const std::int32_t got = was_array || node.tag == 5 ? static_cast< std::int32_t >( &e - node.list.data( ) ) : -1;
+            std::string text;
+            vujb_dump( node, text );
+            if ( ( got != index || text != dump ) && bad++ < 6 )
+                LOG_ERROR( "json_access document %u append on node %u: index %d (retail %d), dump %s", v, k, got, index, text == dump ? "ok" : "differs" );
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuJsonContainer's accessors match retail (0x4FC470 0x4FC500 0x4FC520 0x4FC5E0 0x4FC550 0x4FDD30 0x4FDE40 0x4FBF30 0x4FBD30): %u documents, %d nodes, %d appends", n, nodes, appends );
+    else
+        LOG_ERROR( "json_access FAILED %d", bad );
+    return bad == 0;
+}
