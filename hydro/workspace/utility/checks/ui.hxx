@@ -1055,6 +1055,98 @@ inline bool verify_ui_font_params( )
     return failed == 0;
 }
 
+// One of the game_data_race documents (g_golden_gd_at: word offset, bytes) parsed.
+inline value_t ui_gd_document( int index )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_gd_words + g_golden_gd_at[ 2 * index ] );
+    return c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_gd_at[ 2 * index + 1 ] ) ).parse( );
+}
+
+// c_front_end::exit / ui_game_config / ui_race_game_data (hydro core/ui/
+// config.hxx) against retail's VuFrontEndGameMode exit 0x4BF9B0 and race
+// builder 0x4C0A50 (oracle case game_data_race): the real BoatDB / TrackDB and a
+// hand-built BoatDB, each vector's game-data root (and a separate GameData for
+// the direct calls) - the WHOLE root container after (vujb_dump: every key,
+// tag and payload), the separate GameData after, VuRandom's 34 words after,
+// and the hooks in order (the string DB's ids, the exit's teardown hooks, the
+// unrecreated builders). Retail's 0x4C0690 is logged by the case and skipped
+// here: our unload is the recreated one (m_current is checked cleared).
+inline bool verify_ui_game_data( )
+{
+    const value_t boat_db = ui_gd_document( 0 );
+    const value_t track_db = ui_gd_document( 1 );
+    const value_t synthetic_db = ui_gd_document( 2 );
+    int failed = 0, entries = 0;
+    for ( std::size_t k = 0; k < g_golden_gd_vectors_count; ++k )
+    {
+        const golden_gd_vector_t& v = g_golden_gd_vectors[ k ];
+        std::vector< std::pair< std::string, std::string > > log;
+        value_t root = ui_gd_document( v.m_root );
+        value_t game_data = v.m_game_data >= 0 ? ui_gd_document( v.m_game_data ) : value_t{ };
+        fleet_random_t rng;
+        const unsigned* words = g_golden_gd_rng + v.m_rng;
+        std::memcpy( &rng.seed, words, 4 );
+        std::memcpy( &rng.last, words + 1, 4 );
+        std::memcpy( rng.table, words + 2, 128 );
+        ui_game_env_t env;
+        env.boat_db = v.m_db == 0 ? &boat_db : &synthetic_db;
+        env.track_db = &track_db;
+        env.random = &rng;
+        env.player_name = "Player One";
+        env.string_db = [ &log ]( const char* id ) { log.push_back( { "string", id } ); return std::string( "S" ) + id; };
+        bool cleared = true;
+        if ( v.m_direct )
+            ui_race_game_data( game_data, root, env );
+        else
+        {
+            front_end_engine_t engine;
+            engine.m_platform = [ &log ]( const char* what, int arg ) { log.push_back( { what, std::string( what ) == "0x4D3100" ? "" : std::to_string( arg ) } ); };
+            c_front_end fe( engine, value_t{ } );
+            fe.m_fsm.m_current = fe.m_fsm.state_index( "Exit" );
+            if ( v.m_delegate )
+                fe.m_fsm.current( )->m_exit = [ &log ] { log.push_back( { "state exit", "" } ); };
+            fe.m_mode = v.m_next;
+            fe.m_current = "Screens/SinglePlayer";
+            const ui_game_config_t r = fe.exit( root, env );
+            if ( r.builder && !r.built && r.builder != 0x4C0A50u )
+            {
+                char at[ 16 ];
+                std::snprintf( at, sizeof( at ), "0x%X", r.builder );
+                log.push_back( { "builder", at } );
+            }
+            cleared = fe.m_current.empty( );
+        }
+        std::string root_after, gd_after;
+        vujb_dump( root, root_after );
+        if ( v.m_direct )
+            vujb_dump( game_data, gd_after );
+        bool same = cleared && root_after == v.m_root_after && gd_after == v.m_game_data_after &&
+                    std::memcmp( &rng.seed, words + 34, 4 ) == 0 && std::memcmp( &rng.last, words + 35, 4 ) == 0 &&
+                    std::memcmp( rng.table, words + 36, 128 ) == 0;
+        std::size_t j = 0;
+        for ( int g = 0; g < v.m_logs; ++g )
+        {
+            const golden_btn_log_t& want = g_golden_gd_logs[ v.m_first + g ];
+            if ( std::strcmp( want.m_kind, "0x4C0690" ) == 0 )
+                continue;
+            same = same && j < log.size( ) && log[ j ].first == want.m_kind && log[ j ].second == want.m_a;
+            ++j;
+        }
+        same = same && j == log.size( );
+        entries += static_cast< int >( member( v.m_direct ? game_data : member( root, "GameData" ), "Boats" ).list.size( ) );
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui game data: vector %d (%s) differs from retail's 0x4BF9B0 / 0x4C0A50", static_cast< int >( k ), v.m_label );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_game_config / ui_race_game_data match retail's VuFrontEndGameMode exit 0x4BF9B0 and race GameData 0x4C0A50 "
+                     "(picks 0x4C3380 / shuffle 0x50FF40, AI entry 0x4C31D0, player 0x4C3120) on %d vectors: the whole game-data "
+                     "container, VuRandom's state, the hooks in order (%d boat entries)",
+            static_cast< int >( g_golden_gd_vectors_count ), entries );
+    else
+        LOG_ERROR( "the game data FAILED %d of %d vectors against retail's", failed, static_cast< int >( g_golden_gd_vectors_count ) );
+    return failed == 0;
+}
+
 // ui_text_draw (hydro core/ui/draw.hxx) against retail's VuUITextBaseEntity draw
 // 0x627C60 -> font draw 0x536C10 -> VuGfxSort 0x426B80 / 0x429010 (oracle cases
 // text_draw, text_draw_sweep): every new command's 8 words and its record's
@@ -1848,6 +1940,7 @@ inline bool verify_ui_container_draw( )
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_game_data( ) && ok;
     ok = verify_ui_container_draw( ) && ok;
     ok = verify_ui_font_params( ) && ok;
     ok = verify_ui_minimap_draw( ) && ok;
