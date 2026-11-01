@@ -12,6 +12,7 @@
 #include <workspace/core/boat/nuisance.hxx>
 #include <workspace/core/boat/contact.hxx>
 #include <workspace/core/boat/events.hxx>
+#include <workspace/core/boat/damage.hxx>
 
 #include <algorithm>
 #include <array>
@@ -2457,6 +2458,51 @@ inline bool verify_body_impulse( )
     LOG_ERROR( "body_impulse FAILED %d of %u vectors", failed, nv );
     return false;
 }
+// VuBoatDamageController::VuPiece's getWorldTransform 0x412CA0 / setWorldTransform 0x412D90 against retail (oracle
+// case piece_motion): the btTransform out or the piece's matrix, bit for bit.
+inline bool verify_piece_motion( )
+{
+    const unsigned* g = g_golden_piece_motion_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++;
+        std::uint8_t piece[ 0x200 ] = {};
+        std::memcpy( piece + 8, g, 64 ); g += 16;
+        std::memcpy( piece + 0x1B0, g, 12 ); g += 3;
+        float bt[ 16 ];
+        std::memcpy( bt, g, 64 ); g += 16;
+        const unsigned* after = g;
+        g += 17;
+        unsigned mine[ 16 ];
+        if ( fn == 1 )
+        {
+            float out[ 16 ];
+            piece_motion_get( piece, out );
+            std::memcpy( mine, out, 64 );
+        }
+        else
+        {
+            piece_motion_set( piece, bt );
+            std::memcpy( mine, piece + 8, 64 );
+        }
+        if ( !( std::equal( mine, mine + 16, after ) && after[ 16 ] == 1 ) && ++failed <= 8 )
+        {
+            int k = 0;
+            while ( k < 15 && mine[ k ] == after[ k ] )
+                ++k;
+            LOG_ERROR( "piece_motion vector %u (function %u): word %d 0x%08X (retail 0x%08X)", v, fn, k, mine[ k ], after[ k ] );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuPiece getWorldTransform 0x412CA0 / setWorldTransform 0x412D90 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "piece_motion FAILED %d of %u vectors", failed, nv );
+    return false;
+}
 // The contact-added callback 0x574E90 -> 0x5751F0 -> 0x519720 against retail (oracle case contact_added): the manifold
 // point after (every word, bit for bit), the return, and each listener / callback call's record (but its stale-stack
 // words) with the case's scripted write-backs replayed.
@@ -2823,6 +2869,7 @@ inline bool verify_race_all( )
     ok = verify_nuisance_start_ctor( ) && ok;
     ok = verify_boat_events( ) && ok;
     ok = verify_body_impulse( ) && ok;
+    ok = verify_piece_motion( ) && ok;
     ok = verify_contact_added( ) && ok;
     ok = verify_boat_rtti( ) && ok;
     ok = verify_human_explosion( ) && ok;
