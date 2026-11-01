@@ -484,7 +484,7 @@ inline void pfx_check_boats( pfx_check_run_t& run, const unsigned* b, std::size_
     };
 }
 
-inline bool pfx_check_run( const unsigned* s, const char* tag, const unsigned* boats = nullptr, std::size_t boat_count = 0 )
+inline bool pfx_check_run( const unsigned* s, const char* tag, const unsigned* boats = nullptr, std::size_t boat_count = 0, bool calls = false )
 {
     const std::uint32_t res = s[ 0 ];
     const std::uint32_t blocks[ 4 ] = { s[ 1 ], s[ 2 ], s[ 3 ], s[ 4 ] };
@@ -571,7 +571,7 @@ inline bool pfx_check_run( const unsigned* s, const char* tag, const unsigned* b
             for ( std::uint32_t o = 0; o < sizes[ b ]; o += 4, ++want )
             {
                 const std::uint32_t in = o % pairs[ 2 * b + 1 ];
-                if ( ( b == 0 && ( in == 0x8Cu || in == 0x9Cu ) ) || ( b == 1 && ( in == 0x38u || in == 0x48u ) ) ||
+                if ( ( b == 0 && ( in == 0x8Cu || in == 0x9Cu || ( calls && in == 0x78u ) ) ) || ( b == 1 && ( in == 0x38u || in == 0x48u ) ) ||
                      ( b == 3 && ( in == 0x24u || in == 0x50u || ( boats != nullptr && in == 0x14u ) ) ) )
                     continue;
                 one( h[ blocks[ b ] + o ], *want, names[ b ], o );
@@ -603,17 +603,37 @@ inline bool pfx_check_run( const unsigned* s, const char* tag, const unsigned* b
         switch ( code )
         {
         case 0: bad += pfx_system_instance_create( h, res, addr[ s[ 0 ] ], hooks ) != s[ 1 ] ? 1 : 0; s += 2; break;
-        case 1: pfx_system_start( h, s[ 0 ] ); s += 1; break;
+        case 1: pfx_instance_start( h, s[ 0 ] ); s += 1; break;
         case 3:
         {
             float dt;
             std::memcpy( &dt, s + 1, 4 );
-            pfx_system_tick( h, s[ 0 ], dt, hooks );
+            pfx_instance_tick( h, s[ 0 ], dt, hooks );
             s += 2;
             break;
         }
-        case 4: pfx_system_stop( h, res, s[ 0 ], s[ 1 ] != 0u ); s += 2; break;
+        case 4: pfx_instance_stop( h, res, s[ 0 ], s[ 1 ] != 0u ); s += 2; break;
         case 5: pfx_system_release( h, res, s[ 0 ] ); s += 1; break;
+        case 9:
+        case 10:
+        case 12:
+        {
+            float v[ 16 ];
+            std::memcpy( v, s + 1, code == 9u ? 64 : 16 );
+            if ( code == 9u )
+                pfx_instance_set_matrix( h, s[ 0 ], v );
+            else if ( code == 10u )
+                pfx_instance_set_velocity( h, s[ 0 ], v );
+            else
+                pfx_instance_set_colour( h, s[ 0 ], v );
+            s += code == 9u ? 17 : 5;
+            break;
+        }
+        case 11: pfx_instance_set_scale( h, s[ 0 ], water_bits( s[ 1 ] ) ); s += 2; break;
+        case 13:
+            bad += reinterpret_cast< const std::uint32_t* >( pfx_instance_aabb( h, s[ 0 ] ) ) != h.find( s[ 0 ] + s[ 1 ] ) ? 1 : 0;
+            s += 2;
+            break;
         case 7:
             for ( int k = 0; k < 3; ++k )
             {
@@ -685,6 +705,21 @@ inline bool verify_pfx_trail( ) { return pfx_check_run( g_golden_ptr_words, "pfx
 // The boat processes on the heap (pfxsim.hxx pfx_process_tick: thrust 0x4CD5B0, hull 0x4CE760, boat spring 0x4CD980, the
 // fountains' water snap; the binds 0x41A69B / 0x41A083 / 0x43BFD6) in the same end-to-end run (case pfx_boats).
 inline bool verify_pfx_boats( ) { return pfx_check_run( g_golden_pbt_words, "pfx_boats", g_golden_pbt_boats, g_golden_pbt_boat_count ); }
+
+// pfxsim.hxx's instance calls (pfx_instance_*: slots 2 / 3 / 4 / 5 / 7 / 11 / 12 / 13 - the boat's emitter lists' and the
+// splash's) against every call made through VuPfxSystemInstance's vtable 0x74FF8C in the same end-to-end run (case
+// pfx_calls; system +0x78, slot 2's unwritten fourth euler lane, skipped; the vtable's 17 entries compared too).
+inline bool verify_pfx_calls( )
+{
+    static const std::uint32_t slots[ 17 ] = { 0x58ABF0u, 0x58AC10u, 0x58AB00u, 0x58A650u, 0x58A670u, 0x58A690u, 0x58A6C0u, 0x58A6D0u, 0x58A6E0u,
+        0x58A6F0u, 0x58A700u, 0x58AC90u, 0x58ACC0u, 0x58AD70u, 0x58AF60u, 0x58AFA0u, 0x401DA0u };
+    if ( std::memcmp( slots, g_golden_psv_slots, sizeof( slots ) ) != 0 )
+    {
+        LOG_ERROR( "pfx_calls: VuPfxSystemInstance's vtable 0x74FF8C differs from the slots pfxsim.hxx / pfxclass.hxx recreate" );
+        return false;
+    }
+    return pfx_check_run( g_golden_psv_words, "pfx_calls", nullptr, 0, true );
+}
 
 // The water classes' getType slots (world/surface.hxx g_water_types) against retail (case water_types): per slot the
 // descriptor it returns and the chain of names its descriptor walks to.
@@ -2508,6 +2543,7 @@ inline bool verify_pfx_all( )
 {
     bool ok = true;
     ok = verify_pfx_impl_teardown( ) && ok;
+    ok = verify_pfx_calls( ) && ok;
     ok = verify_pfx_unload( ) && ok;
     ok = verify_ocean_infinite( ) && ok;
     ok = verify_ocean_infinite96( ) && ok;
