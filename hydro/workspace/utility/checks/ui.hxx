@@ -9,6 +9,7 @@
 #include <workspace/core/ui/screen.hxx>
 #include <workspace/core/ui/wiring.hxx>
 #include <workspace/core/ui/compose.hxx>
+#include <workspace/core/ui/gauge.hxx>
 
 #include <algorithm>
 #include <array>
@@ -1444,9 +1445,156 @@ inline bool verify_ui_hud_draw( )
     return failed == 0;
 }
 
+// ui_speedometer_draw / ui_speedometer_layout_draw (core/ui gauge.hxx) against
+// retail's VuHUDSpeedometerEntity draws 0x42BA00 / 0x42C1E0 (+ the rect draw
+// 0x507A00; oracle case speedometer_draw): one sort through every vector in
+// order - the commands' words and records byte for byte. For the real
+// speedometers the property-backed fields come from OUR loaded tree and are
+// compared with retail's bytes first; +0xE0 (OnUITick's), the textures and the
+// material are the case's stand-ins, the boat and the display size inputs.
+inline bool verify_ui_speedometer_draw( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    ui_gfx_sort_t sort;
+    sort.m_buffers[ 0 ].m_capacity = 0x300000;
+    sort.m_buffers[ 1 ].m_used = 0x35;
+    sort.m_buffers[ 1 ].m_capacity = 0x100000;
+    for ( auto& b : sort.m_buffers )
+        b.m_memory.resize( static_cast< std::size_t >( b.m_capacity ) );
+    const auto texture = []( std::uint32_t slot )
+    {
+        ui_texture_t t;
+        for ( const golden_spd_texture_t& g : g_golden_spd_textures )
+            if ( g.m_slot == slot )
+                t = { g.m_handle, g.m_width, g.m_height };
+        return t;
+    };
+    int failed = 0, commands = 0, fields = 0, real = 0;
+    for ( std::size_t k = 0; k < g_golden_spd_vectors_count; ++k )
+    {
+        const golden_spd_vector_t& v = g_golden_spd_vectors[ k ];
+        const golden_txt_env_t& e = g_golden_txt_envs[ v.m_env ];
+        ui_crop_t crop;
+        std::memcpy( &crop.m_matrix[ 0 ], &e.m_crop[ 0 ], 4 );
+        std::memcpy( &crop.m_matrix[ 5 ], &e.m_crop[ 1 ], 4 );
+        std::memcpy( &crop.m_matrix[ 12 ], &e.m_crop[ 2 ], 4 );
+        std::memcpy( &crop.m_matrix[ 13 ], &e.m_crop[ 3 ], 4 );
+        ui_font_draw_env_t env;
+        const std::vector< std::uint8_t > matrix = ui_unhex( v.m_matrix );
+        std::memcpy( env.m_matrix, matrix.data( ), 64 );
+        env.m_texture_material = g_golden_spd_materials[ 0 ][ 0 ];
+        env.m_texture_material_key = g_golden_spd_materials[ 0 ][ 1 ];
+        env.m_rect_material = g_golden_spd_materials[ 1 ][ 0 ];
+        env.m_rect_material_key = g_golden_spd_materials[ 1 ][ 1 ];
+        const std::vector< std::uint8_t > b = ui_unhex( v.m_fields );
+        const auto at = [ &b ]( int offset ) { return b.data( ) + ( offset - 0x60 ); };
+        ui_speedometer_t s;
+        std::memcpy( s.m_screen_scale, at( 0x60 ), 8 );
+        std::memcpy( s.m_rect, at( 0x68 ), 16 );
+        std::memcpy( &s.m_anchor.m_horizontal, at( 0x78 ), 4 );
+        std::memcpy( &s.m_anchor.m_vertical, at( 0x7C ), 4 );
+        std::memcpy( &s.m_anchor.m_h_ratio, at( 0x80 ), 4 );
+        std::memcpy( &s.m_anchor.m_v_ratio, at( 0x84 ), 4 );
+        std::memcpy( &s.m_metric, at( 0xE0 ), 4 );
+        std::memcpy( &s.m_depth, &v.m_depth, 4 );
+        s.m_material = g_golden_spd_materials[ 2 ][ 0 ];
+        s.m_material_key = g_golden_spd_materials[ 2 ][ 1 ];
+        s.m_back_imperial = texture( 0xA0 );
+        s.m_back_metric = texture( 0xA4 );
+        s.m_needle = texture( 0xA8 );
+        for ( int d = 0; d < 8; ++d )
+            s.m_boost[ d ] = texture( 0xC0u + 4u * static_cast< std::uint32_t >( d ) );
+        s.m_self = v.m_entity;
+        if ( v.m_sweep == 0 )
+        {
+            // our loaded entity: the same project and pre-order index
+            const entity_t* have = nullptr;
+            for ( std::size_t p = 0; p < g_golden_ui_projects_count && !have; ++p )
+                if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, v.m_project ) == 0 && v.m_index < static_cast< int >( loaded.trees[ p ].size( ) ) )
+                    have = loaded.trees[ p ][ static_cast< std::size_t >( v.m_index ) ].second;
+            const ui_state_t* st = have && ui_is_state( *have ) ? static_cast< const ui_state_t* >( have->m_state.get( ) ) : nullptr;
+            const ui_state_t* draw = nullptr;
+            for ( const entity_component_t& c : have ? have->m_components : std::vector< entity_component_t >( ) )
+                if ( c.m_vtable == 0x738A44u && c.m_state )
+                    draw = static_cast< const ui_state_t* >( c.m_state.get( ) );
+            bool same = st && draw;
+            const auto take = [ & ]( const char* name, void* target, int bytes, const ui_state_t* from )
+            {
+                const ui_slot_t* slot = from ? ui_slot_named( *from, name ) : nullptr;
+                if ( !slot )
+                {
+                    same = false;
+                    return;
+                }
+                if ( std::memcmp( target, slot->m_bits, static_cast< std::size_t >( bytes ) ) != 0 )
+                    same = false;
+                std::memcpy( target, slot->m_bits, static_cast< std::size_t >( bytes ) );
+                ++fields;
+            };
+            if ( same )
+            {
+                take( "Screen Scale", s.m_screen_scale, 8, st );
+                take( "X", &s.m_rect[ 0 ], 4, st );
+                take( "Y", &s.m_rect[ 1 ], 4, st );
+                take( "Width", &s.m_rect[ 2 ], 4, st );
+                take( "Height", &s.m_rect[ 3 ], 4, st );
+                take( "Horizontal Anchor", &s.m_anchor.m_horizontal, 4, st );
+                take( "Horizontal Ratio", &s.m_anchor.m_h_ratio, 4, st );
+                take( "Vertical Anchor", &s.m_anchor.m_vertical, 4, st );
+                take( "Vertical Ratio", &s.m_anchor.m_v_ratio, 4, st );
+                take( "Depth", &s.m_depth, 4, draw );
+            }
+            if ( !same && ++failed <= 8 )
+                LOG_ERROR( "ui speedometer draw: %s entity %d: our loaded fields differ from retail's", v.m_project, v.m_index );
+            ++real;
+        }
+        ui_speedometer_boat_t boat;
+        boat.m_present = v.m_boat.m_present == 1;
+        std::memcpy( boat.m_velocity, v.m_boat.m_velocity, 8 );
+        boat.m_boost_count = v.m_boat.m_count;
+        std::memcpy( &boat.m_digit_scale, &v.m_boat.m_scale, 4 );
+        boat.m_byte_32c = static_cast< std::uint8_t >( v.m_boat.m_byte_32c );
+        std::memcpy( &boat.m_boost, &v.m_boat.m_boost, 4 );
+        boat.m_mode = v.m_boat.m_mode;
+        boat.m_byte_32d = static_cast< std::uint8_t >( v.m_boat.m_byte_32d );
+        sort.m_index = e.m_index;
+        sort.m_key_lo = e.m_key_lo;
+        sort.m_key_hi = e.m_key_hi;
+        std::vector< ui_gfx_command_t >& list = sort.m_commands[ e.m_index ];
+        const std::size_t before = list.size( );
+        if ( v.m_fn == 0 )
+            ui_speedometer_draw( sort, env, crop, s, boat, v.m_display );
+        else
+            ui_speedometer_layout_draw( sort, env, crop, s, boat, v.m_display, v.m_fn == 1 );
+        bool same = list.size( ) - before == static_cast< std::size_t >( v.m_commands );
+        for ( int c = 0; same && c < v.m_commands; ++c )
+        {
+            const golden_txt_command_t& want = g_golden_spd_commands[ v.m_first + c ];
+            const ui_gfx_command_t& have = list[ before + static_cast< std::size_t >( c ) ];
+            const std::vector< std::uint8_t > record = ui_unhex( want.m_record );
+            const auto& memory = sort.m_buffers[ e.m_index ].m_memory;
+            same = std::memcmp( have.m_words, want.m_words, sizeof( have.m_words ) ) == 0 && have.m_words[ 3 ] + record.size( ) <= memory.size( ) &&
+                   std::memcmp( memory.data( ) + have.m_words[ 3 ], record.data( ), record.size( ) ) == 0;
+            ++commands;
+        }
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui speedometer draw: vector %d (sweep %d, fn %d) gave %d commands, retail %d - or a word / record byte differs", static_cast< int >( k ),
+                v.m_sweep, v.m_fn, static_cast< int >( list.size( ) - before ), v.m_commands );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_speedometer_draw matches retail's VuHUDSpeedometerEntity draws 0x42BA00 / 0x42C1E0 (rect draw 0x507A00, texture draw "
+                     "0x507360, anchor 0x6282D0, 0x40B5F0 / 0x410AB0 / 0x407DB0 / 0x4078C0) on %d vectors (%d on real speedometers, %d of their "
+                     "loaded fields): %d commands and records byte for byte",
+            static_cast< int >( g_golden_spd_vectors_count ), real, fields, commands );
+    else
+        LOG_ERROR( "the speedometer draw FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_speedometer_draw( ) && ok;
     ok = verify_ui_hud_draw( ) && ok;
     ok = verify_ui_texture_draw( ) && ok;
     ok = verify_ui_wiring( ) && ok;

@@ -213,6 +213,9 @@ struct ui_font_draw_env_t
     // The texture draw's: **(VuGfxUtil +4) +0x14 (the material handed to the sort) and its +0x6C8.
     std::uint32_t m_texture_material = 0;
     std::uint32_t m_texture_material_key = 0;
+    // The rect draw's: **(VuGfxUtil +4) +8 and its +0x6C8.
+    std::uint32_t m_rect_material = 0;
+    std::uint32_t m_rect_material_key = 0;
 };
 
 constexpr std::uint32_t k_ui_texture_callback = 0x507430u;  // the texture record's draw at submit (GPU side)
@@ -234,6 +237,22 @@ inline void ui_texture_draw( ui_gfx_sort_t& sort, const ui_font_draw_env_t& env,
     std::memcpy( r + 0x48, b, 16 );
     std::memcpy( r + 0x58, a, 16 );
     sort.submit( 17, env.m_texture_material, env.m_texture_material_key, 0, 0, k_ui_texture_callback, depth );
+}
+
+constexpr std::uint32_t k_ui_rect_callback = 0x507AB0u;  // the rect record's draw at submit (GPU side)
+constexpr int k_ui_rect_record = 84;
+
+// 0x507A00 (VuGfxUtil; depth in xmm1; colour*, rect*; ret 8): the 84-byte
+// record - +0 the matrix stack's top (64 bytes, 0x4BC130 / 0x4BC2E0), +0x40 the
+// colour, +0x44 the rect (x, y, w, h) - then the command (type 17, the
+// material ***(VuGfxUtil +4) +8, 0, 0x507AB0, depth). No test of anything.
+inline void ui_rect_draw( ui_gfx_sort_t& sort, const ui_font_draw_env_t& env, std::uint32_t colour, const float rect[ 4 ], float depth )
+{
+    std::uint8_t* r = sort.allocate( k_ui_rect_record );
+    std::memcpy( r + 0, env.m_matrix, 64 );
+    std::memcpy( r + 0x40, &colour, 4 );
+    std::memcpy( r + 0x44, rect, 16 );
+    sort.submit( 17, env.m_rect_material, env.m_rect_material_key, 0, 0, k_ui_rect_callback, depth );
 }
 
 constexpr std::uint32_t k_ui_font_callback = 0x5375E0u;   // the record's draw at submit (GPU side)
