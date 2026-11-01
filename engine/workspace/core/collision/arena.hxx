@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <emmintrin.h>
 #include <xmmintrin.h>
 
 // More of the race's Bullet rows on RETAIL MEMORY (boat batch 19), the
@@ -1283,4 +1284,288 @@ inline void bt_convex_project( const bt_io_t& io, std::uint32_t self, std::uint3
         bt_wrf( m, mn, hi );
         bt_wrf( m, mx, kept );
     }
+}
+
+// --- btDbvt on retail memory (boat batch 22): the twin of dbvt.hxx's typed
+// insertleaf / removeleaf / update (same functions, read again from the
+// disassembly) for the compound shape's own tree (+0x40). Nodes 0x30 bytes:
+// +0 min, +0x10 max (movaps: four lanes), +0x20 parent, +0x24 childs[ 0 ] /
+// data, +0x28 childs[ 1 ] (0 = a leaf). The tree: +0 root, +4 m_free, +8
+// m_lkhd. Four-lane loads go through a word array and _mm_loadu_si128 (BRIEF:
+// the float[4]-per-lane fill + _mm_loadu_ps shape miscompiles).
+inline __m128 bt_ld128( const bt_mem_t& m, std::uint32_t a )
+{
+    std::uint32_t w[ 4 ];
+    for ( std::uint32_t k = 0; k < 4; ++k )
+        w[ k ] = m.rd( m.user, a + 4 * k );
+    return _mm_castsi128_ps( _mm_loadu_si128( reinterpret_cast< const __m128i* >( w ) ) );
+}
+
+inline void bt_st128( const bt_mem_t& m, std::uint32_t a, __m128 v )
+{
+    std::uint32_t w[ 4 ];
+    _mm_storeu_si128( reinterpret_cast< __m128i* >( w ), _mm_castps_si128( v ) );
+    for ( std::uint32_t k = 0; k < 4; ++k )
+        m.wr( m.user, a + 4 * k, w[ k ] );
+}
+
+// A node's volume = minps( a.min, b.min ) / maxps( a.max, b.max ) (retail's
+// operand order: a NaN lane takes b's).
+inline void bt_dbvt_merge( const bt_mem_t& m, std::uint32_t a, std::uint32_t b, std::uint32_t to )
+{
+    const __m128 mn = _mm_min_ps( bt_ld128( m, a ), bt_ld128( m, b ) );
+    const __m128 mx = _mm_max_ps( bt_ld128( m, a + 0x10 ), bt_ld128( m, b + 0x10 ) );
+    bt_st128( m, to, mn );
+    bt_st128( m, to + 0x10, mx );
+}
+
+// Proximity as insertleaf 0x5942E0 inlines it: |(c.max + c.min) - lsum| (andps
+// 0x6F7CC0) over four lanes, then (lane 2 + lane 0) + (lane 3 + lane 1).
+inline __m128 bt_dbvt_proximity( const bt_mem_t& m, std::uint32_t c, __m128 lsum )
+{
+    const __m128 mask = _mm_castsi128_ps( _mm_set1_epi32( 0x7FFFFFFF ) );
+    const __m128 d = _mm_and_ps( _mm_sub_ps( _mm_add_ps( bt_ld128( m, c + 0x10 ), bt_ld128( m, c ) ), lsum ), mask );
+    const __m128 h = _mm_add_ps( _mm_movehl_ps( d, d ), d );
+    return _mm_add_ss( h, _mm_shuffle_ps( h, h, 1 ) );
+}
+
+// insertleaf @0x5942E0 (ecx tree, edx start, stack leaf; caller pops): an
+// empty tree takes the leaf as root (parent 0); else from `start` while
+// internal to childs[ cmpless( d1, d0 ) & 1 ]; the new node is m_free (taken)
+// or btAlignedAlloc( 0x30, 16 ); its parent = the sibling's, childs 0, volume
+// merge( leaf, sibling ); it takes the sibling's place (childs[ 0 ] =
+// sibling, childs[ 1 ] = leaf); walking up, an ancestor that does not Contain
+// the node below (`comiss; jb` x6: min >= / max >= ordered) is re-merged from
+// its childs, until one does or the root is passed.
+inline void bt_dbvt_insert_leaf( const bt_mem_t& m, std::uint32_t tree, std::uint32_t start, std::uint32_t leaf )
+{
+    if ( m.rd( m.user, tree ) == 0 )
+    {
+        m.wr( m.user, tree, leaf );
+        m.wr( m.user, leaf + 0x20, 0 );
+        return;
+    }
+    std::uint32_t sibling = start;
+    if ( m.rd( m.user, sibling + 0x28 ) != 0 )
+    {
+        const __m128 lsum = _mm_add_ps( bt_ld128( m, leaf + 0x10 ), bt_ld128( m, leaf ) );
+        do
+        {
+            const __m128 d0 = bt_dbvt_proximity( m, m.rd( m.user, sibling + 0x24 ), lsum );
+            const __m128 d1 = bt_dbvt_proximity( m, m.rd( m.user, sibling + 0x28 ), lsum );
+            const std::uint32_t pick = static_cast< std::uint32_t >( _mm_cvtsi128_si32( _mm_castps_si128( _mm_cmple_ss( d1, d0 ) ) ) ) & 1u;
+            sibling = m.rd( m.user, sibling + 0x24 + 4 * pick );
+        } while ( m.rd( m.user, sibling + 0x28 ) != 0 );
+    }
+    std::uint32_t node = m.rd( m.user, tree + 4 );
+    const std::uint32_t prev = m.rd( m.user, sibling + 0x20 );
+    if ( node != 0 )
+        m.wr( m.user, tree + 4, 0 );
+    else
+        node = bt_aligned_alloc( m, 0x30, 0x10 );
+    m.wr( m.user, node + 0x20, prev );
+    m.wr( m.user, node + 0x24, 0 );
+    m.wr( m.user, node + 0x28, 0 );
+    bt_dbvt_merge( m, leaf, sibling, node );
+    if ( prev == 0 )
+    {
+        m.wr( m.user, node + 0x24, sibling );
+        m.wr( m.user, sibling + 0x20, node );
+        m.wr( m.user, node + 0x28, leaf );
+        m.wr( m.user, leaf + 0x20, node );
+        m.wr( m.user, tree, node );
+        return;
+    }
+    const std::uint32_t at = m.rd( m.user, m.rd( m.user, sibling + 0x20 ) + 0x28 ) == sibling ? 1u : 0u;
+    m.wr( m.user, prev + 0x24 + 4 * at, node );
+    m.wr( m.user, node + 0x24, sibling );
+    m.wr( m.user, sibling + 0x20, node );
+    m.wr( m.user, node + 0x28, leaf );
+    m.wr( m.user, leaf + 0x20, node );
+    for ( std::uint32_t up = prev; up != 0; up = m.rd( m.user, up + 0x20 ) )
+    {
+        if ( bt_rdf( m, node ) >= bt_rdf( m, up ) && bt_rdf( m, node + 4 ) >= bt_rdf( m, up + 4 ) && bt_rdf( m, node + 8 ) >= bt_rdf( m, up + 8 ) &&
+             bt_rdf( m, up + 0x10 ) >= bt_rdf( m, node + 0x10 ) && bt_rdf( m, up + 0x14 ) >= bt_rdf( m, node + 0x14 ) &&
+             bt_rdf( m, up + 0x18 ) >= bt_rdf( m, node + 0x18 ) )
+            return;
+        bt_dbvt_merge( m, m.rd( m.user, up + 0x24 ), m.rd( m.user, up + 0x28 ), up );
+        node = up;
+    }
+}
+
+// removeleaf @0x594480 (ecx tree, edx leaf): the root leaf empties the tree
+// (answers 0); else the parent's other child takes the parent's place (as the
+// root, parent 0, when the parent was the root - answers the root), the
+// parent goes through deletenode; the ancestors are re-merged until one whose
+// min / max lanes x y z come out ordered-equal to before (`ucomiss; lahf; test
+// ah, 44h; jp`: NaN = changed) - answered - else the root.
+inline std::uint32_t bt_dbvt_remove_leaf( const bt_mem_t& m, std::uint32_t tree, std::uint32_t leaf )
+{
+    if ( leaf == m.rd( m.user, tree ) )
+    {
+        m.wr( m.user, tree, 0 );
+        return 0;
+    }
+    const std::uint32_t parent = m.rd( m.user, leaf + 0x20 );
+    const std::uint32_t sibling = m.rd( m.user, parent + ( m.rd( m.user, parent + 0x28 ) == leaf ? 0x24u : 0x28u ) );
+    std::uint32_t prev = m.rd( m.user, parent + 0x20 );
+    if ( prev == 0 )
+    {
+        m.wr( m.user, tree, sibling );
+        m.wr( m.user, sibling + 0x20, 0 );
+        bt_dbvt_delete_node( m, tree, parent );
+        return m.rd( m.user, tree );
+    }
+    m.wr( m.user, prev + 0x24 + ( m.rd( m.user, prev + 0x28 ) == parent ? 4u : 0u ), sibling );
+    m.wr( m.user, sibling + 0x20, prev );
+    bt_dbvt_delete_node( m, tree, parent );
+    do
+    {
+        float old[ 8 ];
+        for ( std::uint32_t k = 0; k < 8; ++k )
+            old[ k ] = bt_rdf( m, prev + 4 * k );
+        bt_dbvt_merge( m, m.rd( m.user, prev + 0x24 ), m.rd( m.user, prev + 0x28 ), prev );
+        if ( old[ 0 ] == bt_rdf( m, prev ) && old[ 1 ] == bt_rdf( m, prev + 4 ) && old[ 2 ] == bt_rdf( m, prev + 8 ) && old[ 4 ] == bt_rdf( m, prev + 0x10 ) &&
+             old[ 5 ] == bt_rdf( m, prev + 0x14 ) && old[ 6 ] == bt_rdf( m, prev + 0x18 ) )
+            return prev;
+        prev = m.rd( m.user, prev + 0x20 );
+    } while ( prev != 0 );
+    return m.rd( m.user, tree );
+}
+
+// btDbvt::update @0x594960 (thiscall leaf, volume*; retn 8): removeleaf; with
+// a result, m_lkhd < 0 (`js`) restarts from the root, else the result walked
+// up at most m_lkhd parents; the volume's 32 bytes into the leaf; insertleaf
+// from there. `volume` = the eight words.
+inline void bt_dbvt_update( const bt_mem_t& m, std::uint32_t tree, std::uint32_t leaf, const std::uint32_t* volume )
+{
+    std::uint32_t start = bt_dbvt_remove_leaf( m, tree, leaf );
+    if ( start != 0 )
+    {
+        const std::int32_t lkhd = static_cast< std::int32_t >( m.rd( m.user, tree + 8 ) );
+        if ( lkhd < 0 )
+            start = m.rd( m.user, tree );
+        else
+            for ( std::int32_t i = 0; i < lkhd; ++i )
+            {
+                const std::uint32_t up = m.rd( m.user, start + 0x20 );
+                if ( up == 0 )
+                    break;
+                start = up;
+            }
+    }
+    for ( std::uint32_t k = 0; k < 8; ++k )
+        m.wr( m.user, leaf + 4 * k, volume[ k ] );
+    bt_dbvt_insert_leaf( m, tree, start, leaf );
+}
+
+// btCompoundShape::updateChildTransform @0x526F40 (thiscall index,
+// transform*, a third word never read; retn 0Ch - no local-aabb recalc in
+// this build): the 64 bytes into the child record (data +0x18, 0x50-byte
+// records); with the tree (+0x40) the child shape's (+0x40) getAabb vt+4(
+// transform, min*, max* ) - through io: the transform's 16 words as its
+// arguments, min / max back - and btDbvt::update( the record's leaf +0x4C,
+// min:max ).
+inline void bt_compound_update_child_transform( const bt_io_t& io, std::uint32_t self, std::uint32_t index, const std::uint32_t* transform )
+{
+    const bt_mem_t& m = *io.m;
+    const std::uint32_t off = 0x50u * index;
+    const std::uint32_t record = m.rd( m.user, self + 0x18 ) + off;
+    for ( std::uint32_t k = 0; k < 16; ++k )
+        m.wr( m.user, record + 4 * k, transform[ k ] );
+    if ( m.rd( m.user, self + 0x40 ) == 0 )
+        return;
+    std::uint32_t volume[ 8 ] = { };
+    io.vcall_out( m.user, m.rd( m.user, m.rd( m.user, self + 0x18 ) + off + 0x40 ), 4, transform, 16, volume, 8 );
+    bt_dbvt_update( m, m.rd( m.user, self + 0x40 ), m.rd( m.user, off + m.rd( m.user, self + 0x18 ) + 0x4C ), volume );
+}
+
+// btCompoundShape::setLocalScaling @0x5276D0 (slot 5; thiscall scaling*; retn
+// 4): per child (count +0x10 re-read): the child transform copied; the child
+// shape's getLocalScaling vt+0x18 (answers a pointer: its 16 bytes read);
+// child scale = ((s.x * c.x) / ls.x, (s.y * c.y) / ls.y, (s.z * c.z) / ls.z,
+// 0) with ls = m_localScaling +0x50 -> the child's setLocalScaling vt+0x14
+// (its four words as the arguments); the copy's origin = (s.x * o.x, o.y *
+// s.y, o.z * s.z, 0); updateChildTransform( i, copy ). Then m_localScaling =
+// the scaling's 16 bytes and recalculateLocalAabb (vt+0x3C, virtual).
+inline void bt_compound_set_local_scaling( const bt_io_t& io, std::uint32_t self, std::uint32_t scaling )
+{
+    const bt_mem_t& m = *io.m;
+    for ( std::int32_t i = 0; i < static_cast< std::int32_t >( m.rd( m.user, self + 0x10 ) ); ++i )
+    {
+        const std::uint32_t off = 0x50u * static_cast< std::uint32_t >( i );
+        std::uint32_t t[ 16 ];
+        const std::uint32_t record = m.rd( m.user, self + 0x18 ) + off;
+        for ( std::uint32_t k = 0; k < 16; ++k )
+            t[ k ] = m.rd( m.user, record + 4 * k );
+        const std::uint32_t p = m.vcall( m.user, m.rd( m.user, record + 0x40 ), 0x18, nullptr, 0 );
+        const float c[ 3 ] = { bt_rdf( m, p ), bt_rdf( m, p + 4 ), bt_rdf( m, p + 8 ) };
+        const float s[ 3 ] = { bt_rdf( m, scaling ), bt_rdf( m, scaling + 4 ), bt_rdf( m, scaling + 8 ) };
+        const float v[ 3 ] = { ( s[ 0 ] * c[ 0 ] ) / bt_rdf( m, self + 0x50 ), ( s[ 1 ] * c[ 1 ] ) / bt_rdf( m, self + 0x54 ),
+                               ( s[ 2 ] * c[ 2 ] ) / bt_rdf( m, self + 0x58 ) };
+        std::uint32_t vw[ 4 ] = { 0, 0, 0, 0 };
+        std::memcpy( vw, v, 12 );
+        m.vcall( m.user, m.rd( m.user, m.rd( m.user, self + 0x18 ) + off + 0x40 ), 0x14, vw, 4 );
+        float o[ 3 ];
+        std::memcpy( o, t + 12, 12 );
+        const float no[ 3 ] = { bt_rdf( m, scaling ) * o[ 0 ], o[ 1 ] * bt_rdf( m, scaling + 4 ), o[ 2 ] * bt_rdf( m, scaling + 8 ) };
+        std::memcpy( t + 12, no, 12 );
+        t[ 15 ] = 0;
+        bt_compound_update_child_transform( io, self, static_cast< std::uint32_t >( i ), t );
+    }
+    bt_copy16( m, self + 0x50, scaling );
+    m.vcall( m.user, self, 0x3C, nullptr, 0 );
+}
+
+// btCompoundShape::serialize @0x5278B0 (slot 12; buffer, serializer; retn 8):
+// the name prologue; buffer +0x14 = m_collisionMargin (+0x48), +0x10 = the
+// child count (+0x10), +0xC = 0; with children: chunk = allocate( 0x4C,
+// count ) (vt+0xC), buffer +0xC = getUniquePointer( chunk->m_oldPtr ) (vt+0x18);
+// per child (buffer +0x10 re-read) into the 0x4C-byte btCompoundShapeChildData:
+// +0x48 the margin, +0x40 getUniquePointer( shape ), and when findPointer(
+// shape ) (vt+0x14) is 0 the shape's own 'SHAP' chunk (its vt+0x2C size,
+// allocate( size, 1 ), its vt+0x30( chunk->m_oldPtr, serializer ), finalizeChunk(
+// chunk, type, 'SHAP', shape )); +0x44 the child type; +0 the 64-byte
+// transform. Then finalizeChunk( chunk, "btCompoundShapeChildData" 0x6CDCD8,
+// 'ARAY' 0x59415241, chunk->m_oldPtr ). Answers "btCompoundShapeData"
+// (0x6CDCF4).
+inline std::uint32_t bt_compound_serialize( const bt_mem_t& m, std::uint32_t self, std::uint32_t buffer, std::uint32_t serializer )
+{
+    bt_shape_serialize_name( m, self, buffer, serializer );
+    m.wr( m.user, buffer + 0x14, m.rd( m.user, self + 0x48 ) );
+    const std::uint32_t n = m.rd( m.user, self + 0x10 );
+    m.wr( m.user, buffer + 0x10, n );
+    m.wr( m.user, buffer + 0xC, 0 );
+    if ( n == 0 )
+        return 0x6CDCF4u;
+    const std::uint32_t a[ 2 ] = { 0x4C, n };
+    const std::uint32_t chunk = m.vcall( m.user, serializer, 0xC, a, 2 );
+    const std::uint32_t data = m.rd( m.user, chunk + 8 );
+    m.wr( m.user, buffer + 0xC, m.vcall( m.user, serializer, 0x18, &data, 1 ) );
+    for ( std::int32_t i = 0; i < static_cast< std::int32_t >( m.rd( m.user, buffer + 0x10 ) ); ++i )
+    {
+        const std::uint32_t off = 0x50u * static_cast< std::uint32_t >( i );
+        const std::uint32_t to = data + 0x4Cu * static_cast< std::uint32_t >( i );
+        m.wr( m.user, to + 0x48, m.rd( m.user, m.rd( m.user, self + 0x18 ) + off + 0x48 ) );
+        const std::uint32_t shape = m.rd( m.user, m.rd( m.user, self + 0x18 ) + off + 0x40 );
+        m.wr( m.user, to + 0x40, m.vcall( m.user, serializer, 0x18, &shape, 1 ) );
+        const std::uint32_t again = m.rd( m.user, m.rd( m.user, self + 0x18 ) + off + 0x40 );
+        if ( m.vcall( m.user, serializer, 0x14, &again, 1 ) == 0 )
+        {
+            const std::uint32_t child = m.rd( m.user, m.rd( m.user, self + 0x18 ) + off + 0x40 );
+            const std::uint32_t b[ 2 ] = { m.vcall( m.user, child, 0x2C, nullptr, 0 ), 1 };
+            const std::uint32_t sub = m.vcall( m.user, serializer, 0xC, b, 2 );
+            const std::uint32_t c[ 2 ] = { m.rd( m.user, sub + 8 ), serializer };
+            const std::uint32_t type = m.vcall( m.user, m.rd( m.user, m.rd( m.user, self + 0x18 ) + off + 0x40 ), 0x30, c, 2 );
+            const std::uint32_t d[ 4 ] = { sub, type, 0x50414853u, m.rd( m.user, m.rd( m.user, self + 0x18 ) + off + 0x40 ) };
+            m.vcall( m.user, serializer, 0x10, d, 4 );
+        }
+        m.wr( m.user, to + 0x44, m.rd( m.user, m.rd( m.user, self + 0x18 ) + off + 0x44 ) );
+        const std::uint32_t record = m.rd( m.user, self + 0x18 ) + off;
+        for ( std::uint32_t k = 0; k < 16; ++k )
+            m.wr( m.user, to + 4 * k, m.rd( m.user, record + 4 * k ) );
+    }
+    const std::uint32_t e[ 4 ] = { chunk, 0x6CDCD8u, 0x59415241u, m.rd( m.user, chunk + 8 ) };
+    m.vcall( m.user, serializer, 0x10, e, 4 );
+    return 0x6CDCF4u;
 }
