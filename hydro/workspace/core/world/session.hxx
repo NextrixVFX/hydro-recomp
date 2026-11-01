@@ -15,6 +15,8 @@
 #include <workspace/core/world/bodies.hxx>
 #include <workspace/core/world/dynamics.hxx>
 #include <workspace/core/world/kernel.hxx>
+#include <workspace/core/world/pfxmgr.hxx>
+#include <workspace/core/world/pfxsim.hxx>
 #include <workspace/core/world/rules.hxx>
 #include <workspace/core/world/start.hxx>
 #include <workspace/core/world/tick.hxx>
@@ -108,6 +110,10 @@ struct race_world_t
     std::function< void( int project, race_hud_verb_t verb, float dt ) > hud;
     // A VuEventManager broadcast reaching the world's graph (the HUD's / the level's subscribers).
     std::function< void( const char* name ) > broadcast;
+    // The world's VuPfx runtime / VuPfxManager g 0x75905C (c_effects; null: none - the boats' pfx calls are UNKNOWN).
+    pfx_runtime_t* pfx = nullptr;
+    pfx_manager_t* pfx_manager = nullptr;
+    const pfx_manager_ops_t* pfx_ops = nullptr;
     std::uint32_t viewports = 1;
     std::int32_t control_method = 0;
     std::int32_t display_w = 1280;
