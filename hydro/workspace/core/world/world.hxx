@@ -694,14 +694,36 @@ private:
             return;
         if ( !m_vantage_ready )
         {
-            // The MEAN of the placements, not the centre of their bounding box:
-            // a level is a long ribbon with outliers at both ends, and the box
-            // centre lands in empty space off the course.
+            // The STARTING GRID when the project has one: the mean of its
+            // VuGridPositionEntity worlds from the retail tree - on the water at
+            // the start line. The mean of every placement lands off the course
+            // on a long ribbon of a level (the user saw it outside the map), so
+            // it is only the fallback for a project without a grid.
             double sum[ 3 ]{};
-            for ( const auto& pair : m_entity_world )
-                for ( int axis = 0; axis < 3; ++axis )
-                    sum[ axis ] += pair.second[ 12 + axis ];
-            const double count = m_entity_world.empty( ) ? 1.0 : static_cast< double >( m_entity_world.size( ) );
+            int grid = 0;
+            if ( m_tree )
+            {
+                const auto walk = [ & ]( const auto& self, entity_t& e ) -> void
+                {
+                    const transform_component_t* t = e.m_type == "VuGridPositionEntity" && !e.m_world_unknown
+                        ? entity_transform( e ) : nullptr;
+                    if ( t )
+                    {
+                        for ( int axis = 0; axis < 3; ++axis )
+                            sum[ axis ] += t->world[ 12 + axis ];
+                        ++grid;
+                    }
+                    for ( auto& child : e.m_children )
+                        self( self, *child );
+                };
+                walk( walk, *m_tree );
+            }
+            if ( grid == 0 )
+                for ( const auto& pair : m_entity_world )
+                    for ( int axis = 0; axis < 3; ++axis )
+                        sum[ axis ] += pair.second[ 12 + axis ];
+            const double count = grid > 0 ? static_cast< double >( grid )
+                : m_entity_world.empty( ) ? 1.0 : static_cast< double >( m_entity_world.size( ) );
             for ( int axis = 0; axis < 3; ++axis )
                 m_centre[ axis ] = static_cast< float >( sum[ axis ] / count );
 
@@ -716,8 +738,9 @@ private:
                     m_radius = parsed;
             }
             m_vantage_ready = true;
-            LOG_INFO( "dev vantage: %u placements, mean %.0f %.0f %.0f, orbit radius %.0f (--vantage <units>)",
-                static_cast< unsigned >( m_entity_world.size( ) ),
+            LOG_INFO( "dev vantage: %s %d, centre %.0f %.0f %.0f, orbit radius %.0f (--vantage <units>)",
+                grid > 0 ? "starting grid positions" : "no grid - mean of placements",
+                grid > 0 ? grid : static_cast< int >( m_entity_world.size( ) ),
                 m_centre[ 0 ], m_centre[ 1 ], m_centre[ 2 ], m_radius );
         }
 
