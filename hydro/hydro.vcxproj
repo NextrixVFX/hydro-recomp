@@ -173,6 +173,7 @@
     <ClInclude Include="workspace\core\ui\select.hxx" />
     <ClInclude Include="workspace\core\ui\wiring.hxx" />
     <ClInclude Include="workspace\core\world\animate.hxx" />
+    <ClInclude Include="workspace\core\world\bodies.hxx" />
     <ClInclude Include="workspace\core\world\build.hxx" />
     <ClInclude Include="workspace\core\world\control.hxx" />
     <ClInclude Include="workspace\core\world\drive.hxx" />
