@@ -196,8 +196,12 @@ inline bool verify_logic_types( )
         }
     }
     bad += n != g_golden_lgt_count ? 1 : 0;
+    // VuControlComponent's name getter 0x619F50
+    bad += g_golden_lgt_name_count == 1 && g_golden_lgt_names[ 0 ].address == 0x619F50u
+        && std::strcmp( g_golden_lgt_names[ 0 ].chain, control_component_name( ) ) == 0 ? 0 : 1;
     if ( bad == 0 )
-        LOG_SUCCESS( "g_logic_types match the logic / script classes' %d getType slots (descriptor and chain each)", static_cast< int >( n ) );
+        LOG_SUCCESS( "g_logic_types match the logic / script classes' %d getType slots (descriptor and chain each); VuControlComponent's name 0x619F50",
+                     static_cast< int >( n ) );
     else
         LOG_ERROR( "logic_types FAILED %d", bad );
     return bad == 0;
