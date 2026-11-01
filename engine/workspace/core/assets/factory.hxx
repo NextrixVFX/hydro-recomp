@@ -558,6 +558,7 @@ struct asset_dtor_hooks_t
     std::function< void( std::uint32_t ) > factory_release;   // [0x759004] slot 9 0x4EDE70 ( asset )
     std::function< void( ) > property_base_dtor;              // 0x405260 ( this )
     std::function< void( ) > entity_dtor;                     // 0x500870 ( this )
+    std::function< void( std::uint32_t, std::uint32_t ) > object_delete;   // an object's slot 0 ( object, flags )
 };
 
 enum class asset_dtor_kind_t
@@ -565,6 +566,11 @@ enum class asset_dtor_kind_t
     asset,               // 0x515D70
     asset_property,      // 0x53FD10
     substitute_entity,   // 0x5F4AB0
+    animation,           // 0x515E10
+    project,             // 0x554E90
+    generic_data,        // 0x55C1E0
+    db,                  // 0x55C230
+    timed_event,         // 0x5C8C70
 };
 
 inline void asset_string_reset( const asset_words_t& w, std::uint32_t at, const asset_dtor_hooks_t& h )
@@ -607,7 +613,76 @@ inline void substitute_entity_dtor( const asset_words_t& w, std::uint32_t self, 
         h.entity_dtor( );
 }
 
-// 0x515D70 / 0x53FD10 / 0x5F4AB0: the scalar-deleting dtors.
+// The asset classes' own dtors (slot 1; each then VuAsset's body 0x515D00):
+//   0x515E10 VuAnimationAsset: +0 = 0x74C9E8; a +0x58 VuAnimation has its refcount +4 decremented - at 0 its slot 0
+//            ( 1 ) deletes it - and +0x58 = 0 (whatever the count; nothing when +0x58 is null).
+//   0x554E90 VuProjectAsset: +0 = 0x74EB64, the +0x58 container cleared.
+//   0x55C1E0 VuGenericDataAsset (also VuAssetListAsset / VuStringAsset / VuTemplateAsset / VuShaderAsset's slot 1):
+//            +0 = 0x74EDCC, the +0x58 document cleared twice (the member's clear, then its dtor's).
+//   0x55C230 VuDBAsset: +0 = 0x74EDEC, +0x68 cleared, then the generic data part (+0 = 0x74EDCC, +0x58 twice).
+//   0x5C8C70 VuTimedEventAsset: +0 = 0x7524D8; with +0x58 non-null its events [+0x58, +0x5C) - 0x30 bytes each -
+//            destroyed by 0x5C9D20 (per event the +0x20 container cleared, then the +4 string reset), the block freed
+//            and +0x58 / +0x5C / +0x60 = 0.
+inline void asset_events_destroy( const asset_words_t& w, std::uint32_t first, std::uint32_t last, const asset_dtor_hooks_t& h )
+{
+    for ( std::uint32_t e = first; e != last; e += 0x30 )   // 0x5C9D20 (fastcall first, last)
+    {
+        if ( h.json_clear )
+            h.json_clear( e + 0x20 );
+        asset_string_reset( w, e + 4, h );
+    }
+}
+
+inline void asset_class_dtor( asset_dtor_kind_t kind, const asset_words_t& w, std::uint32_t self, const asset_dtor_hooks_t& h )
+{
+    auto clear = [ & ]( std::uint32_t at ) {
+        if ( h.json_clear )
+            h.json_clear( self + at );
+    };
+    switch ( kind )
+    {
+    case asset_dtor_kind_t::animation:
+        w.put( self, 0x74C9E8u );
+        if ( const std::uint32_t a = w.get( self + 0x58 ) )
+        {
+            const std::uint32_t refs = w.get( a + 4 ) - 1u;
+            w.put( a + 4, refs );
+            if ( refs == 0 && h.object_delete )
+                h.object_delete( a, 1u );
+            w.put( self + 0x58, 0u );
+        }
+        break;
+    case asset_dtor_kind_t::project:
+        w.put( self, 0x74EB64u );
+        clear( 0x58 );
+        break;
+    case asset_dtor_kind_t::db:
+        w.put( self, 0x74EDECu );
+        clear( 0x68 );
+        [[fallthrough]];
+    case asset_dtor_kind_t::generic_data:
+        w.put( self, 0x74EDCCu );
+        clear( 0x58 );
+        clear( 0x58 );
+        break;
+    case asset_dtor_kind_t::timed_event:
+        w.put( self, 0x7524D8u );
+        if ( const std::uint32_t first = w.get( self + 0x58 ) )
+        {
+            asset_events_destroy( w, first, w.get( self + 0x5C ), h );
+            if ( h.free_block )
+                h.free_block( w.get( self + 0x58 ) );
+            for ( std::uint32_t at : { 0x58u, 0x5Cu, 0x60u } )
+                w.put( self + at, 0u );
+        }
+        break;
+    default:
+        break;
+    }
+    asset_base_dtor( w, self, h );
+}
+
+// 0x515D70 / 0x53FD10 / 0x5F4AB0 / 0x515E10 / 0x554E90 / 0x55C1E0 / 0x55C230 / 0x5C8C70: the scalar-deleting dtors.
 inline std::uint32_t asset_destroy( asset_dtor_kind_t kind, const asset_words_t& w, std::uint32_t self, std::uint32_t flags,
                                     const asset_dtor_hooks_t& h )
 {
@@ -615,8 +690,10 @@ inline std::uint32_t asset_destroy( asset_dtor_kind_t kind, const asset_words_t&
         asset_base_dtor( w, self, h );
     else if ( kind == asset_dtor_kind_t::asset_property )
         asset_property_dtor( w, self, h );
-    else
+    else if ( kind == asset_dtor_kind_t::substitute_entity )
         substitute_entity_dtor( w, self, h );
+    else
+        asset_class_dtor( kind, w, self, h );
     if ( ( flags & 1u ) && h.free_block )
         h.free_block( self );
     return self;
