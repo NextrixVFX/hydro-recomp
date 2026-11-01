@@ -10,6 +10,7 @@
 // taken or not and its three arguments, the motion-state sync taken or not.
 
 #include <workspace/core/dynamics/wrapper.hxx>
+#include <workspace/core/world/collide.hxx>
 #include <workspace/core/world/dynamics.hxx>
 
 #include <deque>
@@ -304,5 +305,64 @@ inline bool verify_simple_mesh( )
         LOG_SUCCESS( "simple_striding_mesh_lock / _parts match VuSimpleStridingMesh 0x527CD0 / 0x527D40 on %u meshes", n );
     else
         LOG_ERROR( "simple_mesh FAILED %d", bad );
+    return bad == 0;
+}
+// VuCollisionManager's contact-added listener 0x4AD540 (world/collide.hxx collision_contact_added, with boat/events.hxx's
+// 0x4AD340 and vu_array_reserve 0x4AE490) against retail (case collision_contact): one manager across the contacts, the
+// bodies' images rebuilt per contact from the golden inputs; per contact the count, capacity and last record, then every
+// record.
+inline bool verify_collision_contact( )
+{
+    const unsigned* s = g_golden_ccn_words;
+    std::vector< std::vector< std::uint8_t > > bodies( 4, std::vector< std::uint8_t >( 0x400, 0 ) ), owners( 4, std::vector< std::uint8_t >( 0x500, 0 ) );
+    collision_manager_t m;
+    const unsigned ns = *s++;
+    m.scrapes.data.resize( ns );
+    m.scrapes.count = m.scrapes.capacity = static_cast< std::int32_t >( ns );
+    for ( unsigned i = 0; i < ns; ++i, s += 4 )
+        m.scrapes.data[ i ] = { bodies[ s[ 0 ] ].data( ), bodies[ s[ 1 ] ].data( ), static_cast< std::int32_t >( s[ 2 ] ), static_cast< std::int32_t >( s[ 3 ] ), {} };
+    m.impacts.data.resize( 2 );
+    m.impacts.capacity = 2;
+    const unsigned n = *s++;
+    int bad = 0;
+    for ( unsigned c = 0; c < n; ++c )
+    {
+        const unsigned ia = *s++, ib = *s++;
+        for ( unsigned side = 0; side < 2; ++side, s += 12 )
+        {
+            std::uint8_t* b = bodies[ side ? ib : ia ].data( );
+            std::uint8_t* o = owners[ side ? ib : ia ].data( );
+            const std::uint16_t group = static_cast< std::uint16_t >( s[ 1 ] );
+            std::memcpy( b + 0xD8, &s[ 0 ], 4 );
+            std::memcpy( b + 0x2CA, &group, 2 );
+            o[ 0x467 ] = static_cast< std::uint8_t >( s[ 2 ] );
+            std::memcpy( b + 0x40, s + 3, 12 );
+            std::memcpy( b + 0x140, s + 6, 12 );
+            std::memcpy( b + 0x150, s + 9, 12 );
+        }
+        float point[ 4 ], normal[ 3 ];
+        std::memcpy( point, s, 16 );
+        std::memcpy( normal, s + 4, 12 );
+        s += 7;
+        const unsigned pa = *s++, pb = *s++;
+        collision_contact_added( m, bodies[ ia ].data( ), bodies[ ib ].data( ), owners[ ia ].data( ), owners[ ib ].data( ), point, normal,
+                                 static_cast< std::uint8_t >( pa ), static_cast< std::uint8_t >( pb ) );
+        bad += static_cast< unsigned >( m.impacts.count ) != *s++;
+        bad += static_cast< unsigned >( m.impacts.capacity ) != *s++;
+        unsigned last[ 7 ] = {};
+        if ( m.impacts.count > 0 )
+            std::memcpy( last, &m.impacts.data[ static_cast< std::size_t >( m.impacts.count - 1 ) ], 28 );
+        bad += std::memcmp( last, s, 28 ) != 0;
+        s += 7;
+    }
+    const unsigned nf = *s++;
+    bad += nf != 7u * static_cast< unsigned >( m.impacts.count );
+    if ( nf == 7u * static_cast< unsigned >( m.impacts.count ) )
+        bad += std::memcmp( m.impacts.data.data( ), s, 4u * nf ) != 0;
+    if ( bad == 0 )
+        LOG_SUCCESS( "collision_contact_added matches VuCollisionManager's listener 0x4AD540 (0x4AD340, 0x4AE490) on %u contacts: %d impact "
+                     "records, capacity %d", n, m.impacts.count, m.impacts.capacity );
+    else
+        LOG_ERROR( "collision_contact FAILED %d", bad );
     return bad == 0;
 }
