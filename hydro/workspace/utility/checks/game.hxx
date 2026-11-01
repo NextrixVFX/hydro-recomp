@@ -247,17 +247,20 @@ inline bool verify_race_game_fsm( )
 // c_reader). Per frame: slot 7's result, current / previous / time, every condition's value and pulse, every boat's
 // +0x308 / +0x4B0 / +0x4B4 / +0x4CC and the calls (HUD verbs, the broadcast, the platform text) - one failure per
 // differing frame; the start's calls once per vector.
-inline bool verify_timetrial_game_fsm( )
+// The same for VuSlalomGame (slalom_rules_construct; case slalom_game_fsm: its ctor 0x48BEC0, slot 5 0x48C660, slot 7
+// 0x48C8C0, 0x48DB40; no gates - the project root a template instance) with the course after each document.
+inline bool verify_game_mode_fsm( const unsigned* words, const char* const* texts, bool slalom )
 {
     int failed = 0, frames = 0, calls = 0, unrecreated = 0;
+    const char* label = slalom ? "slalom game fsm" : "timetrial game fsm";
     const auto fail = [ & ]( const std::string& what ) {
         if ( ++failed <= 10 )
-            LOG_ERROR( "timetrial game fsm: %s", what.c_str( ) );
+            LOG_ERROR( "%s: %s", label, what.c_str( ) );
     };
-    const unsigned* w = g_golden_ttf_words;
+    const unsigned* w = words;
     std::size_t s = 0;
     const auto next = [ & ] { return *w++; };
-    const auto text = [ & ] { return std::string( g_golden_ttf_text[ s++ ] ); };
+    const auto text = [ & ] { return std::string( texts[ s++ ] ); };
     char line[ 256 ];
     const unsigned nv = next( );
     for ( unsigned v = 0; v < nv; ++v )
@@ -269,7 +272,10 @@ inline bool verify_timetrial_game_fsm( )
         for ( int& x : live ) x = static_cast< int >( next( ) );
         for ( int& x : hud ) x = static_cast< int >( next( ) );
         race_rules_t r;
-        timetrial_rules_construct( r );
+        if ( slalom )
+            slalom_rules_construct( r );
+        else
+            timetrial_rules_construct( r );
         std::vector< std::vector< std::uint8_t > > images( static_cast< std::size_t >( nb ), std::vector< std::uint8_t >( 0x600, 0 ) );
         std::vector< race_rules_boat_t > boats( images.size( ) );
         race_rules_game_t game;
@@ -304,6 +310,8 @@ inline bool verify_timetrial_game_fsm( )
             bytes.push_back( static_cast< std::uint8_t >( std::stoul( hex.substr( k, 2 ), nullptr, 16 ) ) );
         const value_t db = c_reader( bytes ).parse( );
         r.track_db = &db;
+        if ( slalom )
+            r.course = text( );
         r.unrecreated = [ & ]( std::uint32_t, const char* ) { ++unrecreated; };
         std::vector< std::string > got;
         r.hooks.hud = [ & ]( int p, race_hud_verb_t verb, float dt ) {
@@ -386,20 +394,26 @@ inline bool verify_timetrial_game_fsm( )
                 std::snprintf( line, sizeof( line ), "vector %u frame %u: ret %d state %d prev %d time 0x%08X calls %d%s, retail %u %d %d 0x%08X %u%s", v, f,
                                static_cast< int >( ret ), r.fsm.m_current, r.fsm.m_previous, time, static_cast< int >( got.size( ) ),
                                got.empty( ) ? "" : ( " first '" + got[ 0 ] + "'" ).c_str( ), want_ret, want_cur, want_prev, want_time, nc2,
-                               nc2 ? ( std::string( " first '" ) + g_golden_ttf_text[ first ] + "'" ).c_str( ) : "" );
+                               nc2 ? ( std::string( " first '" ) + texts[ first ] + "'" ).c_str( ) : "" );
                 fail( line );
             }
         }
     }
     if ( unrecreated )
         fail( std::to_string( unrecreated ) + " paths not recreated reached" );
-    if ( failed == 0 )
+    if ( failed == 0 && slalom )
+        LOG_SUCCESS( "slalom_rules (VuSlalomGame) match retail's ctor 0x48BEC0 + slot 5 0x48C660 / slot 7 0x48C8C0 / 0x48DB40 and the 12 "
+                     "handlers: %u vectors, %d frames, %d calls", nv, frames, calls );
+    else if ( failed == 0 )
         LOG_SUCCESS( "timetrial_rules (VuTimeTrialGame) match retail's ctor 0x48ED30 + slot 5 0x48F310 / slot 7 0x48F350 / 0x490540 and the 12 "
                      "handlers: %u vectors, %d frames, %d calls", nv, frames, calls );
     else
-        LOG_ERROR( "timetrial game fsm FAILED %d checks", failed );
+        LOG_ERROR( "%s FAILED %d checks", label, failed );
     return failed == 0;
 }
+
+inline bool verify_timetrial_game_fsm( ) { return verify_game_mode_fsm( g_golden_ttf_words, g_golden_ttf_text, false ); }
+inline bool verify_slalom_game_fsm( ) { return verify_game_mode_fsm( g_golden_sgf_words, g_golden_sgf_text, true ); }
 
 // checkpoint_buoy_contact (core/world rules.hxx) against VuCheckpointBuoyEntity's
 // contact callback 0x4350B0 run real (oracle case buoy_hit; the base 0x437F40
