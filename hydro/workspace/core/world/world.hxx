@@ -1321,6 +1321,21 @@ public:
             if ( end && end[ 0 ] && m_race.active && m_race.frames == std::atoi( end ) )
                 race_session_end( m_race );
         }
+        // Ours (a test driver): `--deliver "N|entity path|plug"` hands the race-side receivers (drive.hxx race_event_dispatch)
+        // that input plug with an empty VuParams after the session's frame N - a plug the run's own graph does not reach.
+        {
+            static const char* deliver = c_engine::option( "deliver" );
+            if ( deliver && deliver[ 0 ] && m_race.active )
+            {
+                const std::string d( deliver );
+                const std::size_t a = d.find( '|' ), b = a == std::string::npos ? a : d.find( '|', a + 1 );
+                if ( b != std::string::npos && m_race.frames == std::atoi( d.substr( 0, a ).c_str( ) ) )
+                {
+                    const bool taken = race_event_dispatch( m_race, d.substr( a + 1, b - a - 1 ), d.substr( b + 1 ), nullptr );
+                    LOG_INFO( "--deliver %s: %s", deliver, taken ? "taken" : "no race-side receiver" );
+                }
+            }
+        }
         // g_vufademanager's "Final" tick 0x4AEE50 (ui/flow.hxx ui_fade_t; delta = the tick manager's = dt): after the
         // frame's other phases. Its two broadcasts (OnFadeOutComplete / OnFadeInComplete) reach no subscriber here.
         if ( m_action )

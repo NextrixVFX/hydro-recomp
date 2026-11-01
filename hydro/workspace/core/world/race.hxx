@@ -190,9 +190,94 @@ inline entity_world_t race_entity_world( const entity_registry_t& registry, std:
             s = logic_state_for( cls );   // world/logic.hxx's classes (above)
         return s ? s : entity_state_for( cls );
     };
-    world.m_properties_load = []( entity_t& e, const value_t& p ) { waypoint_load_properties( e, p ); nuisance_start_load_properties( e, p ); multi_delay_load_properties( e, p ); dynamic_prop_load_properties( e, p ); breakable_load_properties( e, p ); audio_emitter_load_properties( e, p ); key_motion_load_properties( e, p ); logic_load_properties( e, p ); entity_load_properties( e, p ); };
-    world.m_properties_mark = []( entity_t& e ) { waypoint_mark_properties( e ); nuisance_start_mark_properties( e ); multi_delay_mark_properties( e ); dynamic_prop_mark_properties( e ); breakable_mark_properties( e ); audio_emitter_mark_properties( e ); key_motion_mark_properties( e ); logic_mark_properties( e ); entity_mark_properties( e ); };
+    world.m_properties_load = []( entity_t& e, const value_t& p ) { waypoint_load_properties( e, p ); nuisance_start_load_properties( e, p ); multi_delay_load_properties( e, p ); dynamic_prop_load_properties( e, p ); breakable_load_properties( e, p ); audio_emitter_load_properties( e, p ); key_motion_load_properties( e, p ); control_entity_load_properties( e, p ); logic_load_properties( e, p ); entity_load_properties( e, p ); };
+    world.m_properties_mark = []( entity_t& e ) { waypoint_mark_properties( e ); nuisance_start_mark_properties( e ); multi_delay_mark_properties( e ); dynamic_prop_mark_properties( e ); breakable_mark_properties( e ); audio_emitter_mark_properties( e ); key_motion_mark_properties( e ); control_entity_mark_properties( e ); logic_mark_properties( e ); entity_mark_properties( e ); };
+    world.m_post_load = []( entity_t& e, const value_t& data, bool override ) { control_entity_post_load( e, data, override ); };
     return world;
+}
+
+// 0x5CCA10 on an entity: the first component of its +0x48 list whose type chain holds VuControlComponent (0x736E48) - only
+// VuControlComponent's own vtable 0x757EA0 answers it (g_logic_types). Its records are the owner ctor's 0x5AD8C0 push_backs
+// {name, value, value} of the properties' ctor values; for VuDirectionalWaveEntity (ctor 0x5D97F0, 0x5D9C5A .. 0x5D9D0E) five:
+// "Max Height" +0x6C, "Speed" +0x70, "Period" +0x74, "Longitudinal Decay Ratio" +0x78, "Lateral Decay Ratio" +0x7C (their
+// defaults: surface.hxx k_water_directional_props). Kept in that component's m_state, made on first use. Null: no such
+// component; `unknown`: it has one but its owner class's records are not read here (UNKNOWN).
+inline control_component_t* control_component_of( entity_t& e, bool& unknown )
+{
+    unknown = false;
+    for ( entity_component_t& c : e.m_components )
+    {
+        if ( c.m_vtable != 0x757EA0u )
+            continue;
+        if ( !c.m_state )
+        {
+            if ( e.m_type != "VuDirectionalWaveEntity" )
+            {
+                unknown = true;
+                return nullptr;
+            }
+            static const char* const names[ 5 ] = { "Max Height", "Speed", "Period", "Longitudinal Decay Ratio", "Lateral Decay Ratio" };
+            auto comp = std::make_shared< control_component_t >( );
+            for ( int k = 0; k < 5; ++k )
+            {
+                const std::uint32_t v = k_water_directional_props[ k ].fallback;
+                comp->names.push_back( names[ k ] );
+                comp->records.push_back( 0u );
+                comp->records.push_back( v );
+                comp->records.push_back( v );
+            }
+            c.m_state = comp;
+        }
+        return static_cast< control_component_t* >( c.m_state.get( ) );
+    }
+    return nullptr;
+}
+
+// The "Entity" ref's target of an entity's script component (null: unlinked).
+inline entity_t* control_ref_target( entity_t& e )
+{
+    if ( const script_component_t* sc = script_of( e ) )
+        for ( const script_ref_t& ref : sc->m_refs )
+            if ( std::string( ref.m_row->m_name ) == "Entity" )
+                return ref.m_target;
+    return nullptr;
+}
+
+// 0x500A60's vt+0x10 (slot 4) after the project load, on every VuControlEntity of the tree (children first, as 0x500A60
+// recurses before its own call): 0x5CD300 = control_post_load with its children (+0x38 in order: a keyframe is a
+// VuControlKeyframeEntity), the ref's entity's VuControlComponent and 0x5012E0 (an ANCESTOR up the +0x34 chain has a +0x4C).
+// Returns the count of controls whose target's component records are UNKNOWN (bound to none).
+inline int control_entities_post_load( entity_t& root )
+{
+    int unknown = 0;
+    const auto walk = [ & ]( const auto& self, entity_t& e ) -> void {
+        for ( auto& c : e.m_children )
+            self( self, *c );
+        if ( e.m_type != "VuControlEntity" || !e.m_state )
+            return;
+        control_entity_t& v = static_cast< control_entity_state_t* >( e.m_state.get( ) )->value;
+        v.children.clear( );
+        for ( auto& c : e.m_children )
+        {
+            control_child_t ch;
+            ch.keyframe = c->m_type == "VuControlKeyframeEntity";
+            ch.name = c->m_name;
+            v.children.push_back( ch );
+        }
+        bool templated = false;
+        for ( const entity_t* a = e.m_parent; a && !templated; a = a->m_parent )
+            templated = !a->m_template.empty( );
+        control_component_t* comp = nullptr;
+        if ( entity_t* t = control_ref_target( e ) )
+        {
+            bool u = false;
+            comp = control_component_of( *t, u );
+            unknown += u ? 1 : 0;
+        }
+        control_post_load( v, comp, templated );
+    };
+    walk( walk, root );
+    return unknown;
 }
 
 // VuTransformComponent::setWorldTransform 0x5344A0 on an entity of the tree,
@@ -720,7 +805,14 @@ inline std::unique_ptr< entity_t > race_load_tree( c_archive& archive, const cha
         return nullptr;
     const entity_registry_t registry = build_entity_registry( archive.names( "VuTemplateAsset/" ) );
     entity_world_t world = race_entity_world( registry, std::move( templates ) );
-    return entity_load_project( project, path, world );
+    std::unique_ptr< entity_t > tree = entity_load_project( project, path, world );
+    // 0x500A60 follows the load: its slot 4 step for VuControlEntity (the rest of that walk - the +0x30 hash, the
+    // components' vt+0x14, every other class's slot 4 - is not run here).
+    if ( tree )
+        if ( const int unknown = control_entities_post_load( *tree ) )
+            LOG_WARNING( "race tree: %d VuControlEntity target(s) with a VuControlComponent whose owner's records are not read - "
+                         "bound to none (UNKNOWN)", unknown );
+    return tree;
 }
 
 // 0x4D1E10 (__usercall: ecx the 64-byte matrix out, xmm0 the distance; the
