@@ -577,6 +577,74 @@ inline bool verify_lens_water( )
     return bad == 0;
 }
 
+// lens.hxx lens_water_drop_fill / lens_water_draw_scales against retail's 0x515060 (case lens_drop_fill): every vertex
+// word of 150 synthetic drop arrays (0 .. 256 drops; the 4 words after the last vertex must stay the 0xA5 fill), the
+// shader constants, the draw call's arguments, and no device slot outside the read ones.
+inline bool verify_lens_drop_fill( )
+{
+    logic_check_t c{ g_golden_ldf_words };
+    const unsigned n = c.next( );
+    int bad = 0, verts = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const float aspect = control_f( c.next( ) );
+        const std::int32_t width = static_cast< std::int32_t >( c.next( ) ), height = static_cast< std::int32_t >( c.next( ) );
+        const std::uint32_t has40 = c.next( );
+        const unsigned count = c.next( );
+        std::vector< std::uint32_t > drops( 9 * count );
+        for ( auto& x : drops )
+            x = c.next( );
+        const unsigned nv = c.next( );
+        std::vector< lens_water_vertex_t > out( 6 * count + 1 );
+        std::memset( out.data( ), 0xA5, out.size( ) * sizeof( lens_water_vertex_t ) );
+        lens_water_drop_fill( static_cast< int >( count ), reinterpret_cast< const float* >( drops.data( ) ), out.data( ) );
+        int diff = nv == 24 * count + 4 ? 0 : 1000;
+        const std::uint8_t* got = reinterpret_cast< const std::uint8_t* >( out.data( ) );
+        for ( unsigned k = 0; k < nv; ++k )
+        {
+            const std::uint32_t want = c.next( );
+            diff += k < 24 * count + 4 && std::memcmp( got + 4 * k, &want, 4 ) == 0 ? 0 : 1;
+        }
+        if ( diff )
+        {
+            if ( bad < 4 )
+                LOG_ERROR( "lens_drop_fill vector %u: %d of %u vertex words differ", v, diff, nv );
+            ++bad;
+        }
+        verts += static_cast< int >( 6 * count );
+        float s[ 3 ];
+        lens_water_draw_scales( aspect, width, height, s );
+        const unsigned n10 = c.next( );
+        bad += n10 == 1 && c.next( ) == control_w( s[ 0 ] ) ? 0 : 1;
+        const unsigned n20 = c.next( );
+        if ( has40 )
+        {
+            bad += n20 == 2 ? 0 : 1;
+            const std::uint32_t a = c.next( ), b = c.next( );
+            bad += a == control_w( s[ 1 ] ) && b == control_w( s[ 2 ] ) ? 0 : 1;
+        }
+        else
+            bad += n20 == 0 ? 0 : 1;
+        const unsigned nd = c.next( );
+        std::uint32_t d[ 7 ] = { };
+        for ( unsigned k = 0; k < nd; ++k )
+        {
+            const std::uint32_t x = c.next( );
+            if ( k < 7 )
+                d[ k ] = x;
+        }
+        // vt+0xC4( 3, 0, 6 count, 4 count, manager +0x2478 (the case's 0x1B2B3B4B), 0x799898, 0x10 )
+        bad += nd == 7 && d[ 0 ] == 3u && d[ 1 ] == 0u && d[ 2 ] == 6u * count && d[ 3 ] == 4u * count && d[ 4 ] == 0x1B2B3B4Bu &&
+               d[ 5 ] == 0x799898u && d[ 6 ] == 0x10u ? 0 : 1;
+        bad += c.next( ) == 0u ? 0 : 1;
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "The lens-water drop draw's vertex fill (0x515060, CPU half) matches retail: %u drop arrays, %d vertices word for word", n, verts );
+    else
+        LOG_ERROR( "lens_drop_fill FAILED %d", bad );
+    return bad == 0;
+}
+
 // VuAudioEmitterEntity + 0x50FBB0 + VuAnimatedPropEntity's PlayAudioEvent (world/sound.hxx) against retail (case
 // audio_emitter): every step replayed with hooks that log what the case's FMOD recorder logged (getEvent answering FMOD_OK
 // and the next handle 0xE001.. unless the name holds "bad": 74 and 0xBAD0 + the low byte), compared entry for entry; the
@@ -1188,5 +1256,470 @@ inline bool verify_rotate_axis_angle( )
         LOG_SUCCESS( "VuMatrix_rotateAxisAngle_pre / _post (0x55A350 / 0x5D0BE0) match retail: %u matrices, both results word for word", n );
     else
         LOG_ERROR( "rotate_axis_angle FAILED %d", bad );
+    return bad == 0;
+}
+// entity/json.hxx against retail's VuJsonContainer (case json_access): on retail's own containers (its VUJB read
+// 0x55B560 of hand-built documents and two pack DBs; ours = assets/reader.hxx), every node in retail's pre-order -
+// asFloat 0x4FC470, asCString 0x4FC500, asInt64 0x4FC520, getValue( int64& ) 0x4FC5E0, getValue( int& ) 0x4FC550
+// (values.hxx property_int_value), vec4 0x4FDD30, matrix 0x4FDE40, getMemberKeys 0x4FBF30 - and append 0x4FBD30 on
+// every node of the hand-built documents (the element index, the node's dump afterwards).
+#include <workspace/core/entity/json.hxx>
+#include <workspace/utility/verify.hxx>
+
+inline void json_check_nodes( value_t& v, std::vector< value_t* >& out )
+{
+    out.push_back( &v );
+    if ( v.tag == 5 )
+        for ( value_t& e : v.list )
+            json_check_nodes( e, out );
+    else if ( v.tag == 6 )
+    {
+        std::vector< std::pair< std::string, value_t >* > sorted;
+        for ( auto& f : v.object )
+            sorted.push_back( &f );
+        std::sort( sorted.begin( ), sorted.end( ), []( const auto* a, const auto* b ) { return a->first < b->first; } );
+        for ( auto* f : sorted )
+            json_check_nodes( f->second, out );
+    }
+}
+
+inline std::vector< std::uint32_t > json_check_record( const value_t& j )
+{
+    auto w = []( float f ) { std::uint32_t u; std::memcpy( &u, &f, 4 ); return u; };
+    std::vector< std::uint32_t > r{ j.tag, w( json_as_float( j ) ) };
+    const char* s = json_as_cstring( j );
+    const std::string text = j.tag == 4 ? std::string( s ) : std::string( );
+    r.push_back( j.tag == 4 ? 0u : 1u );
+    r.push_back( static_cast< std::uint32_t >( text.size( ) ) );
+    for ( std::size_t i = 0; i < text.size( ); i += 4 )
+    {
+        std::uint32_t x = 0;
+        std::memcpy( &x, text.data( ) + i, std::min< std::size_t >( 4, text.size( ) - i ) );
+        r.push_back( x );
+    }
+    const std::uint64_t a = static_cast< std::uint64_t >( json_as_int64( j ) );
+    r.push_back( static_cast< std::uint32_t >( a ) ), r.push_back( static_cast< std::uint32_t >( a >> 32 ) );
+    std::int64_t g64 = 0x7777777777777777ll;
+    const bool ok64 = json_get_int64( j, g64 );
+    r.push_back( ok64 ? 1u : 0u ), r.push_back( static_cast< std::uint32_t >( g64 ) ), r.push_back( static_cast< std::uint32_t >( static_cast< std::uint64_t >( g64 ) >> 32 ) );
+    std::int32_t g32 = 0x77777777;
+    const bool ok32 = property_int_value( j, g32 );
+    r.push_back( ok32 ? 1u : 0u ), r.push_back( static_cast< std::uint32_t >( g32 ) );
+    float lanes[ 16 ];
+    std::memset( lanes, 0x77, sizeof( lanes ) );
+    r.push_back( json_vec4( j, lanes ) ? 1u : 0u );
+    for ( int k = 0; k < 4; ++k )
+        r.push_back( w( lanes[ k ] ) );
+    std::memset( lanes, 0x77, sizeof( lanes ) );
+    r.push_back( json_matrix( j, lanes ) ? 1u : 0u );
+    for ( int k = 0; k < 16; ++k )
+        r.push_back( w( lanes[ k ] ) );
+    r.push_back( 1u );   // getMemberKeys answers its out pointer
+    return r;
+}
+
+inline bool verify_json_access( )
+{
+    logic_check_t c{ g_golden_jsa_words };
+    const unsigned n = c.next( );
+    int bad = 0, nodes = 0, appends = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const std::string bytes = c.str( );
+        const std::vector< std::uint8_t > blob( bytes.begin( ), bytes.end( ) );
+        value_t root;
+        if ( !c_reader::read_at_start( blob, root ) )
+            ++bad;
+        std::vector< value_t* > ns;
+        json_check_nodes( root, ns );
+        const unsigned nn = c.next( );
+        if ( nn != ns.size( ) )
+        {
+            LOG_ERROR( "json_access document %u: %u nodes, retail %u", v, static_cast< unsigned >( ns.size( ) ), nn );
+            return false;
+        }
+        for ( unsigned k = 0; k < nn; ++k, ++nodes )
+        {
+            std::vector< std::uint32_t > want( c.next( ) );
+            for ( auto& x : want )
+                x = c.next( );
+            const std::vector< std::uint32_t > got = json_check_record( *ns[ k ] );
+            std::vector< std::string > wk( c.next( ) );
+            for ( auto& s : wk )
+                s = c.str( );
+            const bool same = got == want && json_member_keys( *ns[ k ] ) == wk;
+            if ( !same && bad++ < 6 )
+                LOG_ERROR( "json_access document %u node %u (tag %u) differs", v, k, ns[ k ]->tag );
+        }
+        const unsigned na = c.next( );
+        for ( unsigned k = 0; k < na; ++k, ++appends )
+        {
+            const std::int32_t index = static_cast< std::int32_t >( c.next( ) );
+            const std::string dump = c.str( );
+            value_t fresh;
+            c_reader::read_at_start( blob, fresh );
+            std::vector< value_t* > fs;
+            json_check_nodes( fresh, fs );
+            value_t& node = *fs[ k ];
+            const bool was_array = node.tag == 5;
+            value_t& e = json_append( node );
+            const std::int32_t got = was_array || node.tag == 5 ? static_cast< std::int32_t >( &e - node.list.data( ) ) : -1;
+            std::string text;
+            vujb_dump( node, text );
+            if ( ( got != index || text != dump ) && bad++ < 6 )
+                LOG_ERROR( "json_access document %u append on node %u: index %d (retail %d), dump %s", v, k, got, index, text == dump ? "ok" : "differs" );
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuJsonContainer's accessors match retail (0x4FC470 0x4FC500 0x4FC520 0x4FC5E0 0x4FC550 0x4FDD30 0x4FDE40 0x4FBF30 0x4FBD30): %u documents, %d nodes, %d appends", n, nodes, appends );
+    else
+        LOG_ERROR( "json_access FAILED %d", bad );
+    return bad == 0;
+}
+// world/voice.hxx against retail's VuVoiceOverManagerImpl (case voice_over): two sessions (Base.apf's VoiceOverDB and a
+// synthetic one) - init 0x4B7970's entries in full (keys, EventName, MaxPlayCount, StartDelay, the shuffled Waveforms
+// from the logged rand values), then 260 ops each (say now 0x4B7EA0, queue 0x4B7F50, tick 0x4B8000, the FMOD callback
+// 0x4B8180, reset 0x4B7E40, the gates): every FMOD / subtitle / ducking hook call in order with its arguments, and the
+// manager's state after every op.
+#include <workspace/core/world/voice.hxx>
+
+struct vo_check_log_t
+{
+    std::vector< std::vector< std::uint32_t > > entries;   // kind, words...
+    std::size_t at = 0;
+    int bad = 0;
+
+    // The next logged entry of a hook kind (8 .. 11 are the caller's: skipped).
+    const std::vector< std::uint32_t >* take( std::uint32_t kind )
+    {
+        while ( at < entries.size( ) && entries[ at ][ 0 ] >= 8 && entries[ at ][ 0 ] <= 11 )
+            ++at;
+        if ( at >= entries.size( ) || entries[ at ][ 0 ] != kind )
+        {
+            ++bad;
+            return nullptr;
+        }
+        return &entries[ at++ ];
+    }
+};
+
+inline std::string vo_check_unpack( const std::uint32_t* w, std::size_t& i )
+{
+    const std::uint32_t n = w[ i++ ];
+    std::string s( reinterpret_cast< const char* >( w + i ), n );
+    i += ( n + 3 ) / 4;
+    return s;
+}
+
+inline void vo_check_read_log( logic_check_t& c, vo_check_log_t& log )
+{
+    log.entries.clear( );
+    log.at = 0;
+    const unsigned n = c.next( );
+    for ( unsigned k = 0; k < n; ++k )
+    {
+        std::vector< std::uint32_t > e{ c.next( ) };
+        const unsigned len = c.next( );
+        for ( unsigned j = 0; j < len; ++j )
+            e.push_back( c.next( ) );
+        log.entries.push_back( e );
+    }
+}
+
+inline vo_hooks_t vo_check_hooks( vo_check_log_t& log, const std::int32_t& viewports, const bool& boat_ok )
+{
+    vo_hooks_t h;
+    h.rand = [ &log ]( ) -> std::int32_t { const auto* e = log.take( 7 ); return e ? static_cast< std::int32_t >( ( *e )[ 1 ] ) : 0; };
+    h.get_event = [ &log ]( const std::string& name, std::uint32_t& event ) -> std::int32_t
+    {
+        const auto* e = log.take( 1 );
+        if ( !e )
+            return -1;
+        std::size_t i = 1;
+        const std::string want = vo_check_unpack( e->data( ), i );
+        if ( want != std::string( name.c_str( ) ) || ( *e )[ i ] != 1u )
+            ++log.bad;
+        event = ( *e )[ i + 2 ];
+        return static_cast< std::int32_t >( ( *e )[ i + 1 ] );
+    };
+    h.set_callback = [ &log ]( std::uint32_t event, std::int32_t wave )
+    {
+        const auto* e = log.take( 2 );
+        if ( e && ( ( *e )[ 1 ] != event || ( *e )[ 2 ] != 1u || ( *e )[ 3 ] != static_cast< std::uint32_t >( wave ) ) )
+            ++log.bad;
+    };
+    h.start = [ &log ]( std::uint32_t event )
+    {
+        const auto* e = log.take( 3 );
+        if ( e && ( *e )[ 1 ] != event )
+            ++log.bad;
+    };
+    h.subtitle = [ &log ]( const char* text )
+    {
+        const auto* e = log.take( 4 );
+        std::size_t i = 1;
+        if ( e && vo_check_unpack( e->data( ), i ) != text )
+            ++log.bad;
+    };
+    h.duck = [ &log ]( const std::string& category, float volume, float time ) -> std::uint32_t
+    {
+        const auto* e = log.take( 5 );
+        if ( !e )
+            return 0;
+        std::size_t i = 1;
+        const std::string want = vo_check_unpack( e->data( ), i );
+        if ( want != std::string( category.c_str( ) ) || ( *e )[ i ] != control_w( volume ) || ( *e )[ i + 1 ] != control_w( time ) )
+            ++log.bad;
+        return ( *e )[ i + 2 ];
+    };
+    h.unduck = [ &log ]( std::uint32_t handle )
+    {
+        const auto* e = log.take( 6 );
+        if ( e && ( *e )[ 1 ] != handle )
+            ++log.bad;
+    };
+    h.viewports = [ &viewports ]( ) { return viewports; };
+    h.boat_ok = [ &boat_ok ]( const void* ) { return boat_ok; };
+    return h;
+}
+
+// The key of the entry a pointer names (0 for none).
+inline std::uint32_t vo_check_key( const vo_manager_t& m, const vo_entry_t* e )
+{
+    if ( e == nullptr )
+        return 0;
+    for ( const auto& kv : m.entries )
+        if ( &kv.second == e )
+            return kv.first;
+    return 0xFFFFFFFFu;
+}
+
+inline bool vo_check_state( logic_check_t& c, const vo_manager_t& m, bool full )
+{
+    bool ok = true;
+    const std::uint32_t words[ 6 ] = { m.enabled ? 1u : 0u, m.busy ? 1u : 0u, vo_check_key( m, m.current ), control_w( m.timer ), m.duck_handle,
+                                       static_cast< std::uint32_t >( m.entries.size( ) ) };
+    for ( std::uint32_t w : words )
+        ok = c.next( ) == w && ok;
+    const unsigned nq = c.next( );
+    ok = nq == m.queue.size( ) && ok;
+    for ( unsigned k = 0; k < nq; ++k )
+    {
+        const std::uint32_t want = c.next( );
+        ok = k < m.queue.size( ) && vo_check_key( m, m.queue[ k ] ) == want && ok;
+    }
+    ok = c.str( ) == m.duck_category && ok;
+    ok = c.next( ) == control_w( m.duck_volume ) && ok;
+    const unsigned ne = c.next( );
+    ok = ne == m.entries.size( ) && ok;
+    auto it = m.entries.begin( );
+    for ( unsigned k = 0; k < ne; ++k )
+    {
+        std::uint32_t w[ 5 ];
+        for ( auto& x : w )
+            x = c.next( );
+        std::string event;
+        std::vector< std::int32_t > waves;
+        if ( full )
+        {
+            event = c.str( );
+            waves.resize( c.next( ) );
+            for ( auto& x : waves )
+                x = static_cast< std::int32_t >( c.next( ) );
+        }
+        if ( it == m.entries.end( ) )
+        {
+            ok = false;
+            continue;
+        }
+        const vo_entry_t& e = it->second;
+        ok = w[ 0 ] == it->first && w[ 1 ] == static_cast< std::uint32_t >( e.max_plays ) && w[ 2 ] == control_w( e.start_delay ) &&
+             w[ 3 ] == static_cast< std::uint32_t >( e.plays ) && w[ 4 ] == e.next && ok;
+        if ( full )
+            ok = event == e.event && waves == e.waves && ok;
+        ++it;
+    }
+    return ok;
+}
+
+inline bool verify_voice_over( )
+{
+    logic_check_t c{ g_golden_vo_words };
+    const unsigned sessions = c.next( );
+    int bad = 0, ops = 0, calls = 0;
+    for ( unsigned s = 0; s < sessions; ++s )
+    {
+        const std::string bytes = c.str( );
+        value_t root;
+        c_reader::read_at_start( std::vector< std::uint8_t >( bytes.begin( ), bytes.end( ) ), root );
+        const std::uint32_t init_ok = c.next( );
+        vo_check_log_t log;
+        vo_check_read_log( c, log );
+        std::int32_t viewports = 1;
+        bool boat_ok = true, has_boat = false;
+        const vo_hooks_t h = vo_check_hooks( log, viewports, boat_ok );
+        vo_manager_t m;
+        const bool ok = vo_load( m, member( root, "VuDBAsset" ), h );
+        // the caller's hooks in retail's order: tick registration, dev bool, asset create ... release
+        const bool order = log.entries.size( ) >= 4 && log.entries[ 0 ][ 0 ] == 9u && log.entries[ 1 ][ 0 ] == 10u && log.entries[ 2 ][ 0 ] == 8u &&
+                           log.entries.back( )[ 0 ] == 11u;
+        log.take( 0xFFFFu );   // only the caller's entries may be left
+        const bool rest = log.at == log.entries.size( );
+        log.bad -= 1;          // that probe always counts one
+        if ( init_ok != ( ok ? 1u : 0u ) || !order || !rest || log.bad || !vo_check_state( c, m, true ) )
+        {
+            if ( bad < 6 )
+                LOG_ERROR( "voice_over session %u: the init differs (log %d, order %d, rest %d)", s, log.bad, order ? 1 : 0, rest ? 1 : 0 );
+            ++bad;
+        }
+        calls += static_cast< int >( log.entries.size( ) );
+        const unsigned nops = c.next( );
+        for ( unsigned k = 0; k < nops; ++k, ++ops )
+        {
+            const std::uint32_t kind = c.next( );
+            std::uint32_t head[ 6 ] = { };   // gates 6; callback type, userdata, answer, *p1, *p2
+            std::string name;
+            if ( kind == 1 )
+                for ( auto& x : head )
+                    x = c.next( );
+            else if ( kind == 7 || kind == 8 )
+                head[ 0 ] = c.next( ), name = c.str( );
+            else if ( kind == 0 )
+                head[ 0 ] = c.next( );
+            else if ( kind == 9 )
+                for ( int j = 0; j < 5; ++j )
+                    head[ j ] = c.next( );
+            vo_check_read_log( c, log );
+            calls += static_cast< int >( log.entries.size( ) );
+            bool good = true;
+            if ( kind == 1 )
+            {
+                m.enabled = head[ 0 ] != 0;
+                viewports = static_cast< std::int32_t >( head[ 1 ] );
+                has_boat = head[ 2 ] != 0;
+                boat_ok = head[ 3 ] == 0 && head[ 4 ] != 0 && head[ 5 ] != 0;
+            }
+            else if ( kind == 7 || kind == 8 )
+            {
+                static const int boat_tag = 0;
+                const void* boat = head[ 0 ] ? &boat_tag : nullptr;
+                ( kind == 7 ? vo_say_now : vo_queue )( m, boat, name.c_str( ), h );
+            }
+            else if ( kind == 0 )
+                vo_tick( m, control_f( head[ 0 ] ), h );
+            else if ( kind == 9 )
+            {
+                const std::int32_t p1 = 0x77777777;   // param1: retail never writes it
+                std::int32_t p2 = 0x66666666;
+                const std::int32_t r = vo_event_callback( m, static_cast< std::int32_t >( head[ 0 ] ), &p2, static_cast< std::int32_t >( head[ 1 ] ), h );
+                good = static_cast< std::uint32_t >( r ) == head[ 2 ] && static_cast< std::uint32_t >( p1 ) == head[ 3 ] && static_cast< std::uint32_t >( p2 ) == head[ 4 ];
+            }
+            else if ( kind == 6 )
+                vo_reset( m );
+            ( void )has_boat;
+            good = log.at == log.entries.size( ) && log.bad == 0 && good;
+            good = vo_check_state( c, m, false ) && good;
+            if ( !good )
+            {
+                if ( bad < 6 )
+                    LOG_ERROR( "voice_over session %u op %u (kind %u) differs (hook log %d, consumed %u of %u)", s, k, kind, log.bad,
+                               static_cast< unsigned >( log.at ), static_cast< unsigned >( log.entries.size( ) ) );
+                ++bad;
+                log.bad = 0;
+            }
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuVoiceOverManagerImpl matches retail (init 0x4B7970 + shuffle 0x4B8F90, say 0x4B7EA0, queue 0x4B7F50, tick 0x4B8000, callback 0x4B8180, reset 0x4B7E40): %u sessions, %d ops, %d hook calls in order",
+                     sessions, ops, calls );
+    else
+        LOG_ERROR( "voice_over FAILED %d", bad );
+    return bad == 0;
+}
+// lens.hxx lens_water_tick / _clear / _add_drops / _set_push against retail's 0x514500 / 0x5142C0 / 0x513600 / 0x513620 /
+// 0x5135D0 (case lens_water_tick): 400 ops on one manager - every manager word, every live drop and the global VuRand
+// after each.
+inline void lwt_rand_load( pfx_rand_t& r, const std::uint32_t* w )
+{
+    r.seed = static_cast< std::int32_t >( w[ 0 ] );
+    r.previous = static_cast< std::int32_t >( w[ 1 ] );
+    for ( int k = 0; k < 32; ++k )
+        r.table[ k ] = static_cast< std::int32_t >( w[ 2 + k ] );
+}
+
+inline bool lwt_state_same( const lens_water_manager_t& m, const pfx_rand_t& r, logic_check_t& c )
+{
+    bool ok = true;
+    const std::uint32_t words[ 9 ] = { m.enabled ? 1u : 0u, control_w( m.half_width ), m.clear ? 1u : 0u, control_w( m.scroll ),
+                                       control_w( m.push ), control_w( m.idle ), m.active ? 1u : 0u, static_cast< std::uint32_t >( m.count ),
+                                       control_w( m.owed ) };
+    for ( std::uint32_t w : words )
+        ok = c.next( ) == w && ok;
+    const unsigned nd = c.next( );
+    ok = nd == 9u * static_cast< unsigned >( m.count ) && ok;
+    for ( unsigned k = 0; k < nd; ++k )
+    {
+        const std::uint32_t want = c.next( );
+        ok = k < 9u * 256u && control_w( m.drops[ k ] ) == want && ok;
+    }
+    std::uint32_t rw[ 34 ];
+    for ( auto& x : rw )
+        x = c.next( );
+    ok = rw[ 0 ] == static_cast< std::uint32_t >( r.seed ) && rw[ 1 ] == static_cast< std::uint32_t >( r.previous ) && ok;
+    for ( int k = 0; k < 32; ++k )
+        ok = rw[ 2 + k ] == static_cast< std::uint32_t >( r.table[ k ] ) && ok;
+    return ok;
+}
+
+inline bool verify_lens_water_tick( )
+{
+    logic_check_t c{ g_golden_lwt_words };
+    const unsigned n = c.next( );
+    lens_water_manager_t m;
+    std::uint32_t start[ 9 ];
+    for ( auto& x : start )
+        x = c.next( );
+    m.enabled = start[ 0 ] != 0;
+    m.half_width = control_f( start[ 1 ] );
+    std::uint32_t rw[ 34 ];
+    for ( auto& x : rw )
+        x = c.next( );
+    pfx_rand_t rand;
+    lwt_rand_load( rand, rw );
+    int bad = 0, peak = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        std::vector< std::uint32_t > op( c.next( ) );
+        for ( auto& x : op )
+            x = c.next( );
+        switch ( op[ 0 ] )
+        {
+        case 0:
+        {
+            const int ne = static_cast< int >( op[ 2 ] );
+            const std::function< float( int ) > rate = [ &op ]( int i ) { return control_f( op[ 3 + i ] ); };
+            lens_water_tick( m, control_f( op[ 1 ] ), ne, rate, rand );
+            break;
+        }
+        case 10: lens_water_add_drops( m, control_f( op[ 1 ] ) ); break;
+        case 11: lens_water_set_push( m, control_f( op[ 1 ] ) ); break;
+        case 6: m.enabled = ( op[ 1 ] & 0xFFu ) != 0; break;   // slot 6 0x5135D0: the byte
+        case 9: lens_water_clear( m ); break;
+        case 1: m.half_width = control_f( op[ 1 ] ); break;
+        }
+        if ( m.count > peak )
+            peak = m.count;
+        if ( !lwt_state_same( m, rand, c ) )
+        {
+            if ( bad < 4 )
+                LOG_ERROR( "lens_water_tick op %u (kind %u) differs", v, op[ 0 ] );
+            ++bad;
+            // resynchronise nothing: every later op compares against our own state
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuLensWaterManagerImpl's drop tick matches retail (0x514500, slots 6 / 9 / 10 / 11): %u ops, up to %d drops, every drop word and the VuRand", n, peak );
+    else
+        LOG_ERROR( "lens_water_tick FAILED %d", bad );
     return bad == 0;
 }
