@@ -1977,3 +1977,19 @@ inline bool verify_bt_rows3( )
             }
         } );
 }
+
+// verify_bt_rows4 (boat batch 19): cases/boat.py bt_rows4 - btBoxShape::
+// getHalfExtentsWithMargin 0x548B20 (vt+0x28 = retail's leaf 0x43D5C0 in the
+// case: fld [this + 0x30]) and btCollisionDispatcher's ctor 0x56D1B0.
+inline bool verify_bt_rows4( )
+{
+    return bt_rows_verify( g_golden_bt_rows4_words, "bt_rows4",
+        "two Bullet rows 0x548B20 / 0x56D1B0 (collision/arena.hxx: getHalfExtentsWithMargin, the collision dispatcher's ctor with its 36 x 36 "
+        "double-dispatch table)",
+        []( unsigned kind, const bt_mem_t& m, const bt_io_t&, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            if ( kind == 1 )
+                return bt_box_half_extents_with_margin( m, self, args[ 0 ],
+                    []( const bt_mem_t& q, std::uint32_t s ) -> std::uint32_t { return q.rd( q.user, s + 0x30 ); } );   // 0x43D5C0
+            return bt_collision_dispatcher_construct( m, self, args[ 0 ] );
+        } );
+}

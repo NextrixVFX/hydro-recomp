@@ -594,3 +594,55 @@ inline std::uint32_t bt_hash_map_find_index( const bt_mem_t& m, std::uint32_t se
         i = m.rd( m.user, m.rd( m.user, self + 0x20 ) + 4u * i );
     return i;
 }
+// btBoxShape::getHalfExtentsWithMargin 0x548B20 (thiscall; out*; retn 4):
+// out = m_implicitShapeDimensions (+0x20, 16 bytes); getMargin (vt+0x28)
+// three times (ST0 stored as floats: the first for z, the second y, the
+// third x); out.x += the third, out.y += the second, out.z += the first. eax
+// = out. `margin` answers vt+0x28.
+inline std::uint32_t bt_box_half_extents_with_margin( const bt_mem_t& m, std::uint32_t self, std::uint32_t out,
+                                                      std::uint32_t ( *margin )( const bt_mem_t& m, std::uint32_t self ) )
+{
+    bt_copy16( m, out, self + 0x20 );
+    std::uint32_t mb[ 3 ];
+    for ( int k = 0; k < 3; ++k )
+        mb[ k ] = margin( m, self );
+    float mf[ 3 ];
+    std::memcpy( mf, mb, 12 );
+    bt_wrf( m, out, bt_rdf( m, out ) + mf[ 2 ] );
+    bt_wrf( m, out + 4, bt_rdf( m, out + 4 ) + mf[ 1 ] );
+    bt_wrf( m, out + 8, bt_rdf( m, out + 8 ) + mf[ 0 ] );
+    return out;
+}
+
+// btCollisionDispatcher's ctor 0x56D1B0 (thiscall; collisionConfiguration;
+// retn 4): [this] = 0x74F7C4; m_dispatcherFlags (+4) = 2; m_manifoldsPtr (+8)
+// initialised; the btManifoldResult member's vtable (+0x20) = 0x74E700; the
+// configuration at +0x151C; m_nearCallback (+0xD0) = defaultNearCallback
+// 0x56D840; +0xD4 = the configuration's vt+8 getCollisionAlgorithmPool, +0xD8
+// its vt+4 getPersistentManifoldPool; then for i, j < 36 (MAX_BROADPHASE_
+// COLLISION_TYPES) m_doubleDispatch[i][j] (+0xDC, row-major) = its vt+0x10
+// getCollisionAlgorithmCreateFunc( i, j ) (the configuration re-read). eax =
+// this.
+inline std::uint32_t bt_collision_dispatcher_construct( const bt_mem_t& m, std::uint32_t self, std::uint32_t config )
+{
+    m.wr( m.user, self, 0x74F7C4u );
+    m.wr( m.user, self + 4, 2 );
+    m.wr8( m.user, self + 0x18, 1 );
+    m.wr( m.user, self + 0x14, 0 );
+    m.wr( m.user, self + 0xC, 0 );
+    m.wr( m.user, self + 0x10, 0 );
+    m.wr( m.user, self + 0x20, 0x74E700u );
+    m.wr( m.user, self + 0x151C, config );
+    m.wr( m.user, self + 0xD0, 0x56D840u );
+    m.wr( m.user, self + 0xD4, m.vcall( m.user, config, 8, nullptr, 0 ) );
+    m.wr( m.user, self + 0xD8, m.vcall( m.user, config, 4, nullptr, 0 ) );
+    std::uint32_t at = self + 0xDC;
+    for ( std::uint32_t i = 0; i < 36; ++i )
+        for ( std::uint32_t j = 0; j < 36; ++j )
+        {
+            const std::uint32_t a[ 2 ] = { i, j };
+            m.wr( m.user, at, m.vcall( m.user, m.rd( m.user, self + 0x151C ), 0x10, a, 2 ) );
+            at += 4;
+        }
+    return self;
+}

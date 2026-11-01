@@ -3222,6 +3222,7 @@ inline bool verify_race_all( )
     ok = verify_bt_rows( ) && ok;
     ok = verify_bt_rows2( ) && ok;
     ok = verify_bt_rows3( ) && ok;
+    ok = verify_bt_rows4( ) && ok;
     ok = verify_simplex_ctor( ) && ok;
     ok = verify_thunk_exclude( ) && ok;
     ok = verify_boat_contact( ) && ok;
