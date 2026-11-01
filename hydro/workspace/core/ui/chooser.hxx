@@ -1,10 +1,15 @@
 #pragma once
 
+#include <workspace/core/ui/controls.hxx>
+#include <workspace/core/ui/leave.hxx>
 #include <workspace/core/ui/slider.hxx>
 
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <string>
+#include <utility>
+#include <vector>
 
 // VuUIComboBoxEntity (ctor 0x474590; the settings combos - VuUISubtitlesSetting
 // Entity ctor 0x46D710, vtable 0x73DF3C, is the one the Screens tick) - its
@@ -204,9 +209,56 @@ public:
             m_hooks.m_sound( "Global/UI_and_Menu/menu_change" );
     }
 
+    // VuUISubtitlesSettingEntity slot 6 0x46D7A0 (gameInitialize): the touch
+    // callback (+0x5C, vtable 0x73DF24) registered through 0x53FB90 with priority 0;
+    // "Settings_Off" then "Settings_On" pushed onto the choices +0x294 (0x457F50:
+    // std::vector push_back of a VuString + a byte 0 - every run adds two more);
+    // current +0x2A4 = VuSettingsManager g 0x758FE0 +0x5C (the subtitles byte, read
+    // without a null test), shown +0x2A8 = (float) it.
+    void initialize( ui_touch_device_t& touch, std::uint8_t subtitles )
+    {
+        ui_touch_add( touch, this, 0u );
+        for ( const char* name : { "Settings_Off", "Settings_On" } )
+            m_choice_texts.push_back( { name, 0u } );
+        m_choices = static_cast< int >( m_choice_texts.size( ) );
+        m_current = subtitles;
+        m_shown = static_cast< float >( m_current );
+    }
+
+    // Slot 7 0x4253D0 (gameRelease): 0x53FA60 on the touch device with +0x5C.
+    void release( ui_touch_device_t& touch ) { ui_touch_remove( touch, this ); }
+
+    // The touch callbacks (vtable 0x73DF24, this = entity + 0x5C). Slot 0 0x474F80
+    // (down, const VuVector2&): unless held (+0x2AE), +0x2AD = +0x2AE = 1 and the
+    // point through VuUIImpl's inverse crop matrix 0x81A144 (m0 m1 m4 m5 m12 m13 -
+    // an input) -> +0x2B0.
+    void touch_down( const float inverse[ 16 ], const float point[ 2 ] )
+    {
+        if ( m_held )
+            return;
+        m_down = 1;
+        m_held = 1;
+        m_touch[ 0 ] = point[ 0 ] * inverse[ 0 ] + point[ 1 ] * inverse[ 4 ] + inverse[ 12 ];
+        m_touch[ 1 ] = point[ 0 ] * inverse[ 1 ] + point[ 1 ] * inverse[ 5 ] + inverse[ 13 ];
+    }
+
+    // Slot 1 0x475080 (up): +0x2AF = 1.
+    void touch_up( ) { m_up = 1; }
+
+    // Slot 2 0x475090 (move): the device's touch 0 (g 0x759070 slot 7 vt+0x1C (0,
+    // out) - a HOOK: `point`) mapped -> +0x2B0, always (retail's operand order).
+    void touch_move( const float inverse[ 16 ], const float point[ 2 ] )
+    {
+        const float x = inverse[ 4 ] * point[ 1 ] + inverse[ 0 ] * point[ 0 ] + inverse[ 12 ];
+        const float y = inverse[ 5 ] * point[ 1 ] + inverse[ 1 ] * point[ 0 ] + inverse[ 13 ];
+        m_touch[ 0 ] = x;
+        m_touch[ 1 ] = y;
+    }
+
     std::uint32_t m_id;
     std::uint32_t m_vtable;
     ui_combo_box_hooks_t& m_hooks;
+    std::vector< std::pair< std::string, std::uint8_t > > m_choice_texts;   // +0x294 (28-byte entries: VuString, byte)
     // authored (OUR loaded properties)
     float m_scale[ 2 ] = { 100.0f, 100.0f };            // +0x68
     float m_position[ 2 ] = { 0.0f, 0.0f };             // +0x70
@@ -227,3 +279,22 @@ public:
     float m_touch[ 2 ] = { 0.0f, 0.0f };  // +0x2B0
     int m_press = 0;                 // +0x2B8
 };
+
+// The combo box's authored fields from OUR loaded entity (0x474590's property names).
+inline void ui_combo_box_fill( c_ui_combo_box& c, const entity_t& e )
+{
+    const auto take = [ &e ]( const char* name, float* out, std::size_t words )
+    {
+        if ( const ui_slot_t* s = ui_property_value( e, name ) )
+            std::memcpy( out, s->m_bits, 4 * words );
+    };
+    take( "Screen Scale", c.m_scale, 2 );
+    take( "Position X", &c.m_position[ 0 ], 1 );
+    take( "Position Y", &c.m_position[ 1 ], 1 );
+    const char* const rect[ 4 ] = { " X", " Y", " Width", " Height" };
+    for ( int k = 0; k < 4; ++k )
+    {
+        take( ( std::string( "TouchLeft" ) + rect[ k ] ).c_str( ), &c.m_left[ k ], 1 );
+        take( ( std::string( "TouchRight" ) + rect[ k ] ).c_str( ), &c.m_right[ k ], 1 );
+    }
+}

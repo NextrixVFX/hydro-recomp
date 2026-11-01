@@ -512,6 +512,12 @@ private:
             for ( const char* name : { "Show", "Hide", "SetAlpha" } )
                 if ( std::strcmp( plug, name ) == 0 )
                     return true;
+        // Batch 20: VuShortUnlockUITextEntity's Show / Hide / SetAlpha are the text base's
+        // (ctor 0x627070: 0x446C80 / 0x446FB0 / 0x627AA0; its own ctor 0x4454D0 adds none).
+        if ( vt == k_ui_lock_text_vtable )
+            for ( const char* name : { "Show", "Hide", "SetAlpha" } )
+                if ( std::strcmp( plug, name ) == 0 )
+                    return true;
         if ( vt == k_ui_text_vtable && std::strcmp( plug, "SetStringID" ) == 0 )
             return true;
         return vt == k_ui_trigger_forwarder_vtable && std::strcmp( plug, "Trigger" ) == 0;
@@ -991,20 +997,7 @@ private:
             };
             b.m_combo = std::make_unique< c_ui_combo_box >( ui_entity_id( ui_long_name( e ) ), b.m_vtable, h );
             c_ui_combo_box& c = *b.m_combo;
-            const auto take = [ &e ]( const char* name, float* out, std::size_t words )
-            {
-                if ( const ui_slot_t* s = ui_bind_slot( e, name ) )
-                    std::memcpy( out, s->m_bits, 4 * words );
-            };
-            take( "Screen Scale", c.m_scale, 2 );
-            take( "Position X", &c.m_position[ 0 ], 1 );
-            take( "Position Y", &c.m_position[ 1 ], 1 );
-            const char* const rect[ 4 ] = { " X", " Y", " Width", " Height" };
-            for ( int k = 0; k < 4; ++k )
-            {
-                take( ( std::string( "TouchLeft" ) + rect[ k ] ).c_str( ), &c.m_left[ k ], 1 );
-                take( ( std::string( "TouchRight" ) + rect[ k ] ).c_str( ), &c.m_right[ k ], 1 );
-            }
+            ui_combo_box_fill( c, e );
             // 0x474590 registers OnUISetFocus / OnUITick / OnUIEvent through the slot thunks
             add( b, "OnUISetFocus", 0x404AB2u, [ &c ]( const ui_params_t& p ) { c.on_set_focus( p ); } );
             add( b, "OnUITick", 0x4077DEu, [ &c ]( const ui_params_t& ) { c.on_tick( ); } );
@@ -1013,6 +1006,7 @@ private:
         else if ( b.m_vtable == k_ui_lock_text_vtable )
         {
             b.m_lock_text = std::make_unique< std::string >( );
+            make_shown( b );   // the text base's Visible / alpha for its Show / Hide / SetAlpha inputs
             std::string& text = *b.m_lock_text;
             // 0x445450 registers OnSetShortUnlockStringID 0x445570
             add( b, "OnSetShortUnlockStringID", 0x445570u, [ this, &text ]( const ui_params_t& p )
