@@ -140,7 +140,8 @@ inline const water_prop_row_t k_water_bump_props[] = {
 enum water_kind_t
 {
     water_kind_surface, water_kind_ramp, water_kind_rectangular, water_kind_circular, water_kind_banked, water_kind_whirlpool,
-    water_kind_directional, water_kind_bump, water_kind_none
+    water_kind_directional, water_kind_bump, water_kind_none,
+    water_kind_point   // made at run time (VuWater_createPointWave 0x528E10), not by an entity's slot 6
 };
 
 inline water_kind_t water_kind_of( const std::string& cls )
@@ -707,6 +708,63 @@ inline void water_build_entity( water_built_t& b, water_kind_t kind, const water
     case water_kind_bump: add_wave( from_image( bump_create( in.source( ) ) ), kind ); break;
     default: ++b.skipped; break;
     }
+}
+
+// VuWater_createPointWave 0x528E10 (thiscall water; desc*): new 0x94 bytes,
+// +8 / +0x38 / +0x3C / +0x40 / +0x8C zeroed, VuWaterPointWave_ctor 0x5A3340,
+// +4 incremented (the ctor's 1 and the manager's hold), then the allocators'
+// common tail (water_hold_wave). The ctor: VuWaterWave's ctor 0x5A6390 with 0
+// (+0x44 = 0: tested by its box, not its centre), vtable 0x750978, +0x4C ..
+// +0x77 zeroed then the 44-byte descriptor copied over them (VuPointWaveEntity
+// _tick 0x5D4C50's: x, y, z, w, Falloff Time, Magnitude, Range Start, Range
+// End, Speed, Frequency, Foaminess), +0x78 (the clock) = 0, +0x8C (the expiry
+// callback) = 0, the byte +0x90 (expired) = 0; then 1.0 / +0x6C (+0x7C),
+// 1.0 / ( +0x68 - +0x64 ) (+0x80), 1.0 / +0x5C (+0x84), 1.0 / +0x60 (+0x88);
+// the box (x - End, y - End, z) .. (End + x, End + y, z), the centre (x, y),
+// the radius End. +24 / +40 are the high halves of stack qwords the ctor never
+// writes and +0x91 .. +0x93 heap bytes nobody writes: UNKNOWN, not produced.
+inline water_words_t point_wave_create( const std::uint32_t* desc )
+{
+    water_words_t w{};
+    w.set( 0, 0x750978u );
+    w.set( 4, 2 );
+    w.set( 8, 0 );
+    w.set( 56, 0 );
+    w.set( 60, 0 );
+    w.set( 64, 0 );
+    w.set( 68, 0 );
+    w.set( 72, 0x3F800000u );
+    for ( int k = 0; k < 11; ++k )
+        w.set( 76 + 4 * k, desc[ k ] );
+    w.set( 120, 0 );
+    w.set( 140, 0 );
+    w.setf( 124, 1.0f / w.f( 108 ) );
+    w.setf( 128, 1.0f / ( w.f( 104 ) - w.f( 100 ) ) );
+    w.setf( 132, 1.0f / w.f( 92 ) );
+    w.setf( 136, 1.0f / w.f( 96 ) );
+    const float x = w.f( 76 );
+    const float y = w.f( 80 );
+    const float r = w.f( 104 );
+    w.setf( 12, x - r );
+    w.setf( 16, y - r );
+    w.set( 20, w.word[ 84 / 4 ] );
+    w.setf( 28, r + x );
+    w.setf( 32, r + y );
+    w.set( 36, w.word[ 84 / 4 ] );
+    w.setf( 44, x );
+    w.setf( 48, y );
+    w.setf( 52, r );
+    w.word[ 144 / 4 ] = 0;   // the byte +0x90 only: `known` stays false for the word
+    return w;
+}
+
+// 0x528E10 on a build: the wave's words, its hold entry and kind; returns its
+// index in the hold.
+inline int water_create_point_wave( water_built_t& b, const std::uint32_t* desc )
+{
+    b.waves.push_back( point_wave_create( desc ) );
+    b.wave_kind.push_back( water_kind_point );
+    return water_hold_wave( b.hold, water_held_from( b.waves.back( ).word ) );
 }
 
 // Is `cls` a water class (registry category "Water") this build does not

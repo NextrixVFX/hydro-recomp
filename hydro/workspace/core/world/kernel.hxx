@@ -25,6 +25,7 @@
 //   bump         0x5A3FE0 -> 0x5A4140 / 0x5A43A0 (0x5A4610 / 0x5A49A0)
 //   banked turn  0x5A5040 -> 0x5A55C0 / 0x5A5830 (0x5A5AB0 / 0x5A5F10)
 //   whirlpool    0x5A16A0 -> 0x5A1AD0 / 0x5A1D20 (0x5A1F80 / 0x5A2160)
+//   point        0x5A3510 -> 0x5A36A0 / 0x5A3820 (0x5A39B0 / 0x5A3CA0), vtable 0x750978
 //
 // THE TAG VARIANT IS THE BASE BODY BEHIND ONE TEST, read by an instruction
 // diff of each pair (hydro-tools census/vdiff.py): per vertex i,
@@ -44,8 +45,9 @@
 //     (ocean_patch_vertex) but they read the bezier patch field the ctor's
 //     BuildSpectrum 0x59D220 / EvolveField 0x59D4D0 / BuildBezierPatches
 //     0x59D6C0 make, which is not recreated;
-//   - point / wake / flow waves: none is made by water_build_world (their
-//     creation at run time is not wired).
+//   - wake / flow waves: none is made by water_build_world and their creation
+//     at run time is not recreated. Point waves come from
+//     water_create_point_wave (surface.hxx, 0x528E10).
 
 struct water_wave_kernel_t
 {
@@ -55,6 +57,7 @@ struct water_wave_kernel_t
     ramp_t ramp{};
     bump_t bump{};
     banked_turn_t banked{};
+    point_wave_t point{};
 };
 
 // The members each kernel reads, from the wave's words by retail offset (the
@@ -114,6 +117,19 @@ inline water_wave_kernel_t water_wave_kernel( water_kind_t kind, const water_wor
         k.banked.direction_x = w.f( 116 );
         k.banked.direction_y = w.f( 120 );
         k.banked.extent = w.f( 124 );
+        break;
+    case water_kind_point:   // 0x5A36A0
+        k.point.centre_x = w.f( 76 );
+        k.point.centre_y = w.f( 80 );
+        k.point.tail_width = w.f( 92 );
+        k.point.amplitude = w.f( 96 );
+        k.point.inner_radius = w.f( 100 );
+        k.point.outer_radius = w.f( 104 );
+        k.point.phase_scale = w.f( 112 );
+        k.point.clock = w.f( 120 );
+        k.point.rate = w.f( 124 );
+        k.point.amplitude_scale = w.f( 128 );
+        k.point.slope = w.f( 132 );
         break;
     default: break;
     }
@@ -197,7 +213,8 @@ inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
     case water_kind_directional:
     case water_kind_ramp:
     case water_kind_bump:
-    case water_kind_banked: break;
+    case water_kind_banked:
+    case water_kind_point: break;
     default: return false;   // ocean (its field is not built) or a kind not built
     }
     for ( int i = 0; i < ctx.count; ++i )
@@ -211,7 +228,8 @@ inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
         case water_kind_directional: directional_vertex( k.directional, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height ); break;
         case water_kind_ramp: ramp_vertex( k.ramp, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height ); break;
         case water_kind_bump: bump_vertex( k.bump, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height ); break;
-        default: banked_turn_vertex( k.banked, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height ); break;
+        case water_kind_banked: banked_turn_vertex( k.banked, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height ); break;
+        default: point_wave_vertex( k.point, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height ); break;
         }
     }
     return true;
