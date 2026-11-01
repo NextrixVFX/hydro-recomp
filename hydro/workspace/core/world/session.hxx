@@ -16,6 +16,8 @@
 #include <workspace/core/world/collide.hxx>
 #include <workspace/core/world/dynamics.hxx>
 #include <workspace/core/world/kernel.hxx>
+#include <workspace/core/world/lens.hxx>
+#include <workspace/core/world/mine.hxx>
 #include <workspace/core/world/pfxmgr.hxx>
 #include <workspace/core/world/pfxsim.hxx>
 #include <workspace/core/world/dynprop.hxx>
@@ -109,6 +111,9 @@ struct race_world_t
     // The "Triggers" tick 0x536460's trigger half: every listed trigger's vt+0x30 over the manager's
     // instigators (c_world's trigger list - world.hxx race_triggers), run after the instigator step.
     std::function< void( ) > triggers;
+    // The game mode manager's Decision tick 0x4CBFD0 -> the action mode's slot 4 0x4B99E0 (world/action.hxx, c_world's);
+    // null: no action mode - the session's game tick runs as if in Run (the scaffold paths).
+    std::function< void( float ) > game_mode;
     // The race HUD projects (VuRaceGame +0x738 / +0x73C / +0x740: 0 PreGame, 1 Game, 2 PostGame) - their load, gameInitialize,
     // release and graph are the world's (c_world), their tick / draw the UI's; null: no HUD projects (UNKNOWN, logged).
     std::function< void( int project, race_hud_verb_t verb, float dt ) > hud;
@@ -122,6 +127,16 @@ struct race_world_t
     // +0xB0) x world +0x50) and world aabb (0x531D10) re-made and handed to the renderer - the world's static draw of
     // that owner (c_world: the placements moved). Null: not drawn from the bodies (logged).
     std::function< void( const entity_t& owner ) > prop_draw;
+    // The 3D draw manager's add / remove of an owner's static model component (g 0x7590B8 vt+0x28 / +0x2C; the
+    // component's +0x1E) - the renderer's: c_world's static draws. Null: not hidden (logged).
+    std::function< void( const entity_t& owner, bool on ) > prop_drawn;
+    // An entity's output plug fired (VuScriptComponent findPlug 0x504770 + the plug's vt+8 = 0x5023A0): c_world's graph.
+    std::function< void( const entity_t& owner, const char* plug ) > fire;
+    // An entity's transform moved by a motion component (its owner's draw matrix re-made: the animated prop's 0x61DA50 /
+    // the static model's) - the renderer's hand-off (c_world). Null: not redrawn (logged).
+    std::function< void( const entity_t& owner ) > prop_moved;
+    // The audio platform (FMOD's imports - world/sound.hxx; c_world's). Null: no audio calls made (logged).
+    const sound_hooks_t* sound = nullptr;
     std::uint32_t viewports = 1;
     std::int32_t control_method = 0;
     std::int32_t display_w = 1280;
@@ -155,6 +170,9 @@ struct race_session_t
     // agent's surface.hxx) from VuDBAsset/SurfaceDB; built when the session starts.
     surface_table_t surfaces;
     bool surfaces_built = false;
+    // The lens-water manager g 0x759048's emitter list (VuLensWaterManagerImpl vt+0x38 / +0x3C, render side - a
+    // hook): what each VuLensWaterEmitterEntity's slot 6 0x5E6720 handed it (world/lens.hxx). Nothing reads it yet.
+    std::vector< const void* > lens_emitters;
     // Counts of the stopped paths reached (UNKNOWN), logged once each.
     int stopped_decision = 0, stopped_build = 0, stopped_transform = 0, stopped_viewports = 0, stopped_fleet = 0;
     // The world's services (refreshed per frame) and each boat's Decision
@@ -201,6 +219,9 @@ struct race_session_t
         dynamic_prop_motion_t motion;
         dynamic_prop_init_t init;
         bool buoy = false;
+        bool mine = false;               // VuFloatingMineEntity (world/mine.hxx)
+        std::uint8_t exploded = 0, request = 0;   // the mine's +0x214 / +0x215
+        bool step_added = false;         // the step callback in g_vudynamicsimpl's list (the hide removes it)
         float timer = 0.0f;              // +0x17C (the Decision tick's)
         dynamic_prop_hit_t hit;          // +0x164 / +0x174 / +0x178 (the contact callback 0x437F40's)
         std::uint8_t step_tag = 0;       // the entity's +0xB0 part: the step callback's identity in +0x48
@@ -209,6 +230,36 @@ struct race_session_t
     std::vector< std::unique_ptr< dyn_prop_t > > dyn_props;
     int buoy_hits = 0;                   // dev count (not retail): OnCheckPointBuoyHit broadcasts made
     int prop_hits = 0, prop_splashes = 0;   // dev counts (not retail): 0x437F40 hits taken, dynamic-prop splashes started
+    int mine_explosions = 0, explosion_hits = 0;   // dev counts (not retail)
+    // The level's VuBreakablePropEntity (world/breakable.hxx), live from their slot 6 0x434620.
+    struct breakable_live_t
+    {
+        entity_t* entity = nullptr;
+        breakable_t* p = nullptr;
+        rigid_component_t* c = nullptr;
+        level_body_t* body = nullptr;
+        std::uint8_t request = 0;          // +0xD0
+        float velocity[ 3 ] = { };         // +0xD4
+        const void* target = nullptr;      // the weak ref's object (+0xF0): the other body's owner (a session boat's body here)
+        std::uint32_t state = 0;           // the breakable component's +0xE4 (0 whole, 1 broken / debris live, 2 done)
+        race_session_t* session = nullptr;
+    };
+    std::vector< std::unique_ptr< breakable_live_t > > breakables;
+    // The level's VuKeyframeMotionEntity (world/keymotion.hxx), live from their slot 6 0x5CE9E0.
+    struct key_live_t
+    {
+        entity_t* entity = nullptr;
+        key_motion_t* k = nullptr;
+        entity_t* target_entity = nullptr;   // the "Entity" ref's entity (its VuMotionComponent the target)
+        key_motion_target_t target;
+        race_session_t* session = nullptr;
+    };
+    std::vector< std::unique_ptr< key_live_t > > key_motions;
+    int key_unrecreated = 0;
+    int breaks = 0;   // dev count (not retail)
+    // VuExplosionManagerImpl g 0x759034's listeners (+4 / +8; world/mine.hxx): the human drivers' +0x80 parts, added by
+    // their slot 6 0x40F210 (boat human.hxx human_game_initialize).
+    std::vector< explosion_listener_t > explosion_listeners;
     // The gfx-settings blender g 0x759430 (world/blend.hxx; 0x52F620 at the session's start) and the level's gfx-settings
     // entities' blend views (the zones in its list; the global's not listed - its timer only), made by their gameInitialize.
     gfx_blender_t blender;
@@ -244,6 +295,7 @@ struct race_session_t
     race_rules_game_t rules_game;
     std::vector< race_rules_boat_t > rules_boats;
     bool rules_running = false;
+    bool game_answer = true;   // VuGame's tick 0x482F10's answer, last frame (false: the game is done - Run's 0x4BAB50 reads it)
     int rules_frames = 0;
     // THE TEST INPUT (ours, flagged - not retail): --input-script's per-frame pad states (world/drive.hxx race_input_script_t),
     // answered by the platform input hook in place of the device; null: the device (game/input.hxx read_input). rames: the
@@ -282,6 +334,16 @@ inline void race_drive_viewports( race_session_t& s );
 inline void race_drive_build( race_session_t& s, std::size_t boat, float dt );
 // VuGame's tick 0x482F10 as the Decision phase reaches it (world/drive.hxx).
 inline void race_session_game_mode( void* user, float dt );
+// The Decision tick the game mode manager registers: the action mode when there is one (its Run state's 0x4BAB50
+// calls race_session_game_mode), else race_session_game_mode itself.
+inline void race_session_mode_tick( void* user, float dt )
+{
+    race_session_t& s = *static_cast< race_session_t* >( user );
+    if ( s.world.game_mode )
+        s.world.game_mode( dt );
+    else
+        race_session_game_mode( user, dt );
+}
 
 // The graph object a boat-image pointer slot refers to (-1 none).
 inline int race_session_ref( const boat_graph_t& g, int object, int slot )
@@ -699,6 +761,279 @@ inline void race_session_dyn_prop_build( void* user, float )
         race_unwired( *d.session, "a dynamic prop's Build tick 0x546130 with no renderer hand-off (prop_draw) - not drawn from its body" );
 }
 
+// The mine's hide vt+0x34 0x438220: the step callback out of g_vudynamicsimpl (vt+0x30), then 0x545F20 - shown (+0x8C)
+// -> 0, the draw component off the draw manager (the renderer's prop_drawn), the body out of the world when added.
+inline void race_session_mine_hide( race_session_t::dyn_prop_t& d )
+{
+    race_session_t& s = *d.session;
+    if ( d.step_added )
+    {
+        vu_dynamics_remove_step_callback( s.dynamics->impl, &d.step_tag );
+        d.step_added = false;
+    }
+    if ( !d.init.shown )
+        return;
+    d.init.shown = 0;
+    if ( s.world.prop_drawn )
+        s.world.prop_drawn( *d.entity, false );
+    else
+        race_unwired( s, "the mine's hide 0x545F20: no renderer hand-off (prop_drawn) - still drawn" );
+    if ( d.body->in_world )
+    {
+        vu_dynamics_remove_rigid_body( s.dynamics->impl, d.body->body );
+        d.body->in_world = false;
+    }
+}
+
+// The mine's Decision tick 0x438EA0 (world/mine.hxx mine_tick): the hide; the explosion part 0x547BB0 - its params
+// (+0 the position: the transform's row 3, +0x10 .. +0x30 the nine Explosion floats) to the explosion manager's add
+// 0x510180 (explosion_add over the human listeners), the pfx 0x52BCD0 by "Explosion Pfx System Name" (slot 10 discarded,
+// slot 2 setMatrix( the transform world ), slot 11 start) and FMOD's event (platform); the point wave 0x528E10 on the
+// world's VuWater (its returned reference dropped: 2 -> 1); "OnExplode".
+inline void race_session_mine_tick( void* user, float )
+{
+    race_session_t::dyn_prop_t& d = *static_cast< race_session_t::dyn_prop_t* >( user );
+    race_session_t& s = *d.session;
+    const transform_component_t* t = entity_transform( *d.entity );
+    if ( !t || d.entity->m_world_unknown )
+    {
+        if ( !d.exploded && d.request )
+            race_unwired( s, "a mine's tick 0x438EA0 on an entity whose world is unknown - UNKNOWN, not run" );
+        return;
+    }
+    mine_tick_hooks_t h;
+    h.hide = [ &d ] { race_session_mine_hide( d ); };
+    h.explode = [ &s, &d ]( const float* m ) {
+        std::uint8_t params[ 0x38 ] = { };
+        std::memcpy( params, m + 12, 16 );
+        std::memcpy( params + 0x10, d.p->explosion, 36 );
+        s.explosion_hits += explosion_add( params, s.explosion_listeners, hull_sqrt );
+        if ( !d.p->explosion_pfx.empty( ) && s.world.pfx && s.world.pfx_manager && s.world.pfx_ops )
+        {
+            pfx_manager_t& pm = *s.world.pfx_manager;
+            const int e = pfx_manager_create( pm, d.p->explosion_pfx.c_str( ), *s.world.pfx_ops );
+            if ( e >= 0 )
+            {
+                const boat_pfx_ops_t o = boat_pfx_runtime_ops( *s.world.pfx );
+                const std::uint32_t hd = pfx_manager_handle( pm, e );
+                if ( o.duration )
+                    o.duration( o.user, pm.entries[ static_cast< std::size_t >( e ) ].instance );
+                const int x = hd ? pfx_manager_lookup( pm, hd ) : -1;
+                if ( x >= 0 )
+                {
+                    const std::uint32_t inst = pm.entries[ static_cast< std::size_t >( x ) ].instance;
+                    o.set_matrix( o.user, inst, m );
+                    o.start( o.user, inst );
+                }
+            }
+        }
+        else if ( !d.p->explosion_pfx.empty( ) )
+            race_unwired( s, "a mine's explosion pfx 0x52BCD0 with no VuPfx runtime / manager - UNKNOWN, not run" );
+        if ( !d.p->explosion_audio.empty( ) )
+            race_unwired( s, "audio: a mine's explosion event (FMOD getEvent / set3DAttributes / start - platform)" );
+    };
+    h.point_wave = [ &s ]( const std::uint32_t* desc ) {
+        if ( !s.world.water )
+        {
+            race_unwired( s, "a mine's point wave 0x528E10 with no VuWater - UNKNOWN, not made" );
+            return;
+        }
+        water_create_point_wave( *s.world.water, desc );
+        s.world.water->waves.back( ).set( 4, 1 );   // the mine's reference dropped (dec +4: 2 -> 1, not deleted)
+    };
+    h.on_explode = [ &s, &d ] {
+        if ( s.world.fire )
+            s.world.fire( *d.entity, "OnExplode" );
+    };
+    if ( mine_tick( d.exploded, d.request, t->world, d.p->wave, h ) )
+    {
+        ++s.mine_explosions;
+        LOG_INFO( "race: mine '%s' exploded (sync %d) - %d listener hits so far", d.entity->m_name.c_str( ), s.dynamics ? s.dynamics->syncs : -1,
+                  s.explosion_hits );
+    }
+}
+
+// The keyframe motion's hooks (world/keymotion.hxx): the outputs through the world's graph, the tick registration as the
+// session holds it (registered once at game init; the tick runs slot 14 only while active, so an unregistered state is
+// the inactive one), find = the ref's VuMotionComponent (the target set up at game init), the unrecreated count.
+inline key_motion_hooks_t race_session_key_hooks( race_session_t::key_live_t& k )
+{
+    key_motion_hooks_t h;
+    h.user = &k;
+    h.fire = []( void* u, key_motion_t&, const char* plug ) {
+        auto& x = *static_cast< race_session_t::key_live_t* >( u );
+        if ( x.session->world.fire )
+            x.session->world.fire( *x.entity, plug );
+    };
+    h.tick_register = []( void*, key_motion_t&, bool ) { };
+    h.find = []( void* u, key_motion_t& ) -> key_motion_target_t* {
+        auto& x = *static_cast< race_session_t::key_live_t* >( u );
+        return x.target_entity ? &x.target : nullptr;
+    };
+    h.unrecreated = &k.session->key_unrecreated;
+    return h;
+}
+
+// The "Motion" tick 0x61A6E0 -> slot 14 0x5CFE60 while active.
+inline void race_session_key_tick( void* user, float dt )
+{
+    auto& k = *static_cast< race_session_t::key_live_t* >( user );
+    const int before = k.session->key_unrecreated;
+    key_motion_tick( *k.k, dt, race_session_key_hooks( k ) );
+    if ( k.session->key_unrecreated != before )
+        race_unwired( *k.session, "a keyframe motion reached a path not recreated (Curve Type / the key search below every key) - UNKNOWN" );
+}
+
+// VuKeyframeMotionEntity's slot 6 0x5CE9E0 (key_motion_game_init): its VuKeyframeEntity children in order (Time, the
+// transform world), the "Entity" ref (its script component's ref) -> the target entity's VuMotionComponent (vtable
+// 0x74E984; 0x5F5810 answers null without one). The target's IF (VuAnimatedPropEntity's 0x756228 / the props' 0x73A13C
+// shape): slot 0 = setWorldTransform of the owner (race.hxx entity_set_world, notify) then the owner's draw matrix
+// re-made (prop_moved: the animated component 0x61DA50 / the static model's); the rigid component's kinematic step
+// 0x544C50 and the +0x38 call are NOT recreated (counted); slots 1 / 2 (0x546D80 / 0x546DB0: the rigid component's +0xD0
+// bit 1 set / cleared and copied to its body) - no body is built for an animated prop here (UNKNOWN when one is).
+inline void race_session_key_motion( race_session_t& s, entity_t& e )
+{
+    key_motion_state_t* st = static_cast< key_motion_state_t* >( e.m_state.get( ) );
+    if ( st->curve_authored )
+    {
+        race_unwired( s, "a VuKeyframeMotionEntity authoring Curve Type (VuStaticIntEnumProperty 0x74C354's read 0x503600 unread) - UNKNOWN, not run" );
+        return;
+    }
+    auto k = std::make_unique< race_session_t::key_live_t >( );
+    k->entity = &e;
+    k->k = &st->value;
+    k->session = &s;
+    bool linked = false;
+    if ( const script_component_t* sc = script_of( e ) )
+        for ( const script_ref_t& ref : sc->m_refs )
+            if ( std::string( ref.m_row->m_name ) == "Entity" && ref.m_target )
+            {
+                linked = true;
+                for ( const entity_component_t& c : ref.m_target->m_components )
+                    if ( c.m_vtable == 0x74E984u )
+                        k->target_entity = ref.m_target;
+            }
+    if ( k->target_entity )
+    {
+        const transform_component_t* tt = entity_transform( *k->target_entity );
+        k->target.transform = tt ? tt->world : nullptr;
+        k->target.user = k.get( );
+        k->target.update = []( void* u, const float* m, const float*, const float* ) {
+            auto& x = *static_cast< race_session_t::key_live_t* >( u );
+            race_session_t& rs = *x.session;
+            if ( !entity_set_world( *x.target_entity, m, true, { } ) )
+            {
+                race_unwired( rs, "a keyframe motion's target whose world is not modelled - setWorldTransform UNKNOWN, not written" );
+                return;
+            }
+            if ( rs.world.prop_moved )
+                rs.world.prop_moved( *x.target_entity );
+            race_unwired( rs, "a motion target's rigid component kinematic step 0x544C50 / its +0x38 call (not recreated)" );
+        };
+    }
+    std::vector< key_motion_child_t > kids;
+    for ( auto& c : e.m_children )
+    {
+        key_motion_child_t kc;
+        kc.keyframe = c->m_type == "VuKeyframeEntity";
+        if ( kc.keyframe && c->m_state )
+        {
+            const float t = static_cast< keyframe_state_t* >( c->m_state.get( ) )->time;
+            std::memcpy( &kc.time, &t, 4 );
+        }
+        if ( const transform_component_t* ct = entity_transform( *c ) )
+            std::memcpy( kc.transform, ct->world, 64 );
+        kids.push_back( kc );
+    }
+    race_session_t::key_live_t* kp = k.get( );
+    s.key_motions.push_back( std::move( k ) );
+    tick_register( s.ticks, { kp, race_session_key_tick, kp }, "Motion" );
+    key_motion_game_init( *kp->k, kids, linked, race_session_key_hooks( *kp ) );
+}
+
+// VuBreakablePropEntity's Decision tick 0x434A20 (dt), read whole (world/breakable.hxx's head): the breakable
+// component's 0x543640(dt) - its debris fade timer (+0xE8, state +0xE4 1 -> 2 below 0, the debris draw removed): the
+// component's own properties and debris are the renderer's (0x51E790 / 0x5436B0 not recreated), so only the state is
+// kept here. With a request (+0xD0): unless the component's state is already non-zero - 0x546A20 (the static draw off,
+// the body out of the world when added), the debris start 0x51E790 (UNKNOWN: the renderer's), state 1, the draw add;
+// with a target: "OnBreak" (its entity parameter not carried by our fire), "OnCameraShake" {Magnitude, Duration,
+// Falloff, Frequency} and "OnRumble" {Low, High} to the target's event map (0x501160; a session boat's: boat events.hxx);
+// the pfx by Pfx Name (0x52BCD0; slot 10 discarded; slot 2 setMatrix the transform world, slot 3 the kept velocity
+// +0xD4 (its 4th word UNKNOWN: 0 here), slot 11 start); FMOD by Sfx Name (platform). Then +0xD0 = 0 and the weak ref
+// released either way.
+inline void race_session_breakable_tick( void* user, float )
+{
+    race_session_t::breakable_live_t& b = *static_cast< race_session_t::breakable_live_t* >( user );
+    race_session_t& s = *b.session;
+    if ( !b.request )
+        return;
+    if ( b.state == 0 )
+    {
+        if ( s.world.prop_drawn )
+            s.world.prop_drawn( *b.entity, false );
+        if ( b.body->in_world )
+        {
+            vu_dynamics_remove_rigid_body( s.dynamics->impl, b.body->body );
+            b.body->in_world = false;
+        }
+        race_unwired( s, "a breakable's debris 0x51E790 / its draw (Vu3dDrawBreakableModelComponent - the renderer's, not recreated)" );
+        b.state = 1;
+        ++s.breaks;
+        if ( b.target )
+        {
+            if ( s.world.fire )
+                s.world.fire( *b.entity, "OnBreak" );
+            race_session_boat_t* boat = nullptr;
+            for ( const auto& x : s.boats )
+                if ( &x->body.body == b.target )
+                    boat = x.get( );
+            if ( boat && boat->io.camera && boat->driver && !boat->driver->graph.empty( ) )
+            {
+                std::uint8_t shake[ 0x84 ] = { }, rumble[ 0x84 ] = { };
+                std::int32_t n = 0;
+                for ( int k = 0; k < 4; ++k )
+                    race_dyn_prop_param( shake, n, b.p->shake[ k ] );
+                std::memcpy( shake + 0x80, &n, 4 );
+                n = 0;
+                race_dyn_prop_param( rumble, n, b.p->rumble[ 0 ] );
+                race_dyn_prop_param( rumble, n, b.p->rumble[ 1 ] );
+                std::memcpy( rumble + 0x80, &n, 4 );
+                boat_on_camera_shake( boat->io.camera, shake );
+                std::uint8_t* drv = boat->driver->graph[ 0 ].image.data( );
+                boat_on_rumble( drv, load_word( drv, 0 ), rumble );
+            }
+        }
+        const transform_component_t* t = entity_transform( *b.entity );
+        if ( !b.p->pfx.empty( ) && s.world.pfx && s.world.pfx_manager && s.world.pfx_ops && t )
+        {
+            pfx_manager_t& pm = *s.world.pfx_manager;
+            const int e = pfx_manager_create( pm, b.p->pfx.c_str( ), *s.world.pfx_ops );
+            if ( e >= 0 )
+            {
+                const boat_pfx_ops_t o = boat_pfx_runtime_ops( *s.world.pfx );
+                const std::uint32_t hd = pfx_manager_handle( pm, e );
+                if ( o.duration )
+                    o.duration( o.user, pm.entries[ static_cast< std::size_t >( e ) ].instance );
+                const int x = hd ? pfx_manager_lookup( pm, hd ) : -1;
+                if ( x >= 0 )
+                {
+                    const std::uint32_t inst = pm.entries[ static_cast< std::size_t >( x ) ].instance;
+                    std::uint32_t v[ 4 ] = { };
+                    std::memcpy( v, b.velocity, 12 );
+                    o.set_matrix( o.user, inst, t->world );
+                    o.set_velocity( o.user, inst, v );
+                    o.start( o.user, inst );
+                }
+            }
+        }
+        if ( !b.p->sfx.empty( ) )
+            race_unwired( s, "audio: a breakable's Sfx (FMOD getEvent / set3DAttributes / start - platform)" );
+        LOG_INFO( "race: breakable '%s' broke (sync %d)%s", b.entity->m_name.c_str( ), s.dynamics ? s.dynamics->syncs : -1, b.target ? " - by a boat" : "" );
+    }
+    b.request = 0;
+    b.target = nullptr;
+}
+
 // One dynamic game prop's gameInitialize (world/dynprop.hxx, verified by the cases dynamic_prop_bodies /
 // dynamic_prop_step) made live: postLoad 0x5459F0's component step (retail runs it at load; nothing reads the
 // component in between), 0x437580, the body into the dynamics world (vt+0x3C), the motion state's
@@ -725,6 +1060,9 @@ inline bool race_session_dynamic_prop( race_session_t& s, entity_t& e, const bod
     d->session = &s;
     d->p = &static_cast< dynamic_prop_state_t* >( e.m_state.get( ) )->value;
     d->buoy = static_cast< dynamic_prop_state_t* >( e.m_state.get( ) )->buoy;
+    d->mine = static_cast< dynamic_prop_state_t* >( e.m_state.get( ) )->mine;
+    if ( d->mine )
+        d->p->hard_hit = 0;   // the mine's slot 6 0x438CF0 begins with +0x108 = 0, before 0x437580
     d->c = &rs->value;
     dynamic_prop_post_load( *d->p, *d->c );
     const collision_mesh_asset_t* asset = nullptr;
@@ -744,6 +1082,11 @@ inline bool race_session_dynamic_prop( race_session_t& s, entity_t& e, const bod
     quat_from_rows( d->live.anchor_q, t->world );
     level_body_t* lb = b.get( );
     race_session_t::dyn_prop_t* dp = d.get( );
+    // The mine's rest of 0x438CF0 (world/mine.hxx): retail sets group 0x80 on the body and its broadphase proxy after
+    // 0x437580 added it; here it is written before the add below, which builds the proxy from the body's +0x2CA - the
+    // same end state (ORDER OURS, flagged).
+    if ( d->mine )
+        mine_game_initialize( *d->c, reinterpret_cast< std::uint8_t* >( &lb->body ), nullptr );
     if ( d->init.added )
     {
         dyn.objects[ &lb->body ] = &lb->collision;
@@ -784,9 +1127,15 @@ inline bool race_session_dynamic_prop( race_session_t& s, entity_t& e, const bod
         dyn.callbacks[ tag ] = cb;
         if ( !vu_dynamics_add_step_callback( dyn.impl, tag ) )
             race_unwired( s, "g_vudynamicsimpl vt+0x2C refused a dynamic prop's step callback" );
+        else
+            dp->step_added = true;
     }
+    // The Decision delegate (0x4077E8 -> vt+0x40) reaches the MINE's 0x438EA0 for a mine; the mine then registers it
+    // once more itself (0x438D73) - two registrations when 0x437580 made one.
     if ( d->init.decision_tick )
-        tick_register( s.ticks, { dp, race_session_dyn_prop_decision, dp }, "Decision" );
+        tick_register( s.ticks, { dp, d->mine ? race_session_mine_tick : race_session_dyn_prop_decision, dp }, "Decision" );
+    if ( d->mine )
+        tick_register( s.ticks, { dp, race_session_mine_tick, dp }, "Decision" );
     if ( d->init.build_tick )
         tick_register( s.ticks, { dp, race_session_dyn_prop_build, dp }, "Build" );
     s.level_bodies.push_back( std::move( b ) );
@@ -820,7 +1169,7 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
             self( self, *c );
         if ( race_session_gfx_game_initialize( s, e ) )
             return;
-        if ( dynamic_prop_class( e.m_type ) )
+        if ( dynamic_prop_class( e.m_type ) )   // the mine's slot 6 0x438CF0 included (race_session_dynamic_prop)
         {
             if ( race_session_dynamic_prop( s, e, hooks, id ) )
                 ++dynamic;
@@ -834,7 +1183,32 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
                 logic_switch_init( ls->value );
             return;
         }
-        if ( e.m_type != "VuPropEntity" )
+        // VuLensWaterEmitterEntity's slot 6 0x5E6720 (world/lens.hxx): its emitter IF to the lens-water manager.
+        if ( e.m_type == "VuLensWaterEmitterEntity" )
+        {
+            lens_water_hooks_t lh;
+            lh.user = &s;
+            lh.add = []( void* u, const void* emitter ) { static_cast< race_session_t* >( u )->lens_emitters.push_back( emitter ); };
+            lens_water_emitter_start( &e, lh );
+            return;
+        }
+        if ( e.m_type == "VuKeyframeMotionEntity" && e.m_state )
+        {
+            race_session_key_motion( s, e );
+            return;
+        }
+        // VuAudioEmitterEntity's slot 6 0x5F3B30 (world/sound.hxx audio_emitter_game_init: plays when Initially Active).
+        if ( e.m_type == "VuAudioEmitterEntity" && e.m_state )
+        {
+            const transform_component_t* et = entity_transform( e );
+            if ( !s.world.sound || !et || e.m_world_unknown )
+                race_unwired( s, "a VuAudioEmitterEntity's gameInitialize 0x5F3B30 with no audio platform / known world - not run" );
+            else
+                audio_emitter_game_init( static_cast< audio_emitter_state_t* >( e.m_state.get( ) )->value, et->world + 12, *s.world.sound );
+            return;
+        }
+        const bool breakable = e.m_type == "VuBreakablePropEntity";
+        if ( e.m_type != "VuPropEntity" && !breakable )
         {
             ++unknown[ e.m_type.empty( ) ? std::string( "(UNKNOWN node)" ) : e.m_type ];
             return;
@@ -855,9 +1229,18 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
             asset = s.level_meshes.collision_of( boat_mesh_create( &s.level_meshes, "VuCollisionMeshAsset", c.mesh_asset ) );
         auto b = std::make_unique< level_body_t >( );
         b->name = e.m_name;
+        b->owner = &e;
         level_body_t* bp = b.get( );
         std::string why;
-        const std::uint8_t visible = static_cast< prop_entity_state_t* >( e.m_state.get( ) )->visible;
+        const std::uint8_t visible = breakable ? static_cast< breakable_state_t* >( e.m_state.get( ) )->value.visible
+                                               : static_cast< prop_entity_state_t* >( e.m_state.get( ) )->visible;
+        // The breakable's ctor 0x433F80 ends with the rigid component's +0xF4 = its +0x7C part (the contact callback) and
+        // +0xD8 |= 1 - component state the body is built from.
+        if ( breakable )
+        {
+            c.word_f4 = 1;
+            c.flags_d8 |= 1u;
+        }
         const bool ok = bodies_prop_game_initialize( *bp, c, visible, asset, t->world, t->scale, id, hooks, [] { /* g 0x7590B8 vt+0x28: the renderer */ },
             [ & ]( level_body_t& lb ) {
                 d.objects[ &lb.body ] = &lb.collision;
@@ -868,10 +1251,24 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
             race_unwired( s, "VuPropEntity '" + e.m_name + "': " + why + " (UNKNOWN, no body)" );
         if ( bp->in_world )
             ++added;
+        // VuBreakablePropEntity's slot 6 0x434620: 0x546910 above, then the "Decision" tick 0x434A20 and the "Build" tick
+        // 0x434D90 (the debris draw 0x5436B0 - the renderer's: not registered).
+        if ( breakable && ok )
+        {
+            auto br = std::make_unique< race_session_t::breakable_live_t >( );
+            br->entity = &e;
+            br->p = &static_cast< breakable_state_t* >( e.m_state.get( ) )->value;
+            br->c = &c;
+            br->body = bp;
+            br->session = &s;
+            tick_register( s.ticks, { br.get( ), race_session_breakable_tick, br.get( ) }, "Decision" );
+            s.breakables.push_back( std::move( br ) );
+        }
         s.level_bodies.push_back( std::move( b ) );
     };
     walk( walk, tree );
-    LOG_INFO( "race: the level's gameInitialize: %d static bodies added to the dynamics world (VuPropEntity 0x546910), %d dynamic game props live (0x437580)", added, dynamic );
+    LOG_INFO( "race: the level's gameInitialize: %d static bodies added to the dynamics world (VuPropEntity 0x546910), %d dynamic game props live (0x437580), %d lens-water emitters (0x5E6720)", added, dynamic,
+              static_cast< int >( s.lens_emitters.size( ) ) );
     std::string rest;
     for ( const auto& u : unknown )
         rest += ( rest.empty( ) ? "" : ", " ) + u.first + " x" + std::to_string( u.second );
@@ -1376,7 +1773,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     // 0x758F8C, 0x403310 at 0x402808, init 0x4042E0 at 0x402828: 'Decision' -> 0x404331's handler) long before the game
     // mode manager (g 0x758FF0, 0x4CBA30 at 0x402A6C, init 0x4CBCD0 at 0x402A90: 'Decision' at 0x4CBE4C); the list's
     // later walk (0x402AB2) calls each one's vt+4 - 0x401560 (nothing) for both. So the AI's Decision tick runs first.
-    tick_register( s.ticks, { &s.rules, race_session_game_mode, &s }, "Decision" );
+    tick_register( s.ticks, { &s.rules, race_session_mode_tick, &s }, "Decision" );
     tick_register( s.ticks, { &s.manager, race_session_viewports, &s }, "Viewports" );
     // VuWater's tick 0x529E30 in "Water" (VuWater made by the engine init, before the race: c_world's
     // water_tick - surface.hxx water_built_tick and the queries' view).

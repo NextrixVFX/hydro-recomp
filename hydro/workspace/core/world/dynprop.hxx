@@ -68,7 +68,24 @@ struct dynamic_prop_t
     std::uint8_t initially_active = 1;   // +0x141
     std::uint8_t collide_static = 1;     // +0x142
     std::int32_t checkpoint_index = 0;   // +0x184 (the buoy only)
+    // VuFloatingMineEntity (ctor 0x438690): the explosion part at +0x184 (defaults 0x438BA0, nodes 0x5476D0 - nine
+    // VuBasicProperty<float> +0x194 .. +0x1B4 and two VuStringProperty +0x1B8 / +0x1D0) and the point wave's seven
+    // floats +0x1F8 .. +0x210 (the descriptor +0x1E8 .. +0x213 VuWater_createPointWave 0x528E10 takes).
+    float explosion[ 9 ] = { 50.0f, 10.0f, 0.25f, 0.0f, 1.0f, 50.0f, 1.0f, 1.0f, 64.0f };   // +0x194: Outer / Inner Radius,
+                                         // Cam Shake Magnitude / Duration / Falloff Time / Frequency, Rumble Low / High, Lens Splash
+    std::string explosion_pfx;           // +0x1B8 "Explosion Pfx System Name"
+    std::string explosion_audio;         // +0x1D0 "Explosion Audio Event Name"
+    float wave[ 7 ] = { 5.0f, 1.0f, 0.0f, 20.0f, 10.0f, 5.0f, 1.0f };   // +0x1F8: Falloff Time, Magnitude, Range Start / End,
+                                                                    // Speed, Frequency, Foaminess
 };
+
+// The mine's node names, in each part's order.
+inline constexpr const char* k_mine_explosion_names[ 9 ] = {
+    "Explosion Outer Radius", "Explosion Inner Radius", "Explosion Cam Shake Magnitude", "Explosion Cam Shake Duration",
+    "Explosion Cam Shake Falloff Time", "Explosion Cam Shake Frequency", "Explosion Rumble Low Freq Mag", "Explosion Rumble High Freq Mag",
+    "Explosion Lens Splash Amount" };
+inline constexpr const char* k_mine_wave_names[ 7 ] = {
+    "Wave Falloff Time", "Wave Magnitude", "Wave Range Start", "Wave Range End", "Wave Speed", "Wave Frequency", "Wave Foaminess" };
 
 inline void dynamic_prop_construct( dynamic_prop_t& p )
 {
@@ -82,11 +99,12 @@ struct dynamic_prop_state_t
     dynamic_prop_t value;
     dynamic_prop_t defaults;
     bool buoy = false;
+    bool mine = false;
 };
 
 inline bool dynamic_prop_class( const std::string& cls )
 {
-    return cls == "VuDynamicGamePropEntity" || cls == "VuCheckpointBuoyEntity";
+    return cls == "VuDynamicGamePropEntity" || cls == "VuCheckpointBuoyEntity" || cls == "VuFloatingMineEntity";
 }
 
 inline std::shared_ptr< void > dynamic_prop_state_for( const std::string& cls )
@@ -97,6 +115,7 @@ inline std::shared_ptr< void > dynamic_prop_state_for( const std::string& cls )
     dynamic_prop_construct( s->value );
     dynamic_prop_construct( s->defaults );
     s->buoy = cls == "VuCheckpointBuoyEntity";
+    s->mine = cls == "VuFloatingMineEntity";
     return s;
 }
 
@@ -138,6 +157,15 @@ inline void dynamic_prop_load_properties( entity_t& e, const value_t& p )
     property_bool( p, "Collide With Static Props", v.collide_static, d.collide_static );
     if ( s.buoy )
         property_int( p, "CheckPoint Index", v.checkpoint_index, d.checkpoint_index );
+    if ( s.mine )
+    {
+        for ( int k = 0; k < 9; ++k )
+            property_float( p, k_mine_explosion_names[ k ], v.explosion[ k ], d.explosion[ k ], false );
+        property_string( p, "Explosion Pfx System Name", v.explosion_pfx, d.explosion_pfx );
+        property_string( p, "Explosion Audio Event Name", v.explosion_audio, d.explosion_audio );
+        for ( int k = 0; k < 7; ++k )
+            property_float( p, k_mine_wave_names[ k ], v.wave[ k ], d.wave[ k ], false );
+    }
 }
 
 // The template mark's property step (each node's vt+0x1C): default = value.

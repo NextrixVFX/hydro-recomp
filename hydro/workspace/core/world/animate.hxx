@@ -534,6 +534,7 @@ inline void c_world::project_initialized( )
     m_project_initialized = true;
     for ( const std::string& path : m_initialized )
         fire( path, "Trigger" );
+    m_rig.report( );   // the rig as the lights' game-start Triggers left it (graph.hxx)
     LOG_INFO( "project initialized: %u entities fired, %d props playing, %d events delivered to a handler, %d not",
         static_cast< unsigned >( m_initialized.size( ) ), playing( ), m_fired, m_unhandled_events );
     std::string by;
