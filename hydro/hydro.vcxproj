@@ -114,6 +114,8 @@
     <ClInclude Include="workspace\core\assets\skin.hxx" />
     <ClInclude Include="workspace\core\assets\texture.hxx" />
     <ClInclude Include="workspace\core\boat\ai.hxx" />
+    <ClInclude Include="workspace\core\boat\anim.hxx" />
+    <ClInclude Include="workspace\core\boat\camera.hxx" />
     <ClInclude Include="workspace\core\boat\construct.hxx" />
     <ClInclude Include="workspace\core\boat\driver.hxx" />
     <ClInclude Include="workspace\core\boat\entity.hxx" />
@@ -123,6 +125,7 @@
     <ClInclude Include="workspace\core\boat\load.hxx" />
     <ClInclude Include="workspace\core\boat\math.hxx" />
     <ClInclude Include="workspace\core\boat\parts.hxx" />
+    <ClInclude Include="workspace\core\boat\respawn.hxx" />
     <ClInclude Include="workspace\core\boat\sections.hxx" />
     <ClInclude Include="workspace\core\boat\state.hxx" />
     <ClInclude Include="workspace\core\boat\steer.hxx" />
@@ -169,6 +172,7 @@
     <ClInclude Include="workspace\core\world\wave.hxx" />
     <ClInclude Include="workspace\core\world\world.hxx" />
     <ClInclude Include="workspace\utility\checks\boat.hxx" />
+    <ClInclude Include="workspace\utility\checks\race.hxx" />
     <ClInclude Include="workspace\utility\checks\ui.hxx" />
     <ClInclude Include="workspace\utility\checks\water.hxx" />
     <ClInclude Include="workspace\utility\checks\world.hxx" />

@@ -78,6 +78,12 @@
     <ClInclude Include="workspace\core\boat\ai.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\boat\anim.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\boat\camera.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\boat\construct.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
@@ -103,6 +109,9 @@
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\boat\parts.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\boat\respawn.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\boat\sections.hxx">
@@ -241,6 +250,9 @@
       <Filter>workspace\core\world</Filter>
     </ClInclude>
     <ClInclude Include="workspace\utility\checks\boat.hxx">
+      <Filter>workspace\utility\checks</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\checks\race.hxx">
       <Filter>workspace\utility\checks</Filter>
     </ClInclude>
     <ClInclude Include="workspace\utility\checks\ui.hxx">
