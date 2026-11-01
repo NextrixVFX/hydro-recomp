@@ -1,5 +1,8 @@
 #pragma once
 
+#include <workspace/core/world/race.hxx>
+#include <workspace/core/world/tick.hxx>
+
 // The world area's oracle-backed checks (one file per parallel agent; included by check.hxx after every
 // shared check, so anything above is usable here). verify_world_all runs them all.
 
@@ -902,12 +905,449 @@ inline bool verify_water_grid( )
     return failed == 0;
 }
 
+// The surface build with a water map (world/grid.hxx water_map_clip /
+// water_grid_map_terms) against retail (case water_grid_maps): Hydroelectric's
+// real VuWaterMapAssets read from Base.apf through water_map_load (verified by
+// water_point), the case's declared synthetic maps rebuilt from the golden
+// bytes, one scenario with ClipMaps off and a null-map control; per scenario
+// the record, the patches, each patch's vertex block (FNV-1a 32 of its 32-byte
+// records) and the indices. One failure per scenario.
+inline std::uint32_t world_check_fnv32( const void* data, std::size_t n )
+{
+    std::uint32_t x = 0x811C9DC5u;
+    for ( std::size_t i = 0; i < n; ++i )
+        x = ( x ^ static_cast< const std::uint8_t* >( data )[ i ] ) * 0x01000193u;
+    return x;
+}
+
+inline bool verify_water_grid_maps( )
+{
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) )
+    {
+        LOG_ERROR( "water grid maps: Base.apf did not open" );
+        return false;
+    }
+    int failed = 0, patches = 0, vertices = 0, mapped = 0;
+    water_grid_t g{};
+    water_templates( g.templates );
+    for ( std::size_t k = 0; k < g_golden_water_grid_maps_count; ++k )
+    {
+        const golden_water_grid_map_t& r = g_golden_water_grid_maps[ k ];
+        water_map_t map{};
+        bool have = false;
+        const char* what = nullptr;
+        if ( r.m_map[ 0 ] )
+        {
+            std::vector< std::uint8_t > blob;
+            have = archive.read( ( std::string( "VuWaterMapAsset/" ) + r.m_map ).c_str( ), blob ) && water_map_load( blob.data( ), blob.size( ), map );
+            if ( !have )
+                what = "the map did not load";
+        }
+        else if ( r.m_synth_at >= 0 )
+        {
+            const unsigned* w = g_golden_wgm_synth + r.m_synth_at;
+            map.width = w[ 0 ];
+            map.height = w[ 1 ];
+            const unsigned char* b = g_golden_wgm_bytes + w[ 2 ];
+            std::vector< std::uint8_t >* arrays[ 3 ] = { &map.map, &map.second, &map.third };
+            for ( int a = 0; a < 3; ++a )
+            {
+                arrays[ a ]->assign( b, b + w[ 3 + a ] );
+                b += w[ 3 + a ];
+            }
+            for ( unsigned j = 0; j < w[ 6 ]; ++j )
+            {
+                water_map_t::entry_t e{};
+                e.a = w[ 7 + 3 * j ];
+                e.b = w[ 8 + 3 * j ];
+                e.bytes.assign( b, b + w[ 9 + 3 * j ] );
+                b += w[ 9 + 3 * j ];
+                map.entries.push_back( std::move( e ) );
+            }
+            have = true;
+        }
+        mapped += have ? 1 : 0;
+        water_frustum_t fr{};
+        std::memcpy( fr.f, r.m_frustum, sizeof( fr.f ) );
+        std::memcpy( fr.position, r.m_eye, sizeof( fr.position ) );
+        water_words_t s{};
+        for ( int w = 0; w < 68; ++w )
+            s.set( 4 * w, r.m_surface[ w ] );
+        water_view_t view{};
+        water_surface_t q{};
+        q.height = s.f( 20 );
+        q.wave_root = -1;
+        q.map = have ? &map : nullptr;
+        view.water.surfaces.push_back( q );
+        g.clip_maps = r.m_clip != 0;
+        water_grid_frame_t out{};
+        water_grid_build( g, fr, s, 0, &view, out, false );
+        if ( !what && ( ( out.draws.size( ) == 1 ) != ( r.m_built != 0 ) || out.failed != 0 ) )
+            what = "built or not / a failed patch";
+        if ( !what && r.m_built )
+        {
+            const water_grid_draw_t& d = out.draws[ 0 ];
+            const unsigned n = r.m_record[ 10 ];
+            if ( static_cast< unsigned >( d.patches ) != n || static_cast< unsigned >( d.vertex_count ) != r.m_record[ 12 ] ||
+                 static_cast< unsigned >( d.index_count ) != r.m_record[ 14 ] )
+                what = "the record's counts";
+            for ( unsigned p = 0; !what && p < n; ++p )
+                if ( std::memcmp( &g.patches[ p ], g_golden_wgm_patches + r.m_patch_at + 5 * p, 20 ) != 0 )
+                    what = "a patch";
+            std::size_t at = 0;
+            for ( unsigned p = 0; !what && p < n; ++p )
+            {
+                const std::size_t c = g.templates[ g.patches[ p ].flags ].xy.size( ) / 2;
+                if ( world_check_fnv32( out.vertices.data( ) + at, 32 * c ) != g_golden_wgm_vertex_fnv[ r.m_fnv_at + p ] )
+                    what = "a patch's vertex records";
+                at += c;
+            }
+            if ( !what && world_check_fnv32( out.indices.data( ), 2 * out.indices.size( ) ) != r.m_index_fnv )
+                what = "the indices";
+            patches += static_cast< int >( n );
+            vertices += d.vertex_count;
+        }
+        if ( what && ++failed <= 6 )
+            LOG_ERROR( "water grid maps: scenario %d (%s, ClipMaps %d): %s", static_cast< int >( k ), r.m_map[ 0 ] ? r.m_map : "synthetic / none",
+                r.m_clip, what );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_grid_build with water maps matches retail's 0x597B50 (clip test 0x5C7E80 in 0x597260; 0x597D70's byte maps "
+                     "0x598590 / 0x5986E0 / 0x598810 / inline / 0x598940 / 0x598A70 / 0x598B70) on %d scenarios (%d mapped): %d patches, "
+                     "%d vertex records bit for bit",
+            static_cast< int >( g_golden_water_grid_maps_count ), mapped, patches, vertices );
+    else
+        LOG_ERROR( "water grid maps FAILED %d of %d scenarios", failed, static_cast< int >( g_golden_water_grid_maps_count ) );
+    return failed == 0;
+}
+
+// The tick manager (world/tick.hxx) against retail's VuTickManagerImpl (case
+// tick_manager): the same op script replayed - registrations (with their
+// return), unregistrations (the handlers destroyed, in order), the dt cap, the
+// paused / slow / step bytes, the pause count slots, and every tick: the
+// handlers called in order with their dt bits and the manager's +0x18 .. +0x30
+// after. Then the final phase list. One failure per op that differs.
+inline bool verify_tick_manager( )
+{
+    struct call_t
+    {
+        int handler;
+        std::uint32_t dt;
+    };
+    struct user_t
+    {
+        int id;
+        std::vector< call_t >* log;
+    };
+    std::vector< call_t > log;
+    user_t users[ 64 ];
+    int owner_of[ 64 ];
+    for ( int h = 0; h < 64; ++h )
+    {
+        users[ h ] = { h, &log };
+        owner_of[ h ] = -1;
+    }
+    static const int owner_keys[ 8 ] = {};
+    const auto fn = []( void* u, float dt ) {
+        user_t* x = static_cast< user_t* >( u );
+        std::uint32_t b;
+        std::memcpy( &b, &dt, 4 );
+        x->log->push_back( { x->id, b } );
+    };
+    const auto handler_id = []( const tick_handler_t& h ) { return static_cast< const user_t* >( h.user )->id; };
+    tick_manager_t tm{};
+    tick_manager_init( tm );
+    int failed = 0, ticks = 0, calls = 0, ops = 0;
+    const unsigned* w = g_golden_tick_ops;
+    const unsigned* end = g_golden_tick_ops + g_golden_tick_ops_count;
+    while ( w < end )
+    {
+        bool same = true;
+        const unsigned op = *w++;
+        ++ops;
+        if ( op == 1 )
+        {
+            const int h = static_cast< int >( w[ 0 ] );
+            owner_of[ h ] = static_cast< int >( w[ 1 ] );
+            const tick_handler_t th{ &owner_keys[ w[ 1 ] ], fn, &users[ h ] };
+            same = tick_register( tm, th, g_golden_tick_phase_names[ w[ 2 ] ] ) == ( w[ 3 ] != 0 );
+            w += 4;
+        }
+        else if ( op == 2 || op == 3 )
+        {
+            const int o = static_cast< int >( *w++ );
+            const char* phase = op == 2 ? g_golden_tick_phase_names[ *w++ ] : nullptr;
+            const unsigned n = *w++;
+            std::vector< int > destroyed;   // the handlers 0x4F7890 destroys, in list order
+            for ( tick_phase_t& p : tm.phases )
+                if ( !phase || p.name == phase )
+                {
+                    for ( const tick_handler_t& h : p.handlers )
+                        if ( h.owner == &owner_keys[ o ] )
+                            destroyed.push_back( handler_id( h ) );
+                    if ( phase )
+                        break;
+                }
+            if ( phase )
+                tick_unregister( tm, &owner_keys[ o ], phase );
+            else
+                tick_unregister_all( tm, &owner_keys[ o ] );
+            same = destroyed.size( ) == n;
+            for ( unsigned k = 0; same && k < n; ++k )
+                same = destroyed[ k ] == static_cast< int >( w[ k ] );
+            w += n;
+        }
+        else if ( op == 4 )
+            std::memcpy( &tm.cap, w++, 4 );
+        else if ( op == 5 )
+        {
+            tm.paused = w[ 0 ] != 0;
+            tm.slow = w[ 1 ] != 0;
+            tm.step = w[ 2 ] != 0;
+            w += 3;
+        }
+        else if ( op == 6 )
+        {
+            const unsigned which = *w++;
+            tm.pause_count = which == 0 ? tm.pause_count + 1 : which == 1 ? tm.pause_count - 1 : 0;
+        }
+        else if ( op == 7 )
+        {
+            double now;
+            std::memcpy( &now, w, 8 );
+            log.clear( );
+            tick_run( tm, now );
+            std::uint32_t st[ 7 ];
+            std::memcpy( st, &tm.clock, 8 );
+            st[ 2 ] = static_cast< std::uint32_t >( tm.paused ) | ( static_cast< std::uint32_t >( tm.slow ) << 8 ) | ( static_cast< std::uint32_t >( tm.step ) << 16 );
+            st[ 3 ] = static_cast< std::uint32_t >( tm.pause_count );
+            std::memcpy( &st[ 4 ], &tm.dt, 4 );
+            std::memcpy( &st[ 5 ], &tm.raw, 4 );
+            std::memcpy( &st[ 6 ], &tm.previous, 4 );
+            same = std::memcmp( st, w + 2, 28 ) == 0;
+            const unsigned n = w[ 9 ];
+            same = same && log.size( ) == n;
+            for ( unsigned k = 0; same && k < n; ++k )
+                same = log[ k ].handler == static_cast< int >( w[ 10 + 2 * k ] ) && log[ k ].dt == w[ 11 + 2 * k ];
+            w += 10 + 2 * n;
+            ++ticks;
+            calls += static_cast< int >( n );
+        }
+        else
+        {
+            LOG_ERROR( "tick manager: unknown op %u in the golden", op );
+            return false;
+        }
+        if ( !same && ++failed <= 6 )
+            LOG_ERROR( "tick manager: op %d (kind %u) differs from retail", ops, op );
+    }
+    // the final phase list
+    const unsigned* p = g_golden_tick_phases;
+    bool lists = tm.phases.size( ) == p[ 0 ];
+    ++p;
+    for ( const tick_phase_t& ph : tm.phases )
+    {
+        if ( !lists )
+            break;
+        lists = ph.name == g_golden_tick_phase_names[ p[ 0 ] ] && ph.last_dt == ( p[ 1 ] != 0 ) && ph.enabled == ( p[ 2 ] != 0 ) && ph.handlers.size( ) == p[ 3 ];
+        const unsigned n = p[ 3 ];
+        auto it = ph.handlers.begin( );
+        for ( unsigned k = 0; lists && k < n; ++k, ++it )
+            lists = handler_id( *it ) == static_cast< int >( p[ 4 + k ] );
+        p += 4 + n;
+    }
+    if ( !lists && ++failed )
+        LOG_ERROR( "tick manager: the final phase lists differ from retail" );
+    if ( failed == 0 )
+        LOG_SUCCESS( "tick_manager matches retail's VuTickManagerImpl (0x4F6F60 / 0x4F7050 / 0x4F7550 / 0x4F7570 / 0x4F7590 / 0x4F72F0) on %d "
+                     "ops: %d ticks, %d handler calls with their dt bits, the %d phases in retail's order",
+            ops, ticks, calls, static_cast< int >( tm.phases.size( ) ) );
+    else
+        LOG_ERROR( "tick manager FAILED: %d items differ", failed );
+    return failed == 0;
+}
+
+// THE RACE'S TRACK AS THE RUNNING WORLD BUILDS IT (world/race.hxx +
+// entities.hxx): VuProjectAsset/Games/HydroelectricRace loaded from Base.apf
+// through race_load_tree (the callbacks c_world::load_entity_tree uses, the
+// templates read from the pack), then track_build_from_tree - against retail's
+// VuTrackManagerImpl (oracle case track_build, boat area: the level's "AI"
+// child under a bare root, VuEntity::load + every waypoint's slot 6 + slot 7).
+// The same fields verify_track_build compares (stale lanes / pointers
+// skipped). One failure per waypoint, per sector, for the checkpoint list, for
+// the summary, and for a refused load / build.
+inline int race_track_failures( const track_manager_t& tm )
+{
+    int failed = 0;
+    const auto bits = []( float f ) { std::uint32_t u; std::memcpy( &u, &f, 4 ); return u; };
+    if ( tm.waypoints.size( ) != g_golden_track_waypoint_count || tm.sectors.size( ) != g_golden_track_sector_count )
+    {
+        LOG_ERROR( "race track: %d waypoints / %d sectors, retail %d / %d", static_cast< int >( tm.waypoints.size( ) ),
+            static_cast< int >( tm.sectors.size( ) ), static_cast< int >( g_golden_track_waypoint_count ), static_cast< int >( g_golden_track_sector_count ) );
+        return 1 + static_cast< int >( g_golden_track_waypoint_count + g_golden_track_sector_count );
+    }
+    for ( std::size_t i = 0; i < tm.waypoints.size( ); ++i )
+    {
+        const track_waypoint_t& w = tm.waypoints[ i ];
+        const unsigned* g = g_golden_track_waypoints + 20 * i;
+        bool same = w.entity->m_name == g_golden_track_waypoint_names[ i ];
+        for ( int k = 0; k < 3; ++k )
+            same = same && bits( w.right[ k ] ) == g[ k ] && bits( w.left[ k ] ) == g[ 4 + k ];
+        same = same && bits( w.p.speed_hint ) == g[ 10 ] &&
+               static_cast< std::uint32_t >( w.p.start | ( w.p.checkpoint << 8 ) | ( w.p.finish << 16 ) | ( w.p.allow_recovery << 24 ) ) == g[ 11 ] &&
+               w.p.show_wrong_way == ( g[ 12 ] & 0xFF ) && bits( w.p.width ) == g[ 13 ] && bits( w.p.height ) == g[ 14 ] &&
+               static_cast< std::uint32_t >( w.sector_a ) == g[ 15 ] && static_cast< std::uint32_t >( w.sector_b ) == g[ 16 ] &&
+               bits( w.p.branch_a ) == g[ 17 ] && bits( w.p.branch_b ) == g[ 18 ];
+        if ( !same && ++failed <= 6 )
+            LOG_ERROR( "race track: waypoint %d (%s) differs from retail", static_cast< int >( i ), w.entity->m_name.c_str( ) );
+    }
+    const unsigned* g = g_golden_track_sectors;
+    for ( std::size_t i = 0; i < tm.sectors.size( ); ++i )
+    {
+        const track_sector_t& s = tm.sectors[ i ];
+        const std::uint64_t stale = g[ 60 ] | ( static_cast< std::uint64_t >( g[ 61 ] ) << 32 );
+        bool same = true;
+        for ( int k = 0; k < 60; ++k )
+        {
+            const int at = 4 * k;
+            if ( at == 0x0C || at == 0x1C || at == 0x2C || at == 0x3C || at == 0xD4 || at == 0xD8 || at == 0xE0 || at == 0xE4 || at == 0xEC ||
+                 ( stale >> k & 1 ) )
+                continue;
+            same = same && track_u32( s.image, at ) == g[ k ];
+        }
+        const unsigned nn = g[ 63 ], np = g[ 64 ];
+        same = same && static_cast< std::uint32_t >( s.waypoint ) == g[ 62 ] && s.next.size( ) == nn && s.prev.size( ) == np;
+        for ( unsigned k = 0; same && k < nn; ++k )
+            same = static_cast< std::uint32_t >( s.next[ k ] ) == g[ 65 + k ];
+        for ( unsigned k = 0; same && k < np; ++k )
+            same = static_cast< std::uint32_t >( s.prev[ k ] ) == g[ 65 + nn + k ];
+        if ( !same && ++failed <= 12 )
+            LOG_ERROR( "race track: sector %d differs from retail", static_cast< int >( i ) );
+        g += 65 + nn + np;
+    }
+    bool checkpoints = tm.checkpoints.size( ) == g_golden_track_checkpoint_count;
+    for ( std::size_t k = 0; checkpoints && k < tm.checkpoints.size( ); ++k )
+        checkpoints = static_cast< std::uint32_t >( tm.checkpoints[ k ] ) == static_cast< std::uint32_t >( g_golden_track_checkpoints[ k ] );
+    if ( !checkpoints && ++failed )
+        LOG_ERROR( "race track: the checkpoint list differs from retail" );
+    const bool summary = static_cast< std::uint32_t >( tm.start ) == static_cast< std::uint32_t >( g_golden_track_summary[ 0 ] ) &&
+                         static_cast< std::uint32_t >( tm.end ) == static_cast< std::uint32_t >( g_golden_track_summary[ 1 ] ) &&
+                         bits( tm.length ) == g_golden_track_manager[ 7 ] && static_cast< std::uint32_t >( tm.state ) == g_golden_track_manager[ 12 ];
+    if ( !summary && ++failed )
+        LOG_ERROR( "race track: start / end / length / state differ from retail" );
+    return failed;
+}
+
+// The race project's tree the way c_world loads it (race_load_tree with a
+// template reader equal to c_world::template_document: the parsed
+// VuTemplateAsset document when it is a map). Null when the pack is missing.
+inline std::unique_ptr< entity_t > race_check_tree( c_archive& archive, std::map< std::string, value_t >& templates, const char* asset )
+{
+    const std::string pack = world_check_pack( );
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) )
+        return nullptr;
+    std::vector< std::uint8_t > bytes;
+    if ( !archive.read( asset, bytes ) )
+        return nullptr;
+    const value_t root = c_reader( bytes ).parse( );
+    const value_t* project = find( root, "VuProject" );
+    if ( !project )
+        return nullptr;
+    const auto read = [ &archive, &templates ]( const std::string& name ) -> const value_t*
+    {
+        auto it = templates.find( name );
+        if ( it == templates.end( ) )
+        {
+            std::vector< std::uint8_t > b;
+            value_t parsed{};
+            if ( archive.read( ( "VuTemplateAsset/" + name ).c_str( ), b ) )
+                parsed = c_reader( b ).parse( );
+            it = templates.emplace( name, std::move( parsed ) ).first;
+        }
+        return it->second.tag == 6 ? &it->second : nullptr;
+    };
+    return race_load_tree( archive, asset, *project, read );
+}
+
+inline bool verify_race_track( )
+{
+    c_archive archive;
+    std::map< std::string, value_t > templates;
+    const std::unique_ptr< entity_t > tree = race_check_tree( archive, templates, "VuProjectAsset/Games/HydroelectricRace" );
+    track_manager_t tm;
+    if ( !tree || !track_build_from_tree( *tree, tm ) )
+    {
+        LOG_ERROR( "race track FAILED: HydroelectricRace %s", tree ? "built no track (refused)" : "did not load (Base.apf?)" );
+        return false;
+    }
+    const int failed = race_track_failures( tm );
+    if ( failed == 0 )
+        LOG_SUCCESS( "the running world's track (HydroelectricRace's tree via race_load_tree -> track_build_from_tree) matches retail's "
+                     "VuTrackManagerImpl: %d waypoints, %d sectors, %d checkpoints, bit for bit",
+            static_cast< int >( tm.waypoints.size( ) ), static_cast< int >( tm.sectors.size( ) ), static_cast< int >( tm.checkpoints.size( ) ) );
+    else
+        LOG_ERROR( "race track FAILED: %d items differ from retail", failed );
+    return failed == 0;
+}
+
+// race_track_start (world/race.hxx) against retail's 0x4D1E10 (oracle case
+// race_track_start) on the running world's own track (HydroelectricRace via
+// race_load_tree, as verify_race_track): per vector the return, the sector
+// out (or none for a null out) and all 16 matrix words (unwritten words keep
+// the sentinel on both sides). One failure per vector.
+inline bool verify_race_track_start( )
+{
+    c_archive archive;
+    std::map< std::string, value_t > templates;
+    const std::unique_ptr< entity_t > tree = race_check_tree( archive, templates, "VuProjectAsset/Games/HydroelectricRace" );
+    track_manager_t tm;
+    if ( !tree || !track_build_from_tree( *tree, tm ) )
+    {
+        LOG_ERROR( "race track start FAILED: HydroelectricRace's track did not build" );
+        return false;
+    }
+    int failed = 0, found = 0;
+    for ( std::size_t k = 0; k < g_golden_race_track_start_count; ++k )
+    {
+        const unsigned* g = g_golden_race_track_start + 20 * k;
+        float distance;
+        std::memcpy( &distance, &g[ 0 ], 4 );
+        std::uint32_t words[ 16 ];
+        for ( auto& w : words )
+            w = 0xA5A5A5A5u;
+        float m[ 16 ];
+        std::memcpy( m, words, 64 );
+        int sector = -1;
+        const bool ret = race_track_start( tm, distance, m, g[ 1 ] ? nullptr : &sector );
+        std::memcpy( words, m, 64 );
+        found += ret ? 1 : 0;
+        const bool same = ( ret ? 1u : 0u ) == g[ 2 ] && static_cast< std::uint32_t >( ret && !g[ 1 ] ? sector : -1 ) == g[ 3 ] &&
+                          std::memcmp( words, g + 4, 64 ) == 0;
+        if ( !same && ++failed <= 6 )
+            LOG_ERROR( "race track start vector %d (distance 0x%08X) differs from retail: ret %d sector %d word0 0x%08X (retail %u %d 0x%08X)",
+                static_cast< int >( k ), g[ 0 ], ret ? 1 : 0, sector, words[ 0 ], g[ 2 ], static_cast< int >( g[ 3 ] ), g[ 4 ] );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "race_track_start matches retail's 0x4D1E10 (VuRaceGame 0x48AF90's start down the track) on the running world's "
+                     "track: %d distances (%d placed), 16 matrix words + sector each, bit for bit",
+            static_cast< int >( g_golden_race_track_start_count ), found );
+    else
+        LOG_ERROR( "race track start FAILED %d of %d vectors", failed, static_cast< int >( g_golden_race_track_start_count ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_race_track( ) && ok;
+    ok = verify_race_track_start( ) && ok;
     ok = verify_water_templates( ) && ok;
     ok = verify_water_frustum( ) && ok;
     ok = verify_water_grid( ) && ok;
+    ok = verify_water_grid_maps( ) && ok;
+    ok = verify_tick_manager( ) && ok;
     ok = verify_static_scene_load( ) && ok;
     ok = verify_animated_model_draw( ) && ok;
     ok = verify_script_graph( ) && ok;

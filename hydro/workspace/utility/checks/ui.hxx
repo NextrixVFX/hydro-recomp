@@ -9,6 +9,8 @@
 #include <workspace/core/ui/screen.hxx>
 #include <workspace/core/ui/wiring.hxx>
 #include <workspace/core/ui/compose.hxx>
+#include <workspace/core/ui/gauge.hxx>
+#include <workspace/core/ui/map.hxx>
 
 #include <algorithm>
 #include <array>
@@ -996,13 +998,71 @@ inline ui_text_base_t ui_text_base_of( const std::vector< std::uint8_t >& b, std
     return t;
 }
 
+// The FontDB documents of the font_params case, parsed once (0: the real one).
+inline const value_t& ui_font_db( std::size_t index )
+{
+    static const std::vector< value_t > dbs = []
+    {
+        std::vector< value_t > out;
+        for ( std::size_t k = 0; k < g_golden_font_dbs_count; ++k )
+        {
+            const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_font_db_words + g_golden_font_db_at[ 2 * k ] );
+            out.push_back( c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_font_db_at[ 2 * k + 1 ] ) ).parse( ) );
+        }
+        return out;
+    }( );
+    return dbs[ index ];
+}
+
+// ui_font_params (core/ui draw.hxx) against retail's VuUIFont reload 0x626CF0
+// (oracle case font_params): every font in the real FontDB, missing / empty /
+// long names, then hand-built FontDBs for the tags the real one never authors -
+// the params' bytes 0..40 (41..59 are retail's stack: indeterminate, not
+// compared), the asset factory's requests (exists, then create when it answers
+// true) and +0x60.
+inline bool verify_ui_font_params( )
+{
+    int failed = 0, bytes = 0;
+    for ( std::size_t k = 0; k < g_golden_font_vectors_count; ++k )
+    {
+        const golden_font_vector_t& v = g_golden_font_vectors[ k ];
+        const std::vector< std::uint8_t > raw = ui_unhex( v.m_name );
+        const std::vector< std::uint8_t > want = ui_unhex( v.m_params );
+        std::uint8_t params[ 60 ];
+        std::memset( params, 0xA5, sizeof( params ) );
+        std::string asset;
+        ui_font_params( ui_font_db( static_cast< std::size_t >( v.m_db ) ), std::string( raw.begin( ), raw.end( ) ), params, asset );
+        // the factory hooks: exists( name ), create( name ) when it answers true; +0x60 = create's answer, else 0
+        std::vector< std::pair< std::string, std::string > > log = { { "exists", asset } };
+        if ( v.m_answer )
+            log.push_back( { "create", asset } );
+        const std::uint32_t held = v.m_answer ? 0x0F0E0D0Cu : 0u;
+        bool same = want.size( ) == 60 && std::memcmp( params, want.data( ), 41 ) == 0 && held == v.m_asset &&
+                    log.size( ) == static_cast< std::size_t >( v.m_logs );
+        for ( int j = 0; same && j < v.m_logs; ++j )
+            same = log[ static_cast< std::size_t >( j ) ].first == g_golden_font_logs[ v.m_first + j ].m_kind &&
+                   log[ static_cast< std::size_t >( j ) ].second == g_golden_font_logs[ v.m_first + j ].m_a;
+        bytes += 41;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui font params: vector %d (db %d) differs from retail's 0x626CF0", static_cast< int >( k ), v.m_db );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_font_params matches retail's VuUIFont reload 0x626CF0 (colour read 0x4FDEC0) on %d fonts over %d FontDBs (the real one + "
+                     "hand-built): %d param bytes, the FontAsset requests and +0x60",
+            static_cast< int >( g_golden_font_vectors_count ), static_cast< int >( g_golden_font_dbs_count ), bytes );
+    else
+        LOG_ERROR( "the font params FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 // ui_text_draw (hydro core/ui/draw.hxx) against retail's VuUITextBaseEntity draw
 // 0x627C60 -> font draw 0x536C10 -> VuGfxSort 0x426B80 / 0x429010 (oracle cases
 // text_draw, text_draw_sweep): every new command's 8 words and its record's
 // bytes. For the real entities the property-backed fields come from OUR loaded
-// tree (entity_load_project) and are compared with retail's bytes first; the
-// font params (+0xA0, FontDB - 0x626CF0 not recreated), the offset and the
-// alpha come from retail's bytes.
+// tree (entity_load_project) and are compared with retail's bytes first; so
+// are the font params' bytes 0..40 (ui_font_params = 0x626CF0 over the real
+// FontDB for our loaded "Font"; 41..59 are retail's stack, taken from its
+// bytes). The offset and the alpha come from retail's bytes.
 inline bool verify_ui_text_draw( )
 {
     // the case's stand-ins (TXT_REGION 0x5D000000): the two shader sets, the fonts
@@ -1019,7 +1079,7 @@ inline bool verify_ui_text_draw( )
         for ( auto& b : s.m_buffers )
             b.m_memory.resize( static_cast< std::size_t >( b.m_capacity ) );
     }
-    int failed = 0, commands = 0, fields = 0, real = 0;
+    int failed = 0, commands = 0, fields = 0, real = 0, fonts = 0;
     for ( std::size_t k = 0; k < g_golden_txt_vectors_count; ++k )
     {
         const golden_txt_vector_t& v = g_golden_txt_vectors[ k ];
@@ -1097,6 +1157,18 @@ inline bool verify_ui_text_draw( )
                 take( "Vertical Anchor", &ours.m_anchor.m_vertical, 4, s );
                 take( "Vertical Ratio", &ours.m_anchor.m_v_ratio, 4, s );
                 take( "Depth", &ours.m_depth, 4, draw );
+                // the params: 0x626CF0 over the real FontDB for OUR loaded "Font" (bytes 41..59 stay retail's: its stack)
+                const ui_slot_t* font_name = ui_slot_named( *s, "Font" );
+                if ( !font_name )
+                    same = false;
+                else
+                {
+                    std::string asset;
+                    ui_font_params( ui_font_db( 0 ), font_name->m_text, ours.m_params, asset );
+                    if ( std::memcmp( ours.m_params, t.m_params, 41 ) != 0 )
+                        same = false;
+                    ++fonts;
+                }
             }
             if ( !same && ++failed <= 8 )
                 LOG_ERROR( "ui text draw: %s entity %d (%s): our loaded fields differ from retail's", v.m_project, v.m_index, v.m_text );
@@ -1126,8 +1198,9 @@ inline bool verify_ui_text_draw( )
     }
     if ( failed == 0 )
         LOG_SUCCESS( "ui_text_draw matches retail's VuUITextBaseEntity draw 0x627C60 (anchor 0x6282D0, flags 0x5546B0, font draw 0x536C10, "
-                     "VuGfxSort 0x426B80 / 0x429010) on %d vectors (%d real entities, %d of their loaded fields): %d commands and records byte for byte",
-            static_cast< int >( g_golden_txt_vectors_count ), real, fields, commands );
+                     "VuGfxSort 0x426B80 / 0x429010) on %d vectors (%d real entities, %d of their loaded fields, %d font params from FontDB): %d "
+                     "commands and records byte for byte",
+            static_cast< int >( g_golden_txt_vectors_count ), real, fields, fonts, commands );
     else
         LOG_ERROR( "the UI text draw FAILED %d checks against retail's", failed );
     return failed == 0;
@@ -1444,9 +1517,341 @@ inline bool verify_ui_hud_draw( )
     return failed == 0;
 }
 
+// ui_speedometer_draw / ui_speedometer_layout_draw (core/ui gauge.hxx) against
+// retail's VuHUDSpeedometerEntity draws 0x42BA00 / 0x42C1E0 (+ the rect draw
+// 0x507A00; oracle case speedometer_draw): one sort through every vector in
+// order - the commands' words and records byte for byte. For the real
+// speedometers the property-backed fields come from OUR loaded tree and are
+// compared with retail's bytes first; +0xE0 (OnUITick's), the textures and the
+// material are the case's stand-ins, the boat and the display size inputs.
+inline bool verify_ui_speedometer_draw( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    ui_gfx_sort_t sort;
+    sort.m_buffers[ 0 ].m_capacity = 0x300000;
+    sort.m_buffers[ 1 ].m_used = 0x35;
+    sort.m_buffers[ 1 ].m_capacity = 0x100000;
+    for ( auto& b : sort.m_buffers )
+        b.m_memory.resize( static_cast< std::size_t >( b.m_capacity ) );
+    const auto texture = []( std::uint32_t slot )
+    {
+        ui_texture_t t;
+        for ( const golden_spd_texture_t& g : g_golden_spd_textures )
+            if ( g.m_slot == slot )
+                t = { g.m_handle, g.m_width, g.m_height };
+        return t;
+    };
+    int failed = 0, commands = 0, fields = 0, real = 0;
+    for ( std::size_t k = 0; k < g_golden_spd_vectors_count; ++k )
+    {
+        const golden_spd_vector_t& v = g_golden_spd_vectors[ k ];
+        const golden_txt_env_t& e = g_golden_txt_envs[ v.m_env ];
+        ui_crop_t crop;
+        std::memcpy( &crop.m_matrix[ 0 ], &e.m_crop[ 0 ], 4 );
+        std::memcpy( &crop.m_matrix[ 5 ], &e.m_crop[ 1 ], 4 );
+        std::memcpy( &crop.m_matrix[ 12 ], &e.m_crop[ 2 ], 4 );
+        std::memcpy( &crop.m_matrix[ 13 ], &e.m_crop[ 3 ], 4 );
+        ui_font_draw_env_t env;
+        const std::vector< std::uint8_t > matrix = ui_unhex( v.m_matrix );
+        std::memcpy( env.m_matrix, matrix.data( ), 64 );
+        env.m_texture_material = g_golden_spd_materials[ 0 ][ 0 ];
+        env.m_texture_material_key = g_golden_spd_materials[ 0 ][ 1 ];
+        env.m_rect_material = g_golden_spd_materials[ 1 ][ 0 ];
+        env.m_rect_material_key = g_golden_spd_materials[ 1 ][ 1 ];
+        const std::vector< std::uint8_t > b = ui_unhex( v.m_fields );
+        const auto at = [ &b ]( int offset ) { return b.data( ) + ( offset - 0x60 ); };
+        ui_speedometer_t s;
+        std::memcpy( s.m_screen_scale, at( 0x60 ), 8 );
+        std::memcpy( s.m_rect, at( 0x68 ), 16 );
+        std::memcpy( &s.m_anchor.m_horizontal, at( 0x78 ), 4 );
+        std::memcpy( &s.m_anchor.m_vertical, at( 0x7C ), 4 );
+        std::memcpy( &s.m_anchor.m_h_ratio, at( 0x80 ), 4 );
+        std::memcpy( &s.m_anchor.m_v_ratio, at( 0x84 ), 4 );
+        std::memcpy( &s.m_metric, at( 0xE0 ), 4 );
+        std::memcpy( &s.m_depth, &v.m_depth, 4 );
+        s.m_material = g_golden_spd_materials[ 2 ][ 0 ];
+        s.m_material_key = g_golden_spd_materials[ 2 ][ 1 ];
+        s.m_back_imperial = texture( 0xA0 );
+        s.m_back_metric = texture( 0xA4 );
+        s.m_needle = texture( 0xA8 );
+        for ( int d = 0; d < 8; ++d )
+            s.m_boost[ d ] = texture( 0xC0u + 4u * static_cast< std::uint32_t >( d ) );
+        s.m_self = v.m_entity;
+        if ( v.m_sweep == 0 )
+        {
+            // our loaded entity: the same project and pre-order index
+            const entity_t* have = nullptr;
+            for ( std::size_t p = 0; p < g_golden_ui_projects_count && !have; ++p )
+                if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, v.m_project ) == 0 && v.m_index < static_cast< int >( loaded.trees[ p ].size( ) ) )
+                    have = loaded.trees[ p ][ static_cast< std::size_t >( v.m_index ) ].second;
+            const ui_state_t* st = have && ui_is_state( *have ) ? static_cast< const ui_state_t* >( have->m_state.get( ) ) : nullptr;
+            const ui_state_t* draw = nullptr;
+            for ( const entity_component_t& c : have ? have->m_components : std::vector< entity_component_t >( ) )
+                if ( c.m_vtable == 0x738A44u && c.m_state )
+                    draw = static_cast< const ui_state_t* >( c.m_state.get( ) );
+            bool same = st && draw;
+            const auto take = [ & ]( const char* name, void* target, int bytes, const ui_state_t* from )
+            {
+                const ui_slot_t* slot = from ? ui_slot_named( *from, name ) : nullptr;
+                if ( !slot )
+                {
+                    same = false;
+                    return;
+                }
+                if ( std::memcmp( target, slot->m_bits, static_cast< std::size_t >( bytes ) ) != 0 )
+                    same = false;
+                std::memcpy( target, slot->m_bits, static_cast< std::size_t >( bytes ) );
+                ++fields;
+            };
+            if ( same )
+            {
+                take( "Screen Scale", s.m_screen_scale, 8, st );
+                take( "X", &s.m_rect[ 0 ], 4, st );
+                take( "Y", &s.m_rect[ 1 ], 4, st );
+                take( "Width", &s.m_rect[ 2 ], 4, st );
+                take( "Height", &s.m_rect[ 3 ], 4, st );
+                take( "Horizontal Anchor", &s.m_anchor.m_horizontal, 4, st );
+                take( "Horizontal Ratio", &s.m_anchor.m_h_ratio, 4, st );
+                take( "Vertical Anchor", &s.m_anchor.m_vertical, 4, st );
+                take( "Vertical Ratio", &s.m_anchor.m_v_ratio, 4, st );
+                take( "Depth", &s.m_depth, 4, draw );
+            }
+            if ( !same && ++failed <= 8 )
+                LOG_ERROR( "ui speedometer draw: %s entity %d: our loaded fields differ from retail's", v.m_project, v.m_index );
+            ++real;
+        }
+        ui_speedometer_boat_t boat;
+        boat.m_present = v.m_boat.m_present == 1;
+        std::memcpy( boat.m_velocity, v.m_boat.m_velocity, 8 );
+        boat.m_boost_count = v.m_boat.m_count;
+        std::memcpy( &boat.m_digit_scale, &v.m_boat.m_scale, 4 );
+        boat.m_byte_32c = static_cast< std::uint8_t >( v.m_boat.m_byte_32c );
+        std::memcpy( &boat.m_boost, &v.m_boat.m_boost, 4 );
+        boat.m_mode = v.m_boat.m_mode;
+        boat.m_byte_32d = static_cast< std::uint8_t >( v.m_boat.m_byte_32d );
+        sort.m_index = e.m_index;
+        sort.m_key_lo = e.m_key_lo;
+        sort.m_key_hi = e.m_key_hi;
+        std::vector< ui_gfx_command_t >& list = sort.m_commands[ e.m_index ];
+        const std::size_t before = list.size( );
+        if ( v.m_fn == 0 )
+            ui_speedometer_draw( sort, env, crop, s, boat, v.m_display );
+        else
+            ui_speedometer_layout_draw( sort, env, crop, s, boat, v.m_display, v.m_fn == 1 );
+        bool same = list.size( ) - before == static_cast< std::size_t >( v.m_commands );
+        for ( int c = 0; same && c < v.m_commands; ++c )
+        {
+            const golden_txt_command_t& want = g_golden_spd_commands[ v.m_first + c ];
+            const ui_gfx_command_t& have = list[ before + static_cast< std::size_t >( c ) ];
+            const std::vector< std::uint8_t > record = ui_unhex( want.m_record );
+            const auto& memory = sort.m_buffers[ e.m_index ].m_memory;
+            same = std::memcmp( have.m_words, want.m_words, sizeof( have.m_words ) ) == 0 && have.m_words[ 3 ] + record.size( ) <= memory.size( ) &&
+                   std::memcmp( memory.data( ) + have.m_words[ 3 ], record.data( ), record.size( ) ) == 0;
+            ++commands;
+        }
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui speedometer draw: vector %d (sweep %d, fn %d) gave %d commands, retail %d - or a word / record byte differs", static_cast< int >( k ),
+                v.m_sweep, v.m_fn, static_cast< int >( list.size( ) - before ), v.m_commands );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_speedometer_draw matches retail's VuHUDSpeedometerEntity draws 0x42BA00 / 0x42C1E0 (rect draw 0x507A00, texture draw "
+                     "0x507360, anchor 0x6282D0, 0x40B5F0 / 0x410AB0 / 0x407DB0 / 0x4078C0) on %d vectors (%d on real speedometers, %d of their "
+                     "loaded fields): %d commands and records byte for byte",
+            static_cast< int >( g_golden_spd_vectors_count ), real, fields, commands );
+    else
+        LOG_ERROR( "the speedometer draw FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
+// ui_minimap_draw (core/ui map.hxx) against retail's VuHUDMiniMapEntity slot 13
+// draw 0x427BD0 (oracle case minimap_draw): one sort through every vector in
+// order - the commands' words and the 96- / 680-byte records byte for byte. For
+// the real minimaps the property-backed fields come from OUR loaded tree and are
+// compared with retail's bytes first; the boats are inputs.
+inline bool verify_ui_minimap_draw( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    ui_gfx_sort_t sort;
+    sort.m_buffers[ 0 ].m_capacity = 0x300000;
+    sort.m_buffers[ 1 ].m_used = 0x35;
+    sort.m_buffers[ 1 ].m_capacity = 0x100000;
+    for ( auto& b : sort.m_buffers )
+        b.m_memory.resize( static_cast< std::size_t >( b.m_capacity ) );
+    const auto boat_of = []( const golden_map_boat_t& g )
+    {
+        ui_map_boat_t b;
+        std::memcpy( b.m_position, &g.m_floats[ 0 ], 8 );
+        std::memcpy( b.m_direction, &g.m_floats[ 2 ], 8 );
+        std::memcpy( b.m_heading, &g.m_floats[ 4 ], 8 );
+        b.m_answer = g.m_answer != 0;
+        b.m_kind = g.m_kind;
+        return b;
+    };
+    int failed = 0, commands = 0, fields = 0, real = 0;
+    for ( std::size_t k = 0; k < g_golden_map_vectors_count; ++k )
+    {
+        const golden_map_vector_t& v = g_golden_map_vectors[ k ];
+        const golden_txt_env_t& e = g_golden_txt_envs[ v.m_env ];
+        const golden_map_world_t& gw = g_golden_map_worlds[ v.m_world ];
+        ui_crop_t crop;
+        std::memcpy( &crop.m_matrix[ 0 ], &e.m_crop[ 0 ], 4 );
+        std::memcpy( &crop.m_matrix[ 5 ], &e.m_crop[ 1 ], 4 );
+        std::memcpy( &crop.m_matrix[ 12 ], &e.m_crop[ 2 ], 4 );
+        std::memcpy( &crop.m_matrix[ 13 ], &e.m_crop[ 3 ], 4 );
+        ui_font_draw_env_t env;
+        const std::vector< std::uint8_t > matrix = ui_unhex( v.m_matrix );
+        std::memcpy( env.m_matrix, matrix.data( ), 64 );
+        env.m_texture_material = g_golden_map_materials[ 0 ][ 0 ];
+        env.m_texture_material_key = g_golden_map_materials[ 0 ][ 1 ];
+        const std::vector< std::uint8_t > b = ui_unhex( v.m_fields );
+        const auto at = [ &b ]( int offset ) { return b.data( ) + ( offset - 0x60 ); };
+        ui_minimap_t m;
+        std::memcpy( m.m_screen_scale, at( 0x60 ), 8 );
+        std::memcpy( m.m_rect, at( 0x68 ), 16 );
+        std::memcpy( &m.m_anchor.m_horizontal, at( 0x78 ), 4 );
+        std::memcpy( &m.m_anchor.m_vertical, at( 0x7C ), 4 );
+        std::memcpy( &m.m_anchor.m_h_ratio, at( 0x80 ), 4 );
+        std::memcpy( &m.m_anchor.m_v_ratio, at( 0x84 ), 4 );
+        std::memcpy( &m.m_depth, &v.m_depth, 4 );
+        m.m_material = g_golden_map_materials[ 1 ][ 0 ];
+        m.m_material_key = g_golden_map_materials[ 1 ][ 1 ];
+        m.m_icon = g_golden_map_materials[ 2 ][ 0 ];
+        m.m_self = v.m_entity;
+        if ( v.m_sweep == 0 )
+        {
+            const entity_t* have = nullptr;
+            for ( std::size_t p = 0; p < g_golden_ui_projects_count && !have; ++p )
+                if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, v.m_project ) == 0 && v.m_index < static_cast< int >( loaded.trees[ p ].size( ) ) )
+                    have = loaded.trees[ p ][ static_cast< std::size_t >( v.m_index ) ].second;
+            const ui_state_t* st = have && ui_is_state( *have ) ? static_cast< const ui_state_t* >( have->m_state.get( ) ) : nullptr;
+            const ui_state_t* draw = nullptr;
+            for ( const entity_component_t& c : have ? have->m_components : std::vector< entity_component_t >( ) )
+                if ( c.m_vtable == 0x738A44u && c.m_state )
+                    draw = static_cast< const ui_state_t* >( c.m_state.get( ) );
+            bool same = st && draw;
+            const auto take = [ & ]( const char* name, void* target, int bytes, const ui_state_t* from )
+            {
+                const ui_slot_t* slot = from ? ui_slot_named( *from, name ) : nullptr;
+                if ( !slot )
+                {
+                    same = false;
+                    return;
+                }
+                if ( std::memcmp( target, slot->m_bits, static_cast< std::size_t >( bytes ) ) != 0 )
+                    same = false;
+                std::memcpy( target, slot->m_bits, static_cast< std::size_t >( bytes ) );
+                ++fields;
+            };
+            if ( same )
+            {
+                take( "Screen Scale", m.m_screen_scale, 8, st );
+                take( "X", &m.m_rect[ 0 ], 4, st );
+                take( "Y", &m.m_rect[ 1 ], 4, st );
+                take( "Width", &m.m_rect[ 2 ], 4, st );
+                take( "Height", &m.m_rect[ 3 ], 4, st );
+                take( "Horizontal Anchor", &m.m_anchor.m_horizontal, 4, st );
+                take( "Horizontal Ratio", &m.m_anchor.m_h_ratio, 4, st );
+                take( "Vertical Anchor", &m.m_anchor.m_vertical, 4, st );
+                take( "Vertical Ratio", &m.m_anchor.m_v_ratio, 4, st );
+                take( "Depth", &m.m_depth, 4, draw );
+            }
+            if ( !same && ++failed <= 8 )
+                LOG_ERROR( "ui minimap draw: %s entity %d: our loaded fields differ from retail's", v.m_project, v.m_index );
+            ++real;
+        }
+        // the case's world: the local slot holds boat (local % count) unless mode 1 (null); no boats: the index is out of range
+        ui_map_world_t world;
+        world.m_manager = gw.m_manager != 0;
+        for ( int i = 0; i < gw.m_boats; ++i )
+            world.m_boats.push_back( boat_of( g_golden_map_boats[ gw.m_first + i ] ) );
+        world.m_local_present = gw.m_boats > 0 && gw.m_mode != 1;
+        if ( world.m_local_present )
+            world.m_local = world.m_boats[ static_cast< std::size_t >( gw.m_local % gw.m_boats ) ];
+        sort.m_index = e.m_index;
+        sort.m_key_lo = e.m_key_lo;
+        sort.m_key_hi = e.m_key_hi;
+        std::vector< ui_gfx_command_t >& list = sort.m_commands[ e.m_index ];
+        const std::size_t before = list.size( );
+        bool same = ui_minimap_draw( sort, env, crop, m, world ) && list.size( ) - before == static_cast< std::size_t >( v.m_commands );
+        for ( int c = 0; same && c < v.m_commands; ++c )
+        {
+            const golden_txt_command_t& want = g_golden_map_commands[ v.m_first + c ];
+            const ui_gfx_command_t& have = list[ before + static_cast< std::size_t >( c ) ];
+            const std::vector< std::uint8_t > record = ui_unhex( want.m_record );
+            const auto& memory = sort.m_buffers[ e.m_index ].m_memory;
+            same = std::memcmp( have.m_words, want.m_words, sizeof( have.m_words ) ) == 0 && have.m_words[ 3 ] + record.size( ) <= memory.size( ) &&
+                   std::memcmp( memory.data( ) + have.m_words[ 3 ], record.data( ), record.size( ) ) == 0;
+            ++commands;
+        }
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui minimap draw: vector %d (sweep %d, world %d) gave %d commands, retail %d - or a word / record byte differs", static_cast< int >( k ),
+                v.m_sweep, v.m_world, static_cast< int >( list.size( ) - before ), v.m_commands );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_minimap_draw matches retail's VuHUDMiniMapEntity draw 0x427BD0 (anchor 0x6282D0, atan2 headings, the boat icons' colours) "
+                     "on %d vectors (%d on real minimaps, %d of their loaded fields): %d commands and records byte for byte",
+            static_cast< int >( g_golden_map_vectors_count ), real, fields, commands );
+    else
+        LOG_ERROR( "the minimap draw FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
+// ui_container_draw (core/ui compose.hxx) against retail's VuUIContainerEntity
+// draw 0x62F7E0 (oracle case container_draw) on every container of OUR loaded
+// trees (same project, pre-order index): the child draws reached in order -
+// child, component index, alpha bits.
+inline bool verify_ui_container_draw( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0, calls = 0;
+    for ( std::size_t r = 0; r < g_golden_con_runs_count; ++r )
+    {
+        const golden_con_run_t& run = g_golden_con_runs[ r ];
+        const entity_t* e = nullptr;
+        for ( std::size_t p = 0; p < g_golden_ui_projects_count && !e; ++p )
+            if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, run.m_project ) == 0 && run.m_index < static_cast< int >( loaded.trees[ p ].size( ) ) )
+                e = loaded.trees[ p ][ static_cast< std::size_t >( run.m_index ) ].second;
+        bool same = e && e->m_children.size( ) == static_cast< std::size_t >( run.m_children );
+        int at = 0;
+        float alpha;
+        std::memcpy( &alpha, &run.m_alpha, 4 );
+        if ( same )
+            ui_container_draw( *e, alpha, [ & ]( const entity_t& child, int component, float a )
+            {
+                if ( at >= run.m_calls )
+                {
+                    same = false;
+                    return;
+                }
+                const golden_con_call_t& want = g_golden_con_calls[ run.m_first + at++ ];
+                int index = -1;
+                for ( std::size_t k = 0; k < e->m_children.size( ); ++k )
+                    if ( e->m_children[ k ].get( ) == &child )
+                        index = static_cast< int >( k );
+                std::uint32_t bits;
+                std::memcpy( &bits, &a, 4 );
+                same = same && index == want.m_child && component == want.m_component && bits == want.m_alpha;
+                ++calls;
+            } );
+        if ( !( same && at == run.m_calls ) && ++failed <= 8 )
+            LOG_ERROR( "ui container draw: %s entity %d reached %d child draws, retail %d - or a call differs", run.m_project, run.m_index, at, run.m_calls );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_container_draw matches retail's VuUIContainerEntity draw 0x62F7E0 (0x628070) on %d runs over the loaded containers: "
+                     "%d child draws - child, component, alpha",
+            static_cast< int >( g_golden_con_runs_count ), calls );
+    else
+        LOG_ERROR( "the container draw FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_container_draw( ) && ok;
+    ok = verify_ui_font_params( ) && ok;
+    ok = verify_ui_minimap_draw( ) && ok;
+    ok = verify_ui_speedometer_draw( ) && ok;
     ok = verify_ui_hud_draw( ) && ok;
     ok = verify_ui_texture_draw( ) && ok;
     ok = verify_ui_wiring( ) && ok;

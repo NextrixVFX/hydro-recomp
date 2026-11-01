@@ -36,11 +36,10 @@
 //   - the thread, the dev profile, the dev menu flags (+0x6C "Water/Normals",
 //     +0x6D "Water/Flow": 0 from the ctor; their line draws 0x597850 /
 //     0x5978E0 are debug-only and not recreated);
-//   - +0x6E "Water/ClipMaps" is 1 from the ctor: the clip test 0x5C7E80 and the
-//     three map terms read the surface's VuWaterMapAsset (+0x100). The asset's
-//     load is NOT recreated, so a surface carries no map here and both steps
-//     are skipped exactly as retail skips them for a null +0x100 - which is
-//     NOT what retail does on Hydroelectric (every surface authors one).
+//   - +0x6E "Water/ClipMaps" is 1 from the ctor (water_grid_t::clip_maps):
+//     0x597260 asks the clip test 0x5C7E80 only while it is set and the
+//     surface has a VuWaterMapAsset (+0x100, surface.hxx water_build_maps).
+//     The three byte-map terms of 0x597D70 depend on the map alone.
 //   - qsort is the CRT DLL's: SUBSTITUTION std::stable_sort with the same
 //     comparator (descending +0xC). Ties order differently from MSVC's qsort;
 //     that changes only where a patch's vertices sit in the buffer.
@@ -383,16 +382,34 @@ struct water_grid_t
     float lod_min = 2.0f;      // +0x58 = 2 / VuWater+0x40
     float lod_ratio = 4.0f;    // +0x5C = VuWater+0x40 * 4
     std::vector< water_patch_t > patches;
+    bool clip_maps = true;               // +0x6E "Water/ClipMaps", 1 from the ctor
+    const water_map_t* map = nullptr;    // the surface being built's +0x100 (water_grid_build)
 };
+
+// 0x5C7E80 (thiscall VuWaterMapAsset; level, x, y; retn 0xC): true = the cell
+// may hold water. Past the last level (+0x88), or past the level's byte array
+// (row y of +0 cells, its size +0xC), it passes; otherwise its byte (+8) is
+// the answer. Signed compares (jge), as retail. The indices 0x597110 / 0x597260
+// hand it are never negative.
+inline bool water_map_clip( const water_map_t& m, int level, int ix, int iy )
+{
+    if ( level >= static_cast< int >( m.entries.size( ) ) )
+        return true;
+    const water_map_t::entry_t& e = m.entries[ static_cast< std::size_t >( level ) ];
+    const int row = static_cast< int >( e.a ) * iy;
+    if ( row + ix >= static_cast< int >( e.bytes.size( ) ) )
+        return true;
+    return e.bytes[ static_cast< std::size_t >( row + ix ) ] != 0;
+}
 
 // 0x597260 (thiscall; level, x, y, centre*, half).
 inline void water_grid_node( water_grid_t& g, const water_frustum_t& cam, int level, int ix, int iy, const float* centre, float half )
 {
-    ( void )level;
-    ( void )ix;
-    ( void )iy;   // the clip map's indices: no map here (see the top)
     const float box[ 8 ] = { centre[ 0 ] - half, centre[ 1 ] - half, -g.below, 0.0f, centre[ 0 ] + half, centre[ 1 ] + half, g.above, 0.0f };
     if ( !water_frustum_test( cam, box, g.matrix ) )
+        return;
+    // ClipMaps on and a map on the surface: its clip test decides.
+    if ( g.clip_maps && g.map && !water_map_clip( *g.map, level, ix, iy ) )
         return;
     const float* m = g.matrix;
     const float mx = ( box[ 4 ] + box[ 0 ] ) * 0.5f;
@@ -525,7 +542,7 @@ struct water_grid_frame_t
     std::vector< water_grid_record_t > vertices;   // renderer +520 (+24 * buffer)
     std::vector< std::uint16_t > indices;          // +532
     std::vector< water_grid_draw_t > draws;
-    int failed = 0;          // patches whose query returned UNKNOWN
+    int failed = 0;          // patches whose query returned UNKNOWN + map cells off the map
 };
 
 // The query with ctx+0x4C set (0x528FC0's first branch): 0x529ED0 with the
@@ -540,6 +557,54 @@ inline bool water_query_forced( const water_t& w, water_query_t& ctx, int surfac
         return true;
     const float rect[ 4 ] = { ctx.aabb[ 0 ], ctx.aabb[ 1 ], ctx.aabb[ 4 ], ctx.aabb[ 5 ] };
     return water_waves( w, s.wave_root, ctx, rect, kernel, user );
+}
+
+// The water map's three byte maps on one patch's records (0x597D70 after the
+// query, the map non-null). Which arrays are non-empty (+0x64, +0x70, +0x7C)
+// picks one of six loops - 0x598590 (all three), 0x5986E0 (first + second),
+// 0x598810 (first + third), the inline one (first only), 0x598940 (second +
+// third), 0x598A70 (second), 0x598B70 (third); none, nothing - and every one
+// computes the same cell and the same per-array term, so they are one loop
+// here: u = (template x * half + centre x) * (1 / (float) surface +0x48),
+// v likewise with y and +0x4C, cell = (int)((W - 1) * u) + W * (int)((H - 1)
+// * v) (W +0x58, H +0x5C; cvttss2si), and per array byte * (1/255, 0x6F75BC):
+// the first (+0x60) REPLACES +0x18, the second (+0x6C) is ADDED to +0x14,
+// the third (+0x78) ADDED to +0x1C. Retail has no bounds check on the cell;
+// the patches stay inside [0, size] so it never leaves the map - a cell that
+// would is counted in `failed` and that vertex left alone (not retail's read).
+inline void water_grid_map_terms( const water_map_t& m, const water_words_t& s, const water_patch_t& p, const water_template_t& t,
+    water_grid_record_t* rec, int count, int& failed )
+{
+    const bool first = !m.map.empty( ), second = !m.second.empty( ), third = !m.third.empty( );
+    if ( !first && !second && !third )
+        return;
+    const float scale = 0.0039215689f;   // 0x6F75BC (0x3B808081)
+    const float inv_x = 1.0f / static_cast< float >( static_cast< std::int32_t >( s.word[ 0x48 / 4 ] ) );
+    const float inv_y = 1.0f / static_cast< float >( static_cast< std::int32_t >( s.word[ 0x4C / 4 ] ) );
+    const std::int32_t w = static_cast< std::int32_t >( m.width );
+    const float wm = static_cast< float >( w - 1 );
+    const float hm = static_cast< float >( static_cast< std::int32_t >( m.height ) - 1 );
+    for ( int i = 0; i < count; ++i )
+    {
+        const float x = ( t.xy[ 2 * i ] * p.half ) + p.x;
+        const float y = ( t.xy[ 2 * i + 1 ] * p.half ) + p.y;
+        const std::int32_t cx = _mm_cvtt_ss2si( _mm_set_ss( wm * ( x * inv_x ) ) );
+        const std::int32_t cy = _mm_cvtt_ss2si( _mm_set_ss( hm * ( y * inv_y ) ) );
+        const std::int32_t cell = cx + ( cy * w );
+        water_grid_record_t& r = rec[ i ];
+        const auto in = [ cell ]( const std::vector< std::uint8_t >& a ) { return cell >= 0 && static_cast< std::size_t >( cell ) < a.size( ); };
+        if ( ( first && !in( m.map ) ) || ( second && !in( m.second ) ) || ( third && !in( m.third ) ) )
+        {
+            ++failed;
+            continue;
+        }
+        if ( first )
+            r.shade = static_cast< float >( m.map[ static_cast< std::size_t >( cell ) ] ) * scale;
+        if ( second )
+            r.foam = ( static_cast< float >( m.second[ static_cast< std::size_t >( cell ) ] ) * scale ) + r.foam;
+        if ( third )
+            r.extra = ( static_cast< float >( m.third[ static_cast< std::size_t >( cell ) ] ) * scale ) + r.extra;
+    }
 }
 
 // 0x597D70 (thiscall renderer; vertices*, indices*): every patch in order.
@@ -600,8 +665,9 @@ inline void water_grid_vertices( const water_grid_t& g, const water_words_t& s, 
         // from the water agent's field, world/field.hxx).
         if ( !water_query_forced( view->water, ctx, surface, water_view_kernel, view ) )
             ++out.failed;
-        // surface +0x100 (the water map): not loaded (see the top) - skipped
-        // as retail skips a null one.
+        // surface +0x100: its byte maps (none for a null map).
+        if ( g.map )
+            water_grid_map_terms( *g.map, s, p, t, rec, count, out.failed );
     }
 }
 
@@ -611,6 +677,10 @@ inline void water_grid_build( water_grid_t& g, const water_frustum_t& cam, const
 {
     g.below = s.f( 40 );
     g.above = s.f( 44 );
+    // The surface's +0x100 as 0x597260 / 0x597D70 read it (through renderer +4).
+    g.map = view && surface >= 0 && static_cast< std::size_t >( surface ) < view->water.surfaces.size( )
+                ? view->water.surfaces[ static_cast< std::size_t >( surface ) ].map
+                : nullptr;
     float t[ 16 ];
     float o[ 16 ];
     wave_matrix_identity( g.matrix );
