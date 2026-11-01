@@ -621,3 +621,98 @@ inline std::uint32_t asset_destroy( asset_dtor_kind_t kind, const asset_words_t&
         h.free_block( self );
     return self;
 }
+// ---- The asset types' create functions on retail's words (boat batch 26) ----
+//
+// The record's create (+0xC of a registered type, cdecl, no arguments): operator new( size ) (the caller's `alloc`;
+// 0 answers 0), then the class's ctor on the block, eax = the block. Every ctor inlines VuAsset's: the strings +0x8 /
+// +0x20 empty (capacity 15, size 0, first byte 0), the +0x38 VuJsonContainer null (+0x38 / +0x40 / +0x44 = 0), +0x48 =
+// 0, refs +0x4C = 1, +0x50 = 0; then its own vtable at +0 and members.
+//   0x515E90 VuAnimationAsset  new 0x60; +0x58 = 0; ctor 0x515DB0: base, vtable 0x74C9E8, +0x58 = 0.
+//   0x554ED0 VuProjectAsset    new 0x70; ctor 0x554E10: base, vtable 0x74EB64, +0x58 / +0x60 / +0x64 / +0x68 = 0.
+//   0x55C280 VuDBAsset         new 0x78; VuGenericDataAsset's ctor 0x55C2C0 (base, vtable 0x74EDCC, +0x58 / +0x60 /
+//                              +0x64 = 0 - its document), then vtable 0x74EDEC, +0x68 / +0x70 / +0x74 = 0.
+//   0x5644E0 VuAssetListAsset / 0x5A9800 VuStringAsset / 0x5BB0E0 VuTemplateAsset: new 0x68; 0x55C2C0; vtable 0x74F194 /
+//                              0x750D38 / 0x751DF0.
+// Not here yet: the creates whose ctors build sub-objects - 0x518EC0 VuCollisionMeshAsset (0x518F70), 0x5C7920 VuXmlAsset
+// (TiXmlDocument 0x5AAB90), 0x5C8CD0 VuTimedEventAsset (0x5C8BB0) - and the other registered types' (unread).
+enum class asset_create_kind_t
+{
+    animation,    // 0x515E90
+    project,      // 0x554ED0
+    db,           // 0x55C280
+    asset_list,   // 0x5644E0
+    string,       // 0x5A9800
+    templ,        // 0x5BB0E0
+};
+
+inline void asset_byte_zero( const asset_words_t& w, std::uint32_t at )
+{
+    w.put( at, w.get( at ) & 0xFFFFFF00u );
+}
+
+// VuAsset's ctor, inlined in every asset class's.
+inline void asset_base_init( const asset_words_t& w, std::uint32_t p )
+{
+    w.put( p + 0x1C, 0xFu );
+    w.put( p + 0x18, 0u );
+    asset_byte_zero( w, p + 0x8 );
+    w.put( p + 0x34, 0xFu );
+    w.put( p + 0x30, 0u );
+    asset_byte_zero( w, p + 0x20 );
+    for ( std::uint32_t at : { 0x38u, 0x40u, 0x44u, 0x48u } )
+        w.put( p + at, 0u );
+    w.put( p + 0x4C, 1u );
+    w.put( p + 0x50, 0u );
+}
+
+// 0x55C2C0: VuGenericDataAsset's ctor.
+inline void generic_data_asset_init( const asset_words_t& w, std::uint32_t p )
+{
+    asset_base_init( w, p );
+    w.put( p, 0x74EDCCu );
+    for ( std::uint32_t at : { 0x58u, 0x60u, 0x64u } )
+        w.put( p + at, 0u );
+}
+
+inline std::uint32_t asset_create( asset_create_kind_t kind, const asset_words_t& w,
+                                   const std::function< std::uint32_t( std::uint32_t ) >& alloc )
+{
+    static constexpr std::uint32_t k_size[ ] = { 0x60u, 0x70u, 0x78u, 0x68u, 0x68u, 0x68u };
+    const std::uint32_t p = alloc ? alloc( k_size[ static_cast< int >( kind ) ] ) : 0u;
+    if ( p == 0 )
+        return 0;
+    switch ( kind )
+    {
+    case asset_create_kind_t::animation:
+        w.put( p + 0x58, 0u );
+        asset_base_init( w, p );
+        w.put( p, 0x74C9E8u );
+        w.put( p + 0x58, 0u );
+        break;
+    case asset_create_kind_t::project:
+        asset_base_init( w, p );
+        w.put( p, 0x74EB64u );
+        for ( std::uint32_t at : { 0x58u, 0x60u, 0x64u, 0x68u } )
+            w.put( p + at, 0u );
+        break;
+    case asset_create_kind_t::db:
+        generic_data_asset_init( w, p );
+        w.put( p, 0x74EDECu );
+        for ( std::uint32_t at : { 0x68u, 0x70u, 0x74u } )
+            w.put( p + at, 0u );
+        break;
+    case asset_create_kind_t::asset_list:
+        generic_data_asset_init( w, p );
+        w.put( p, 0x74F194u );
+        break;
+    case asset_create_kind_t::string:
+        generic_data_asset_init( w, p );
+        w.put( p, 0x750D38u );
+        break;
+    case asset_create_kind_t::templ:
+        generic_data_asset_init( w, p );
+        w.put( p, 0x751DF0u );
+        break;
+    }
+    return p;
+}

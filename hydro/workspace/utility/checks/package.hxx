@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -358,6 +359,43 @@ inline bool verify_asset_dtors( )
         LOG_SUCCESS( "asset_destroy matches retail's 0x515D70 / 0x53FD10 / 0x5F4AB0 (bodies 0x515D00 / 0x53FD40 / 0x5F4AE0) on %u images: the hook log, every string, +0, eax", nv );
     else
         LOG_ERROR( "asset_destroy FAILED %d of %u against 0x515D70 / 0x53FD10 / 0x5F4AB0", failed, nv );
+    return failed == 0;
+}
+
+// asset_create (engine assets/factory.hxx) against retail's create functions 0x515E90 / 0x554ED0 / 0x55C280 / 0x5644E0 /
+// 0x5A9800 / 0x5BB0E0 run whole (case asset_creates, cases/package.py): the size asked, eax, all 32 words of the block.
+inline bool verify_asset_creates( )
+{
+    const unsigned* g = g_golden_asset_creates_words;
+    const std::uint32_t block = 0x1000;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned kind = *g++, null = *g++, size = *g++, eax = *g++;
+        const unsigned* fill = g;
+        const unsigned* after = g + 32;
+        g += 64;
+        std::uint32_t mem[ 32 ];
+        std::memcpy( mem, fill, sizeof( mem ) );
+        asset_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { return mem[ ( a - block ) / 4 ]; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ ( a - block ) / 4 ] = x; };
+        std::vector< std::uint32_t > asked;
+        const std::uint32_t r = asset_create( static_cast< asset_create_kind_t >( kind ), w, [ & ]( std::uint32_t n ) {
+            asked.push_back( n );
+            return null ? 0u : block;
+        } );
+        bool ok = asked.size( ) == 1 && asked[ 0 ] == size && ( r == block ? 1u : 0u ) == eax && ( r == 0 || r == block );
+        for ( int i = 0; i < 32 && ok; ++i )
+            ok = mem[ i ] == after[ i ];
+        if ( !ok && ++failed <= 4 )
+            LOG_ERROR( "asset create vector %u (kind %u null %u) differs from retail", v, kind, null );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "asset_create matches retail's 0x515E90 / 0x554ED0 / 0x55C280 / 0x5644E0 / 0x5A9800 / 0x5BB0E0 on %u blocks: the size, eax, every word", nv );
+    else
+        LOG_ERROR( "asset_create FAILED %d of %u against the create functions", failed, nv );
     return failed == 0;
 }
 
