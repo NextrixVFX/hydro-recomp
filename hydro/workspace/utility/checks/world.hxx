@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/world/race.hxx>
+#include <workspace/core/world/tick.hxx>
 
 // The world area's oracle-backed checks (one file per parallel agent; included by check.hxx after every
 // shared check, so anything above is usable here). verify_world_all runs them all.
@@ -1022,6 +1023,152 @@ inline bool verify_water_grid_maps( )
     return failed == 0;
 }
 
+// The tick manager (world/tick.hxx) against retail's VuTickManagerImpl (case
+// tick_manager): the same op script replayed - registrations (with their
+// return), unregistrations (the handlers destroyed, in order), the dt cap, the
+// paused / slow / step bytes, the pause count slots, and every tick: the
+// handlers called in order with their dt bits and the manager's +0x18 .. +0x30
+// after. Then the final phase list. One failure per op that differs.
+inline bool verify_tick_manager( )
+{
+    struct call_t
+    {
+        int handler;
+        std::uint32_t dt;
+    };
+    struct user_t
+    {
+        int id;
+        std::vector< call_t >* log;
+    };
+    std::vector< call_t > log;
+    user_t users[ 64 ];
+    int owner_of[ 64 ];
+    for ( int h = 0; h < 64; ++h )
+    {
+        users[ h ] = { h, &log };
+        owner_of[ h ] = -1;
+    }
+    static const int owner_keys[ 8 ] = {};
+    const auto fn = []( void* u, float dt ) {
+        user_t* x = static_cast< user_t* >( u );
+        std::uint32_t b;
+        std::memcpy( &b, &dt, 4 );
+        x->log->push_back( { x->id, b } );
+    };
+    const auto handler_id = []( const tick_handler_t& h ) { return static_cast< const user_t* >( h.user )->id; };
+    tick_manager_t tm{};
+    tick_manager_init( tm );
+    int failed = 0, ticks = 0, calls = 0, ops = 0;
+    const unsigned* w = g_golden_tick_ops;
+    const unsigned* end = g_golden_tick_ops + g_golden_tick_ops_count;
+    while ( w < end )
+    {
+        bool same = true;
+        const unsigned op = *w++;
+        ++ops;
+        if ( op == 1 )
+        {
+            const int h = static_cast< int >( w[ 0 ] );
+            owner_of[ h ] = static_cast< int >( w[ 1 ] );
+            const tick_handler_t th{ &owner_keys[ w[ 1 ] ], fn, &users[ h ] };
+            same = tick_register( tm, th, g_golden_tick_phase_names[ w[ 2 ] ] ) == ( w[ 3 ] != 0 );
+            w += 4;
+        }
+        else if ( op == 2 || op == 3 )
+        {
+            const int o = static_cast< int >( *w++ );
+            const char* phase = op == 2 ? g_golden_tick_phase_names[ *w++ ] : nullptr;
+            const unsigned n = *w++;
+            std::vector< int > destroyed;   // the handlers 0x4F7890 destroys, in list order
+            for ( tick_phase_t& p : tm.phases )
+                if ( !phase || p.name == phase )
+                {
+                    for ( const tick_handler_t& h : p.handlers )
+                        if ( h.owner == &owner_keys[ o ] )
+                            destroyed.push_back( handler_id( h ) );
+                    if ( phase )
+                        break;
+                }
+            if ( phase )
+                tick_unregister( tm, &owner_keys[ o ], phase );
+            else
+                tick_unregister_all( tm, &owner_keys[ o ] );
+            same = destroyed.size( ) == n;
+            for ( unsigned k = 0; same && k < n; ++k )
+                same = destroyed[ k ] == static_cast< int >( w[ k ] );
+            w += n;
+        }
+        else if ( op == 4 )
+            std::memcpy( &tm.cap, w++, 4 );
+        else if ( op == 5 )
+        {
+            tm.paused = w[ 0 ] != 0;
+            tm.slow = w[ 1 ] != 0;
+            tm.step = w[ 2 ] != 0;
+            w += 3;
+        }
+        else if ( op == 6 )
+        {
+            const unsigned which = *w++;
+            tm.pause_count = which == 0 ? tm.pause_count + 1 : which == 1 ? tm.pause_count - 1 : 0;
+        }
+        else if ( op == 7 )
+        {
+            double now;
+            std::memcpy( &now, w, 8 );
+            log.clear( );
+            tick_run( tm, now );
+            std::uint32_t st[ 7 ];
+            std::memcpy( st, &tm.clock, 8 );
+            st[ 2 ] = static_cast< std::uint32_t >( tm.paused ) | ( static_cast< std::uint32_t >( tm.slow ) << 8 ) | ( static_cast< std::uint32_t >( tm.step ) << 16 );
+            st[ 3 ] = static_cast< std::uint32_t >( tm.pause_count );
+            std::memcpy( &st[ 4 ], &tm.dt, 4 );
+            std::memcpy( &st[ 5 ], &tm.raw, 4 );
+            std::memcpy( &st[ 6 ], &tm.previous, 4 );
+            same = std::memcmp( st, w + 2, 28 ) == 0;
+            const unsigned n = w[ 9 ];
+            same = same && log.size( ) == n;
+            for ( unsigned k = 0; same && k < n; ++k )
+                same = log[ k ].handler == static_cast< int >( w[ 10 + 2 * k ] ) && log[ k ].dt == w[ 11 + 2 * k ];
+            w += 10 + 2 * n;
+            ++ticks;
+            calls += static_cast< int >( n );
+        }
+        else
+        {
+            LOG_ERROR( "tick manager: unknown op %u in the golden", op );
+            return false;
+        }
+        if ( !same && ++failed <= 6 )
+            LOG_ERROR( "tick manager: op %d (kind %u) differs from retail", ops, op );
+    }
+    // the final phase list
+    const unsigned* p = g_golden_tick_phases;
+    bool lists = tm.phases.size( ) == p[ 0 ];
+    ++p;
+    for ( const tick_phase_t& ph : tm.phases )
+    {
+        if ( !lists )
+            break;
+        lists = ph.name == g_golden_tick_phase_names[ p[ 0 ] ] && ph.last_dt == ( p[ 1 ] != 0 ) && ph.enabled == ( p[ 2 ] != 0 ) && ph.handlers.size( ) == p[ 3 ];
+        const unsigned n = p[ 3 ];
+        auto it = ph.handlers.begin( );
+        for ( unsigned k = 0; lists && k < n; ++k, ++it )
+            lists = handler_id( *it ) == static_cast< int >( p[ 4 + k ] );
+        p += 4 + n;
+    }
+    if ( !lists && ++failed )
+        LOG_ERROR( "tick manager: the final phase lists differ from retail" );
+    if ( failed == 0 )
+        LOG_SUCCESS( "tick_manager matches retail's VuTickManagerImpl (0x4F6F60 / 0x4F7050 / 0x4F7550 / 0x4F7570 / 0x4F7590 / 0x4F72F0) on %d "
+                     "ops: %d ticks, %d handler calls with their dt bits, the %d phases in retail's order",
+            ops, ticks, calls, static_cast< int >( tm.phases.size( ) ) );
+    else
+        LOG_ERROR( "tick manager FAILED: %d items differ", failed );
+    return failed == 0;
+}
+
 // THE RACE'S TRACK AS THE RUNNING WORLD BUILDS IT (world/race.hxx +
 // entities.hxx): VuProjectAsset/Games/HydroelectricRace loaded from Base.apf
 // through race_load_tree (the callbacks c_world::load_entity_tree uses, the
@@ -1200,6 +1347,7 @@ inline bool verify_world_all( )
     ok = verify_water_frustum( ) && ok;
     ok = verify_water_grid( ) && ok;
     ok = verify_water_grid_maps( ) && ok;
+    ok = verify_tick_manager( ) && ok;
     ok = verify_static_scene_load( ) && ok;
     ok = verify_animated_model_draw( ) && ok;
     ok = verify_script_graph( ) && ok;
