@@ -33,17 +33,15 @@
 //   per frame, VuTickManagerImpl's tick 0x4F72F0 (tick_run) over its phases.
 //
 // STOPPED / UNKNOWN (logged, never stood in for):
-// - VuRandom 0x736810 is seeded from the host clock as retail's 0x566230 does
-//   (fleet_random_seed): "Race" builds its AI roster from it - per run.
+// - VuRandom 0x736810 is the one global c_world seeds at its engine init as
+//   retail's 0x566230 does (fleet_random_seed on the platform clock; a --bench
+//   run's clock answers a fixed 0): "Race" builds its AI roster from it.
 // - 0x420A70 loads the collision / fluids meshes (the boat agent's meshes.hxx)
-//   and stops at the surface-type table (g_vudynamicsimpl +0x38 slot 2): not
-//   recreated - and with it everything that reads what it loads after: the
-//   transform-changed delegate (it reads the +0x290 centre), each boat's
-//   Decision 0x41EFF0 and Build 0x41F330 ticks, the race camera (the Camera
-//   section) and the Viewports tick. Each is counted and logged once.
-// - The skin pass 0x421490 (world/livery.hxx, 1:1) is 0x420A70's last step:
-//   with the sections load stopped it is not reached, and the hulls draw their
-//   models' own materials (c_world race_switch_on applies it once b.sections).
+//   and, with the surface-type table (surface.hxx, from SurfaceDB), runs to its
+//   end, the skin pass 0x421490 (world/livery.hxx) included. Still STOPPED, each
+//   counted and logged once: each boat's Decision 0x41EFF0 (recreated, not yet
+//   wired) and Build 0x41F330 (not recreated) ticks, and with them the race
+//   camera 0x409900 and the Viewports tick 0x4AB0A0.
 // - The signed-in player's name (the human entry's Driver Name) is a platform
 //   service: empty here.
 
@@ -80,9 +78,14 @@ struct race_session_t
     fleet_manager_t fleet;
     std::vector< fleet_pilot_t > pilots;
     std::vector< fleet_boat_t > fleet_boats;
-    // VuRandom's global 0x736810 for the AI manager's plans: its state is NOT
-    // ESTABLISHED, so a fleet with entries stops (never reached: "Race" stops first).
-    fleet_random_t random;
+    // THE global VuRandom 0x736810 (c_world's, seeded once by the engine init
+    // 0x566230; the pfx emitters draw from the same one): the roster picks and
+    // the AI manager's plans.
+    fleet_random_t* random = nullptr;
+    // The surface-type table (g_vudynamicsimpl +0x38, VuDynamicsContactManagerImpl ctor 0x574EC0: the boat
+    // agent's surface.hxx) from VuDBAsset/SurfaceDB; built when the session starts.
+    surface_table_t surfaces;
+    bool surfaces_built = false;
     // Counts of the stopped paths reached (UNKNOWN), logged once each.
     int stopped_decision = 0, stopped_build = 0, stopped_transform = 0, stopped_viewports = 0, stopped_fleet = 0;
 };
@@ -110,7 +113,7 @@ inline std::uint8_t* race_session_image( race_session_boat_t& b, int object, int
 // factory's doesAssetExist answers from the pack's directory (as the oracle's
 // factory does); create hands a handle; the collision mesh / fluids count
 // readers are absent - UNKNOWN, the load stops (b.stop says where).
-inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb, const c_archive& archive )
+inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb, const c_archive& archive, const surface_table_t* surfaces )
 {
     std::uint8_t* boat = b.graph.objects[ 0 ].image.data( );
     std::uint8_t* body = race_session_image( b, 0, 0x21C );
@@ -176,10 +179,11 @@ inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb
     // the load creates come from the boat agent's mesh library (core/boat/meshes.hxx: the 1:1 loads 0x51AF20 /
     // 0x523770; its name list and refcounted cache are its flagged substitution); every other create hands a
     // handle from 0x10000 (the rendering assets' loads are hooks); every other release is the null one 0x421870
-    // makes on a fresh boat. The surface-type table (g_vudynamicsimpl +0x38, slot 2 through 0x4F88A0) is NOT
-    // recreated: io.hooks.surface stays null and the load stops there (UNKNOWN); the collision mesh's material
-    // bytes (+40) take the library's null-surface 0 - nothing reads them before that stop.
+    // makes on a fresh boat. The surface-type table (g_vudynamicsimpl +0x38, slot 2 0x5754D0 through 0x4F88A0:
+    // the boat agent's surface.hxx, built from SurfaceDB) answers both the collision mesh materials' byte +40 and
+    // the body's +0x2C8; without one (SurfaceDB unreadable) io.hooks.surface stays null and the load stops there.
     b.meshes = boat_mesh_library_t{ };
+    b.meshes.surfaces = surfaces;
     b.meshes.read_user = const_cast< c_archive* >( &archive );
     b.meshes.read = []( void* u, const std::string& asset, std::vector< std::uint8_t >& blob ) {
         return static_cast< const c_archive* >( u )->read( asset.c_str( ), blob );
@@ -196,6 +200,10 @@ inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb
         return asset < 0x10000u && boat_mesh_release( &static_cast< ctx_t* >( u )->b->meshes, asset );
     };
     io.hooks.surface = nullptr;
+    if ( surfaces != nullptr )
+        io.hooks.surface = []( void* u, const std::string& name ) -> std::uint8_t {
+            return surface_id( *static_cast< ctx_t* >( u )->b->meshes.surfaces, name.c_str( ) );
+        };
     io.hooks.mesh = []( void* u, std::uint32_t a, striding_mesh_t& out ) {
         const collision_mesh_asset_t* m = static_cast< ctx_t* >( u )->b->meshes.collision_of( a );
         if ( !m )
@@ -224,8 +232,16 @@ inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb
 }
 
 // The Decision / Build delegates the boat's gameInitialize registers (0x41EFF0
-// / 0x41F330 behind the thunks 0x4077ED / 0x404AB2): with the sections load
-// stopped, both are UNKNOWN - counted.
+// / 0x41F330 behind the thunks 0x4077ED / 0x404AB2). With the sections load
+// complete (the surface-type table, boat batch 11) they are reached, and both
+// are still STOPPED here - counted, logged once each:
+// - Decision 0x41EFF0 IS recreated (core/boat state.hxx boat_decision_tick)
+//   but NOT WIRED: its boat_decision_t (hull / engine strings, the engine's
+//   +0xF8 records, the water floor) and its hooks (the driver tick vt+0x48,
+//   the animation tick 0x40FFF0, the camera 0x409900 = boat_camera_tick, the
+//   respawn, slots 17 / 18, the debris paths) are not composed yet.
+// - Build 0x41F330 is NOT RECREATED anywhere (it moves the draw matrix +0x49C
+//   and feeds the dynamics).
 struct race_session_tick_t
 {
     race_session_t* session;
@@ -235,15 +251,20 @@ struct race_session_tick_t
 inline void race_session_decision( void* user, float )
 {
     race_session_tick_t& t = *static_cast< race_session_tick_t* >( user );
-    if ( !t.boat->sections && t.session->stopped_decision++ == 0 )
-        LOG_WARNING( "race: VuBoatEntity Decision tick 0x41EFF0 STOPPED (UNKNOWN) - %s's sections load did not complete", t.boat->name.c_str( ) );
+    if ( t.session->stopped_decision++ == 0 )
+        LOG_WARNING( t.boat->sections ? "race: VuBoatEntity Decision tick 0x41EFF0 STOPPED - recreated (boat_decision_tick) but not wired "
+                                        "for %s yet"
+                                      : "race: VuBoatEntity Decision tick 0x41EFF0 STOPPED (UNKNOWN) - %s's sections load did not complete",
+                     t.boat->name.c_str( ) );
 }
 
 inline void race_session_build( void* user, float )
 {
     race_session_tick_t& t = *static_cast< race_session_tick_t* >( user );
-    if ( !t.boat->sections && t.session->stopped_build++ == 0 )
-        LOG_WARNING( "race: VuBoatEntity Build tick 0x41F330 STOPPED (UNKNOWN) - %s's sections load did not complete", t.boat->name.c_str( ) );
+    if ( t.session->stopped_build++ == 0 )
+        LOG_WARNING( t.boat->sections ? "race: VuBoatEntity Build tick 0x41F330 STOPPED (UNKNOWN) - not recreated (%s)"
+                                      : "race: VuBoatEntity Build tick 0x41F330 STOPPED (UNKNOWN) - %s's sections load did not complete",
+                     t.boat->name.c_str( ) );
 }
 
 // The AI manager's tick 0x403900 (fleet_tick), in Decision ahead of the boats
@@ -251,25 +272,21 @@ inline void race_session_build( void* user, float )
 inline void race_session_fleet( void* user, float dt )
 {
     race_session_t& s = *static_cast< race_session_t* >( user );
-    fleet_tick( s.fleet, *s.track, s.pilots, s.fleet_boats, s.random, dt );
+    fleet_tick( s.fleet, *s.track, s.pilots, s.fleet_boats, *s.random, dt );
 }
 
-// The Viewports phase's boat manager tick 0x4AB0A0 (boat_manager_viewport_tick)
-// reads the viewport boat's camera, which boat_camera_tick 0x409900 computes
-// from the Camera section: UNKNOWN while the sections load stops - counted.
+// The Viewports phase's boat manager tick 0x4AB0A0 (boat_manager_viewport_tick,
+// core/boat manager.hxx) reads the viewport boat's camera image, which only
+// the Decision tick's camera step 0x409900 computes: STOPPED with the Decision
+// tick (counted, logged once) - the view stays on dev_vantage's orbit / freecam.
 inline void race_session_viewports( void* user, float )
 {
     race_session_t& s = *static_cast< race_session_t* >( user );
-    for ( const auto& b : s.boats )
-        if ( !b->sections )
-        {
-            if ( s.stopped_viewports++ == 0 )
-                LOG_WARNING( "race: the Viewports tick 0x4AB0A0 and the race camera 0x409900 STOPPED (UNKNOWN) - %s's Camera section is "
-                             "read after the stop", b->name.c_str( ) );
-            return;
-        }
+    if ( s.stopped_viewports++ == 0 && !s.boats.empty( ) )
+        LOG_WARNING( "race: the Viewports tick 0x4AB0A0 and the race camera 0x409900 STOPPED - %s", s.boats[ 0 ]->sections
+                         ? "the Decision tick that runs the camera is not wired yet"
+                         : "the Camera section is read after the sections load's stop" );
 }
-
 // A boat property's text into the boat image's inline std::string (+0x74 /
 // +0x8C / +0xA4 - VuEntity::load's targets): false for a text retail would
 // keep on the heap (16 characters or more - not modelled by the image).
@@ -290,15 +307,15 @@ struct race_session_dbs_t
     const value_t* constant_db = nullptr;
 };
 
-// The start: GameData, the boat load + postLoad, begin. `tree` the race
-// project's entity tree, `track` the world's track manager built from it. False
-// (logged) when there is no race: an option missing, an UNKNOWN builder, a boat
-// that cannot be made.
-inline bool race_session_start( race_session_t& s, const std::string& mode, const std::string& track_name, const std::string& course,
-                                const std::string& boat, const std::string& skin, const race_session_dbs_t& db, const c_archive& archive,
-                                entity_t& tree, const track_manager_t* track )
+// The front end's GameData (ui_front_end_game_data, core/ui config.hxx) from
+// --mode / --race / --course / --boat / --skin - built BEFORE the project load,
+// as retail's front end leaves it for VuActionGameMode's load 0x4BA060 (whose
+// project choice 0x4D3480 reads its Level / GameType / Course). False (logged)
+// when an option is missing or the builder is not recreated. The roster picks
+// draw from the shared VuRandom 0x736810 in whatever state the run has left it.
+inline bool race_session_game_data( const std::string& mode, const std::string& track_name, const std::string& course, const std::string& boat,
+                                    const std::string& skin, const race_session_dbs_t& db, fleet_random_t& random, value_t& out )
 {
-    s = race_session_t{ };
     if ( mode.empty( ) || boat.empty( ) || skin.empty( ) || track_name.empty( ) )
     {
         LOG_WARNING( "race: boats UNKNOWN - --mode, --race, --boat and --skin are all required (no defaults); no race" );
@@ -309,31 +326,44 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         LOG_ERROR( "race: BoatDB / TrackDB / ConstantDB not readable from the pack; no race" );
         return false;
     }
-    // VuRandom 0x736810's game seed: the engine init 0x566230 reseeds it from the clock (fleet_random_seed with seed
-    // 0: QueryPerformanceCounter's low + high words | 0x80000000, 40 steps). The clock is the platform's (VuMetroSys
-    // slot 12 0x4EC7C0, a HOOK): the host's performance counter, as retail - so the Race builder's AI roster and the
-    // AI plans differ per run, as in retail.
-    fleet_random_seed( s.random, 0, [ ]( ) -> std::int64_t {
-#if defined( _WIN32 )
-        LARGE_INTEGER c;
-        return QueryPerformanceCounter( &c ) ? static_cast< std::int64_t >( c.QuadPart ) : 0;
-#else
-        return 0;
-#endif
-    } );
-    LOG_INFO( "race: VuRandom 0x736810 seeded from the host clock (0x566230): seed 0x%08X - the AI roster and plans differ per run, as in retail",
-              static_cast< unsigned >( s.random.seed ) );
     ui_game_env_t env;
     env.boat_db = db.boat_db;
     env.track_db = db.track_db;
-    env.random = &s.random;
+    env.random = &random;
     ui_game_config_t built;
-    s.game_data = ui_front_end_game_data( mode, track_name, course, boat, skin, env, &built );
+    out = ui_front_end_game_data( mode, track_name, course, boat, skin, env, &built );
     if ( !built.built )
     {
         LOG_WARNING( "race: GameData UNKNOWN - mode '%s' reaches builder 0x%X, %s; no race", mode.c_str( ), built.builder,
                      built.builder ? "not recreated" : "none (not a front-end event type)" );
         return false;
+    }
+    return true;
+}
+
+// The start (0x4BA060 after the project load, for GameType "Race": the
+// VuRaceGame ctor, the boat load + postLoad, begin) on the GameData
+// race_session_game_data built. `tree` the race project's entity tree, `track`
+// the world's track manager built from it. False (logged) when a boat cannot
+// be made.
+inline bool race_session_start( race_session_t& s, const std::string& mode, const value_t& game_data, const race_session_dbs_t& db,
+                                const c_archive& archive, entity_t& tree, const track_manager_t* track, fleet_random_t& random )
+{
+    s = race_session_t{ };
+    s.random = &random;
+    s.game_data = game_data;
+    race_game_construct( s.game );   // the VuRaceGame ctor 0x489030 (its base 0x480BA0's values)
+    {
+        std::vector< std::uint8_t > bytes;
+        if ( archive.read( "VuDBAsset/SurfaceDB", bytes ) )
+        {
+            const value_t surface_db = c_reader( bytes ).parse( );
+            s.surfaces_built = surface_table_build( s.surfaces, &surface_db );
+        }
+        if ( !s.surfaces_built )
+            LOG_WARNING( "race: VuDBAsset/SurfaceDB did not build the surface-type table - the sections load will stop at it" );
+        else
+            LOG_INFO( "race: surface-type table built from SurfaceDB: %d types", static_cast< int >( surface_count( s.surfaces ) ) );
     }
     s.mode = mode;
     s.track = track;
@@ -364,7 +394,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         }
         race_session_boat_t& r = *b;
         race_post_load_hooks_t ph;
-        ph.load_sections = [ &r, &db, &archive ] { r.sections = race_session_sections( r, *db.boat_db, archive ); };
+        ph.load_sections = [ &r, &db, &archive, &s ] { r.sections = race_session_sections( r, *db.boat_db, archive, s.surfaces_built ? &s.surfaces : nullptr ); };
         ph.transform_changed = [ &r, &s ]
         {
             std::uint8_t* t = race_session_image( r, 0, 0x50 );
@@ -481,7 +511,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     };
     sh.fleet_start = [ &s ]
     {
-        fleet_start( s.fleet, *s.track, s.pilots, s.fleet_boats, s.random );
+        fleet_start( s.fleet, *s.track, s.pilots, s.fleet_boats, *s.random );
     };
     sh.fleet_run = [ &s ] { fleet_run( s.fleet ); };
     race_begin( s.start, s.start_boats, s.manager, *track, *db.track_db, *db.constant_db, sh );
@@ -489,7 +519,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     for ( const race_start_boat_t& b : s.start_boats )
         placed += b.transform ? 1 : 0;
     LOG_SUCCESS( "race: %s on %s - %d boat(s) from GameData, %d grid position(s), %d lap(s), difficulty %s, begin 0x4829A0 run "
-                 "(humans %d, AI %d)", mode.c_str( ), track_name.c_str( ), static_cast< int >( s.boats.size( ) ),
+                 "(humans %d, AI %d)", mode.c_str( ), s.game.track.c_str( ), static_cast< int >( s.boats.size( ) ),
                  static_cast< int >( s.manager.grid.size( ) ), s.game.laps, s.game.difficulty.c_str( ),
                  static_cast< int >( s.manager.lists.humans.boats.size( ) ), static_cast< int >( s.manager.lists.ais.boats.size( ) ) );
     s.active = true;

@@ -1913,9 +1913,102 @@ inline bool verify_boat_skin( )
     return failed == 0;
 }
 
+// race_project_name (core/world race.hxx) against retail's 0x4D3480 run whole (oracle case game_project_name):
+// per vector the util root and the dev config's ActionGameData (retail's VUJB reader on both), the asset
+// factory's doesAssetExist answered as retail was answered (from Base.apf's directory). Compared: the project
+// name out, and every doesAssetExist request (type / name) in order.
+inline std::vector< std::uint8_t > world_unhex( const char* hex )
+{
+    std::vector< std::uint8_t > out;
+    for ( const char* p = hex; p[ 0 ] && p[ 1 ]; p += 2 )
+    {
+        const auto nib = []( char c ) { return c <= '9' ? c - '0' : ( c | 0x20 ) - 'a' + 10; };
+        out.push_back( static_cast< std::uint8_t >( nib( p[ 0 ] ) * 16 + nib( p[ 1 ] ) ) );
+    }
+    return out;
+}
+
+inline bool verify_game_project_name( )
+{
+    int failed = 0, asked = 0;
+    for ( std::size_t v = 0; v < g_golden_game_project_name_count; ++v )
+    {
+        const golden_game_project_name_t& g = g_golden_game_project_name[ v ];
+        const value_t root = c_reader( world_unhex( g.m_document ) ).parse( );
+        value_t dev;
+        const bool has_dev = g.m_devconfig[ 0 ] != '\0';
+        if ( has_dev )
+            dev = c_reader( world_unhex( g.m_devconfig ) ).parse( );
+        // The requests retail made, "VuProjectAsset/<name> = <answer>" joined by ';'.
+        std::vector< std::string > want;
+        for ( std::string s = g.m_exists; !s.empty( ); )
+        {
+            const std::size_t semi = s.find( ';' );
+            want.push_back( s.substr( 0, semi ) );
+            s = semi == std::string::npos ? std::string( ) : s.substr( semi + 1 );
+        }
+        std::size_t at = 0;
+        bool same = true;
+        const std::string name = race_project_name( root, has_dev ? &dev : nullptr, [ & ]( const std::string& type, const std::string& n )
+        {
+            ++asked;
+            if ( at >= want.size( ) )
+            {
+                same = false;
+                return false;
+            }
+            const std::string& w = want[ at++ ];
+            const std::size_t eq = w.rfind( " = " );
+            same = same && w.substr( 0, eq ) == type + "/" + n;
+            return eq != std::string::npos && w.substr( eq + 3 ) == "1";
+        } );
+        if ( name != g.m_name || !same || at != want.size( ) )
+        {
+            if ( ++failed <= 6 )
+                LOG_ERROR( "game project name '%s': ours '%s' retail '%s'%s", g.m_label, name.c_str( ), g.m_name,
+                           same && at == want.size( ) ? "" : " (doesAssetExist requests differ)" );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "race_project_name matches retail's project choice 0x4D3480 (0x4D3260 / 0x4D31D0 / 0x4D32F0, 0x564AE0, 0x4D3FF0, "
+                     "0x436700, 0x430420): %d vectors, %d doesAssetExist requests",
+                     static_cast< int >( g_golden_game_project_name_count ), asked );
+    else
+        LOG_ERROR( "game project name FAILED %d of %d vectors", failed, static_cast< int >( g_golden_game_project_name_count ) );
+    return failed == 0;
+}
+
+// race_game_construct (core/world race.hxx) against retail's VuGame ctor 0x480BA0 run whole (oracle case
+// race_game_ctor): count, capacity, laps, championship, difficulty, track and the 14 font names.
+inline bool verify_race_game_ctor( )
+{
+    race_game_t game;
+    race_game_construct( game );
+    const unsigned* w = g_golden_race_game_ctor_words;
+    const char* const* t = g_golden_race_game_ctor_texts;
+    int failed = 0;
+    const auto one = [ &failed ]( bool same, const char* what ) {
+        if ( !same && ++failed <= 6 )
+            LOG_ERROR( "race game ctor: %s differs from retail's 0x480BA0", what );
+    };
+    one( game.boats.size( ) == w[ 0 ], "the boat count" );
+    one( static_cast< unsigned >( game.capacity ) == w[ 1 ], "the capacity +0x40" );
+    one( static_cast< unsigned >( game.laps ) == w[ 2 ], "the laps +0x4C" );
+    one( game.championship == w[ 3 ], "the championship +0x80" );
+    one( game.difficulty == t[ 0 ], "the difficulty +0x50" );
+    one( game.track == t[ 1 ], "the track +0x68" );
+    for ( int k = 0; k < 14; ++k )
+        one( game.fonts[ k ] == t[ 2 + k ], "a font name" );
+    if ( failed == 0 )
+        LOG_SUCCESS( "race_game_construct matches retail's VuGame ctor 0x480BA0 (VuRaceGame 0x489030's base): 20 values" );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_race_game_ctor( ) && ok;
+    ok = verify_game_project_name( ) && ok;
     ok = verify_boat_skin( ) && ok;
     ok = verify_boat_draw( ) && ok;
     ok = verify_race_begin( ) && ok;

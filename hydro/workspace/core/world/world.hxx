@@ -592,7 +592,6 @@ private:
         m_attaches.clear( );
         m_refs.clear( );
         m_booleans.clear( );
-        m_random = random_t{};
         m_graph.clear( );
         m_point_waves.clear( );
         m_unhandled_events = 0;
@@ -676,6 +675,31 @@ private:
         if ( path.empty( ) || !m_archive.open( path.c_str( ) ) )
             return;
         m_opened = true;
+        seed_random( );
+    }
+
+    // THE global VuRandom 0x736810 (m_vurandom): statically seed -1 with a zeroed table, warmed by the CRT initializer
+    // 0x64B620 - then the engine init 0x566230 (from 0x4D9900) reseeds it ONCE from the platform clock:
+    // fleet_random_seed(0, clock) = the clock's low + high words | 0x80000000, 40 steps. The clock is VuMetroSys slot
+    // 12 0x4EC7C0 (a HOOK: QueryPerformanceCounter, 0 when it fails). Every draw after - the pfx emitters (c_effects),
+    // the front end's roster picks, the AI plans (the race session) - comes from this one state, so a run's
+    // sequence differs per run, as in retail. A --bench run's clock answers a FIXED 0 (retail's own failure answer)
+    // so the gate stills stay reproducible.
+    void seed_random( )
+    {
+        fleet_random_seed( m_vurandom, 0, [ ]( ) -> std::int64_t {
+            if ( c_engine::option( "bench" ) != nullptr )
+                return 0;
+#if defined( _WIN32 )
+            LARGE_INTEGER c;
+            return QueryPerformanceCounter( &c ) ? static_cast< std::int64_t >( c.QuadPart ) : 0;
+#else
+            return 0;
+#endif
+        } );
+        m_pfx.bind_random( &m_vurandom );
+        LOG_INFO( "VuRandom 0x736810 seeded by the engine init 0x566230 from the %s clock: seed 0x%08X",
+                  c_engine::option( "bench" ) != nullptr ? "fixed bench (0)" : "host", static_cast< unsigned >( m_vurandom.seed ) );
     }
 
     // SCAFFOLD - ours, no retail counterpart.
@@ -846,52 +870,71 @@ public:
         return m_loaded;
     }
 
-    // The project path is built the way the game modes name their projects -
-    // Games/<track><mode> - which is read out of the pack's own asset table,
-    // not guessed. Everything the mode is supposed to MEAN (grid, rules,
-    // scoring, laps) lives in VuGameModeManagerImpl and is not transliterated,
-    // so this loads the scene and nothing else.
+    // VuActionGameMode's load 0x4BA060, in its order: the project by 0x4D3480 (race_project_name: GameData's Level,
+    // else "Games/" + its last path part + GameType [+ Course for Slalom]) from the GameData the front end left,
+    // loaded; then the game object by GameType (race_game_kind) - "Race" -> the VuRaceGame ctor 0x489030 and the
+    // race session (world/session.hxx: 0x481CE0, postLoad, begin 0x4829A0); Slalom / TimeTrial / Ghost -> their
+    // ctors 0x48BEC0 / 0x48ED30 / 0x484A20, NOT recreated (logged, no game); anything else -> no game.
+    // THE GAMEDATA: with --boat / --skin, the front end's (race_session_game_data from --mode / --race / --course /
+    // --boat / --skin - the roster drawn from the shared VuRandom). Without them (the gates' bench) there is no front
+    // end run and retail has no counterpart (its dev config's ActionGameData is the null container,
+    // 0x4FDB70): SCAFFOLD, ours - GameData {Level: --race, GameType: --mode (else "Race"), Course: --course}, the
+    // inputs the old Games/<track><mode> path took; with Level a bare track name 0x4D3480 names the same projects.
     void load_scene( const char* track, const char* mode, const char* course = nullptr )
     {
         if ( !m_opened )
             load( );
-        const char* name = track != nullptr && track[ 0 ] != '\0' ? track : "Hydroelectric";
-        std::string suffix = "Race";
-        if ( mode != nullptr )
+        m_race = race_session_t{ };
+        race_session_dbs_t dbs = race_dbs( );
+        const auto text = []( const char* v ) { return std::string( v ? v : "" ); };
+        const bool race = c_engine::option( "boat" ) != nullptr || c_engine::option( "skin" ) != nullptr;
+        value_t util;
+        value_t& game_data = ui_json_child( util, "GameData" );
+        bool front_end = false;
+        if ( race )
+            front_end = race_session_game_data( text( mode ), text( track ), text( course ), text( c_engine::option( "boat" ) ),
+                                                text( c_engine::option( "skin" ) ), dbs, m_vurandom, game_data );
+        if ( !front_end )
         {
-            if ( std::strstr( mode, "Slalom" ) != nullptr )
-            {
-                suffix = "Slalom";
-                if ( course != nullptr && std::strncmp( course, "Course", 6 ) == 0 )
-                    suffix += course;
-                else
-                    suffix += "CourseA";
-            }
-            else if ( std::strstr( mode, "TimeTrial" ) != nullptr )
-                suffix = "TimeTrial";
-            else if ( std::strstr( mode, "Ghost" ) != nullptr )
-                suffix = "Ghost";
+            game_data = value_t{ };
+            ui_json_set_string( ui_json_child( game_data, "Level" ), text( track ).c_str( ) );
+            ui_json_set_string( ui_json_child( game_data, "GameType" ), mode != nullptr && mode[ 0 ] != '\0' ? mode : "Race" );
+            if ( course != nullptr && course[ 0 ] != '\0' )
+                ui_json_set_string( ui_json_child( game_data, "Course" ), course );
         }
-        const std::string path = std::string( "VuProjectAsset/Games/" ) + name + suffix;
+        const std::string name = race_project_name( util, nullptr, [ this ]( const std::string& type, const std::string& n ) {
+            for ( const std::string& rest : m_archive.names( type + "/" + n ) )   // names() strips the prefix: exact = ""
+                if ( rest.empty( ) )
+                    return true;
+            return false;
+        } );
+        const std::string path = "VuProjectAsset/" + name;
         wipe_scene( );
         m_vantage_ready = false;
         m_authored_camera = false;
         m_authored_far = 500.0f;
         load_project( path.c_str( ) );
         m_loaded = true;
-        LOG_SUCCESS( "scene %s%s", name, suffix.c_str( ) );
-        race_switch_on( );
+        LOG_SUCCESS( "scene %s (0x4D3480 from the %s GameData)", name.c_str( ), front_end ? "front end's" : "scaffold" );
+        const std::string type = race_game_data_text( util, nullptr, "GameType" );
+        switch ( race_game_kind( type ) )
+        {
+        case race_game_kind_t::race:
+            if ( front_end )
+                race_switch_on( game_data, dbs, type );
+            break;
+        case race_game_kind_t::none:
+            LOG_INFO( "0x4BA060: GameType '%s' makes no game object", type.c_str( ) );
+            break;
+        default:
+            LOG_WARNING( "0x4BA060: the %s game's ctor (0x48BEC0 / 0x48ED30 / 0x484A20) is NOT recreated - no game object", type.c_str( ) );
+            break;
+        }
     }
 
-    // The race (world/session.hxx) when --boat or --skin asks for one; the
-    // bench passes neither, so a scene-only run never reaches it.
-    void race_switch_on( )
+    // BoatDB / TrackDB / ConstantDB (and SkinDB for the skin pass) from the pack.
+    race_session_dbs_t race_dbs( )
     {
-        m_race = race_session_t{ };
-        const char* boat = c_engine::option( "boat" );
-        const char* skin = c_engine::option( "skin" );
-        if ( boat == nullptr && skin == nullptr )
-            return;
         const auto db = [ this ]( const char* asset, value_t& out ) -> const value_t*
         {
             std::vector< std::uint8_t > bytes;
@@ -905,14 +948,18 @@ public:
         dbs.track_db = db( "VuDBAsset/TrackDB", m_track_db );
         dbs.constant_db = db( "VuDBAsset/ConstantDB", m_constant_db );
         db( "VuDBAsset/SkinDB", m_skin_db );
-        const auto text = []( const char* key ) { const char* v = c_engine::option( key ); return std::string( v ? v : "" ); };
+        return dbs;
+    }
+
+    // The race (world/session.hxx) on the front end's GameData, after the project load.
+    void race_switch_on( const value_t& game_data, const race_session_dbs_t& dbs, const std::string& mode )
+    {
         if ( !m_tree )
         {
             LOG_WARNING( "race: the project's entity tree did not load; no race" );
             return;
         }
-        if ( !race_session_start( m_race, text( "mode" ), text( "race" ), text( "course" ), text( "boat" ), text( "skin" ), dbs, m_archive,
-                                  *m_tree, track( ) ) )
+        if ( !race_session_start( m_race, mode, game_data, dbs, m_archive, *m_tree, track( ), m_vurandom ) )
             return;
         // The hulls: each boat's three model instances (+0x2A4 / +0x2A8 / +0x2AC from BoatDB's Model Asset / LOD 1 /
         // LOD 2 Model Asset - the instance loads 0x5322C0 / 0x520080 are the rendering layer: our model path) placed
@@ -1156,6 +1203,7 @@ private:
     c_archive m_archive{};
     // The world's VuPfx (world/effects.hxx: the verified runtime; the old c_pfx simulation is gone).
     c_effects m_pfx{};
+    fleet_random_t m_vurandom{};   // VuRandom 0x736810 (seed_random)
     c_corona_entity m_coronas{};
     std::map< std::string, std::vector< cached_part_t > > m_models;
     std::map< std::string, std::vector< pfx_part_t > > m_pfx_models;
@@ -1356,38 +1404,6 @@ private:
         float remaining = 0.0f;
     };
 
-    // The engine's shared random source, transliterated from sub_50FD20:
-    // Park-Miller 16807 * s - 2147483647 * (s / 127773) behind a 32 entry
-    // Bays-Durham shuffle, the draw being (float)last * 2^-31 clamped by
-    // fminf against 0x3F7FFFFE. The state is NOT seeded by any initialiser -
-    // dword_736810 is statically -1 with a zeroed table and zeroed `last` -
-    // so the first draws legitimately return 0.0 until the table fills, and
-    // reproducing that is the point of copying it exactly.
-    //
-    // DEVIATION, FLAGGED: retail has ONE of these, shared with the particle
-    // spawner and everything else that draws, so the sequence a delay sees
-    // depends on a global draw order we do not reproduce. The generator is
-    // identical; the stream is ours.
-    struct random_t
-    {
-        std::int32_t seed = -1;
-        std::int32_t last = 0;
-        std::int32_t table[ 32 ]{};
-
-        float draw( )
-        {
-            const std::int32_t k = seed / 127773;
-            seed = 16807 * seed - 2147483647 * k;
-            if ( seed < 0 )
-                seed += 2147483647;
-            const std::int32_t slot = last / 0x4000000;
-            last = table[ slot & 31 ];
-            table[ slot & 31 ] = seed;
-            const float value = static_cast< float >( last ) * 4.65661287e-10f;
-            return value < 0.99999988f ? value : 0.99999988f;
-        }
-    };
-
     std::vector< animated_t > m_animated;
     std::vector< static_draw_item_t > m_static_draws;
     // Each VuStaticModelAsset's scene aabb (model_for, from load_model_scene), by asset name.
@@ -1407,7 +1423,6 @@ private:
     // (entity, refName) -> the full path the ref points at.
     std::map< std::pair< std::string, std::string >, std::string > m_refs;
     std::map< std::string, bool > m_booleans;
-    random_t m_random;
     // The crossing sphere's radius. Retail's comes from
     // VuInstigatorComponent+36 via _register @0x531e10 and is written by boat
     // code at 0x41da90 / 0x421670 that has not been read; see gate_distance.

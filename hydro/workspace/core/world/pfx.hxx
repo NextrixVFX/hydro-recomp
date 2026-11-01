@@ -24,10 +24,13 @@
 // velocity, +0x34 alpha, +0x38 scale, +0x3C age, +0x4C world scale z; the
 // node's params by theirs, from +0x30.
 //
-// NOT YET WIRED INTO c_pfx::simulate below, whose own versions predate these
-// and DIFFER: its dampen keeps 1 - Amount * dt with no clamp, where retail
-// clamps Amount * dt to 1.0 with minss first. Switching simulate over moves
-// what the bench draws and needs its own measured still change.
+// The world's running pfx is the water agent's verified runtime
+// (pfxsim.hxx / pfxload.hxx / pfxmgr.hxx), driven by world/effects.hxx's
+// c_effects; the old c_pfx simulation these once stood beside is deleted.
+// What remains here: these per-particle tick bodies, the shared VuRand view
+// (pfx_rand_t - the runtime's copy of the global 0x736810, which c_effects
+// loads from and stores back to c_world's one VuRandom) and the helpers the
+// runtime and its checks include.
 struct pfx_tick_particle_t
 {
     float velocity[ 3 ];   // +0x18
