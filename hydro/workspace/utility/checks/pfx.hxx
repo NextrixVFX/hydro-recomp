@@ -858,8 +858,13 @@ inline bool verify_pfx_load( )
 // instances; after each the manager's words, every entry's words and the hook log (draw add / remove / update, the
 // instance tick / release, the create request) in order. The draw component's +0x30 / +0x40 before its first AABB
 // copy are UNKNOWN (not compared).
-inline bool verify_pfx_manager( )
+inline bool pfx_check_manager( const unsigned* golden, std::size_t golden_size, const char* const* golden_names, std::size_t golden_name_count,
+    const char* tag )
 {
+    static const char* const* names_p;
+    static std::size_t names_n;
+    names_p = golden_names;
+    names_n = golden_name_count;
     struct script_t
     {
         std::vector< std::vector< std::uint32_t > > insts;   // state, count, AABB 8
@@ -869,8 +874,8 @@ inline bool verify_pfx_manager( )
     pfx_manager_ops_t ops;
     ops.user = &s;
     static auto name_index = []( const char* p ) -> std::uint32_t {
-        for ( std::uint32_t i = 0; i < sizeof( g_golden_pmg_names ) / sizeof( g_golden_pmg_names[ 0 ] ); ++i )
-            if ( std::strcmp( g_golden_pmg_names[ i ], p ) == 0 )
+        for ( std::uint32_t i = 0; i < names_n; ++i )
+            if ( std::strcmp( names_p[ i ], p ) == 0 )
                 return i;
         return 0xFFFFu;
     };
@@ -892,7 +897,9 @@ inline bool verify_pfx_manager( )
     ops.draw_remove = []( void* u, int e ) { static_cast< script_t* >( u )->log.insert( static_cast< script_t* >( u )->log.end( ), { 2u, static_cast< std::uint32_t >( e ) } ); };
     ops.draw_update = []( void* u, int e ) { static_cast< script_t* >( u )->log.insert( static_cast< script_t* >( u )->log.end( ), { 3u, static_cast< std::uint32_t >( e ) } ); };
     ops.register_tick = []( void* u ) { static_cast< script_t* >( u )->log.push_back( 0u ); };
-    const unsigned* w = g_golden_pmg_words;
+    ops.unregister_tick = []( void* u ) { static_cast< script_t* >( u )->log.push_back( 7u ); };
+    ops.destroy = []( void* u, int e ) { static_cast< script_t* >( u )->log.insert( static_cast< script_t* >( u )->log.end( ), { 8u, static_cast< std::uint32_t >( e ) } ); };
+    const unsigned* w = golden;
     std::size_t at = 0;
     pfx_manager_t m;
     int failed = 0, compared = 0;
@@ -925,7 +932,7 @@ inline bool verify_pfx_manager( )
         {
             const std::uint32_t code = w[ at++ ];
             want.push_back( code );
-            const int args = code == 0 ? 0 : code == 6 ? 2 : 1;
+            const int args = code == 0 || code == 7 ? 0 : code == 6 ? 2 : 1;
             for ( int j = 0; j < args; ++j )
                 want.push_back( w[ at++ ] );
         }
@@ -934,7 +941,7 @@ inline bool verify_pfx_manager( )
         if ( bad )
         {
             if ( failed < 6 )
-                LOG_ERROR( "pfx_manager: %s (step %d) differs from retail (%d)", what, step, bad );
+                LOG_ERROR( "%s: %s (step %d) differs from retail (%d)", tag, what, step, bad );
             ++failed;
         }
     };
@@ -955,7 +962,7 @@ inline bool verify_pfx_manager( )
                 at += 10;
                 s.answer = answer + 1u;
             }
-            const int e = pfx_manager_create( m, g_golden_pmg_names[ name ], ops );
+            const int e = pfx_manager_create( m, golden_names[ name ], ops );
             failed += ix( e ) != ret ? 1 : 0;
         }
         else if ( code == 1 )
@@ -968,6 +975,8 @@ inline bool verify_pfx_manager( )
             pfx_manager_release( m, static_cast< int >( w[ at++ ] ), ops );
         else if ( code == 3 )
             pfx_manager_release_all( m, ops );
+        else if ( code == 5 )
+            pfx_manager_destroy( m, ops );
         else if ( code == 4 )
             for ( auto& inst : s.insts )
             {
@@ -976,18 +985,32 @@ inline bool verify_pfx_manager( )
             }
         check_state( "operation", static_cast< int >( i ) );
     }
-    if ( at != g_golden_pmg_size )
+    if ( at != golden_size )
     {
-        LOG_ERROR( "pfx_manager: golden layout read %d of %d words", static_cast< int >( at ), static_cast< int >( g_golden_pmg_size ) );
+        LOG_ERROR( "%s: golden layout read %d of %d words", tag, static_cast< int >( at ), static_cast< int >( golden_size ) );
         return false;
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "VuPfxManager matches retail's 0x52B7B0 / 0x52BCD0 / 0x52BBF0 / 0x52BC30 / 0x52BD50 / 0x52BB60 over %d operations: "
-                     "%d words and hook logs exact",
-            static_cast< int >( nops ), compared );
+        LOG_SUCCESS( "%s: VuPfxManager matches retail's 0x52B7B0 / 0x52BCD0 / 0x52BBF0 / 0x52BC30 / 0x52BD50 / 0x52BB60%s over %d "
+                     "operations: %d words and hook logs exact",
+            tag, std::strcmp( tag, "pfx_manager" ) == 0 ? "" : " / the dtor 0x52B810", static_cast< int >( nops ), compared );
     else
-        LOG_ERROR( "pfx_manager FAILED %d of %d steps", failed, static_cast< int >( nops ) + 1 );
+        LOG_ERROR( "%s FAILED %d of %d steps", tag, failed, static_cast< int >( nops ) + 1 );
     return failed == 0;
+}
+
+inline bool verify_pfx_manager( )
+{
+    return pfx_check_manager( g_golden_pmg_words, g_golden_pmg_size, g_golden_pmg_names, sizeof( g_golden_pmg_names ) / sizeof( g_golden_pmg_names[ 0 ] ),
+        "pfx_manager" );
+}
+
+// VuPfxManager's dtor 0x52B810 (pfxmgr.hxx pfx_manager_destroy; case pfx_manager_dtor: nine effects, a plan, two ticks, a
+// release, then the dtor - the unregister, releaseAll, every free entry's release / slot 0 0x405000 in order).
+inline bool verify_pfx_manager_dtor( )
+{
+    return pfx_check_manager( g_golden_pmd_words, g_golden_pmd_size, g_golden_pmd_names, sizeof( g_golden_pmd_names ) / sizeof( g_golden_pmd_names[ 0 ] ),
+        "pfx_manager_dtor" );
 }
 
 // water_point_height (world/query.hxx) against VuWater's base-mode one-point query 0x529140 - the fountain's water snap -
@@ -1176,6 +1199,7 @@ inline bool verify_pfx_all( )
     ok = verify_water_snap( ) && ok;
     ok = verify_pfx_boats( ) && ok;
     ok = verify_pfx_manager( ) && ok;
+    ok = verify_pfx_manager_dtor( ) && ok;
     ok = verify_pfx_load( ) && ok;
     ok = verify_water_types( ) && ok;
     ok = verify_pfx_run( ) && ok;
