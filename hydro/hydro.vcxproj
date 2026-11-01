@@ -221,6 +221,7 @@
     <ClInclude Include="workspace\core\world\session.hxx" />
     <ClInclude Include="workspace\core\world\spray.hxx" />
     <ClInclude Include="workspace\core\world\start.hxx" />
+    <ClInclude Include="workspace\core\world\strings.hxx" />
     <ClInclude Include="workspace\core\world\surface.hxx" />
     <ClInclude Include="workspace\core\world\tick.hxx" />
     <ClInclude Include="workspace\core\world\transform.hxx" />
@@ -238,6 +239,7 @@
     <ClInclude Include="workspace\utility\checks\pfx.hxx" />
     <ClInclude Include="workspace\utility\checks\race.hxx" />
     <ClInclude Include="workspace\utility\checks\rays.hxx" />
+    <ClInclude Include="workspace\utility\checks\session.hxx" />
     <ClInclude Include="workspace\utility\checks\ui.hxx" />
     <ClInclude Include="workspace\utility\checks\update.hxx" />
     <ClInclude Include="workspace\utility\checks\wake.hxx" />

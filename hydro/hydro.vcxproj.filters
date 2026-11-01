@@ -387,6 +387,9 @@
     <ClInclude Include="workspace\core\world\start.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\world\strings.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\world\surface.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
@@ -436,6 +439,9 @@
       <Filter>workspace\utility\checks</Filter>
     </ClInclude>
     <ClInclude Include="workspace\utility\checks\rays.hxx">
+      <Filter>workspace\utility\checks</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\checks\session.hxx">
       <Filter>workspace\utility\checks</Filter>
     </ClInclude>
     <ClInclude Include="workspace\utility\checks\ui.hxx">
