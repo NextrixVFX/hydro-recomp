@@ -649,6 +649,45 @@ inline bool verify_asset_creates( )
     return failed == 0;
 }
 
+// asset_create (engine assets/factory.hxx) against retail's 0x518EC0 / 0x5C7920 / 0x5C8CD0 run whole (case asset_creates2):
+// the hook log (new's size, TiXmlDocument's ctor), eax, all 44 words of the block (+0x94 / +0xA4: the stack word).
+inline bool verify_asset_creates2( )
+{
+    const unsigned* g = g_golden_asset_creates2_words;
+    const std::uint32_t block = 0x1000;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned kind = *g++, null = *g++, eax = *g++, stack = *g++, nlog = *g++;
+        std::vector< unsigned > glog( g, g + 2 * nlog ), log;
+        g += 2 * nlog;
+        const unsigned* fill = g;
+        const unsigned* after = g + 44;
+        g += 88;
+        std::uint32_t mem[ 44 ];
+        std::memcpy( mem, fill, sizeof( mem ) );
+        asset_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { return mem[ ( a - block ) / 4 ]; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ ( a - block ) / 4 ] = x; };
+        asset_create_hooks_t h;
+        h.alloc = [ & ]( std::uint32_t n ) { log.insert( log.end( ), { 11u, n } ); return null ? 0u : block; };
+        h.xml_document_ctor = [ & ]( std::uint32_t a ) { log.insert( log.end( ), { 12u, a - block } ); };
+        h.stack_word = [ & ]( ) { return stack; };
+        const std::uint32_t r = asset_create( static_cast< asset_create_kind_t >( kind ), w, h );
+        bool ok = log == glog && ( r == block ? 1u : 0u ) == eax && ( r == 0 || r == block );
+        for ( int i = 0; i < 44 && ok; ++i )
+            ok = mem[ i ] == after[ i ];
+        if ( !ok && ++failed <= 4 )
+            LOG_ERROR( "asset create vector %u (kind %u null %u) differs from retail", v, kind, null );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "asset_create matches retail's 0x518EC0 / 0x5C7920 / 0x5C8CD0 on %u blocks: the hook log, eax, every word", nv );
+    else
+        LOG_ERROR( "asset_create (2) FAILED %d of %u against 0x518EC0 / 0x5C7920 / 0x5C8CD0", failed, nv );
+    return failed == 0;
+}
+
 inline bool verify_asset_package( )
 {
     const std::string pack = package_check_pack( );

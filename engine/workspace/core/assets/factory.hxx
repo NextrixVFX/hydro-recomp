@@ -734,16 +734,35 @@ inline std::uint32_t asset_destroy( asset_dtor_kind_t kind, const asset_words_t&
 //                              +0x64 = 0 - its document), then vtable 0x74EDEC, +0x68 / +0x70 / +0x74 = 0.
 //   0x5644E0 VuAssetListAsset / 0x5A9800 VuStringAsset / 0x5BB0E0 VuTemplateAsset: new 0x68; 0x55C2C0; vtable 0x74F194 /
 //                              0x750D38 / 0x751DF0.
-// Not here yet: the creates whose ctors build sub-objects - 0x518EC0 VuCollisionMeshAsset (0x518F70), 0x5C7920 VuXmlAsset
-// (TiXmlDocument 0x5AAB90), 0x5C8CD0 VuTimedEventAsset (0x5C8BB0) - and the other registered types' (unread).
+//   0x518EC0 VuCollisionMeshAsset new 0xB0; +0x58 / +0x64 / +0x70 / +0x7C / +0xA8 = 0; ctor 0x518F70: base, vtable
+//                              0x74CC3C, +0x58..+0x84 = 0, the aabb +0x88 = ( FLT_MAX x3, ? ) and +0x98 = ( -FLT_MAX x3, ? ),
+//                              +0xA8 = 0, the byte +0xAC = 0. "?": the ctor writes each aabb vector as two 8-byte copies of
+//                              a stack local whose fourth word it never writes ([ebp - 0x10]), so +0x94 / +0xA4 get
+//                              whatever the stack held there (asset_create_hooks_t::stack_word - the caller's answer).
+//   0x5C7920 VuXmlAsset        new 0xA0; +0x64 / +0x68 / +0x70..+0x80 / +0x8C = 0; ctor 0x5C79D0: base, vtable 0x752458,
+//                              TiXmlDocument's ctor 0x5AAB90 on +0x58 (TinyXML: a hook).
+//   0x5C8CD0 VuTimedEventAsset new 0x68; +0x58 / +0x5C / +0x60 = 0; ctor 0x5C8BB0: base, vtable 0x7524D8, the event vector
+//                              +0x58..+0x60 = 0, then 0x5C9810 resize( 0 ) - on the empty vector its size 0 equals 0:
+//                              nothing (the shrink / grow branches 0x5C98D0 / 0x5C9960 cannot run from here).
+// The other registered types' creates are not read.
 enum class asset_create_kind_t
 {
-    animation,    // 0x515E90
-    project,      // 0x554ED0
-    db,           // 0x55C280
-    asset_list,   // 0x5644E0
-    string,       // 0x5A9800
-    templ,        // 0x5BB0E0
+    animation,        // 0x515E90
+    project,          // 0x554ED0
+    db,               // 0x55C280
+    asset_list,       // 0x5644E0
+    string,           // 0x5A9800
+    templ,            // 0x5BB0E0
+    collision_mesh,   // 0x518EC0
+    xml,              // 0x5C7920
+    timed_event,      // 0x5C8CD0
+};
+
+struct asset_create_hooks_t
+{
+    std::function< std::uint32_t( std::uint32_t ) > alloc;           // operator new ( size )
+    std::function< void( std::uint32_t ) > xml_document_ctor;        // 0x5AAB90 ( document )
+    std::function< std::uint32_t( ) > stack_word;                    // 0x518F70's unwritten [ebp - 0x10]
 };
 
 inline void asset_byte_zero( const asset_words_t& w, std::uint32_t at )
@@ -775,11 +794,10 @@ inline void generic_data_asset_init( const asset_words_t& w, std::uint32_t p )
         w.put( p + at, 0u );
 }
 
-inline std::uint32_t asset_create( asset_create_kind_t kind, const asset_words_t& w,
-                                   const std::function< std::uint32_t( std::uint32_t ) >& alloc )
+inline std::uint32_t asset_create( asset_create_kind_t kind, const asset_words_t& w, const asset_create_hooks_t& h )
 {
-    static constexpr std::uint32_t k_size[ ] = { 0x60u, 0x70u, 0x78u, 0x68u, 0x68u, 0x68u };
-    const std::uint32_t p = alloc ? alloc( k_size[ static_cast< int >( kind ) ] ) : 0u;
+    static constexpr std::uint32_t k_size[ ] = { 0x60u, 0x70u, 0x78u, 0x68u, 0x68u, 0x68u, 0xB0u, 0xA0u, 0x68u };
+    const std::uint32_t p = h.alloc ? h.alloc( k_size[ static_cast< int >( kind ) ] ) : 0u;
     if ( p == 0 )
         return 0;
     switch ( kind )
@@ -814,8 +832,51 @@ inline std::uint32_t asset_create( asset_create_kind_t kind, const asset_words_t
         generic_data_asset_init( w, p );
         w.put( p, 0x751DF0u );
         break;
+    case asset_create_kind_t::collision_mesh:
+    {
+        for ( std::uint32_t at : { 0x58u, 0x64u, 0x70u, 0x7Cu, 0xA8u } )
+            w.put( p + at, 0u );
+        asset_base_init( w, p );
+        w.put( p, 0x74CC3Cu );
+        for ( std::uint32_t at = 0x58u; at <= 0x84u; at += 4u )
+            w.put( p + at, 0u );
+        const std::uint32_t junk = h.stack_word ? h.stack_word( ) : 0u;
+        for ( std::uint32_t at : { 0x88u, 0x8Cu, 0x90u } )
+            w.put( p + at, 0x7F7FFFFFu );
+        w.put( p + 0x94, junk );
+        for ( std::uint32_t at : { 0x98u, 0x9Cu, 0xA0u } )
+            w.put( p + at, 0xFF7FFFFFu );
+        w.put( p + 0xA4, junk );
+        w.put( p + 0xA8, 0u );
+        asset_byte_zero( w, p + 0xAC );
+        break;
+    }
+    case asset_create_kind_t::xml:
+        for ( std::uint32_t at : { 0x64u, 0x68u, 0x70u, 0x74u, 0x78u, 0x7Cu, 0x80u, 0x8Cu } )
+            w.put( p + at, 0u );
+        asset_base_init( w, p );
+        w.put( p, 0x752458u );
+        if ( h.xml_document_ctor )
+            h.xml_document_ctor( p + 0x58 );
+        break;
+    case asset_create_kind_t::timed_event:
+        for ( std::uint32_t at : { 0x58u, 0x5Cu, 0x60u } )
+            w.put( p + at, 0u );
+        asset_base_init( w, p );
+        w.put( p, 0x7524D8u );
+        for ( std::uint32_t at : { 0x58u, 0x5Cu, 0x60u } )
+            w.put( p + at, 0u );
+        break;
     }
     return p;
+}
+
+inline std::uint32_t asset_create( asset_create_kind_t kind, const asset_words_t& w,
+                                   const std::function< std::uint32_t( std::uint32_t ) >& alloc )
+{
+    asset_create_hooks_t h;
+    h.alloc = alloc;
+    return asset_create( kind, w, h );
 }
 // ---- The asset properties' small virtuals on retail's words (boat batch 26) ----
 //
