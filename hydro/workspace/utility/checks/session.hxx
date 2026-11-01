@@ -1520,10 +1520,150 @@ inline bool verify_slalom_gate_draw( )
     return failed == 0;
 }
 
+// The boat pfx controller's draw 0x419CE0 (boat effects.hxx boat_pfx_draw_systems) against retail (case boat_pfx_draw):
+// hand-built controllers, the systems whose slot 14 it called, in order.
+inline bool verify_boat_pfx_draw( )
+{
+    const unsigned* p = g_golden_bpd_words;
+    const unsigned nv = *p++;
+    int failed = 0, calls = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        boat_pfx_t c;
+        c.on[ 2 ] = static_cast< std::uint8_t >( *p++ );
+        const std::uint8_t b46b = static_cast< std::uint8_t >( *p++ );
+        const bool reflection = *p++ != 0;
+        const std::int32_t extra = static_cast< std::int32_t >( *p++ );
+        c.extra = extra >= 0 ? 0x1000u + static_cast< std::uint32_t >( extra ) : 0u;
+        for ( int l = 0; l < 7; ++l )
+        {
+            const unsigned n = *p++;
+            for ( unsigned k = 0; k < n; ++k )
+            {
+                boat_pfx_record_t r;
+                r.system = 0x1000u + *p++;
+                c.list[ l ].push_back( r );
+            }
+        }
+        std::vector< std::uint32_t > got;
+        boat_pfx_draw_systems( c, b46b, reflection, got );
+        const unsigned want = *p++;
+        bool bad = got.size( ) != want;
+        for ( unsigned k = 0; k < want; ++k, ++p )
+            if ( k < got.size( ) && got[ k ] != 0x1000u + *p )
+                bad = true;
+        calls += static_cast< int >( want );
+        if ( bad && ++failed <= 6 )
+            LOG_ERROR( "boat pfx draw vector %u: %d systems (retail %u) or their order differs", v, static_cast< int >( got.size( ) ), want );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "boat_pfx_draw_systems matches retail's 0x419CE0 + 0x41ACC0 on %u controllers, %d slot 14 calls in order", nv, calls );
+    else
+        LOG_ERROR( "the boat pfx draw FAILED on %d of %u controllers", failed, nv );
+    return failed == 0;
+}
+
+// VuGhostManager (world/ghost.hxx) against retail (case ghost_manager): the start, the per-step tick, the frames and the
+// counters after; the writer's blob (over a buffer holding `pre` bytes); the reader on the blob good and mutated (answer,
+// strings, count, capacity, frames); the clear.
+inline bool verify_ghost_manager( )
+{
+    const unsigned* p = g_golden_gmd_words;
+    const unsigned nv = *p++;
+    auto text = [ & ]( ) {
+        const unsigned n = *p++;
+        std::string t;
+        for ( unsigned k = 0; k < n; ++k )
+            t.push_back( static_cast< char >( *p++ ) );
+        return t;
+    };
+    auto bytes = [ & ]( ) {
+        const unsigned n = *p++;
+        std::vector< std::uint8_t > t;
+        for ( unsigned k = 0; k < n; ++k )
+            t.push_back( static_cast< std::uint8_t >( *p++ ) );
+        return t;
+    };
+    int failed = 0, frames = 0, reads = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        bool bad = false;
+        const std::string sb = text( ), ss = text( ), sd = text( );
+        const unsigned preset = *p++;
+        const unsigned steps = *p++;
+        ghost_manager_t m;
+        ghost_start( m, sb, ss, sd );
+        if ( preset )
+            m.clock = 299.5f;
+        std::vector< std::uint8_t > boat( 0x600 ), transform( 0x100 ), debris( 0x100 );
+        ghost_boat_t b{ boat.data( ), transform.data( ), debris.data( ), 0.0f };
+        for ( unsigned k = 0; k < steps; ++k, p += 14 )
+        {
+            std::memcpy( transform.data( ) + 0x80, p + 1, 16 );
+            std::memcpy( transform.data( ) + 0xA0, p + 5, 16 );
+            std::memcpy( boat.data( ) + 0x310, p + 9, 4 );
+            boat[ 0x32C ] = static_cast< std::uint8_t >( p[ 10 ] );
+            boat[ 0x464 ] = static_cast< std::uint8_t >( p[ 11 ] );
+            debris[ 0x94 ] = static_cast< std::uint8_t >( p[ 12 ] );
+            std::memcpy( &b.throttle, p + 13, 4 );
+            float dt;
+            std::memcpy( &dt, p, 4 );
+            ghost_tick( m, b, dt );
+        }
+        const std::int32_t count = static_cast< std::int32_t >( p[ 0 ] ), capacity = static_cast< std::int32_t >( p[ 1 ] );
+        bad = bad || m.record.count != count || m.record.capacity != capacity || std::memcmp( &m.clock, p + 2, 4 ) != 0 || std::memcmp( &m.accumulator, p + 3, 4 ) != 0;
+        p += 5;
+        const unsigned nf = *p++;
+        if ( nf == 6u * static_cast< unsigned >( m.record.count ) && nf != 0u )
+            bad = bad || std::memcmp( m.record.frames.data( ), p, 4u * nf ) != 0;
+        p += nf;
+        frames += static_cast< int >( nf / 6u );
+        const unsigned pre = *p++;
+        const std::vector< std::uint8_t > blob = bytes( );
+        std::vector< std::uint8_t > out;
+        for ( unsigned k = 0; k < pre; ++k )
+            out.push_back( static_cast< std::uint8_t >( k ) );
+        ghost_write( m.record, out );
+        bad = bad || out != blob;
+        const unsigned nr = *p++;
+        for ( unsigned r = 0; r < nr; ++r, ++reads )
+        {
+            const std::vector< std::uint8_t > in = bytes( );
+            const bool answer = *p++ != 0;
+            const std::string rb = text( ), rs = text( ), rd = text( );
+            ghost_data_t d;
+            d.skin = "stale skin";
+            bool overrun = false;
+            const bool got = ghost_read( d, in.data( ), in.size( ), &overrun );
+            const std::int32_t c = static_cast< std::int32_t >( p[ 0 ] ), cap = static_cast< std::int32_t >( p[ 1 ] );
+            p += 2;
+            const unsigned rf = *p++;
+            bad = bad || overrun || got != answer || d.boat != rb || d.skin != rs || d.driver != rd || d.count != c || d.capacity != cap;
+            if ( rf == 6u * static_cast< unsigned >( d.count ) && rf != 0u )
+                bad = bad || std::memcmp( d.frames.data( ), p, 4u * rf ) != 0;
+            p += rf;
+        }
+        ghost_clear( m );
+        const std::string cb = text( ), cs = text( ), cd = text( );
+        bad = bad || m.record.boat != cb || m.record.skin != cs || m.record.driver != cd || m.record.count != static_cast< std::int32_t >( p[ 0 ] ) ||
+              m.record.capacity != static_cast< std::int32_t >( p[ 1 ] );
+        p += 2;
+        if ( bad && ++failed <= 6 )
+            LOG_ERROR( "ghost manager run %u: a frame, counter, blob or read differs from retail", v );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuGhostManager (0x4AF520 / 0x4AF9C0 / 0x4AFA30 / 0x4AFE10 / 0x4AFB90 / 0x4AFCE0 / 0x4AF490) matches retail on %u runs: %d frames, %d blob reads", nv, frames, reads );
+    else
+        LOG_ERROR( "the ghost manager FAILED on %d of %u runs", failed, nv );
+    return failed == 0;
+}
+
 inline bool verify_session_all( )
 {
     bool ok = true;
     ok = verify_slalom_gate_draw( ) && ok;
+    ok = verify_boat_pfx_draw( ) && ok;
+    ok = verify_ghost_manager( ) && ok;
     ok = verify_substitute_asset_properties( ) && ok;
     ok = verify_rigid_body_dtor( ) && ok;
     ok = verify_vugame_release( ) && ok;

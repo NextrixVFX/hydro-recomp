@@ -1,5 +1,6 @@
 #pragma once
 
+#include <workspace/core/world/ghost.hxx>
 #include <workspace/core/boat/construct.hxx>
 #include <workspace/core/boat/fleet.hxx>
 #include <workspace/core/boat/load.hxx>
@@ -85,6 +86,13 @@ struct race_session_boat_t
     bool pfx_filled = false;
     int pfx_unknown_bones = 0;   // findNodeByName calls answered UNKNOWN (no skeleton here)
     std::uint8_t* pfx_fluids = nullptr;   // the controller's +0x34 VuFluidsObject image
+    // What the VuPfx processes bound to this boat read (pfx_frame_t's entries; world/drive.hxx race_drive_pfx_frame): the
+    // controller's fluids object as the solver 0x4CE760 prepares (its mesh from the load's handle) and the boat's views.
+    fluids_mesh_t pfx_mesh{ };
+    fluid_solver_t pfx_solver{ };
+    solver_rigid_t pfx_body{ };
+    std::unique_ptr< boat_view_t > pfx_view;
+    pfx_hull_boat_t pfx_hull{ };
     bool sections = false;    // 0x420A70 ran to its end
     std::string stop;         // where it stopped (UNKNOWN), when it did
     std::string name, boat, skin;
@@ -184,6 +192,11 @@ struct race_session_t
     race_start_game_t start;
     race_boat_manager_t manager;
     std::vector< std::unique_ptr< race_session_boat_t > > boats;
+    // pfx_frame_t's boats / fluids (the words the boat processes hold -> their readers): one entry per boat, kept current by Build step 5.
+    ghost_manager_t ghost;              // VuGhostManager g 0x758FC8 (world/ghost.hxx)
+    std::string ghost_error;            // VuGhostGame +0x740 (a string key, ShowError's message)
+    std::vector< pfx_frame_boat_t > pfx_boats;
+    std::vector< pfx_frame_fluids_t > pfx_fluids;
     std::vector< race_start_boat_t > start_boats;
     tick_manager_t ticks;
     // VuEventManager g 0x759028 and the handlers the session's objects registered (world/bus.hxx).
@@ -2227,6 +2240,19 @@ inline void race_session_end( race_session_t& s )
 {
     if ( !s.active )
         return;
+    if ( s.world.pfx )   // the pfx frame's boats die with the session (world/drive.hxx race_drive_pfx_frame)
+    {
+        pfx_frame_t& pf = s.world.pfx->frame;
+        pf.boats = nullptr;
+        pf.boat_count = 0;
+        pf.fluids = nullptr;
+        pf.fluids_count = 0;
+        pf.user = nullptr;
+        pf.prepare = nullptr;
+        pf.point = nullptr;
+        pf.snap = nullptr;
+        pf.water = true;
+    }
     std::vector< std::uint32_t > flags( s.rules_boats.size( ), 4u );   // every game boat was gameInitialize'd (+0x14 bit 2)
     vugame_release_hooks_t h;
     h.exit = [ &s ]( int machine ) {
@@ -2258,7 +2284,7 @@ inline void race_session_end( race_session_t& s )
         s.slalom_draw = false;   // +0x744's +0x1E = 0 after the draw manager's remove (g 0x7590B8 vt+0x2C - the renderer's)
         race_unwired( s, "VuSlalomGame slot 6 0x48C880: the draw manager's remove (g 0x7590B8 vt+0x2C) of +0x744 - the renderer's (a hook)" );
     };
-    h.ghost_release = [ &s ] { race_unwired( s, "VuGhostGame slot 6 0x485360: 0x4AF490 on the ghost manager g 0x758FC8 - not recreated (UNKNOWN)" ); };
+    h.ghost_release = [ &s ] { ghost_clear( s.ghost ); };   // VuGhostGame slot 6 0x485360: 0x4AF490 (no ghost boats: 0x4AF640 not recreated)
     h.call = [ &s ]( const char* what ) {
         const std::string w( what );
         if ( w == "cameras" )
@@ -2819,8 +2845,50 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     // slots 13 / 5 in race_begin (start.hxx), its Game exit's TrackDB and the human's boat class (+0x160).
     s.start.timetrial = mode == "TimeTrial";
     s.start.slalom = mode == "Slalom";
+    s.start.ghost = mode == "Ghost";
     if ( s.start.slalom )
         race_session_slalom( s, tree, db );
+    else if ( s.start.ghost )
+    {
+        // VuGhostGame 0x484A20: VuGame's base machines (verified), then ITS machine +0x700 from the ctor's table (game_mode_defs,
+        // case game_ctors) - its state handlers are not recreated yet: each logs UNKNOWN (rules.hxx game_mode_construct), so the
+        // machine sits in GetLeaderboard (no "Success"). Retail's own slots that ARE read: 5 0x485340 (race_rules_start), 13
+        // 0x487570 (start.hxx race_place_timetrial "Ghost"), 7 0x485380 (race_rules_tick, then the ghosts' matrix copy below),
+        // 12 = nullsub 0x4021A0 (no results written). Slot 15 0x487640 is not read (drive.hxx: UNKNOWN).
+        vugame_fsms_construct( s.rules );
+        s.rules.buoys = 0;
+        game_mode_construct( s.rules.fsm, game_mode_defs( )[ 2 ], [ &s ]( std::uint32_t address, const char* what ) {
+            if ( s.rules.unrecreated )
+                s.rules.unrecreated( address, what );
+        } );
+        // GetLeaderboard, read whole. Enter 0x485890: the tick manager's vt+0x2C, every game boat's +0x308 += 1, the leaderboard
+        // g 0x758FA8's vt+0x18 (the request: "Ghost" and the track), a "Ghost_Leaderboard" VuMessageBox +0x758 (UI: a hook). Exit
+        // 0x485AA0: vt+0x30, +0x308 -= 1, the box released. Tick 0x485AF0: vt+0x1C's status 0 waits, 1 "Success", else +0x740 =
+        // "Ghost_NotConnected" and the "Failure" pulse (ShowError).
+        // PLATFORM (a hook, FLAGGED): the online leaderboard is not in this build, so vt+0x1C answers 2 - retail's answer with no
+        // connection, the one path retail itself has for it. LoadGhosts 0x485B50 and on need the service: not reached.
+        for ( auto& st : s.rules.fsm.m_states )
+            if ( st->m_name == "GetLeaderboard" )
+            {
+                st->m_enter = [ &s ] {
+                    race_rules_hold( s.rules, 1 );
+                    race_unwired( s, "VuGhostGame GetLeaderboard: the tick manager's vt+0x2C and the \"Ghost_Leaderboard\" VuMessageBox +0x758 (UI, not recreated)" );
+                };
+                st->m_exit = [ &s ] { race_rules_hold( s.rules, -1 ); };
+                st->m_tick = [ &s ]( float ) {
+                    s.ghost_error = "Ghost_NotConnected";
+                    s.rules.fsm.pulse_condition( "Failure" );
+                };
+            }
+        // 0x485380 past the time: for i < the +0x75C list's count, the ghost manager g 0x758FC8's +0x64 record whose [0] == i:
+        // its +0x58 entity's +0x4DC = its transform's world (+0x50 +0x50, 16 words). The list is LoadGhosts' / PreGame's
+        // (0x485B50 / 0x486060, not recreated): empty here, so the loop runs over none - logged.
+        s.rules.hooks.gates = [ &s ] {
+            race_unwired( s, "VuGhostGame slot 7 0x485380: the +0x75C ghost list is empty (LoadGhosts 0x485B50 / PreGame 0x486060 not recreated) - "
+                             "the per-ghost +0x4DC copy ran over none (UNKNOWN)" );
+        };
+        LOG_WARNING( "race: VuGhostGame - its states' handlers are not recreated (UNKNOWN); only VuGame's machines and slots 5 / 7 / 13 run" );
+    }
     else if ( s.start.timetrial )
     {
         timetrial_rules_construct( s.rules );
@@ -2900,6 +2968,8 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
             }
             return e;
         };
+        if ( s.start.ghost )
+            return;   // VuGhostGame slot 12 = nullsub 0x4021A0: nothing written
         if ( s.start.timetrial || s.start.slalom )
         {
             // VuSlalomGame slot 12 0x48CAF0 is the same writer (in.slalom: case slalom_results).
@@ -3180,6 +3250,21 @@ inline int race_boat_draw_instance( const std::uint8_t* boat, const std::uint8_t
     if ( _mm_comigt_ss( _mm_set_ss( d ), _mm_set_ss( lod1 * lod1 ) ) )
         return 1;
     return 0;
+}
+
+// 0x41EAE0's tail: the controller's draw 0x419CE0 on the normal pass, reached unless (+0x464 && +0x465) (its +0x46B branch
+// lands on it too). What it draws, boat by boat in the race's order.
+inline void race_session_pfx_draw( const race_session_t& s, std::vector< std::uint32_t >& out )
+{
+    out.clear( );
+    if ( !s.active )
+        return;
+    for ( const auto& b : s.boats )
+    {
+        const std::uint8_t* boat = b->graph.objects[ 0 ].image.data( );
+        if ( !boat[ 0x464 ] || !boat[ 0x465 ] )
+            boat_pfx_draw_systems( b->pfx, boat[ 0x46B ], false, out );
+    }
 }
 
 inline void race_boat_draw_matrix( const std::uint8_t* boat, const std::uint8_t* transform, float* out )

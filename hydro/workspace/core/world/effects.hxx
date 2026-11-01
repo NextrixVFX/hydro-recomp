@@ -195,7 +195,7 @@ public:
     // The draw (ours - see the top), into placement group 11 (dropped first, as the old c_pfx did). Texture: path ->
     // texture id; Model: path -> the model's parts (c_world::pfx_parts).
     template < typename Texture, typename Model >
-    void draw( const float* eye, const float* target, Texture&& texture, Model&& model )
+    void draw( const float* eye, const float* target, Texture&& texture, Model&& model, const std::vector< std::uint32_t >* systems = nullptr )
     {
         c_engine::drop( 11 );
         if ( !m_ready || eye == nullptr || target == nullptr )
@@ -206,22 +206,26 @@ public:
         float right[ 3 ], up[ 3 ];
         facing( eye, target, right, up );
         int trails = 0;
-        for ( const static_t& s : m_statics )
-        {
-            if ( !s.drawn )
-                continue;
-            for ( std::uint32_t pattern = m_rt.heap[ s.instance + 0x10 ]; pattern != 0u; pattern = m_rt.heap[ pattern + 4 ] )
+        auto draw_system = [ & ]( std::uint32_t instance ) {
+            for ( std::uint32_t pattern = m_rt.heap[ instance + 0x10 ]; pattern != 0u; pattern = m_rt.heap[ pattern + 4 ] )
             {
                 const std::uint32_t node = m_rt.heap[ pattern + 0x10 ];
                 const std::uint32_t vt = m_rt.heap[ node ];
                 if ( vt == 0x007505ACu )
-                    draw_quads( s.instance, pattern, node, card, right, up, texture );
+                    draw_quads( instance, pattern, node, card, right, up, texture );
                 else if ( vt == 0x00750328u )
-                    draw_geoms( s.instance, pattern, node, model );
+                    draw_geoms( instance, pattern, node, model );
                 else if ( vt == 0x00750294u && m_rt.heap[ pattern + 0x28 ] != 0u )
                     ++trails;
             }
-        }
+        };
+        for ( const static_t& s : m_statics )
+            if ( s.drawn )
+                draw_system( s.instance );
+        // The race boats' systems (0x419CE0's order: world/session.hxx race_session_pfx_draw): slot 14 0x58AF60 has no gate on the system.
+        if ( systems != nullptr )
+            for ( std::uint32_t instance : *systems )
+                draw_system( instance );
         if ( trails > 0 && !m_trails_logged )
         {
             m_trails_logged = true;

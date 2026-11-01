@@ -311,6 +311,26 @@ inline bool boat_pfx_tick( boat_pfx_t& c, const boat_pfx_boat_t& b, float dt, co
     return true;
 }
 
+// 0x419CE0 (thiscall the controller; the draw params; retn 4), the normal pass (0x41EAE0's call; the params' +0x18, the
+// reflection pass, draws nothing here): the systems whose slot 14 0x58AF60 it calls, 0x41ACC0 per list, in its order -
+// list 4 (only while +0x8E), then unless boat +0x46B lists 2, 3, 0, 1, 5, 6, then +0x94 when set.
+inline void boat_pfx_draw_systems( const boat_pfx_t& c, std::uint8_t b46b, bool reflection, std::vector< std::uint32_t >& out )
+{
+    if ( reflection )
+        return;
+    auto add = [ & ]( int l ) {
+        for ( const boat_pfx_record_t& r : c.list[ l ] )
+            out.push_back( r.system );
+    };
+    if ( c.on[ 2 ] )
+        add( 4 );
+    if ( b46b == 0 )
+        for ( int l : { 2, 3, 0, 1, 5, 6 } )
+            add( l );
+    if ( c.extra != 0 )
+        out.push_back( c.extra );
+}
+
 // The binding onto the recreated VuPfx runtime: the water agent's instance
 // exports (world/pfxsim.hxx pfx_instance_*, verified by its case pfx_calls; a
 // system is its heap word) - slot 0 as world/pfxclass.hxx's setter (no
