@@ -22,6 +22,8 @@
 #include <workspace/utility/logger.hxx>
 
 #include <cstdint>
+#include <fstream>
+#include <sstream>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -106,6 +108,70 @@ inline void race_unwired( race_session_t& s, const std::string& what )
 {
     if ( s.unwired[ what ]++ == 0 )
         LOG_WARNING( "race: %s", what.c_str( ) );
+}
+
+// ---- THE TEST INPUT (ours, FLAGGED: not retail) -----------------------------
+//
+// Retail's input is a platform hook (the input device behind the control
+// method manager); a --bench run has no player. --input-script FILE answers
+// that hook from a file of pad states instead of the device, so the human
+// boat can be driven through the verified input -> controls mapping
+// (VuHumanDriver's 0x40F690, boat human.hxx) in a repeatable run. One key per
+// line, "FRAME THROTTLE BRAKE STEERING BOOST" (the four channels the device
+// answer has: the right / left trigger 0..1, the stick -1..1, the shoulder 0 /
+// 1); a key holds from its session frame until the next one; '#' starts a
+// comment. A TEST INPUT, logged as such - never a stand-in for the AI.
+struct race_input_script_t
+{
+    struct key_t
+    {
+        int frame = 0;
+        input_t pad{};
+    };
+    std::vector< key_t > keys;
+    std::string path;
+};
+
+inline bool race_input_script_load( const std::string& path, race_input_script_t& out )
+{
+    std::ifstream f( path );
+    if ( !f )
+        return false;
+    out = race_input_script_t{ };
+    out.path = path;
+    std::string line;
+    while ( std::getline( f, line ) )
+    {
+        const std::size_t hash = line.find( '#' );
+        if ( hash != std::string::npos )
+            line.resize( hash );
+        std::istringstream in( line );
+        race_input_script_t::key_t k;
+        int boost = 0;
+        if ( in >> k.frame >> k.pad.throttle >> k.pad.brake >> k.pad.steer )
+        {
+            if ( in >> boost )
+                k.pad.boost = boost != 0;
+            out.keys.push_back( k );
+        }
+    }
+    return !out.keys.empty( );
+}
+
+// The pad state at a session frame: the last key at or before it (none: a released pad).
+inline input_t race_input_script_at( const race_input_script_t& s, int frame )
+{
+    input_t pad{};
+    for ( const race_input_script_t::key_t& k : s.keys )
+        if ( k.frame <= frame )
+            pad = k.pad;
+    return pad;
+}
+
+// The platform input hook's answer: the script when one is loaded, else the device.
+inline input_t race_drive_pad( const race_session_t& s )
+{
+    return s.input_script ? race_input_script_at( *s.input_script, s.frames ) : read_input( );
 }
 
 // g 0x759058's first surface's +0xD8 (boat_decision_t::floor). VuWater +0x20
@@ -476,8 +542,8 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         hd.tick.animation = d.animation;
         hd.env.control_method = s.world.control_method;
         hd.hooks.user = &s;
-        hd.hooks.axis = []( void*, std::int32_t, const char* name ) -> float {
-            const input_t in = read_input( );
+        hd.hooks.axis = []( void* u, std::int32_t, const char* name ) -> float {
+            const input_t in = race_drive_pad( *static_cast< const race_session_t* >( u ) );
             if ( std::strcmp( name, "Throttle" ) == 0 )
                 return in.throttle;
             if ( std::strcmp( name, "Brake" ) == 0 )
@@ -486,8 +552,8 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
                 return in.steer;
             return 0.0f;
         };
-        hd.hooks.held = []( void*, std::int32_t, const char* name ) -> std::uint8_t {
-            return std::strcmp( name, "Boost" ) == 0 && read_input( ).boost ? 1 : 0;
+        hd.hooks.held = []( void* u, std::int32_t, const char* name ) -> std::uint8_t {
+            return std::strcmp( name, "Boost" ) == 0 && race_drive_pad( *static_cast< const race_session_t* >( u ) ).boost ? 1 : 0;
         };
         hd.hooks.pressed = []( void*, std::int32_t, const char* ) -> std::uint8_t { return 0; };
         hd.hooks.misfire = []( void* u ) { race_unwired( *static_cast< race_session_t* >( u ), "audio: the BoostMisfire sound 0x41E060 (FMOD - platform)" ); };

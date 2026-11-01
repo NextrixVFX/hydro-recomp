@@ -204,6 +204,11 @@ struct race_session_t
     std::vector< race_rules_boat_t > rules_boats;
     bool rules_running = false;
     int rules_frames = 0;
+    // THE TEST INPUT (ours, flagged - not retail): --input-script's per-frame pad states (world/drive.hxx race_input_script_t),
+    // answered by the platform input hook in place of the device; null: the device (game/input.hxx read_input). rames: the
+    // session frames run (race_session_frame), the script's clock.
+    std::shared_ptr< struct race_input_script_t > input_script;
+    int frames = 0;
 };
 
 // The model's entity / driver tokens (see race_session_t::words).
@@ -1229,6 +1234,7 @@ inline void race_session_frame( race_session_t& s, float dt )
         return;
     s.clock += static_cast< double >( dt );
     tick_run( s.ticks, s.clock );
+    ++s.frames;
 }
 
 // VuBoatEntity's draw 0x41EAE0 (slot 12, behind the draw delegate 0x4077E3),

@@ -990,6 +990,18 @@ public:
             project_initialized( );   // the session stopped before 0x4BA060 reached it: the event still goes out
         if ( !started )
             return;
+        // THE TEST INPUT (ours, flagged): --input-script answers the platform input hook from a file (world/drive.hxx).
+        if ( const char* script = c_engine::option( "input-script" ) )
+        {
+            auto loaded = std::make_shared< race_input_script_t >( );
+            if ( race_input_script_load( script, *loaded ) )
+            {
+                m_race.input_script = loaded;
+                LOG_WARNING( "race: TEST INPUT - the human pad answered from %s (%d keys), not the device", script, static_cast< int >( loaded->keys.size( ) ) );
+            }
+            else
+                LOG_ERROR( "race: --input-script %s did not load (no keys) - the device answers", script );
+        }
         // The queries' view of VuWater as the load left it: the race's first frame reads VuWater (DynamicsSync,
         // Decision) before its first "Water" phase rebuilds the view.
         water_view_build( m_water, m_water_view );
