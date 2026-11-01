@@ -18,10 +18,10 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 873 | 426143 |
-| callee | 891 | 254473 |
-| cited | 247 | 128569 |
-| absent | 6627 | 1417075 |
+| verified | 885 | 433635 |
+| callee | 884 | 250338 |
+| cited | 250 | 126736 |
+| absent | 6619 | 1415551 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -30,17 +30,17 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 
 | subsystem | functions | verified | callee | cited | absent | verified bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| unattributed | 1845 | 244 | 192 | 54 | 1355 | 175577 of 695394 |
+| unattributed | 1845 | 246 | 192 | 55 | 1352 | 175923 of 695394 |
 | physics (Bullet) | 646 | 196 | 26 | 36 | 388 | 76151 of 256657 |
-| entity / component / script framework | 1094 | 99 | 182 | 43 | 770 | 30050 of 207438 |
-| HUD / UI / fonts | 648 | 42 | 153 | 6 | 447 | 24964 of 184315 |
+| entity / component / script framework | 1094 | 101 | 180 | 44 | 769 | 30092 of 207438 |
+| HUD / UI / fonts | 648 | 49 | 149 | 7 | 443 | 31895 of 184315 |
 | game modes / race | 766 | 39 | 64 | 13 | 650 | 12828 of 179957 |
 | rendering / gfx | 552 | 64 | 48 | 21 | 419 | 22858 of 126915 |
 | water | 325 | 84 | 53 | 21 | 167 | 40377 of 96416 |
 | boat | 264 | 29 | 48 | 16 | 171 | 16648 of 87400 |
 | engine core / math / containers | 391 | 15 | 12 | 11 | 353 | 3771 of 76072 |
 | other classes | 731 | 9 | 3 | 1 | 718 | 5251 of 67698 |
-| assets | 286 | 12 | 35 | 2 | 237 | 1564 of 61239 |
+| assets | 286 | 13 | 34 | 2 | 237 | 1737 of 61239 |
 | particles | 215 | 13 | 5 | 10 | 187 | 6585 of 45495 |
 | audio | 163 | 4 | 33 | 0 | 126 | 783 of 30823 |
 | input | 156 | 1 | 6 | 0 | 149 | 24 of 30388 |
@@ -58,7 +58,7 @@ Over-approximate (a referenced vtable brings every slot) and under-approximate (
 
 | tier | functions | verified | callee | cited | absent | runtime / STL / thunk | platform layer | game + engine logic not verified |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| race | 4905 | 819 | 576 | 239 | 3271 | 68 | 610 | 3480 |
+| race | 4905 | 831 | 569 | 242 | 3263 | 68 | 610 | 3468 |
 | game | 2431 | 52 | 314 | 8 | 2057 | 77 | 313 | 1990 |
 | service | 452 | 0 | 0 | 0 | 452 | 45 | 98 | 309 |
 | dead | 850 | 2 | 1 | 0 | 847 | 61 | 126 | 661 |
