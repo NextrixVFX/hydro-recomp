@@ -1,5 +1,6 @@
 #pragma once
 
+#include <workspace/core/ui/chooser.hxx>
 #include <workspace/core/ui/results.hxx>
 
 #include <cstdio>
@@ -181,9 +182,155 @@ inline bool verify_ui_race_results( )
     return failed == 0;
 }
 
+// verify_ui_subtitles_combo: retail's VuUISubtitlesSettingEntity slot 6 0x46D7A0, its
+// touch callbacks 0x474F80 / 0x475080 / 0x475090, slots 13 / 15 / 16 (with the two
+// choices: the change 0x475B40 and slot 12 0x46D9B0 run) and slot 7 0x4253D0 through
+// one script per authored instance (oracle case subtitles_combo). The fields from OUR
+// loaded entity (ui_combo_box_fill; compared with retail's bytes first); the touch
+// device, the settings byte, the tick manager's delta, VuUIImpl's inverse crop matrix
+// and the NavUp / NavDown connection counts are the case's (inputs). Per step: the
+// state +0x2A0..+0x2BB, the choices, the device's entries and +0x1C, the settings
+// byte, the VuRetVal of SetFocus, the hook log in order.
+inline bool verify_ui_subtitles_combo( )
+{
+    int failed = 0, steps = 0, logs = 0;
+    for ( std::size_t k = 0; k < g_golden_sc_entities_count; ++k )
+    {
+        const golden_sc_entity_t& ge = g_golden_sc_entities[ k ];
+        const entity_t* e = ui_lv_entity( ge.m_project, ge.m_index );
+        const std::vector< std::uint8_t > raw = ui_unhex( ge.m_fields );
+        std::vector< std::string > log;
+        ui_settings_t settings;
+        ui_touch_device_t device;
+        ui_combo_box_hooks_t hooks;
+        char line[ 160 ];
+        hooks.m_broadcast = [ & ]( std::uint32_t hash, const ui_params_t& p )
+        {
+            std::snprintf( line, sizeof line, "broadcast|0x%08X|%d", hash, p.m_size );
+            log.push_back( line );
+        };
+        hooks.m_fire = [ & ]( const char* plug, const ui_params_t& p )
+        {
+            log.push_back( std::string( "find|" ) + plug );
+            log.push_back( "fire|" + std::to_string( p.m_size ) );
+        };
+        hooks.m_connections = [ & ]( const char* plug )
+        {
+            log.push_back( std::string( "find|" ) + plug );
+            return std::strcmp( plug, "NavUp" ) == 0 ? ge.m_links[ 0 ] : std::strcmp( plug, "NavDown" ) == 0 ? ge.m_links[ 1 ] : 0;
+        };
+        hooks.m_sound = [ & ]( const char* name ) { log.push_back( std::string( "sound|" ) + name ); };
+        hooks.m_delta = [ ] { return ui_lv_float( g_golden_sc_delta ); };
+        hooks.m_apply = [ & ]( std::uint32_t, int current ) { settings.m_subtitles = current != 0; };
+        c_ui_combo_box c( 0u, k_ui_subtitles_vtable, hooks );
+        bool same = e && e->m_ctor && e->m_ctor->m_vtable == k_ui_subtitles_vtable && raw.size( ) == 0x260;
+        if ( same )
+        {
+            ui_combo_box_fill( c, *e );
+            same = std::memcmp( c.m_scale, raw.data( ) + 0x08, 8 ) == 0 && std::memcmp( c.m_position, raw.data( ) + 0x10, 8 ) == 0 &&
+                   std::memcmp( c.m_left, raw.data( ) + 0x1F8, 16 ) == 0 && std::memcmp( c.m_right, raw.data( ) + 0x208, 16 ) == 0 &&
+                   std::memcmp( &c.m_scroll_time, raw.data( ) + 0x138, 4 ) == 0;   // +0x68, +0x70, +0x258, +0x268, block +0x120 = +0x198
+        }
+        if ( !same )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "ui subtitles combo: %s entity %d: OUR loaded fields differ from retail's", ge.m_project, ge.m_index );
+            continue;
+        }
+        for ( int s = 0; s < ge.m_steps; ++s )
+        {
+            const golden_sc_step_t& st = g_golden_sc_steps[ ge.m_first + s ];
+            const std::vector< std::uint8_t > inverse_raw = ui_unhex( g_golden_sc_inverses[ st.m_env ] );
+            float inverse[ 16 ];
+            std::memcpy( inverse, inverse_raw.data( ), 64 );
+            const float point[ 2 ] = { ui_lv_float( st.m_point[ 0 ] ), ui_lv_float( st.m_point[ 1 ] ) };
+            log.clear( );
+            std::uint32_t ret[ 2 ] = { 0xCCCCCCCCu, 0xCCCCCCCCu };
+            switch ( st.m_op )
+            {
+            case 0:
+                settings.m_subtitles = st.m_byte != 0;
+                c.initialize( device, settings.m_subtitles ? 1u : 0u );
+                break;
+            case 1:
+                c.on_tick( );
+                break;
+            case 2:
+                c.set_focus( );
+                ret[ 0 ] = 0u;
+                break;
+            case 3:
+            {
+                ui_params_t p;
+                p.add_string( st.m_event );
+                if ( std::strcmp( st.m_event, "InputUp" ) == 0 || std::strcmp( st.m_event, "InputDown" ) == 0 )
+                    ui_params_add( p, 1, 0u );
+                c.on_event( p );
+                break;
+            }
+            case 4:
+                c.touch_down( inverse, point );
+                break;
+            case 5:
+                c.touch_up( );
+                break;
+            case 6:
+                log.push_back( "touch|0" );   // the device's slot 7 (0, out)
+                c.touch_move( inverse, point );
+                break;
+            default:
+                c.release( device );
+                break;
+            }
+            std::uint8_t state[ 0x1C ] = { };
+            state[ 0 ] = c.m_latched;
+            state[ 1 ] = c.m_left_pressed;
+            state[ 2 ] = c.m_right_pressed;
+            std::memcpy( state + 4, &c.m_current, 4 );
+            std::memcpy( state + 8, &c.m_shown, 4 );
+            state[ 0xC ] = c.m_focused;
+            state[ 0xD ] = c.m_down;
+            state[ 0xE ] = c.m_held;
+            state[ 0xF ] = c.m_up;
+            std::memcpy( state + 0x10, c.m_touch, 8 );
+            std::memcpy( state + 0x18, &c.m_press, 4 );
+            const std::vector< std::uint8_t > want = ui_unhex( st.m_state );
+            bool ok = want.size( ) == sizeof state && std::memcmp( state, want.data( ), sizeof state ) == 0;
+            ok = ok && static_cast< int >( c.m_choice_texts.size( ) ) == st.m_choices && c.m_choices == st.m_choices;
+            for ( int q = 0; ok && q < st.m_choices; ++q )
+            {
+                const golden_sc_choice_t& gc = g_golden_sc_choices[ st.m_first_choice + q ];
+                ok = c.m_choice_texts[ static_cast< std::size_t >( q ) ].first == gc.m_text &&
+                     c.m_choice_texts[ static_cast< std::size_t >( q ) ].second == gc.m_byte;
+            }
+            ok = ok && static_cast< int >( device.m_callbacks.size( ) ) == st.m_entries && device.m_priority == st.m_priority;
+            if ( ok && st.m_entries )
+                ok = device.m_callbacks[ 0 ].first == &c && st.m_entry_offset == 0x5C && device.m_callbacks[ 0 ].second == st.m_entry_priority;
+            ok = ok && ( settings.m_subtitles ? 1 : 0 ) == st.m_settings && ret[ 0 ] == st.m_ret[ 0 ] && static_cast< int >( log.size( ) ) == st.m_logs;
+            for ( int q = 0; ok && q < st.m_logs; ++q )
+            {
+                ok = log[ static_cast< std::size_t >( q ) ] == g_golden_sc_logs[ st.m_first_log + q ];
+                ++logs;
+            }
+            ++steps;
+            if ( !ok && ++failed <= 8 )
+                LOG_ERROR( "ui subtitles combo: %s entity %d step %d (op %d): the state / choices / touch entries / settings / log differ (log %d, retail %d)",
+                    ge.m_project, ge.m_index, s, st.m_op, static_cast< int >( log.size( ) ), st.m_logs );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_combo_box initialize / touch_down / touch_up / touch_move / release (+ the tick, SetFocus, events, change) match retail's "
+                     "VuUISubtitlesSettingEntity 0x46D7A0 / 0x474F80 / 0x475080 / 0x475090 / 0x4253D0 on %d entities: %d steps, %d hook calls in order",
+            static_cast< int >( g_golden_sc_entities_count ), steps, logs );
+    else
+        LOG_ERROR( "the UI subtitles combo box FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_results_all( )
 {
     bool ok = true;
     ok = verify_ui_race_results( ) && ok;
+    ok = verify_ui_subtitles_combo( ) && ok;
     return ok;
 }
