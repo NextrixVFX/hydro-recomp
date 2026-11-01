@@ -376,6 +376,12 @@ struct ui_bind_hooks_t
     std::function< void( int, float[ 2 ] ) > m_touch_point;
     const float* m_inverse = nullptr;
     ui_settings_t* m_settings = nullptr;
+    // Batch 24: the other five settings combos (units / fidelity / flip interval /
+    // vibration / tilt steering - chooser.hxx initialize_settings / apply_settings)
+    // are bound only when this is set (the platform calls their slots 6 / 12 make
+    // and the game state the fidelity setter 0x4B50A0 writes); null = unbound, their
+    // slot 6 / 7 rows entered as UNKNOWN as before.
+    ui_settings_platform_t* m_settings_platform = nullptr;
     // The race HUD's (null: not bound - see ui_hud_env_t): the game it reads,
     // VuStringDB slot 6 (the toast's template - a HOOK), the inputs owned by the
     // world / the audio layer (multi delay In, audio Start / Stop: entity, plug,
@@ -1131,7 +1137,7 @@ private:
                 h.m_option_db = m_hooks.m_option_db;   // gameutil +0x34
             b.m_ladder = std::make_unique< c_ui_leaderboard >( ui_leaderboard_of( e ), h );
         }
-        else if ( b.m_vtable == k_ui_subtitles_vtable )
+        else if ( b.m_vtable == k_ui_subtitles_vtable || ( ui_is_settings_combo_vtable( b.m_vtable ) && m_hooks.m_settings_platform ) )
         {
             ui_combo_box_hooks_t& h = b.m_combo_hooks;
             h.m_broadcast = [ this ]( std::uint32_t hash, const ui_params_t& p ) { broadcast( hash, p ); };
@@ -1144,12 +1150,19 @@ private:
             };
             h.m_sound = [ this ]( const char* name ) { trace( ui_trace_kind_t::sound, -1, name, 0u, ui_params_t( ), true ); };
             h.m_delta = [ this ] { return m_hooks.m_delta ? m_hooks.m_delta( ) : 0.0f; };
-            h.m_apply = [ this ]( std::uint32_t, int current )
+            h.m_apply = [ this, bp = &b ]( std::uint32_t vtable, int current )
             {
                 // 0x46D9B0: g 0x758FE0 +0x5C = current != 0 (no null test in retail)
-                if ( m_hooks.m_settings )
-                    m_hooks.m_settings->m_subtitles = current != 0;
-                else
+                if ( vtable == k_ui_subtitles_vtable )
+                {
+                    if ( m_hooks.m_settings )
+                        m_hooks.m_settings->m_subtitles = current != 0;
+                    else
+                        ++m_config_faults;
+                }
+                // the other five: their slot 12 (chooser.hxx apply_settings; a table index past it = a fault)
+                else if ( !m_hooks.m_settings || !m_hooks.m_settings_platform ||
+                          !bp->m_combo->apply_settings( *m_hooks.m_settings, *m_hooks.m_settings_platform ) )
                     ++m_config_faults;
             };
             b.m_combo = std::make_unique< c_ui_combo_box >( ui_entity_id( ui_long_name( e ) ), b.m_vtable, h );
@@ -1221,7 +1234,8 @@ private:
             for ( const char* name : { "Show", "Hide", "SetFocus" } )
                 if ( std::strcmp( plug, name ) == 0 )
                     return true;
-        if ( vt == k_ui_subtitles_vtable && std::strcmp( plug, "SetFocus" ) == 0 )
+        if ( ui_is_settings_combo_vtable( vt ) && std::strcmp( plug, "SetFocus" ) == 0 &&
+             ( vt == k_ui_subtitles_vtable || ( index_of( owner ) >= 0 && m_bound[ static_cast< std::size_t >( index_of( owner ) ) ]->m_combo ) ) )
             return true;
         if ( vt == k_ui_boat_stat_vtable && std::strcmp( plug, "Set" ) == 0 )
             return true;
@@ -1379,6 +1393,8 @@ private:
     //   Priority" - OUR loaded value); slot 7 0x4253D0: 0x53FA60 (callback).
     // - VuUISubtitlesSettingEntity 0x46D7A0 / 0x4253D0 (chooser.hxx initialize /
     //   release; the subtitles byte = the settings manager g 0x758FE0 +0x5C).
+    // - batch 24, with m_settings_platform: the other five settings combos' slot 6
+    //   (chooser.hxx initialize_settings) / the shared slot 7 0x4253D0.
     // Retail reads g 0x759070 / g 0x758FE0 without a null test: without
     // m_touch_device / m_settings the row is entered as UNKNOWN (and counted).
     void game_slot( entity_t& e, std::uint32_t vt, bool init )
@@ -1400,6 +1416,9 @@ private:
         else if ( vt == k_ui_button_vtable && b && b->m_button && m_hooks.m_touch_device )
             known = true;
         else if ( vt == k_ui_subtitles_vtable && b && b->m_combo && m_hooks.m_touch_device && ( !init || m_hooks.m_settings ) )
+            known = true;
+        else if ( ui_is_settings_combo_vtable( vt ) && b && b->m_combo && m_hooks.m_touch_device &&
+                  ( !init || ( m_hooks.m_settings && m_hooks.m_settings_platform ) ) )
             known = true;
         else if ( vt == k_ui_mini_board_vtable && b && b->m_board )
             known = true;
@@ -1447,8 +1466,10 @@ private:
             else
                 b->m_ladder->release( );
         }
-        else if ( init )
+        else if ( init && vt == k_ui_subtitles_vtable )
             b->m_combo->initialize( *m_hooks.m_touch_device, m_hooks.m_settings->m_subtitles ? 1u : 0u );
+        else if ( init )   // units 0x46D3E0 / fidelity 0x46DA70 / flip 0x46DE30 / vibration 0x46CD70 / tilt 0x46C780
+            b->m_combo->initialize_settings( *m_hooks.m_touch_device, *m_hooks.m_settings, *m_hooks.m_settings_platform );
         else
             b->m_combo->release( *m_hooks.m_touch_device );
     }
@@ -1590,9 +1611,9 @@ private:
             out.m_known = false;
             return out;
         }
-        if ( vt == k_ui_subtitles_vtable )
+        if ( ui_is_settings_combo_vtable( vt ) && m_bound[ static_cast< std::size_t >( index_of( owner ) ) ]->m_combo )
         {
-            // SetFocus -> slot 13 0x475190: VuRetVal +0 = 0 (+4 the caller's)
+            // SetFocus -> slot 13 0x475190 (every settings combo's): VuRetVal +0 = 0 (+4 the caller's)
             m_bound[ static_cast< std::size_t >( index_of( owner ) ) ]->m_combo->set_focus( );
             out.m_known = false;
             return out;

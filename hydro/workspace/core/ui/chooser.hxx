@@ -36,6 +36,95 @@
 
 inline constexpr std::uint32_t k_ui_subtitles_vtable = 0x73DF3Cu;
 
+// The other five VuUIComboBoxEntity subclasses (their ctors install these
+// vtables over 0x474590's; the base's handlers / slots 13..16 / 0x475B40 are the
+// same - only slot 6 (the choices + the current choice) and slot 12 (apply)
+// differ: initialize_settings / apply_settings below).
+inline constexpr std::uint32_t k_ui_units_vtable = 0x73DFA4u;       // VuUIUnitsSettingEntity
+inline constexpr std::uint32_t k_ui_fidelity_vtable = 0x73DED4u;    // VuUIFidelitySettingEntity
+inline constexpr std::uint32_t k_ui_flip_vtable = 0x73DE6Cu;        // VuUIFlipIntervalSettingEntity
+inline constexpr std::uint32_t k_ui_vibration_vtable = 0x73E0BCu;   // VuVibrationSettingsEntity
+inline constexpr std::uint32_t k_ui_tilt_vtable = 0x73E15Cu;        // VuTiltSteeringSettingsEntity
+
+inline bool ui_is_settings_combo_vtable( std::uint32_t vt )
+{
+    return vt == k_ui_subtitles_vtable || vt == k_ui_units_vtable || vt == k_ui_fidelity_vtable || vt == k_ui_flip_vtable ||
+           vt == k_ui_vibration_vtable || vt == k_ui_tilt_vtable;
+}
+
+// .data 0x7357EC {"Imperial", "Metric"} (the units) and 0x7357DC {"Low", "Medium",
+// "High"} (the fidelity) - static pointers, no CRT initializer writes them. The
+// slots 12 index them with +0x2A4 and NO bounds test (retail then reads the
+// neighbouring .data words: 0x7357E8 = 2 after the fidelity's, 0x7357F4 "OFF" after
+// the units') - here an index outside the table is a fault (false = UNKNOWN).
+inline constexpr const char* k_ui_units_names[ 2 ] = { "Imperial", "Metric" };
+inline constexpr const char* k_ui_fidelity_names[ 3 ] = { "Low", "Medium", "High" };
+
+// What the settings combos reach outside VuSettingsManager g 0x758FE0. The
+// platform calls are HOOKS (the device / the system): g_vumetrosys 0x759000
+// vt+0x54 / vt+0x58 (two capability queries the tilt combo asks, thiscall, al),
+// the D3D11 device g 0x75907C vt+0x28 (the flip interval, one int), the
+// VuGfxSort g 0x759074 +0xC block (when the byte is set: g 0x759098 vt+0x3C(
+// +0xA0, -1), the device's vt+0x30, the byte := 0, the device's vt+0xD0 - one
+// hook `m_flush`, called with the byte already cleared), VuLensWaterManagerImpl g
+// 0x759048 vt+0x18 (one bool). The game state 0x4B50A0 writes is data here:
+// VuWater g 0x759058 +0x40 (float) / +0x44 / +0x45 / +0x46 (bytes) and the
+// display object g 0x758F94 +0x11 (byte) - all written without a null test.
+struct ui_settings_platform_t
+{
+    std::function< bool( ) > m_sys_54;                                        // g 0x759000 vt+0x54 (HOOK)
+    std::function< bool( ) > m_sys_58;                                        // g 0x759000 vt+0x58 (HOOK)
+    std::function< void( int ) > m_flip;                                      // g 0x75907C vt+0x28 (HOOK)
+    std::function< void( ) > m_flush;                                         // the g 0x759074 +0xC block (HOOK)
+    std::function< void( bool ) > m_lens;                                     // g 0x759048 vt+0x18 (HOOK)
+    std::function< void( std::uint32_t, const ui_params_t& ) > m_broadcast;  // 0x505690
+    bool m_gfx_pending = false;      // VuGfxSort g 0x759074 +0xC
+    float m_water_scale = 0.0f;      // VuWater g 0x759058 +0x40
+    std::uint8_t m_water_44 = 0;     // VuWater +0x44
+    std::uint8_t m_water_45 = 0;     // VuWater +0x45
+    std::uint8_t m_water_46 = 0;     // VuWater +0x46
+    std::uint8_t m_display_11 = 0;   // g 0x758F94 +0x11
+};
+
+// VuSettingsManager's fidelity setter 0x4B50A0 (thiscall on g 0x758FE0, the new
+// name by reference; ret 4), disassembled: nothing when the name equals +0x60
+// (std::string compare 0x404AC0 + the lengths). Else the VuGfxSort block (above),
+// +0x60 = the name (0x401DB0 unless the same object), then by name (VuString_equals
+// 0x404990): "Low" -> VuWater +0x40 = 0.5, +0x44 = +0x45 = +0x46 = 0, display +0x11
+// = 0, lens(0); "Medium" -> 1.0, 1, 1, 0, +0x11 = 0, lens(0); "High" -> 1.0, 1, 1,
+// 1, +0x11 = 1, lens(1); any other name: none of those. Then (every changed name)
+// broadcast FNV-1a "OnWaterSettingsChanged" with an empty VuParams.
+inline void ui_settings_set_fidelity( ui_settings_t& s, const std::string& name, ui_settings_platform_t& p )
+{
+    if ( name == s.m_fidelity )
+        return;
+    if ( p.m_gfx_pending )
+    {
+        p.m_gfx_pending = false;
+        if ( p.m_flush )
+            p.m_flush( );
+    }
+    s.m_fidelity = name;
+    const auto set = [ &p ]( float scale, std::uint8_t a, std::uint8_t b, std::uint8_t c, bool high )
+    {
+        p.m_water_scale = scale;   // 0x3F000000 / 0x3F800000
+        p.m_water_44 = a;
+        p.m_water_45 = b;
+        p.m_water_46 = c;
+        p.m_display_11 = high ? 1u : 0u;
+        if ( p.m_lens )
+            p.m_lens( high );
+    };
+    if ( name == "Low" )
+        set( 0.5f, 0u, 0u, 0u, false );
+    else if ( name == "Medium" )
+        set( 1.0f, 1u, 1u, 0u, false );
+    else if ( name == "High" )
+        set( 1.0f, 1u, 1u, 1u, true );
+    if ( p.m_broadcast )
+        p.m_broadcast( fsm_hash( "OnWaterSettingsChanged" ), ui_params_t( ) );
+}
+
 struct ui_combo_box_hooks_t
 {
     std::function< void( std::uint32_t, const ui_params_t& ) > m_broadcast;  // 0x505690
@@ -223,6 +312,136 @@ public:
         m_choices = static_cast< int >( m_choice_texts.size( ) );
         m_current = subtitles;
         m_shown = static_cast< float >( m_current );
+    }
+
+    // Slot 6 of every settings combo (gameInitialize; each registers the touch
+    // callback +0x5C through 0x53FB90 with priority 0 first, then pushes its
+    // choices with 0x457F50 - or 0x457830 on the record +0x278, the same push onto
+    // +0x294 - every run adds them again). False: not a settings combo vtable.
+    // - subtitles 0x46D7A0: initialize( ) above.
+    // - units 0x46D3E0: k = 0, 1: push "Settings_Units_" + k_ui_units_names[k]
+    //   (0x4366B0 = std::string operator+), then if settings +0x44 == that NAME
+    //   (std::string compare): +0x2A4 = k, +0x2A8 = (float)k.
+    // - fidelity 0x46DA70: the same over "Settings_Fidelity_" + k_ui_fidelity_names
+    //   [k], k = 0..2, against settings +0x60.
+    // - flip interval 0x46DE30: "Settings_FlipInterval_1", "Settings_FlipInterval_2";
+    //   c = 2 - settings +0x78, then min( c, 1 ), then 0 if negative; +0x2A4 = c,
+    //   +0x2A8 = (float)c.
+    // - vibration 0x46CD70: "Settings_Off", "Settings_On"; +0x2A4 = settings +0x34
+    //   (movzx; +0x2A8 NOT written).
+    // - tilt steering 0x46C780: "Settings_Tilt_Off" if sys vt+0x54, then
+    //   "Settings_Tilt_On" if sys vt+0x58; if the choices count > 1: a = vt+0x54,
+    //   b = vt+0x58 (asked again), +0x2A4 = a ? ( b ? settings +0x2E : 0 ) : b
+    //   (+0x2A8 NOT written).
+    bool initialize_settings( ui_touch_device_t& touch, const ui_settings_t& s, ui_settings_platform_t& p )
+    {
+        const auto push = [ this ]( const std::string& name )
+        {
+            m_choice_texts.push_back( { name, 0u } );
+            m_choices = static_cast< int >( m_choice_texts.size( ) );
+        };
+        const auto named = [ & ]( const char* prefix, const char* const* names, int count, const std::string& current )
+        {
+            for ( int k = 0; k < count; ++k )
+            {
+                push( std::string( prefix ) + names[ k ] );
+                if ( current == names[ k ] )
+                {
+                    m_current = k;
+                    m_shown = static_cast< float >( k );   // cvtdq2ps
+                }
+            }
+        };
+        switch ( m_vtable )
+        {
+        case k_ui_subtitles_vtable:
+            initialize( touch, s.m_subtitles ? 1u : 0u );
+            return true;
+        case k_ui_units_vtable:
+            ui_touch_add( touch, this, 0u );
+            named( "Settings_Units_", k_ui_units_names, 2, s.m_units );
+            return true;
+        case k_ui_fidelity_vtable:
+            ui_touch_add( touch, this, 0u );
+            named( "Settings_Fidelity_", k_ui_fidelity_names, 3, s.m_fidelity );
+            return true;
+        case k_ui_flip_vtable:
+        {
+            ui_touch_add( touch, this, 0u );
+            push( "Settings_FlipInterval_1" );
+            push( "Settings_FlipInterval_2" );
+            int c = 2 - s.m_flip_interval;
+            if ( c > 1 )
+                c = 1;
+            if ( c < 0 )
+                c = 0;
+            m_current = c;
+            m_shown = static_cast< float >( c );
+            return true;
+        }
+        case k_ui_vibration_vtable:
+            ui_touch_add( touch, this, 0u );
+            push( "Settings_Off" );
+            push( "Settings_On" );
+            m_current = s.m_vibration ? 1 : 0;
+            return true;
+        case k_ui_tilt_vtable:
+        {
+            ui_touch_add( touch, this, 0u );
+            const auto ask = []( const std::function< bool( ) >& f ) { return f ? f( ) : false; };
+            if ( ask( p.m_sys_54 ) )
+                push( "Settings_Tilt_Off" );
+            if ( ask( p.m_sys_58 ) )
+                push( "Settings_Tilt_On" );
+            if ( static_cast< int >( m_choice_texts.size( ) ) > 1 )
+            {
+                const bool a = ask( p.m_sys_54 );
+                const bool b = ask( p.m_sys_58 );
+                m_current = a ? ( b ? ( s.m_tilt ? 1 : 0 ) : 0 ) : ( b ? 1 : 0 );
+            }
+            return true;
+        }
+        default:
+            return false;
+        }
+    }
+
+    // Slot 12 of every settings combo (the change 0x475B40 calls it) - the current
+    // choice +0x2A4 into VuSettingsManager g 0x758FE0 (no null test). False: not a
+    // settings combo, or a table index outside it (retail reads past - UNKNOWN).
+    // - subtitles 0x46D9B0: +0x5C = current != 0.
+    // - units 0x46D640: +0x44 = k_ui_units_names[current] (0x401DB0 unless the same object).
+    // - fidelity 0x46DCD0: the setter 0x4B50A0 with k_ui_fidelity_names[current].
+    // - flip interval 0x46E050: +0x78 = 2 - current, then the device's vt+0x28( it ).
+    // - vibration 0x46CF70: +0x34 = current != 0.
+    // - tilt steering 0x46C9B0: only when the choices count > 1: +0x2E = current != 0.
+    bool apply_settings( ui_settings_t& s, ui_settings_platform_t& p ) const
+    {
+        switch ( m_vtable )
+        {
+        case k_ui_subtitles_vtable: s.m_subtitles = m_current != 0; return true;
+        case k_ui_units_vtable:
+            if ( m_current < 0 || m_current >= 2 )
+                return false;
+            s.m_units = k_ui_units_names[ m_current ];
+            return true;
+        case k_ui_fidelity_vtable:
+            if ( m_current < 0 || m_current >= 3 )
+                return false;
+            ui_settings_set_fidelity( s, k_ui_fidelity_names[ m_current ], p );
+            return true;
+        case k_ui_flip_vtable:
+            s.m_flip_interval = 2 - m_current;
+            if ( p.m_flip )
+                p.m_flip( s.m_flip_interval );
+            return true;
+        case k_ui_vibration_vtable: s.m_vibration = m_current != 0; return true;
+        case k_ui_tilt_vtable:
+            if ( static_cast< int >( m_choice_texts.size( ) ) > 1 )
+                s.m_tilt = m_current != 0;
+            return true;
+        default: return false;
+        }
     }
 
     // Slot 7 0x4253D0 (gameRelease): 0x53FA60 on the touch device with +0x5C.

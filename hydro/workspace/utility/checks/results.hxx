@@ -331,6 +331,170 @@ inline bool verify_ui_subtitles_combo( )
     return failed == 0;
 }
 
+// verify_ui_settings_combos (batch 24): the other five settings combos - units
+// 0x46D3E0 / 0x46D640, fidelity 0x46DA70 / 0x46DCD0 + the setter 0x4B50A0, flip
+// interval 0x46DE30 / 0x46E050, vibration 0x46CD70 / 0x46CF70, tilt steering
+// 0x46C780 / 0x46C9B0 - through one script per authored instance (oracle case
+// settings_combos): c_ui_combo_box::initialize_settings / apply_settings with the
+// base's tick / SetFocus / events / change / release. The fields from OUR loaded
+// entity (compared with retail's bytes first); the fake world per slot 6 (the
+// settings, g_vumetrosys's two answers, VuGfxSort +0xC) is the case's. Per step:
+// the state +0x2A0..+0x2BB, the choices, the touch entries and +0x1C, the settings
+// fields, VuWater +0x40..+0x47, display +0x11, VuGfxSort +0xC, the hook log.
+inline bool verify_ui_settings_combos( )
+{
+    int failed = 0, steps = 0, logs = 0;
+    for ( std::size_t k = 0; k < g_golden_stc_entities_count; ++k )
+    {
+        const golden_stc_entity_t& ge = g_golden_stc_entities[ k ];
+        const entity_t* e = ui_lv_entity( ge.m_project, ge.m_index );
+        const std::vector< std::uint8_t > raw = ui_unhex( ge.m_fields );
+        std::vector< std::string > log;
+        ui_settings_t settings;
+        ui_settings_platform_t platform;
+        ui_touch_device_t device;
+        ui_combo_box_hooks_t hooks;
+        char line[ 160 ];
+        int sys[ 2 ] = { 0, 0 };
+        const auto broadcast = [ & ]( std::uint32_t hash, const ui_params_t& p )
+        {
+            std::snprintf( line, sizeof line, "broadcast|0x%08X|%d", hash, p.m_size );
+            log.push_back( line );
+        };
+        hooks.m_broadcast = broadcast;
+        platform.m_broadcast = broadcast;
+        platform.m_sys_54 = [ & ] { log.push_back( "sys54" ); return sys[ 0 ] != 0; };
+        platform.m_sys_58 = [ & ] { log.push_back( "sys58" ); return sys[ 1 ] != 0; };
+        platform.m_flip = [ & ]( int v ) { log.push_back( "flip|" + std::to_string( v ) ); };
+        platform.m_flush = [ & ]
+        {
+            log.push_back( "gfx3C|0x5A5A0001|0xFFFFFFFF" );   // the case's +0xA0 handle, -1
+            log.push_back( "d3d30" );
+            log.push_back( "d3dD0|0" );                        // the byte already cleared
+        };
+        platform.m_lens = [ & ]( bool high ) { log.push_back( std::string( "lens|" ) + ( high ? "1" : "0" ) ); };
+        hooks.m_fire = [ & ]( const char* plug, const ui_params_t& p )
+        {
+            log.push_back( std::string( "find|" ) + plug );
+            log.push_back( "fire|" + std::to_string( p.m_size ) );
+        };
+        hooks.m_connections = [ & ]( const char* plug )
+        {
+            log.push_back( std::string( "find|" ) + plug );
+            return std::strcmp( plug, "NavUp" ) == 0 ? ge.m_links[ 0 ] : std::strcmp( plug, "NavDown" ) == 0 ? ge.m_links[ 1 ] : 0;
+        };
+        hooks.m_sound = [ & ]( const char* name ) { log.push_back( std::string( "sound|" ) + name ); };
+        hooks.m_delta = [ ] { return ui_lv_float( g_golden_stc_delta ); };
+        c_ui_combo_box c( 0u, ge.m_vtable, hooks );
+        bool faults = false;
+        hooks.m_apply = [ & ]( std::uint32_t, int ) { faults |= !c.apply_settings( settings, platform ); };
+        bool same = e && e->m_ctor && e->m_ctor->m_vtable == ge.m_vtable && raw.size( ) == 0x260;
+        if ( same )
+        {
+            ui_combo_box_fill( c, *e );
+            same = std::memcmp( c.m_scale, raw.data( ) + 0x08, 8 ) == 0 && std::memcmp( c.m_position, raw.data( ) + 0x10, 8 ) == 0 &&
+                   std::memcmp( c.m_left, raw.data( ) + 0x1F8, 16 ) == 0 && std::memcmp( c.m_right, raw.data( ) + 0x208, 16 ) == 0 &&
+                   std::memcmp( &c.m_scroll_time, raw.data( ) + 0x138, 4 ) == 0;
+        }
+        if ( !same )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "ui settings combos: %s entity %d: OUR loaded fields differ from retail's", ge.m_project, ge.m_index );
+            continue;
+        }
+        for ( int s = 0; s < ge.m_steps; ++s )
+        {
+            const golden_stc_step_t& st = g_golden_stc_steps[ ge.m_first + s ];
+            log.clear( );
+            std::uint32_t ret[ 2 ] = { 0xCCCCCCCCu, 0xCCCCCCCCu };
+            bool known = true;
+            switch ( st.m_op )
+            {
+            case 0:
+            {
+                const golden_stc_state_t& w = g_golden_stc_states[ st.m_state ];
+                settings.m_tilt = w.m_tilt != 0;
+                settings.m_vibration = w.m_vibration != 0;
+                settings.m_units = w.m_units;
+                settings.m_fidelity = w.m_fidelity;
+                settings.m_flip_interval = w.m_flip;
+                sys[ 0 ] = w.m_sys[ 0 ];
+                sys[ 1 ] = w.m_sys[ 1 ];
+                platform.m_gfx_pending = w.m_gfx != 0;
+                known = c.initialize_settings( device, settings, platform );
+                break;
+            }
+            case 1: c.on_tick( ); break;
+            case 2:
+                c.set_focus( );
+                ret[ 0 ] = 0u;
+                break;
+            case 3:
+            {
+                ui_params_t p;
+                p.add_string( st.m_event );
+                c.on_event( p );
+                break;
+            }
+            default: c.release( device ); break;
+            }
+            std::uint8_t state[ 0x1C ] = { };
+            state[ 0 ] = c.m_latched;
+            state[ 1 ] = c.m_left_pressed;
+            state[ 2 ] = c.m_right_pressed;
+            std::memcpy( state + 4, &c.m_current, 4 );
+            std::memcpy( state + 8, &c.m_shown, 4 );
+            state[ 0xC ] = c.m_focused;
+            state[ 0xD ] = c.m_down;
+            state[ 0xE ] = c.m_held;
+            state[ 0xF ] = c.m_up;
+            std::memcpy( state + 0x10, c.m_touch, 8 );
+            std::memcpy( state + 0x18, &c.m_press, 4 );
+            std::uint8_t water[ 8 ] = { };
+            std::memcpy( water, &platform.m_water_scale, 4 );
+            water[ 4 ] = platform.m_water_44;
+            water[ 5 ] = platform.m_water_45;
+            water[ 6 ] = platform.m_water_46;
+            const std::vector< std::uint8_t > want = ui_unhex( st.m_bytes );
+            const std::vector< std::uint8_t > want_water = ui_unhex( st.m_water );
+            bool ok = known && !faults && want.size( ) == sizeof state && std::memcmp( state, want.data( ), sizeof state ) == 0;
+            ok = ok && want_water.size( ) == sizeof water && std::memcmp( water, want_water.data( ), sizeof water ) == 0;
+            ok = ok && platform.m_display_11 == st.m_display && ( platform.m_gfx_pending ? 1 : 0 ) == st.m_gfx;
+            const golden_stc_settings_t& gs = st.m_settings;
+            ok = ok && ( settings.m_tilt ? 1 : 0 ) == gs.m_tilt && ( settings.m_vibration ? 1 : 0 ) == gs.m_vibration && settings.m_units == gs.m_units &&
+                 settings.m_fidelity == gs.m_fidelity && settings.m_flip_interval == gs.m_flip && ( settings.m_subtitles ? 1 : 0 ) == gs.m_subtitles;
+            ok = ok && static_cast< int >( c.m_choice_texts.size( ) ) == st.m_choices && c.m_choices == st.m_choices;
+            for ( int q = 0; ok && q < st.m_choices; ++q )
+            {
+                const golden_sc_choice_t& gc = g_golden_stc_choices[ st.m_first_choice + q ];
+                ok = c.m_choice_texts[ static_cast< std::size_t >( q ) ].first == gc.m_text &&
+                     c.m_choice_texts[ static_cast< std::size_t >( q ) ].second == gc.m_byte;
+            }
+            ok = ok && static_cast< int >( device.m_callbacks.size( ) ) == st.m_entries && device.m_priority == st.m_priority;
+            if ( ok && st.m_entries )
+                ok = device.m_callbacks[ 0 ].first == &c && st.m_entry_offset == 0x5C && device.m_callbacks[ 0 ].second == st.m_entry_priority;
+            ok = ok && ret[ 0 ] == st.m_ret[ 0 ] && static_cast< int >( log.size( ) ) == st.m_logs;
+            for ( int q = 0; ok && q < st.m_logs; ++q )
+            {
+                ok = log[ static_cast< std::size_t >( q ) ] == g_golden_stc_logs[ st.m_first_log + q ];
+                ++logs;
+            }
+            ++steps;
+            if ( !ok && ++failed <= 8 )
+                LOG_ERROR( "ui settings combos: %s entity %d (vtable 0x%X) step %d (op %d): the state / choices / settings / world / log differ (log %d, retail %d)",
+                    ge.m_project, ge.m_index, ge.m_vtable, s, st.m_op, static_cast< int >( log.size( ) ), st.m_logs );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_combo_box initialize_settings / apply_settings (+ ui_settings_set_fidelity) match retail's settings combos (units 0x46D3E0 / "
+                     "0x46D640, fidelity 0x46DA70 / 0x46DCD0 / 0x4B50A0, flip 0x46DE30 / 0x46E050, vibration 0x46CD70 / 0x46CF70, tilt 0x46C780 / "
+                     "0x46C9B0) on %d entities: %d steps, %d hook calls in order",
+            static_cast< int >( g_golden_stc_entities_count ), steps, logs );
+    else
+        LOG_ERROR( "the UI settings combos FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 // verify_ui_screen_game_init (batch 21): c_ui_binding::project_initialize /
 // project_release on OUR loaded Screens projects (the scripted world, as
 // verify_ui_frames) against retail's 0x500B10 + 0x501260 / 0x500B80 (oracle case
@@ -402,6 +566,16 @@ inline bool verify_ui_screen_game_init( )
         ladder.m_option_db = &option_db;
         ladder.m_total = [ ] { return 0; };
         hooks.m_ladder = &ladder;
+        // batch 24: the other five settings combos' slot 6 run live over the case's settings / g_vumetrosys answers
+        settings.m_tilt = g_golden_sgi_settings.m_tilt != 0;
+        settings.m_vibration = g_golden_sgi_settings.m_vibration != 0;
+        settings.m_units = g_golden_sgi_settings.m_units;
+        settings.m_fidelity = g_golden_sgi_settings.m_fidelity;
+        settings.m_flip_interval = g_golden_sgi_settings.m_flip;
+        ui_settings_platform_t platform;
+        platform.m_sys_54 = [ ] { return g_golden_sgi_settings.m_sys[ 0 ] != 0; };
+        platform.m_sys_58 = [ ] { return g_golden_sgi_settings.m_sys[ 1 ] != 0; };
+        hooks.m_settings_platform = &platform;
         c_ui_binding bind( *root, hooks );
         if ( static_cast< int >( bind.m_bound.size( ) ) != gp.m_count )
         {
@@ -569,7 +743,7 @@ inline bool verify_ui_screen_game_init( )
     }
     if ( failed == 0 )
         LOG_SUCCESS( "c_ui_binding project_initialize / project_release (+ VuUserNextUIAction's Trigger) match retail's 0x500B10 / 0x501260 / "
-                     "0x500B80 (button 0x4426E0 + 0x53FAE0, subtitles 0x46D7A0, 0x4253D0, mini leaderboard 0x47DAB0 / 0x47DB10, leaderboard 0x479C50 / 0x479CF0; 0x470E50) on %d Screens projects: %d phases, %d log "
+                     "0x500B80 (button 0x4426E0 + 0x53FAE0, subtitles 0x46D7A0, the five settings combos' slot 6, 0x4253D0, mini leaderboard 0x47DAB0 / 0x47DB10, leaderboard 0x479C50 / 0x479CF0; 0x470E50) on %d Screens projects: %d phases, %d log "
                      "lines in order (%d slot 6 / 7 entries), %d triggers, the touch device / combos / flags after each",
             static_cast< int >( g_golden_sgi_projects_count ), phases, logs, slots, triggers );
     else
@@ -1161,6 +1335,7 @@ inline bool verify_ui_results_all( )
     ok = verify_ui_leaderboard_tick( ) && ok;
     ok = verify_ui_race_results( ) && ok;
     ok = verify_ui_subtitles_combo( ) && ok;
+    ok = verify_ui_settings_combos( ) && ok;
     ok = verify_ui_screen_game_init( ) && ok;
     ok = verify_ui_mini_board( ) && ok;
     return ok;

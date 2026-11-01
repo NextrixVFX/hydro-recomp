@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <string>
 
 // VuSliderEntity (ctor 0x46E300, vtable 0x73E334 - abstract: slots 12 / 13 the
 // value get / set are _purecall) and its four settings subclasses, transliterated
@@ -58,6 +59,12 @@ struct ui_settings_t
     float m_display = 0.0f;    // +0x40
     float m_display_out = 0.0f;  // g 0x758F94 +0xC
     bool m_subtitles = false;    // +0x5C (VuUISubtitlesSettingEntity slot 12 0x46D9B0)
+    // the other settings combos (chooser.hxx): slots 6 read them, slots 12 write them
+    bool m_tilt = false;               // +0x2E (VuTiltSteeringSettingsEntity 0x46C780 / 0x46C9B0)
+    bool m_vibration = false;          // +0x34 (VuVibrationSettingsEntity 0x46CD70 / 0x46CF70)
+    std::string m_units;               // +0x44 std::string (VuUIUnitsSettingEntity 0x46D3E0 / 0x46D640)
+    std::string m_fidelity;            // +0x60 std::string (VuUIFidelitySettingEntity 0x46DA70 / setter 0x4B50A0)
+    std::int32_t m_flip_interval = 0;  // +0x78 (VuUIFlipIntervalSettingEntity 0x46DE30 / 0x46E050)
 };
 
 struct ui_slider_hooks_t
