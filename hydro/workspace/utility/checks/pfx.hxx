@@ -3,6 +3,7 @@
 #include <workspace/core/world/pfxclass.hxx>
 #include <workspace/core/world/pfxsim.hxx>
 #include <workspace/core/world/pfxload.hxx>
+#include <workspace/core/world/pfxmgr.hxx>
 
 #include <cstring>
 #include <map>
@@ -676,9 +677,147 @@ inline bool verify_pfx_load( )
     return failed == 0 && hook_bad == 0 && lookup_bad == 0;
 }
 
+// VuPfxManager (world/pfxmgr.hxx) against retail (case pfx_manager): init, then 70 planned operations - createEffect
+// (the instance answer planned), the "Final" tick, a release by entry, releaseAll, new instance answers - on scripted
+// instances; after each the manager's words, every entry's words and the hook log (draw add / remove / update, the
+// instance tick / release, the create request) in order. The draw component's +0x30 / +0x40 before its first AABB
+// copy are UNKNOWN (not compared).
+inline bool verify_pfx_manager( )
+{
+    struct script_t
+    {
+        std::vector< std::vector< std::uint32_t > > insts;   // state, count, AABB 8
+        std::uint32_t answer = 0;
+        std::vector< std::uint32_t > log;
+    } s;
+    pfx_manager_ops_t ops;
+    ops.user = &s;
+    static auto name_index = []( const char* p ) -> std::uint32_t {
+        for ( std::uint32_t i = 0; i < sizeof( g_golden_pmg_names ) / sizeof( g_golden_pmg_names[ 0 ] ); ++i )
+            if ( std::strcmp( g_golden_pmg_names[ i ], p ) == 0 )
+                return i;
+        return 0xFFFFu;
+    };
+    ops.create = []( void* u, const char* p ) {
+        script_t& x = *static_cast< script_t* >( u );
+        x.log.insert( x.log.end( ), { 4u, name_index( p ) } );
+        return x.answer;
+    };
+    ops.release = []( void* u, std::uint32_t i ) { static_cast< script_t* >( u )->log.insert( static_cast< script_t* >( u )->log.end( ), { 5u, i - 1u } ); };
+    ops.tick = []( void* u, std::uint32_t i, float dt ) {
+        std::uint32_t b;
+        std::memcpy( &b, &dt, 4 );
+        static_cast< script_t* >( u )->log.insert( static_cast< script_t* >( u )->log.end( ), { 6u, i - 1u, b } );
+    };
+    ops.state = []( void* u, std::uint32_t i ) { return static_cast< script_t* >( u )->insts[ i - 1 ][ 0 ]; };
+    ops.count = []( void* u, std::uint32_t i ) { return static_cast< script_t* >( u )->insts[ i - 1 ][ 1 ]; };
+    ops.aabb = []( void* u, std::uint32_t i ) -> const std::uint32_t* { return static_cast< script_t* >( u )->insts[ i - 1 ].data( ) + 2; };
+    ops.draw_add = []( void* u, int e ) { static_cast< script_t* >( u )->log.insert( static_cast< script_t* >( u )->log.end( ), { 1u, static_cast< std::uint32_t >( e ) } ); };
+    ops.draw_remove = []( void* u, int e ) { static_cast< script_t* >( u )->log.insert( static_cast< script_t* >( u )->log.end( ), { 2u, static_cast< std::uint32_t >( e ) } ); };
+    ops.draw_update = []( void* u, int e ) { static_cast< script_t* >( u )->log.insert( static_cast< script_t* >( u )->log.end( ), { 3u, static_cast< std::uint32_t >( e ) } ); };
+    ops.register_tick = []( void* u ) { static_cast< script_t* >( u )->log.push_back( 0u ); };
+    const unsigned* w = g_golden_pmg_words;
+    std::size_t at = 0;
+    pfx_manager_t m;
+    int failed = 0, compared = 0;
+    const auto ix = []( int e ) { return e < 0 ? 0xFFFFFFFEu : static_cast< std::uint32_t >( e ); };
+    auto check_state = [&]( const char* what, int step ) {
+        const std::uint32_t head[ 12 ] = { 0u, m.capacity, 0u, m.mask, m.bits, m.serial_cap, ix( m.free_first ), ix( m.free_last ),
+            m.free_count, ix( m.active_first ), ix( m.active_last ), m.active_count };
+        int bad = 0;
+        for ( int k = 0; k < 12; ++k, ++compared )
+            bad += head[ k ] != w[ at + k ];
+        at += 12;
+        for ( const pfx_manager_entry_t& x : m.entries )
+        {
+            const std::uint32_t ours[ 16 ] = { x.flags, ix( x.next ), ix( x.prev ), x.instance ? x.instance - 1u : 0xFFFFFFFFu, x.index, x.serial,
+                static_cast< std::uint32_t >( x.reflect ) | ( static_cast< std::uint32_t >( x.b1d ) << 8 ) |
+                    ( static_cast< std::uint32_t >( x.registered ) << 16 ) | ( static_cast< std::uint32_t >( x.b1f ) << 24 ),
+                x.w20, x.aabb[ 0 ], x.aabb[ 1 ], x.aabb[ 2 ], x.aabb[ 3 ], x.aabb[ 4 ], x.aabb[ 5 ], x.aabb[ 6 ], x.aabb[ 7 ] };
+            for ( int k = 0; k < 16; ++k )
+            {
+                if ( !x.aabb_known && ( k == 11 || k == 15 ) )
+                    continue;   // UNKNOWN component +0x30 / +0x40
+                bad += ours[ k ] != w[ at + k ];
+                ++compared;
+            }
+            at += 16;
+        }
+        const std::uint32_t n = w[ at++ ];
+        std::vector< std::uint32_t > want( w + at, w + at );
+        for ( std::uint32_t k = 0; k < n; ++k )
+        {
+            const std::uint32_t code = w[ at++ ];
+            want.push_back( code );
+            const int args = code == 0 ? 0 : code == 6 ? 2 : 1;
+            for ( int j = 0; j < args; ++j )
+                want.push_back( w[ at++ ] );
+        }
+        bad += want != s.log;
+        ++compared;
+        if ( bad )
+        {
+            if ( failed < 6 )
+                LOG_ERROR( "pfx_manager: %s (step %d) differs from retail (%d)", what, step, bad );
+            ++failed;
+        }
+    };
+    pfx_manager_init( m, ops );
+    check_state( "init", -1 );
+    const std::uint32_t nops = w[ at++ ];
+    for ( std::uint32_t i = 0; i < nops; ++i )
+    {
+        s.log.clear( );
+        const std::uint32_t code = w[ at++ ];
+        if ( code == 0 )
+        {
+            const std::uint32_t name = w[ at++ ], answer = w[ at++ ], ret = w[ at++ ];
+            s.answer = 0u;
+            if ( answer != 0xFFFFFFFFu )
+            {
+                s.insts.emplace_back( w + at, w + at + 10 );
+                at += 10;
+                s.answer = answer + 1u;
+            }
+            const int e = pfx_manager_create( m, g_golden_pmg_names[ name ], ops );
+            failed += ix( e ) != ret ? 1 : 0;
+        }
+        else if ( code == 1 )
+        {
+            float dt;
+            std::memcpy( &dt, &w[ at++ ], 4 );
+            pfx_manager_tick( m, dt, ops );
+        }
+        else if ( code == 2 )
+            pfx_manager_release( m, static_cast< int >( w[ at++ ] ), ops );
+        else if ( code == 3 )
+            pfx_manager_release_all( m, ops );
+        else if ( code == 4 )
+            for ( auto& inst : s.insts )
+            {
+                inst.assign( w + at, w + at + 10 );
+                at += 10;
+            }
+        check_state( "operation", static_cast< int >( i ) );
+    }
+    if ( at != g_golden_pmg_size )
+    {
+        LOG_ERROR( "pfx_manager: golden layout read %d of %d words", static_cast< int >( at ), static_cast< int >( g_golden_pmg_size ) );
+        return false;
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuPfxManager matches retail's 0x52B7B0 / 0x52BCD0 / 0x52BBF0 / 0x52BC30 / 0x52BD50 / 0x52BB60 over %d operations: "
+                     "%d words and hook logs exact",
+            static_cast< int >( nops ), compared );
+    else
+        LOG_ERROR( "pfx_manager FAILED %d of %d steps", failed, static_cast< int >( nops ) + 1 );
+    return failed == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_pfx_manager( ) && ok;
     ok = verify_pfx_load( ) && ok;
     ok = verify_water_types( ) && ok;
     ok = verify_pfx_run( ) && ok;
