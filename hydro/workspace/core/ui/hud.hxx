@@ -42,6 +42,25 @@ struct ui_hud_boat_t
     std::uint8_t m_byte_812 = 0;      // +812 (the speedometer's boost-meter rate)
 };
 
+// The element's fields straight from a boat's 0x520 VuBoatEntity image (world
+// rules.hxx keeps them in race_rules_boat_t::boat): +0x4AC (1196) lap, +0x4B0 /
+// +0x4B4 / +0x4B8 (1200 / 1204 / 1208) the lap / race / best-lap times, +0x4CC
+// (1228) place, +0x4D4 (1236), +0x51C (1308) wrong way, +0x32C (812) - the
+// offsets 0x423F40 / 0x42BA00 read, nothing else.
+inline ui_hud_boat_t ui_hud_boat_of( const std::uint8_t* image )
+{
+    ui_hud_boat_t b;
+    std::memcpy( &b.m_lap, image + 1196, 4 );
+    std::memcpy( &b.m_time_1200, image + 1200, 4 );
+    std::memcpy( &b.m_time_1204, image + 1204, 4 );
+    std::memcpy( &b.m_time_1208, image + 1208, 4 );
+    std::memcpy( &b.m_place, image + 1228, 4 );
+    std::memcpy( &b.m_laps, image + 1236, 4 );
+    std::memcpy( &b.m_wrong_way, image + 1308, 4 );
+    b.m_byte_812 = image[ 812 ];
+    return b;
+}
+
 struct ui_hud_world_t
 {
     bool m_manager = false;                      // g_vu_boat_manager 0x758FB8 != 0
