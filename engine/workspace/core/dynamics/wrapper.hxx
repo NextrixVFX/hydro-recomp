@@ -80,7 +80,7 @@ struct vu_dynamics_wrapper_t
 };
 
 // manager.hxx's 0x4F8900 bound to this object: retail calls the wait and then
-// clears +0xD whatever it answered, so the adapter reports success.
+// clears +0xD whatever it answered (vu_dynamics_sync ignores the answer).
 inline void vu_dynamics_wrapper_bind( vu_dynamics_wrapper_t& w )
 {
     w.base.hooks.user = &w;

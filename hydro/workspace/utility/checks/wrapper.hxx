@@ -731,6 +731,45 @@ inline bool verify_collision_scrape( )
         LOG_ERROR( "collision_scrape FAILED %d", bad );
     return bad == 0;
 }
+// VuDynamicsImpl slot 25 0x4F8900 (engine dynamics/manager.hxx vu_dynamics_sync) against retail (case dynamics_sync): the
+// wait's calls, +0xD after - cleared whatever the wait answered - and the answer true.
+inline bool verify_dynamics_sync( )
+{
+    const unsigned* s = g_golden_dsy_words;
+    const unsigned n = *s++;
+    int bad = 0;
+    for ( unsigned i = 0; i < n; ++i )
+    {
+        struct log_t
+        {
+            unsigned answer = 0;
+            std::vector< unsigned > calls;
+        } L;
+        vu_dynamics_t d{ };
+        d.pending = static_cast< std::uint8_t >( s[ 0 ] );
+        L.answer = s[ 1 ];
+        d.thread = s[ 2 ];
+        d.hooks.user = &L;
+        d.hooks.wait = []( void* u, std::uint32_t handle, std::int32_t timeout ) {
+            log_t& l = *static_cast< log_t* >( u );
+            l.calls.push_back( handle );
+            l.calls.push_back( static_cast< unsigned >( timeout ) );
+            return l.answer != 0u;
+        };
+        const bool made = vu_dynamics_sync( d );
+        const unsigned nc = s[ 3 ];
+        s += 4;
+        bad += L.calls != std::vector< unsigned >( s, s + 2 * nc );
+        s += 2 * nc;
+        bad += ( d.pending != s[ 0 ] ) + ( s[ 1 ] != 1u ) + !made;
+        s += 2;
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "vu_dynamics_sync matches VuDynamicsImpl slot 25 0x4F8900 on %u vectors (+0xD cleared whatever the wait answers)", n );
+    else
+        LOG_ERROR( "dynamics_sync FAILED %d", bad );
+    return bad == 0;
+}
 // VuCollisionManager's ctor 0x4ACDF0 / init 0x4AD110 (world/collide.hxx collision_manager_construct / _init, the loads 0x4AD690)
 // against retail (case collision_init) on the pack's SurfaceTableDB, with boat/surface.hxx's table built from SurfaceDB.
 inline bool verify_collision_init( )
