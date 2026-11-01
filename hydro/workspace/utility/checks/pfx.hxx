@@ -2584,9 +2584,32 @@ inline bool verify_pfx_entity_draw( )
         LOG_ERROR( "pfx_entity_draw FAILED %d of %u", bad, n );
     return bad == 0;
 }
+// pfx_sort_layer (world/pfxclass.hxx) against the layer the quad / trail renderers 0x58BD60 / 0x58D030 load for every
+// authored (Blend Mode, Water Interaction) pair (case pfx_sort_layers).
+inline bool verify_pfx_sort_layers( )
+{
+    int bad = 0;
+    for ( unsigned i = 0; i < g_golden_psl_count; ++i )
+    {
+        const unsigned* v = g_golden_psl_words + 4 * i;
+        if ( pfx_sort_layer( v[ 1 ], v[ 2 ] ) != v[ 3 ] )
+        {
+            ++bad;
+            LOG_ERROR( "pfx_sort_layers: 0x%X blend %u water %u: ours %u, retail %u", v[ 0 ], v[ 1 ], v[ 2 ], pfx_sort_layer( v[ 1 ], v[ 2 ] ), v[ 3 ] );
+        }
+        bad += pfx_sort_layer_additive( v[ 3 ] ) != ( v[ 1 ] == 0u );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "pfx_sort_layer matches the quad / trail renderers' sort layer on %u (blend, water) pairs", g_golden_psl_count );
+    else
+        LOG_ERROR( "pfx_sort_layers FAILED %d", bad );
+    return bad == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_pfx_sort_layers( ) && ok;
     ok = verify_pfx_impl_teardown( ) && ok;
     ok = verify_pfx_entity_draw( ) && ok;
     ok = verify_pfx_calls( ) && ok;
