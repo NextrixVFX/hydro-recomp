@@ -252,6 +252,9 @@
     <ClInclude Include="workspace\core\world\drive.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\world\dynamics.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\world\effects.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
