@@ -201,6 +201,9 @@
     <ClInclude Include="workspace\core\ui\bind.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\ui\board.hxx">
+      <Filter>workspace\core\ui</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\ui\button.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
