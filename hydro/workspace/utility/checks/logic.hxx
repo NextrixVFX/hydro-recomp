@@ -177,6 +177,32 @@ inline bool verify_logic_plugs( )
     return bad == 0;
 }
 
+// g_logic_types (world/logic.hxx) against the classes' getType slots run by retail (case logic_types).
+inline bool verify_logic_types( )
+{
+    int bad = 0;
+    const std::size_t n = sizeof( g_logic_types ) / sizeof( g_logic_types[ 0 ] );
+    for ( std::size_t i = 0; i < g_golden_lgt_count; ++i )
+    {
+        const golden_logic_type_t& g = g_golden_lgt[ i ];
+        const logic_type_t* t = nullptr;
+        for ( std::size_t j = 0; j < n; ++j )
+            if ( g_logic_types[ j ].address == g.address )
+                t = &g_logic_types[ j ];
+        if ( t == nullptr || t->descriptor != g.descriptor || std::strcmp( t->chain, g.chain ) != 0 )
+        {
+            ++bad;
+            LOG_ERROR( "logic_types 0x%X: descriptor / chain differ (retail 0x%X %s)", g.address, g.descriptor, g.chain );
+        }
+    }
+    bad += n != g_golden_lgt_count ? 1 : 0;
+    if ( bad == 0 )
+        LOG_SUCCESS( "g_logic_types match the logic / script classes' %d getType slots (descriptor and chain each)", static_cast< int >( n ) );
+    else
+        LOG_ERROR( "logic_types FAILED %d", bad );
+    return bad == 0;
+}
+
 // The game-tier filters (case logic_game): the environment as retail had it - the document parsed by c_reader (= 0x55B560)
 // as gameutil +0x50, the SKU string, the repository's table (a missing hash answers the first entity, as the case's stub
 // did) and the entity / driver words. Compared: the VuRetVal type (the value word is the handler's stale stack), the

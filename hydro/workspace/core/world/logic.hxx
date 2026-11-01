@@ -640,3 +640,42 @@ inline logic_entity_t logic_construct( std::uint32_t vtable )
     e.vtable = vtable;
     return e;
 }
+
+// The classes' getType slots (6 bytes: mov eax, descriptor; ret): the static
+// VuRTTI descriptor (+0 the name, +4 the parent) and the chain it names - the
+// logic classes above, the game filters (with VuIsEventTypeEntity 0x42C7D0),
+// VuGroupEntity, VuControlEntity, VuControlKeyframeEntity (case logic_types).
+struct logic_type_t
+{
+    std::uint32_t address;
+    std::uint32_t descriptor;
+    const char* chain;
+};
+
+inline const logic_type_t g_logic_types[] = {
+    { 0x5DC890u, 0x736C58u, "VuAddIntegerConstantEntity|VuEntity" },
+    { 0x5DCC30u, 0x736C60u, "VuAddIntegersEntity|VuEntity" },
+    { 0x5DD060u, 0x736C68u, "VuSubtractIntegersEntity|VuEntity" },
+    { 0x5DD670u, 0x736C70u, "VuIntegerEntity|VuEntity" },
+    { 0x5DE010u, 0x736C80u, "VuCompareBooleansEntity|VuEntity" },
+    { 0x5DE3C0u, 0x736C88u, "VuCompareIntegersEntity|VuEntity" },
+    { 0x5DE8E0u, 0x736C90u, "VuCompareStringsEntity|VuEntity" },
+    { 0x5E2F30u, 0x736CE8u, "VuSetBooleanEntity|VuEntity" },
+    { 0x5E32B0u, 0x736CF0u, "VuSetIntegerEntity|VuEntity" },
+    { 0x5E3630u, 0x736CF8u, "VuSetStringEntity|VuEntity" },
+    { 0x5DF0B0u, 0x736CA0u, "VuSequencerEntity|VuEntity" },
+    { 0x5E0740u, 0x736CB8u, "VuTriggerArrayEntity|VuEntity" },
+    { 0x5E1050u, 0x736CC8u, "VuRandomTriggerEntity|VuEntity" },
+    { 0x5E1890u, 0x736CD0u, "VuPlatformFilterEntity|VuEntity" },
+    { 0x5E1D80u, 0x736CD8u, "VuBuildFilterEntity|VuEntity" },
+    { 0x5E2130u, 0x736CE0u, "VuSwitchEntity|VuEntity" },
+    { 0x5E4B40u, 0x736D20u, "VuCounterEntity|VuEntity" },
+    { 0x5E5180u, 0x736D28u, "VuStringEntity|VuEntity" },
+    { 0x42D810u, 0x736338u, "VuIsTegraEntity|VuEntity" },
+    { 0x42CCE0u, 0x736320u, "VuIsSkuEntity|VuEntity" },
+    { 0x42D150u, 0x736328u, "VuHumanFilterEntity|VuEntity" },
+    { 0x42C7D0u, 0x736318u, "VuIsEventTypeEntity|VuEntity" },
+    { 0x5F05A0u, 0x736DB8u, "VuGroupEntity|VuEntity" },
+    { 0x5CCA40u, 0x736B90u, "VuControlEntity|VuEntity" },
+    { 0x5CC700u, 0x736B88u, "VuControlKeyframeEntity|VuEntity" },
+};
