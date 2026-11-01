@@ -279,6 +279,12 @@ inline bool c_world::front_end_defaults( const std::string& mode, const std::str
     env.boat_db = dbs.boat_db;
     env.track_db = dbs.track_db;
     env.random = &m_vurandom;
+    // VuStringDBImpl's getString (g 0x759078 slot 6 0x53B830): world/strings.hxx on the world's string DB (case string_db)
+    // - the race builder 0x4C0A50 names each AI driver by "AI_Name<n>" through it.
+    env.string_db = [ this ]( const char* id ) -> std::string {
+        string_db_ready( );
+        return string_db_get( m_string_db, id ? id : "" );
+    };
     ui_game_config_t built;
     game_data = ui_front_end_game_data_root( root, env, &built );
     if ( !built.built )
