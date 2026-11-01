@@ -1537,8 +1537,9 @@ inline bool verify_destroyed_event( )
     return false;
 }
 // verify_bt_teardown (boat batch 18): engine collision/teardown.hxx against
-// cases/boat.py bt_teardown - the eight scalar deleting dtors 0x56D290 /
-// 0x5B53E0 / 0x54C0C0 / 0x56DD30 / 0x56FB80 / 0x624580 / 0x6000F0 / 0x56CCD0 run whole on fake objects in one arena: the
+// cases/boat.py bt_teardown - the twelve scalar deleting dtors 0x56D290 /
+// 0x5B53E0 / 0x54C0C0 / 0x56DD30 / 0x56FB80 / 0x624580 / 0x6000F0 / 0x56CCD0 /
+// 0x586320 / 0x43D5E0 / 0x5471A0 / 0x6060A0 run whole on fake objects in one arena: the
 // arena after, gNumAlignedFree, the frees, the deletes, the virtual calls.
 inline bool verify_bt_teardown( )
 {
@@ -1632,8 +1633,15 @@ inline bool verify_bt_teardown( )
         void ( *const inners[ 8 ] )( const bt_mem_t&, std::uint32_t ) = { bt_dispatcher_destroy, bt_convex_polyhedron_destroy, bt_collision_world_destroy,
             bt_dbvt_broadphase_destroy, bt_sequential_solver_destroy, bt_island_manager_destroy, bt_dynamics_world_destroy,
             bt_collision_configuration_destroy };
-        void ( *inner )( const bt_mem_t&, std::uint32_t ) = inners[ ( kind - 1 ) & 7 ];
-        const std::uint32_t r = bt_deleting( m, self, flags, inner );
+        std::uint32_t r;
+        if ( kind == 9 )
+            r = bt_quantized_bvh_delete( m, self, flags );
+        else if ( kind == 10 || kind == 11 )
+            r = bt_aligned_base_delete( m, self, flags, kind == 10 ? 0x74CF98u : 0x74DEBCu );
+        else if ( kind == 12 )
+            r = bt_dynamics_world_base_delete( m, self, flags );
+        else
+            r = bt_deleting( m, self, flags, inners[ ( kind - 1 ) & 7 ] );
         frees += static_cast< int >( nf );
         calls += static_cast< int >( x.nv );
         const bool same = !x.outside && !x.vbad && x.at == x.nv && r == eax && counter == c1 && x.frees == want_frees &&
@@ -1644,10 +1652,107 @@ inline bool verify_bt_teardown( )
     }
     if ( failed == 0 )
     {
-        LOG_SUCCESS( "the eight Bullet teardown dtors (0x56D290 .. 0x56CCD0, collision/teardown.hxx) match retail: %u calls, "
+        LOG_SUCCESS( "the twelve Bullet teardown dtors (0x56D290 .. 0x6060A0, collision/teardown.hxx) match retail: %u calls, "
                      "%d frees, %d virtual calls", n, frees, calls );
         return true;
     }
     LOG_ERROR( "bt_teardown FAILED %d of %u", failed, n );
+    return false;
+}
+// verify_bt_misc (boat batch 18): the small rows of engine
+// collision/teardown.hxx (0x56C270, 0x552540, 0x5B80E0, 0x5AF690, 0x43D5B0,
+// 0x54FE50) against cases/boat.py bt_misc: eax, the arena after, the virtual
+// calls in order (each answered with retail's logged eax).
+inline bool verify_bt_misc( )
+{
+    struct arena_t
+    {
+        std::uint32_t base = 0;
+        std::vector< std::uint8_t > bytes;
+        bool bad = false;
+        const unsigned* vcalls = nullptr;
+        unsigned nv = 0, at = 0;
+        std::uint8_t* p( std::uint32_t a, unsigned n )
+        {
+            if ( a < base || a + n > base + bytes.size( ) )
+            {
+                bad = true;
+                return nullptr;
+            }
+            return bytes.data( ) + ( a - base );
+        }
+    };
+    const unsigned* g = g_golden_bt_misc_words;
+    const unsigned n = *g++;
+    int failed = 0, calls = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = *g++, address = *g++, self = *g++, base = *g++, eax = *g++, na = *g++;
+        const unsigned* args = g;
+        g += na;
+        arena_t x;
+        x.base = base;
+        x.nv = *g++;
+        x.vcalls = g;
+        for ( unsigned k = 0; k < x.nv; ++k )
+            g += 4 + g[ 2 ];
+        const unsigned nch = *g++;
+        const unsigned* changed = g;
+        g += 2 * nch;
+        const unsigned nw = *g++;
+        x.bytes.assign( reinterpret_cast< const std::uint8_t* >( g ), reinterpret_cast< const std::uint8_t* >( g + nw ) );
+        g += nw;
+        std::vector< std::uint8_t > want( x.bytes );
+        for ( unsigned k = 0; k < nch; ++k )
+            std::memcpy( want.data( ) + 4 * changed[ 2 * k ], &changed[ 2 * k + 1 ], 4 );
+        bt_mem_t m;
+        m.user = &x;
+        m.rd = []( void* u, std::uint32_t a ) -> std::uint32_t {
+            std::uint32_t w = 0;
+            if ( std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 4 ) )
+                std::memcpy( &w, q, 4 );
+            return w;
+        };
+        m.wr = []( void* u, std::uint32_t a, std::uint32_t w ) {
+            if ( std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 4 ) )
+                std::memcpy( q, &w, 4 );
+        };
+        m.vcall = []( void* u, std::uint32_t s, std::uint32_t off, const std::uint32_t* a, int count ) -> std::uint32_t {
+            arena_t& y = *static_cast< arena_t* >( u );
+            if ( y.at >= y.nv )
+            {
+                y.bad = true;
+                return 0;
+            }
+            const unsigned* c = y.vcalls;
+            for ( unsigned k = 0; k < y.at; ++k )
+                c += 4 + c[ 2 ];
+            ++y.at;
+            y.bad = y.bad || c[ 0 ] != s || c[ 1 ] != off || c[ 2 ] != static_cast< unsigned >( count );
+            for ( int k = 0; k < count && !y.bad; ++k )
+                y.bad = c[ 3 + k ] != a[ k ];
+            return c[ 3 + c[ 2 ] ];
+        };
+        std::uint32_t r = 0;
+        switch ( kind )
+        {
+            case 1: r = bt_empty_algorithm_create( m, args[ 0 ] ); break;
+            case 2: r = bt_convex_result_needs_collision( m, self, args[ 0 ] ) ? 1u : 0u; break;
+            case 3: bt_zero_inertia( m, args[ 1 ] ); r = eax; break;   // void: eax is not an answer
+            case 4: r = bt_support_forward( m, self, args[ 0 ], args[ 1 ] ); break;
+            case 5: r = bt_forward_43D5B0( m, self, args, static_cast< int >( na ) ); break;
+            default: r = bt_forward_54FE50( m, self, args, static_cast< int >( na ) ); break;
+        }
+        calls += static_cast< int >( x.nv );
+        if ( ( x.bad || x.at != x.nv || r != eax || x.bytes != want ) && ++failed <= 4 )
+            LOG_ERROR( "bt_misc %u (0x%06X): eax 0x%08X (retail 0x%08X), arena %s", v, address, r, eax, x.bytes == want ? "same" : "differs" );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the small Bullet rows 0x56C270 / 0x552540 / 0x5B80E0 / 0x5AF690 / 0x43D5B0 / 0x54FE50 (collision/teardown.hxx) match "
+                     "retail: %u calls, %d virtual calls", n, calls );
+        return true;
+    }
+    LOG_ERROR( "bt_misc FAILED %d of %u", failed, n );
     return false;
 }

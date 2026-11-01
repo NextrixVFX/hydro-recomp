@@ -308,3 +308,104 @@ inline void bt_collision_configuration_destroy( const bt_mem_t& m, std::uint32_t
     bt_owned_destroy( m, self, 0x24 );
     m.wr( m.user, self, 0x74F684u );
 }
+
+// btQuantizedBvh::~btQuantizedBvh 0x586470: [this] = 0x74FED4; the five
+// arrays from the last member - +0xA0, +0x88, +0x74, +0x60, +0x4C.
+inline void bt_quantized_bvh_destroy( const bt_mem_t& m, std::uint32_t self )
+{
+    m.wr( m.user, self, 0x74FED4u );
+    for ( std::uint32_t at : { 0xA0u, 0x88u, 0x74u, 0x60u, 0x4Cu } )
+        bt_array_clear( m, self + at );
+}
+
+// The scalar deleting dtors of the classes with Bullet's aligned operator
+// delete (BT_DECLARE_ALIGNED_ALLOCATOR: btAlignedFree, not the CRT's):
+// 0x586320 (btQuantizedBvh: 0x586470, then with flags & 1 and this non-null
+// the free); 0x43D5E0 (btCollisionShape's vtable 0x74CF98 for the
+// sphere / cylinder rows) and 0x5471A0 (btCollisionObject 0x74DEBC): the base
+// vtable stored, then with flags & 1 the free (no null test). eax = this.
+inline std::uint32_t bt_quantized_bvh_delete( const bt_mem_t& m, std::uint32_t self, std::uint32_t flags )
+{
+    bt_quantized_bvh_destroy( m, self );
+    if ( ( flags & 1u ) != 0 && self != 0 )
+        bt_aligned_free( m, self );
+    return self;
+}
+
+inline std::uint32_t bt_aligned_base_delete( const bt_mem_t& m, std::uint32_t self, std::uint32_t flags, std::uint32_t vtable )
+{
+    m.wr( m.user, self, vtable );
+    if ( ( flags & 1u ) != 0 )
+        bt_aligned_free( m, self );
+    return self;
+}
+
+// btDynamicsWorld's scalar deleting dtor 0x6060A0: [this] = 0x757B44,
+// btCollisionWorld's 0x54C0F0, operator delete (the CRT import) with
+// flags & 1; eax = this.
+inline std::uint32_t bt_dynamics_world_base_delete( const bt_mem_t& m, std::uint32_t self, std::uint32_t flags )
+{
+    m.wr( m.user, self, 0x757B44u );
+    bt_collision_world_destroy( m, self );
+    if ( ( flags & 1u ) != 0 && m.release )
+        m.release( m.user, self );
+    return self;
+}
+
+// btEmptyAlgorithm::CreateFunc::CreateCollisionAlgorithm 0x56C270 (thiscall;
+// ci, body0, body1; retn 0Ch): ci.m_dispatcher1's (+0) vt+0x34
+// allocateCollisionAlgorithm( 8 ); a block -> [block] = btCollisionAlgorithm's
+// 0x7573CC, +4 = the dispatcher, [block] = btEmptyAlgorithm's 0x757394.
+// Answers the block (0 when none).
+inline std::uint32_t bt_empty_algorithm_create( const bt_mem_t& m, std::uint32_t ci )
+{
+    const std::uint32_t eight = 8;
+    const std::uint32_t block = m.vcall( m.user, m.rd( m.user, ci ), 0x34, &eight, 1 );
+    if ( block == 0 )
+        return 0;
+    m.wr( m.user, block, 0x7573CCu );
+    m.wr( m.user, block + 4, m.rd( m.user, ci ) );
+    m.wr( m.user, block, 0x757394u );
+    return block;
+}
+
+// ClosestConvexResultCallback's needsCollision 0x552540 (ConvexResultCallback
+// slot 1; thiscall; proxy; retn 4): the proxy's group (+4, u16) against this
+// one's mask (+0xA), then this one's group (+8) against the proxy's mask (+6).
+inline bool bt_convex_result_needs_collision( const bt_mem_t& m, std::uint32_t self, std::uint32_t proxy )
+{
+    const std::uint32_t pw = m.rd( m.user, proxy + 4 ), sw = m.rd( m.user, self + 8 );
+    if ( ( ( pw & 0xFFFFu ) & ( sw >> 16 ) ) == 0 )
+        return false;
+    return ( ( pw >> 16 ) & ( sw & 0xFFFFu ) ) != 0;
+}
+
+// calculateLocalInertia of the triangle / mesh shapes 0x5B80E0 (slot 7;
+// thiscall; mass, inertia*; retn 8): the four words of *inertia = 0.
+inline void bt_zero_inertia( const bt_mem_t& m, std::uint32_t inertia )
+{
+    for ( std::uint32_t k = 0; k < 16; k += 4 )
+        m.wr( m.user, inertia + k, 0 );
+}
+
+// btBvhTriangleMeshShape slot 16 0x5AF690 (thiscall; out, direction; retn 8):
+// this one's vt+0x3C( out, direction ); answers out.
+inline std::uint32_t bt_support_forward( const bt_mem_t& m, std::uint32_t self, std::uint32_t out, std::uint32_t direction )
+{
+    const std::uint32_t a[ 2 ] = { out, direction };
+    m.vcall( m.user, self, 0x3C, a, 2 );
+    return out;
+}
+
+// The tail-jump forwarders: 0x43D5B0 (btTriangleShape slot 1: jmp vt+0x48 on
+// this, the caller's arguments untouched) and 0x54FE50 (DebugDrawcallback's
+// adjustor thunk: this - 4, then jmp vt+4). The forwarded call answers.
+inline std::uint32_t bt_forward_43D5B0( const bt_mem_t& m, std::uint32_t self, const std::uint32_t* args, int count )
+{
+    return m.vcall( m.user, self, 0x48, args, count );
+}
+
+inline std::uint32_t bt_forward_54FE50( const bt_mem_t& m, std::uint32_t self, const std::uint32_t* args, int count )
+{
+    return m.vcall( m.user, self - 4, 4, args, count );
+}
