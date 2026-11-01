@@ -70,6 +70,195 @@ inline std::vector< image_object_t > ai_driver_construct( )
     // (slot 6 0x4FDB70 returns the static null container), so never.
     return g;
 }
+// postLoad 0x41CFF0's other Driver Types (0x404AC0's type index picks the
+// human for the local player's boat; then the strings "AI", "UI", "Nuisance",
+// "Ghost"). Each is retail's operator new block, a pre-step, postLoad's zero
+// stores and the ctor (thiscall, the boat; retn 4), recreated as the object
+// graph it leaves (objects in retail's allocation order; AI_DRIVER_REF_BOAT
+// for the boat).
+
+// "UI": as "AI" (0x41D2E0, +0x8C / +0xBC = 0, VuAiDriver's ctor 0x40B690),
+// then postLoad writes the VuAiUiDriver vtable 0x737CDC. 0xD4.
+inline std::vector< image_object_t > ui_driver_construct( )
+{
+    std::vector< image_object_t > g = ai_driver_construct( );
+    image_put32( g[ 0 ].image.data( ), 0x00, 0x00737CDCu );
+    return g;
+}
+
+// "Nuisance" (0x104): 0x41D280 (0x41D2E0, then +0x8C, +0xBC, +0xE8, +0xEC,
+// +0xF0, +0xF4, +0xFC = 0; ret 4) and VuAiNuisanceDriver's ctor 0x40D880:
+// 0x40B690, the vtable 0x737C4C, the weak reference at +0xE4 (vtable
+// 0x737C44 VuWeakRef<VuBoatEntity>; +0xE8 / +0xEC its links, +0xF0 the boat
+// it refers to, all 0) and its slot 0 0x40E4D0 (the release - nothing with
+// +0xF0 0), +0xF4 0 (the target's sector), the word +0xF8 = 1 (+0xF8 1, +0xF9
+// 0), +0xFC 0 (the audio line's event), +0x100 -1 (the last line). +0xD4 ..
+// +0xE3 are never written (the allocator's).
+inline std::vector< image_object_t > nuisance_driver_construct( )
+{
+    std::vector< image_object_t > g = ai_driver_construct( );
+    g[ 0 ].image.resize( 0x104, 0 );
+    std::uint8_t* b = g[ 0 ].image.data( );
+    for ( int at : { 0xE8, 0xEC, 0xF0, 0xF4, 0xFC } )
+        image_put32( b, at, 0 );
+    image_put32( b, 0x00, 0x00737C4Cu );
+    image_put32( b, 0xE4, 0x00737C44u );
+    b[ 0xF8 ] = 1;
+    b[ 0xF9 ] = 0;
+    image_put32( b, 0x100, 0xFFFFFFFFu );
+    return g;
+}
+
+// VuDriverEntity's part of the human / ghost ctors (0x40ED50 / 0x40EB50, after
+// postLoad's 0x41D2E0 and its own zero store): VuEntity 0x500710(this, 0) -
+// objects 1-5 - then +0x5C the boat, the empty Name string at +0x60, +0x78 -1,
+// +0x7C 0.
+inline std::vector< image_object_t > driver_entity_construct( std::size_t size, int zero_at )
+{
+    std::vector< image_object_t > g( 1 );
+    g[ 0 ].image.assign( size, 0 );
+    std::uint8_t* b = g[ 0 ].image.data( );
+    for ( int at : { 0x08, 0x0C, 0x34, 0x38, 0x3C, 0x40, 0x44, 0x48, 0x4C, 0x50, 0x54, 0x58, 0x5C, 0x7C } )
+        image_put32( b, at, 0 );
+    image_put32( b, zero_at, 0 );
+    const std::vector< image_object_t > entity = vu_entity( 0 );
+    std::memcpy( b, entity[ 0 ].image.data( ), 0x5C );
+    g[ 0 ].refs = entity[ 0 ].refs;
+    for ( std::size_t k = 1; k < entity.size( ); ++k )
+        g.push_back( entity[ k ] );
+    b = g[ 0 ].image.data( );
+    g[ 0 ].refs.push_back( { 0x5C, AI_DRIVER_REF_BOAT, 0 } );
+    image_empty_string( b, 0x60 );
+    image_put32( b, 0x78, 0xFFFFFFFFu );
+    image_put32( b, 0x7C, 0 );
+    return g;
+}
+
+// "Ghost" (0x84): 0x41D2E0, +0x80 = 0, VuGhostDriver's ctor 0x40EB50: the
+// VuDriverEntity part, the vtable 0x737DDC, +0x80 (the sector) 0.
+inline std::vector< image_object_t > ghost_driver_construct( )
+{
+    std::vector< image_object_t > g = driver_entity_construct( 0x84, 0x80 );
+    image_put32( g[ 0 ].image.data( ), 0x00, 0x00737DDCu );
+    image_put32( g[ 0 ].image.data( ), 0x80, 0 );
+    return g;
+}
+
+extern "C" void x87_sincos( float x, float* c, float* s );
+
+// One DB scalar into a float lane, as the human ctor reads it: an int (tag 1)
+// through cvtdq2ps, a float (tag 2) as is, an int64 (tag 7) through fild /
+// fstp; anything else leaves the lane (false).
+inline bool driver_db_float( std::uint8_t* image, int at, const value_t& v )
+{
+    float lane;
+    if ( v.tag == 1 )
+        lane = static_cast< float >( v.integer );
+    else if ( v.tag == 2 )
+        lane = v.real;
+    else if ( v.tag == 7 )
+        lane = static_cast< float >( v.int64 );
+    else
+        return false;
+    std::memcpy( image + at, &lane, 4 );
+    return true;
+}
+
+inline std::uint32_t driver_fnv( const char* name )
+{
+    std::uint32_t h = 0x811C9DC5u;
+    for ( ; *name; ++name )
+        h = ( h ^ static_cast< unsigned char >( *name ) ) * 0x1000193u;
+    return h;
+}
+
+// The human's graph: the objects, and the one method its ctor registers
+// through 0x5156E0 (on +0xC, the entity's method map, and g_vueventmanager's
+// tree): (FNV-1a hash of the name, the delegate object). The map / tree
+// nodes and 0x4FBDF0's key-string temporaries retail allocates are not
+// objects here.
+struct human_driver_graph_t
+{
+    std::vector< image_object_t > objects;
+    std::vector< std::pair< std::uint32_t, int > > methods;
+};
+
+// "Human" (0xD0): 0x41D2E0, +0x84 = 0, VuHumanDriver's ctor 0x40ED50. The
+// VuDriverEntity part; +0x80 the explosion listener's vtable (0x737F20 then
+// VuHumanDriver's 0x737F30), +0 0x737F44; +0x84 / +0x88 0, +0x8C 0, +0x90 10,
+// +0x94 30, +0x98 1, +0x9C .. +0xB4 0, the word +0xB8 = 0x100 (+0xB8 0, +0xB9
+// 1), +0xBA 0, +0xBC .. +0xCC 0. The delegate VuMethod1<VuHumanDriver, void,
+// VuParams const&> (vtable 0x737F10, the driver, 0x40F680, 0) registered as
+// "OnStartLightsOut". Then ConstantDB's ([[g_vugameutil 0x758FF8 + 4] +
+// 0x58]) VuDBAsset: AccelerometerSteeringExtents [0] / [1] (a list's
+// elements, else the null container) -> +0x90 / +0x94,
+// AccelerometerCameraDamping -> +0x98, GamePadCameraTilt -> +0x9C; HUD's
+// WrongWaySpeedThreshold -> +0xA0 (x 0.44704 when read), WrongWayAngleThreshold
+// -> +0xA4 (when read: x87 fcos of it x pi/180 - this machine's FPU, as
+// x87_sincos's cos), WrongWayInertiaTime -> +0xA8.
+inline human_driver_graph_t human_driver_construct( const value_t& constant_db )
+{
+    human_driver_graph_t h;
+    h.objects = driver_entity_construct( 0xD0, 0x84 );
+    std::vector< image_object_t >& g = h.objects;
+    std::uint8_t* b = g[ 0 ].image.data( );
+    image_put32( b, 0x80, 0x00737F30u );
+    image_put32( b, 0x00, 0x00737F44u );
+    image_put32( b, 0x84, 0 );
+    image_put32( b, 0x88, 0 );
+    b[ 0x8C ] = 0;
+    image_put32( b, 0x90, 0x41200000u );
+    image_put32( b, 0x94, 0x41F00000u );
+    image_put32( b, 0x98, 0x3F800000u );
+    for ( int at = 0x9C; at <= 0xB4; at += 4 )
+        image_put32( b, at, 0 );
+    b[ 0xB8 ] = 0;
+    b[ 0xB9 ] = 1;
+    b[ 0xBA ] = 0;
+    for ( int at = 0xBC; at <= 0xCC; at += 4 )
+        image_put32( b, at, 0 );
+    g.push_back( {} );
+    g.back( ).image.assign( 0x10, 0 );
+    const int delegate = static_cast< int >( g.size( ) ) - 1;
+    image_put32( g.back( ).image.data( ), 0, 0x00737F10u );
+    g.back( ).refs.push_back( { 4, 0, 0 } );
+    image_put32( g.back( ).image.data( ), 8, 0x0040F680u );
+    h.methods.push_back( { driver_fnv( "OnStartLightsOut" ), delegate } );
+    image_put32( g[ 0 ].image.data( ), 16, 1 );   // the method map's size (+0xC's _Mysize)
+    b = g[ 0 ].image.data( );
+    const value_t& db = member( constant_db, "VuDBAsset" );
+    const value_t& extents = member( db, "AccelerometerSteeringExtents" );
+    static const value_t none;
+    const bool list = extents.kind == value_t::kind_t::list;
+    driver_db_float( b, 0x90, list && !extents.list.empty( ) ? extents.list[ 0 ] : none );
+    driver_db_float( b, 0x94, list && extents.list.size( ) > 1 ? extents.list[ 1 ] : none );
+    driver_db_float( b, 0x98, member( db, "AccelerometerCameraDamping" ) );
+    driver_db_float( b, 0x9C, member( db, "GamePadCameraTilt" ) );
+    const value_t& hud = member( db, "HUD" );
+    if ( driver_db_float( b, 0xA0, member( hud, "WrongWaySpeedThreshold" ) ) )
+    {
+        float v;
+        std::memcpy( &v, b + 0xA0, 4 );
+        const std::uint32_t k = 0x3EE4E26Du;   // 0x6F7654
+        float m;
+        std::memcpy( &m, &k, 4 );
+        v *= m;
+        std::memcpy( b + 0xA0, &v, 4 );
+    }
+    if ( driver_db_float( b, 0xA4, member( hud, "WrongWayAngleThreshold" ) ) )
+    {
+        float v, c, s;
+        std::memcpy( &v, b + 0xA4, 4 );
+        const std::uint32_t k = 0x3C8EFA35u;   // 0x6F75DC
+        float m;
+        std::memcpy( &m, &k, 4 );
+        x87_sincos( v * m, &c, &s );
+        std::memcpy( b + 0xA4, &c, 4 );
+    }
+    driver_db_float( b, 0xA8, member( hud, "WrongWayInertiaTime" ) );
+    return h;
+}
+
 // The drivers' load (vtable slot 2, postLoad's driver->load(container
 // ["Driver"]); thiscall, retn 4). VuDriverEntity's 0x40EAC0 (VuHumanDriver /
 // VuGhostDriver): "Name" (tag 4) into the string at +0x60.

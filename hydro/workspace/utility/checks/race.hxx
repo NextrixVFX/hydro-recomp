@@ -6,6 +6,7 @@
 #include <workspace/core/boat/human.hxx>
 #include <workspace/core/boat/pilots.hxx>
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -775,6 +776,95 @@ inline bool verify_ui_tick( )
     return false;
 }
 
+// The Human / UI / Nuisance / Ghost driver constructions (boat/driver.hxx) against retail's postLoad branches
+// (oracle case boat_drivers): every object's size, every written byte, every pointer by what it points at. The
+// human's method-map / event-tree nodes and the DB key temporaries (retail's objects 7..) are not objects of ours:
+// its map head (object 1) is compared by bytes only, and the registration by the map node holding the name's hash
+// and the delegate, and an event-tree node holding the hash.
+inline bool verify_boat_drivers( )
+{
+    const unsigned* cdb = g_golden_vujb_words + g_golden_vujb_offsets[ 0 ];
+    const unsigned char* cdb_raw = reinterpret_cast< const unsigned char* >( cdb + 2 );
+    const value_t constant_db = c_reader( std::vector< std::uint8_t >( cdb_raw, cdb_raw + cdb[ 1 ] ) ).parse( );
+    const human_driver_graph_t human = human_driver_construct( constant_db );
+    const std::vector< image_object_t > mine[ 4 ] = { human.objects, ui_driver_construct( ), nuisance_driver_construct( ), ghost_driver_construct( ) };
+    static const char* names[ 4 ] = { "Human", "UI", "Nuisance", "Ghost" };
+    const unsigned* s = g_golden_boat_drivers_words;
+    const unsigned kinds = *s++;
+    int failed = 0, bytes = 0, objects = 0;
+    auto fail = [ &failed ]( const char* kind, const char* what, int object, int at ) {
+        if ( ++failed <= 8 )
+            LOG_ERROR( "boat_drivers %s: %s at object %d, byte %d", kind, what, object, at );
+    };
+    for ( unsigned kind = 0; kind < kinds && kind < 4; ++kind )
+    {
+        const std::vector< image_object_t >& g = mine[ kind ];
+        const unsigned count = *s++;
+        const bool partial = kind == 0;
+        if ( partial ? count < g.size( ) : count != g.size( ) )
+            fail( names[ kind ], "object count", static_cast< int >( count ), static_cast< int >( g.size( ) ) );
+        bool map_node = false, tree_node = false;
+        for ( unsigned k = 0; k < count; ++k )
+        {
+            const unsigned size = *s++;
+            const unsigned char* want = reinterpret_cast< const unsigned char* >( s );
+            s += ( size + 3 ) / 4;
+            const unsigned char* mask = reinterpret_cast< const unsigned char* >( s );
+            s += ( size + 3 ) / 4;
+            std::vector< image_ref_t > refs( *s++ );
+            for ( auto& r : refs )
+            {
+                r = { static_cast< int >( s[ 0 ] ), s[ 1 ] == 1 ? AI_DRIVER_REF_BOAT : static_cast< int >( s[ 2 ] ), static_cast< int >( s[ 3 ] ) };
+                s += 4;
+            }
+            if ( partial && k >= g.size( ) )
+            {
+                std::uint32_t w[ 6 ] = { };
+                std::memcpy( w, want, size < 24 ? size : 24 );
+                const std::uint32_t hash = human.methods[ 0 ].first;
+                if ( size == 24 && w[ 4 ] == hash )
+                    for ( const auto& r : refs )
+                        map_node = map_node || ( r.slot == 20 && r.object == human.methods[ 0 ].second && r.offset == 0 );
+                if ( size == 20 && w[ 2 ] == hash )
+                    tree_node = true;
+                continue;
+            }
+            ++objects;
+            if ( size != g[ k ].image.size( ) )
+            {
+                fail( names[ kind ], "size", static_cast< int >( k ), static_cast< int >( g[ k ].image.size( ) ) );
+                continue;
+            }
+            for ( unsigned at = 0; at < size; ++at )
+            {
+                if ( !mask[ at ] )
+                    continue;
+                ++bytes;
+                if ( g[ k ].image[ at ] != want[ at ] )
+                    fail( names[ kind ], "byte", static_cast< int >( k ), static_cast< int >( at ) );
+            }
+            if ( partial && k == 1 )
+                continue;   // the map head: its links go to the nodes
+            std::vector< image_ref_t > ours = g[ k ].refs;
+            auto by_slot = []( const image_ref_t& x, const image_ref_t& y ) { return x.slot < y.slot; };
+            std::sort( ours.begin( ), ours.end( ), by_slot );
+            std::sort( refs.begin( ), refs.end( ), by_slot );
+            if ( !( ours == refs ) )
+                fail( names[ kind ], "pointers", static_cast< int >( k ), 0 );
+        }
+        if ( partial && !( map_node && tree_node ) )
+            fail( names[ kind ], "the OnStartLightsOut registration", -1, 0 );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "postLoad's Human 0x40ED50 / UI 0x40B690 + 0x737CDC / Nuisance 0x41D280 + 0x40D880 / Ghost 0x40EB50 drivers match "
+                     "retail: %d objects, %d bytes, every pointer, the human's method registration", objects, bytes );
+        return true;
+    }
+    LOG_ERROR( "boat_drivers FAILED %d checks", failed );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -784,5 +874,6 @@ inline bool verify_race_all( )
     ok = verify_human_tick( ) && ok;
     ok = verify_ghost_tick( ) && ok;
     ok = verify_ui_tick( ) && ok;
+    ok = verify_boat_drivers( ) && ok;
     return ok;
 }
