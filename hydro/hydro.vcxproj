@@ -158,6 +158,7 @@
     <ClInclude Include="workspace\core\ui\combo.hxx" />
     <ClInclude Include="workspace\core\ui\compose.hxx" />
     <ClInclude Include="workspace\core\ui\config.hxx" />
+    <ClInclude Include="workspace\core\ui\controls.hxx" />
     <ClInclude Include="workspace\core\ui\difficulty.hxx" />
     <ClInclude Include="workspace\core\ui\dock.hxx" />
     <ClInclude Include="workspace\core\ui\draw.hxx" />
@@ -176,6 +177,7 @@
     <ClInclude Include="workspace\core\ui\schema.hxx" />
     <ClInclude Include="workspace\core\ui\screen.hxx" />
     <ClInclude Include="workspace\core\ui\select.hxx" />
+    <ClInclude Include="workspace\core\ui\slider.hxx" />
     <ClInclude Include="workspace\core\ui\ticker.hxx" />
     <ClInclude Include="workspace\core\ui\wiring.hxx" />
     <ClInclude Include="workspace\core\world\animate.hxx" />
@@ -227,6 +229,7 @@
     <ClInclude Include="workspace\utility\checks\wake.hxx" />
     <ClInclude Include="workspace\utility\checks\watchers.hxx" />
     <ClInclude Include="workspace\utility\checks\water.hxx" />
+    <ClInclude Include="workspace\utility\checks\widgets.hxx" />
     <ClInclude Include="workspace\utility\checks\world.hxx" />
   </ItemGroup>
   <ItemGroup>
