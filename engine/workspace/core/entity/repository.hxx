@@ -480,6 +480,29 @@ inline bool vu_script_component_dtor( M& m, std::uint32_t c, const vu_dtor_hooks
     return true;
 }
 
+// 0x5042A0 VuScriptComponent slot 8 (thiscall component): the baseline its template-diff save (slot 7 0x504450)
+// compares against - per plug (+0x10 vector) +0x5C = its connection count ((+0x54 - +0x50) sar 2); per ref (+0x1C
+// vector) byte +0x1C = ( +0x18 != 0 ); +0x34 = the count of refs pointing at it ((+0x2C - +0x28) sar 2); +0x38 /
+// +0x3C = +0x4C / +0x50 (the node position), +0x44 = +0x48. Counts signed, re-read each step.
+template < typename M >
+inline void vu_script_component_snapshot( M& m, std::uint32_t c )
+{
+    for ( std::int32_t i = 0; i < ( static_cast< std::int32_t >( m[ c + 0x14 ] - m[ c + 0x10 ] ) >> 2 ); ++i )
+    {
+        const std::uint32_t p = m[ m[ c + 0x10 ] + 4u * static_cast< std::uint32_t >( i ) ];
+        m[ p + 0x5C ] = static_cast< std::uint32_t >( static_cast< std::int32_t >( m[ p + 0x54 ] - m[ p + 0x50 ] ) >> 2 );
+    }
+    for ( std::int32_t i = 0; i < ( static_cast< std::int32_t >( m[ c + 0x20 ] - m[ c + 0x1C ] ) >> 2 ); ++i )
+    {
+        const std::uint32_t r = m[ m[ c + 0x1C ] + 4u * static_cast< std::uint32_t >( i ) ];
+        vu_set_byte( m, r + 0x1C, m[ r + 0x18 ] != 0 ? 1 : 0 );
+    }
+    m[ c + 0x34 ] = static_cast< std::uint32_t >( static_cast< std::int32_t >( m[ c + 0x2C ] - m[ c + 0x28 ] ) >> 2 );
+    m[ c + 0x38 ] = m[ c + 0x4C ];
+    m[ c + 0x3C ] = m[ c + 0x50 ];
+    m[ c + 0x44 ] = m[ c + 0x48 ];
+}
+
 // 0x502340 (thiscall a, b): the connection undone both ways - b erased from a's +0x50 vector, then a from b's, then b
 // from a's again ... until one is not found.
 template < typename M >

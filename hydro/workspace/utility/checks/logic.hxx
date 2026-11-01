@@ -1629,7 +1629,11 @@ inline bool verify_framework_dtors( )
         h.event_remove = [ & ]( std::uint32_t k, std::uint32_t val ) { got.push_back( { 3u, k, val } ); };
         h.instigator_remove = [ & ]( std::uint32_t comp ) { got.push_back( { 4u, 0x30000000u + 0x20C0u, comp } ); };   // the case's g 0x759064
         h.json_clear = [ & ]( std::uint32_t j ) { got.push_back( { 5u, j } ); };
-        const bool ok = vu_framework_delete( m, static_cast< vu_framework_dtor_t >( kind ), self, flags, h );
+        bool ok = true;
+        if ( kind == 11 )   // VuScriptComponent slot 8 0x5042A0 (not a dtor; the case's appended vectors)
+            vu_script_component_snapshot( m, self );
+        else
+            ok = vu_framework_delete( m, static_cast< vu_framework_dtor_t >( kind ), self, flags, h );
         const bool same = ok && m.words == after && got == want && !m.outside;
         if ( !same && bad++ < 6 )
             LOG_ERROR( "framework_dtors vector %u (kind %u): %s, memory %s, calls %s (%u, retail %u)", v, kind, ok ? "ended" : "UNKNOWN",
@@ -1638,7 +1642,7 @@ inline bool verify_framework_dtors( )
     }
     if ( bad == 0 )
         LOG_SUCCESS( "the framework dtors match retail (0x423770 0x4268F0/0x539610 0x50B960/0x50B990 0x531D90/0x531DC0 0x534280/0x5342B0 "
-                     "0x503B70/0x503BA0 0x4052E0/0x502180/0x502340 0x542680/0x5426B0/0x504980 0x4B4330/0x4B4290 0x5EFA30 0x4032A0): %u vectors", n );
+                     "0x503B70/0x503BA0 0x4052E0/0x502180/0x502340 0x542680/0x5426B0/0x504980 0x4B4330/0x4B4290 0x5EFA30 0x4032A0; VuScriptComponent slot 8 0x5042A0): %u vectors", n );
     else
         LOG_ERROR( "framework_dtors FAILED %d", bad );
     return bad == 0;

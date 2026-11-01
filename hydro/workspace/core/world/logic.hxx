@@ -731,6 +731,16 @@ inline const logic_type_t g_logic_types[] = {
     { 0x5F5840u, 0x736E10u, "VuPlayAnimationEntity|VuEntity" },
     { 0x5EF840u, 0x736DA0u, "VuOnProjectInitializedEntity|VuEntity" },
     { 0x423730u, 0x736920u, "VuComponent" },
+    // the framework components' slot 0 (0x736800 is the descriptor script.hxx keys VuScriptComponent by), VuDelayEntity,
+    // VuBooleanEntity, VuStaticPfxEntity
+    { 0x4238E0u, 0x736928u, "Vu2dLayoutComponent|VuComponent" },
+    { 0x503A10u, 0x736800u, "VuScriptComponent|VuComponent" },
+    { 0x50B8C0u, 0x736808u, "Vu3dLayoutComponent|VuComponent" },
+    { 0x531D80u, 0x7368E0u, "VuInstigatorComponent|VuComponent" },
+    { 0x534170u, 0x7368E8u, "VuTransformComponent|VuComponent" },
+    { 0x5DF7A0u, 0x736CA8u, "VuDelayEntity|VuEntity" },
+    { 0x5E5780u, 0x736D30u, "VuBooleanEntity|VuEntity" },
+    { 0x5EA930u, 0x736D70u, "VuStaticPfxEntity|VuEntity" },
 };
 
 // VuControlComponent's slot 1 0x619F50 (mov eax, 0x6F6FC8; ret): the component's name.
