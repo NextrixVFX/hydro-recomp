@@ -1,5 +1,7 @@
 #pragma once
 
+#include <workspace/core/world/watchers.hxx>
+
 // THE WATER ENTITIES' CONTROL / MOTION HANDLERS (world/watchers.hxx) against retail on Hydroelectric's built water.
 
 // water_ocean_control / water_directional_control against the ocean entities' 0x5D8930 and VuDirectionalWaveEntity's
@@ -171,9 +173,146 @@ inline bool verify_water_controls( )
     return failed == 0;
 }
 
+// water_surface_motion (0x5DC3B0 = entity_set_world + the watcher water_surface_refresh / water_ramp_refresh) against retail
+// on Hydroelectric's built water (case water_surface_motion): every surface / ramp entity in entity order handed a new world
+// (rotated about z and moved) through its motion component. Compared per call: the transform's world, the surface's known
+// words (+220 / +236 the box's stack w lanes excepted), the ramp wave's known words (+0x40 the entry pointer excepted), the
+// draw and layout boxes (w lanes excepted) and the draw update, the surface tree word for word, every surface's wave tree
+// (summary + FNV-1a 64), the wave list, the pool.
+inline bool verify_water_surface_motion( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "water_surface_motion: the document did not load" );
+        return false;
+    }
+    water_built_t b{};
+    water_build_world( *tree, b, []( entity_t& e ) { return entity_transform( e ); } );
+    std::vector< entity_t* > order;
+    const auto post = [ & ]( const auto& self, entity_t& e ) -> void {
+        for ( auto& child : e.m_children )
+            self( self, *child );
+        if ( water_kind_of( e.m_type ) != water_kind_none )
+            order.push_back( &e );
+    };
+    post( post, *tree );
+    const unsigned* s = g_golden_wsm_words;
+    const unsigned n = *s++;
+    int failed = 0, ramps = 0, compared = 0, updates = 0;
+    for ( unsigned c = 0; c < n; ++c )
+    {
+        const unsigned index = *s++;
+        const int surface = static_cast< int >( *s++ );
+        const int wave = static_cast< int >( *s++ );
+        const bool registered = *s++ != 0;
+        float matrix[ 16 ];
+        std::memcpy( matrix, s, 64 );
+        s += 16;
+        const unsigned* world = s;
+        s += 16;
+        if ( index >= order.size( ) )
+        {
+            LOG_ERROR( "water_surface_motion: entity %u missing", index );
+            return false;
+        }
+        entity_t& e = *order[ index ];
+        int bad = 0;
+        const water_built_t::entity_ref_t* r = water_entity_of( b, e );
+        bad += !r || r->surface != surface || r->wave != wave;
+        ramps += wave >= 0 ? 1 : 0;
+        water_surface_boxes_t boxes{};
+        bad += water_surface_motion( b, e, matrix, registered, boxes ) ? 0 : 1;
+        const transform_component_t* t = entity_transform( e );
+        for ( int k = 0; k < 16; ++k )
+        {
+            std::uint32_t u;
+            std::memcpy( &u, &t->world[ k ], 4 );
+            bad += u != world[ k ];
+        }
+        compared += 16;
+        const unsigned nw = *s++;
+        const water_words_t& sw = b.surfaces[ static_cast< std::size_t >( surface ) ];
+        for ( unsigned k = 0; k < nw && k < 80; ++k )
+            if ( sw.known[ k ] && k != 55 && k != 59 )
+            {
+                ++compared;
+                bad += sw.word[ k ] != s[ k ];
+            }
+        s += nw;
+        const unsigned nv = *s++;
+        if ( wave >= 0 )
+        {
+            const water_words_t& ww = b.waves[ static_cast< std::size_t >( wave ) ];
+            for ( unsigned k = 0; k < nv && k < 80; ++k )
+                if ( ww.known[ k ] && k != 16 )
+                {
+                    ++compared;
+                    bad += ww.word[ k ] != s[ k ];
+                }
+        }
+        s += nv;
+        for ( int k = 0; k < 8; ++k )
+            if ( boxes.draw.known[ k ] )
+            {
+                ++compared;
+                bad += boxes.draw.word[ k ] != s[ k ];
+            }
+        s += 8;
+        for ( int k = 0; k < 8; ++k )
+            if ( boxes.layout.known[ k ] )
+            {
+                ++compared;
+                bad += boxes.layout.word[ k ] != s[ k ];
+            }
+        s += 8;
+        updates += boxes.draw_update ? 1 : 0;
+        bad += boxes.draw_update != registered;
+        const unsigned ns = *s++;
+        bad += water_tree_words( b.hold.surface_tree ) != std::vector< unsigned >( s, s + ns );
+        compared += static_cast< int >( ns );
+        s += ns;
+        const unsigned nt = *s++;
+        for ( unsigned k = 0; k < nt; ++k, s += 9 )
+        {
+            const std::vector< unsigned > tw = water_tree_words( b.hold.surfaces[ s[ 0 ] ].waves );
+            const std::uint64_t hv = water_fnv64( tw.data( ) + 6, tw.size( ) - 6 );
+            for ( int j = 0; j < 6; ++j )
+                bad += tw[ static_cast< std::size_t >( j ) ] != s[ 1 + j ];
+            bad += static_cast< unsigned >( hv & 0xFFFFFFFFu ) != s[ 7 ] || static_cast< unsigned >( hv >> 32 ) != s[ 8 ];
+            compared += 8;
+        }
+        const unsigned nl = *s++;
+        int at = b.hold.list;
+        for ( unsigned k = 0; k < nl; ++k, s += 2 )
+        {
+            bad += static_cast< unsigned >( at ) != s[ 0 ];
+            if ( at < 0 )
+                continue;
+            bad += static_cast< unsigned >( b.hold.pool[ at ].leaf ) != s[ 1 ];
+            at = b.hold.pool[ at ].next;
+        }
+        bad += at != -1;
+        bad += static_cast< unsigned >( b.hold.pool_count ) != *s++;
+        bad += static_cast< unsigned >( b.hold.pool_free ) != *s++;
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "water_surface_motion: call %u (entity %u, surface %d, wave %d): %d differences", c, index, surface, wave, bad );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_surface_motion matches 0x5DC3B0 (0x5344A0 + the watchers 0x5DB610 / 0x5D70A0: 0x535C50 + 0x529990 / 0x529860, "
+                     "0x5A2370) on Hydroelectric's built water: %u entities (%d ramps, %d draw updates), %d values plus every wave tree",
+            n, ramps, updates, compared );
+    else
+        LOG_ERROR( "water_surface_motion FAILED %d of %u", failed, n );
+    return failed == 0;
+}
 inline bool verify_watchers_all( )
 {
     bool ok = true;
     ok = verify_water_controls( ) && ok;
+    ok = verify_water_surface_motion( ) && ok;
     return ok;
 }

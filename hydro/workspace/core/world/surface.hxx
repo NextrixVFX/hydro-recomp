@@ -401,10 +401,9 @@ inline int water_log2( std::uint32_t size )
 //   (hx, hy, height) through +80 (0x41b2a0); +240 / +244 hx / hy (each size
 //   (float) * 0.5); +248 the surface-tree leaf, +252 the wave tree (the tree
 //   itself is water_held_surface_t's), +256 = +60.
-inline water_words_t water_surface_create( const water_input_t& in )
+inline void water_surface_desc( const water_input_t& in, std::uint32_t* d )   // 0x5DBA90 (d: 14 words, 11 / 12 left 0)
 {
-    water_words_t s{};
-    std::uint32_t d[ 14 ]{};
+    std::memset( d, 0, 56 );
     for ( int k = 0; k < 4; ++k )
         d[ k ] = in.t( 0x80 + 4 * k );
     d[ 4 ] = in.t( 0xA8 );
@@ -415,9 +414,15 @@ inline water_words_t water_surface_create( const water_input_t& in )
     d[ 9 ] = in.e( 0x80 );
     d[ 10 ] = in.e( 0x84 );
     d[ 13 ] = 1;
-    s.set( 0, 0x74D378u );
-    s.set( 4, 1 );
-    s.set( 8, 0 );
+}
+
+// 0x535C50 (thiscall surface; desc*; retn 4) up to its tail: the 56 bytes to
+// +12 (rep movsd), +72 / +76, the matrix +80, its inverse +144, +240 / +244 and
+// the box +208 (+0x100 = desc +0x30, the map asset - water_built_t::maps here).
+// Its tail - when the surface already has its surface-tree leaf (+0xF8), VuWater
+// 0x529990 then 0x529860 on it - is water_surface_redescribe's (watchers.hxx).
+inline void water_surface_set( water_words_t& s, const std::uint32_t* d )
+{
     for ( int k = 0; k < 14; ++k )
         if ( k != 11 && k != 12 )
             s.set( 12 + 4 * k, d[ k ] );
@@ -455,6 +460,17 @@ inline water_words_t water_surface_create( const water_input_t& in )
         s.setf( 208 + 4 * k, blo[ k ] );
         s.setf( 224 + 4 * k, bhi[ k ] );
     }
+}
+
+inline water_words_t water_surface_create( const water_input_t& in )
+{
+    water_words_t s{};
+    std::uint32_t d[ 14 ];
+    water_surface_desc( in, d );
+    s.set( 0, 0x74D378u );
+    s.set( 4, 1 );
+    s.set( 8, 0 );
+    water_surface_set( s, d );
     return s;
 }
 
@@ -464,10 +480,9 @@ inline water_words_t water_surface_create( const water_input_t& in )
 // VuWaterWave's ctor 0x5A6390 with 1 (+0x44 = 1: tested by its centre), vtable
 // 0x75093C, +76 .. +119 zeroed, then 0x5A2570 and 0x5A28F0. +4 is 2 (the
 // ctor's 1 and the allocator's hold).
-inline water_words_t ramp_wave_create( const water_input_t& in )
+inline void ramp_wave_desc( const water_input_t& in, std::uint32_t* d )   // 11 words, memset first
 {
-    water_words_t w{};
-    std::uint32_t d[ 11 ]{};
+    std::memset( d, 0, 44 );
     for ( int k = 0; k < 4; ++k )
         d[ k ] = in.t( 0x80 + 4 * k );
     float x;
@@ -479,15 +494,12 @@ inline water_words_t ramp_wave_create( const water_input_t& in )
     d[ 8 ] = in.t( 0xA8 );
     d[ 9 ] = in.e( 0x138 );
     d[ 10 ] = in.e( 0x13C );
-    w.set( 0, 0x75093Cu );
-    w.set( 4, 2 );
-    w.set( 8, 0 );
-    w.set( 56, 0 );
-    w.set( 60, 0 );
-    w.set( 64, 0 );
-    w.set( 68, 1 );
-    w.set( 72, 0x3F800000u );
-    // 0x5A2570: the descriptor to +76 .. +116.
+}
+
+// 0x5A2570 (thiscall wave; desc*; retn 4): the descriptor to +76 .. +116, the
+// frame, the shape terms and the flow rows.
+inline void ramp_wave_set( water_words_t& w, const std::uint32_t* d )
+{
     for ( int k = 0; k < 11; ++k )
         w.set( 76 + 4 * k, d[ k ] );
     // The frame at +120: identity . fromScale( +92 / 2, +96 / 2, +100 / 2 ) .
@@ -553,6 +565,10 @@ inline water_words_t ramp_wave_create( const water_input_t& in )
     w.setf( 296, ( w.f( 136 ) * r2 ) * nflow );
     w.setf( 300, ( w.f( 140 ) * r2 ) * nflow );
     w.setf( 304, ( w.f( 144 ) * r2 ) * nflow );
+}
+
+inline void ramp_wave_bounds( water_words_t& w )
+{
     // 0x5A28F0: the bounds - the rotated half-extent rectangle's corners (x87
     // fsincos of +108) folded through minss / maxss, z = +84 -+ +100 * 0.5, the
     // centre +44 / +48 and the radius sqrt( hy * hy + hx * hx ). +24 / +40 are
@@ -594,6 +610,23 @@ inline water_words_t ramp_wave_create( const water_input_t& in )
     w.setf( 36, z + hz );
     w.set( 40, 0 );
     w.setf( 52, _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( v2 * v2 ) + ( v1 * v1 ) ) ) ) );
+}
+
+inline water_words_t ramp_wave_create( const water_input_t& in )
+{
+    water_words_t w{};
+    std::uint32_t d[ 11 ];
+    ramp_wave_desc( in, d );
+    w.set( 0, 0x75093Cu );
+    w.set( 4, 2 );
+    w.set( 8, 0 );
+    w.set( 56, 0 );
+    w.set( 60, 0 );
+    w.set( 64, 0 );
+    w.set( 68, 1 );
+    w.set( 72, 0x3F800000u );
+    ramp_wave_set( w, d );
+    ramp_wave_bounds( w );
     return w;
 }
 
@@ -646,9 +679,12 @@ inline int water_hold_wave( water_hold_t& w, const water_held_wave_t& v )
 // +228) into the surface tree, its leaf kept (+248), then every wave on the
 // list from the head - a centre-tested wave by its box's centre inside the
 // surface's box, any other by box overlap - through 0x529C60.
-inline int water_hold_surface( water_hold_t& w, const water_words_t& s )
+// `surface` is an index the hold already has (its wave tree as the surface
+// ctor 0x5359E0 made it, or as 0x529990 left it); the held view of the words
+// (retail reads them from the surface itself) is refreshed first.
+inline void water_hold_surface_insert( water_hold_t& w, const water_words_t& s, int surface )
 {
-    water_held_surface_t h{};
+    water_held_surface_t& h = w.surfaces[ static_cast< std::size_t >( surface ) ];
     for ( int k = 0; k < 16; ++k )
         h.rows[ k ] = s.f( 144 + 4 * k );
     h.z_low = s.f( 216 );
@@ -657,9 +693,6 @@ inline int water_hold_surface( water_hold_t& w, const water_words_t& s )
     h.half[ 1 ] = s.f( 244 );
     h.below = s.f( 40 );
     h.above = s.f( 44 );
-    water_tree_init( h.waves );
-    const int surface = static_cast< int >( w.surfaces.size( ) );
-    w.surfaces.push_back( std::move( h ) );
     const float r[ 4 ] = { s.f( 208 ), s.f( 212 ), s.f( 224 ), s.f( 228 ) };
     w.surfaces[ surface ].leaf = water_tree_add( w.surface_tree, surface, r );
     for ( int e = w.list; e >= 0; e = w.pool[ e ].next )
@@ -680,6 +713,15 @@ inline int water_hold_surface( water_hold_t& w, const water_words_t& s )
         if ( hit )
             water_hold_test( w, w.pool[ e ].leaf, surface );
     }
+}
+
+inline int water_hold_surface( water_hold_t& w, const water_words_t& s )
+{
+    water_held_surface_t h{};
+    water_tree_init( h.waves );
+    const int surface = static_cast< int >( w.surfaces.size( ) );
+    w.surfaces.push_back( std::move( h ) );
+    water_hold_surface_insert( w, s, surface );
     return surface;
 }
 
@@ -722,6 +764,17 @@ struct water_built_t
     // VuWater +0x40: 1.0 from its ctor 0x528050 (the wake update 0x417D80's segment rate: a new segment once the
     // fixed end's age reaches 1 / (4 x this)).
     float wake_rate = 1.0f;
+    // Per entity water_build_world built (visit order): the entity, its kind, its
+    // surface (the surface / ramp entity's +0x128) and its wave (-1 none) - what
+    // the entity's handlers / releases take (world/watchers.hxx water_entity_of).
+    struct entity_ref_t
+    {
+        const void* entity = nullptr;
+        water_kind_t kind = water_kind_none;
+        int surface = -1;
+        int wave = -1;
+    };
+    std::vector< entity_ref_t > entities;
 };
 
 // The field of ocean wave `wave`, or null (not an ocean wave / not built).
@@ -1533,7 +1586,14 @@ inline void water_build_world( entity_t& root, water_built_t& out, water_transfo
         in.entity = s->value.word;
         in.transform = transform;
         in.water_map = s->water_map.c_str( );
+        const std::size_t surfaces = out.surfaces.size( ), waves = out.waves.size( );
         water_build_entity( out, kind, in );
+        water_built_t::entity_ref_t ref{};
+        ref.entity = &e;
+        ref.kind = kind;
+        ref.surface = out.surfaces.size( ) > surfaces ? static_cast< int >( surfaces ) : -1;
+        ref.wave = out.waves.size( ) > waves ? static_cast< int >( waves ) : -1;
+        out.entities.push_back( ref );
     };
     visit( visit, root );
 }
@@ -1608,4 +1668,3 @@ inline const water_type_t g_water_types[] = {
 };
 
 #include <workspace/core/world/wake.hxx>
-#include <workspace/core/world/watchers.hxx>
