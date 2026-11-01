@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -284,6 +285,483 @@ inline bool verify_powerup_dtors( )
         LOG_SUCCESS( "powerup_destroy matches retail's 0x43B830 / 0x43DCC0 (body 0x43B890) on %u images: the hook log, every string, +0x118, eax", nv );
     else
         LOG_ERROR( "powerup_destroy FAILED %d of %u against 0x43B830 / 0x43DCC0", failed, nv );
+    return failed == 0;
+}
+
+// asset_destroy (engine assets/factory.hxx) against retail's 0x515D70 / 0x53FD10 / 0x5F4AB0 (bodies 0x515D00 / 0x53FD40 /
+// 0x5F4AE0) run whole on images (case asset_dtors, cases/package.py): the hook log in order, every string's words, +0, eax.
+inline bool verify_asset_dtors( )
+{
+    const unsigned* g = g_golden_asset_dtors_words;
+    const std::uint32_t obj = 0x100, fac = 0x600, asset = 0x700;
+    const std::uint32_t offs[ 3 ][ 3 ] = { { 0x20, 0x8, 0 }, { 0x4C, 0, 0 }, { 0x90, 0x78, 0x60 } };
+    auto text_at = []( unsigned k ) { return 0x800u + 0x40u * k; };
+    auto sym = [ & ]( std::uint32_t x ) -> unsigned {
+        if ( x == 0 ) return 0;
+        if ( x == obj ) return 1;
+        if ( x == fac ) return 2;
+        if ( x == asset ) return 3;
+        if ( x == obj + 0x38 ) return 4;
+        for ( unsigned k = 0; k < 3; ++k )
+            if ( x == text_at( k ) ) return 5u + k;
+        return 0x100 + ( x & 0xFF );
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned kind = *g++, flags = *g++, held = *g++, untouched = *g++, nt = *g++;
+        std::map< std::uint32_t, std::uint32_t > mem;
+        asset_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0x5A5A5A5Au : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        mem[ obj + 0x64 ] = held == 3 ? asset : 0u;
+        for ( unsigned k = 0; k < nt; ++k )
+        {
+            const unsigned n = *g++;
+            const unsigned first = n != 0 ? *g : 0u;
+            g += ( n + 3 ) / 4;
+            const std::uint32_t at = obj + offs[ kind - 1 ][ k ];
+            mem[ at ] = n < 16 ? first : text_at( k );
+            mem[ at + 0x10 ] = n;
+            mem[ at + 0x14 ] = n < 16 ? 15u : ( n | 15u );
+        }
+        std::vector< std::vector< unsigned > > glog( *g++ ), log;
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        const unsigned* after = g;
+        g += 3 * nt + 2;
+        asset_dtor_hooks_t h;
+        h.free_block = [ & ]( std::uint32_t a ) { log.push_back( { 1u, sym( a ) } ); };
+        h.json_clear = [ & ]( std::uint32_t a ) { log.push_back( { 2u, sym( a ) } ); };
+        h.factory_release = [ & ]( std::uint32_t a ) { log.push_back( { 3u, sym( fac ), sym( a ) } ); };
+        h.property_base_dtor = [ & ]( ) { log.push_back( { 4u, 1u } ); };
+        h.entity_dtor = [ & ]( ) { log.push_back( { 5u, 1u } ); };
+        const asset_dtor_kind_t k = kind == 1 ? asset_dtor_kind_t::asset
+                                  : kind == 2 ? asset_dtor_kind_t::asset_property : asset_dtor_kind_t::substitute_entity;
+        const std::uint32_t r = asset_destroy( k, w, obj, flags, h );
+        bool ok = log == glog && untouched == 1;
+        for ( unsigned s = 0; s < nt && ok; ++s )
+        {
+            const std::uint32_t at = obj + offs[ kind - 1 ][ s ];
+            ok = ( w.get( at ) & 0xFFu ) == after[ 3 * s ] && w.get( at + 0x10 ) == after[ 3 * s + 1 ] && w.get( at + 0x14 ) == after[ 3 * s + 2 ];
+        }
+        // +0: the stored vtable; the substitute entity stores none (the image's random word, not compared).
+        ok = ok && ( kind == 3 || w.get( obj ) == after[ 3 * nt ] ) && ( r == obj ? 1u : 0u ) == after[ 3 * nt + 1 ];
+        if ( !ok && ++failed <= 4 )
+            LOG_ERROR( "asset dtor vector %u (kind %u flags %u) differs from retail: %d log entries, retail %d", v, kind, flags,
+                static_cast< int >( log.size( ) ), static_cast< int >( glog.size( ) ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "asset_destroy matches retail's 0x515D70 / 0x53FD10 / 0x5F4AB0 (bodies 0x515D00 / 0x53FD40 / 0x5F4AE0) on %u images: the hook log, every string, +0, eax", nv );
+    else
+        LOG_ERROR( "asset_destroy FAILED %d of %u against 0x515D70 / 0x53FD10 / 0x5F4AB0", failed, nv );
+    return failed == 0;
+}
+
+// asset_destroy's class dtors (engine assets/factory.hxx) against retail's 0x515E10 / 0x554E90 / 0x55C1E0 / 0x55C230 /
+// 0x5C8C70 (+ 0x5C9D20, body 0x515D00) run whole on images (case asset_dtors2, cases/package.py).
+inline bool verify_asset_dtors2( )
+{
+    const unsigned* g = g_golden_asset_dtors2_words;
+    const std::uint32_t obj = 0x100, anim = 0x600, events = 0x700;
+    auto text_at = []( unsigned k ) { return 0xC00u + 0x40u * k; };
+    auto sym = [ & ]( std::uint32_t x ) -> unsigned {
+        if ( x == 0 ) return 0;
+        if ( x == obj ) return 1;
+        if ( x == anim ) return 2;
+        if ( x == events ) return 3;
+        for ( unsigned k = 0; k < 8; ++k )
+            if ( x == text_at( k ) ) return 5u + k;
+        for ( std::uint32_t o : { 0x38u, 0x58u, 0x68u } )
+            if ( x == obj + o ) return 0x200u + o;
+        for ( unsigned k = 0; k < 4; ++k )
+            if ( x == events + 0x30u * k + 0x20u ) return 0x300u + k;
+        return 0x100 + ( x & 0xFF );
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned kind = *g++, flags = *g++, held = *g++, refs0 = *g++;
+        const int n_ev = static_cast< int >( *g++ );
+        const unsigned untouched = *g++;
+        const unsigned init[ 3 ] = { g[ 0 ], g[ 1 ], g[ 2 ] };
+        g += 3;
+        const unsigned nt = *g++;
+        std::map< std::uint32_t, std::uint32_t > mem;
+        asset_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0x5A5A5A5Au : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        mem[ anim + 4 ] = refs0;
+        for ( unsigned k = 0; k < 3; ++k )
+            mem[ obj + 0x58 + 4 * k ] = init[ k ];
+        if ( kind == 3 )
+            mem[ obj + 0x58 ] = held == 2 ? anim : 0u;
+        std::vector< std::uint32_t > at( nt );
+        for ( unsigned k = 0; k < nt; ++k )
+        {
+            at[ k ] = k == 0 ? obj + 0x20 : k == 1 ? obj + 0x8 : events + 0x30u * ( k - 2 ) + 4u;
+            const unsigned n = *g++;
+            const unsigned first = n != 0 ? *g : 0u;
+            g += ( n + 3 ) / 4;
+            mem[ at[ k ] ] = n < 16 ? first : text_at( k );
+            mem[ at[ k ] + 0x10 ] = n;
+            mem[ at[ k ] + 0x14 ] = n < 16 ? 15u : ( n | 15u );
+        }
+        std::vector< std::vector< unsigned > > glog( *g++ ), log;
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        const unsigned* after = g;
+        g += 3 * nt + 6;
+        asset_dtor_hooks_t h;
+        h.free_block = [ & ]( std::uint32_t a ) { log.push_back( { 1u, sym( a ) } ); };
+        h.json_clear = [ & ]( std::uint32_t a ) { log.push_back( { 2u, sym( a ) } ); };
+        h.object_delete = [ & ]( std::uint32_t a, std::uint32_t f ) { log.push_back( { 6u, sym( a ), f } ); };
+        const std::uint32_t r = asset_destroy( static_cast< asset_dtor_kind_t >( kind ), w, obj, flags, h );
+        bool ok = log == glog && untouched == 1 && ( n_ev < 0 || kind != 7 || nt == 2u + static_cast< unsigned >( n_ev ) );
+        for ( unsigned s = 0; s < nt && ok; ++s )
+            ok = ( w.get( at[ s ] ) & 0xFFu ) == after[ 3 * s ] && w.get( at[ s ] + 0x10 ) == after[ 3 * s + 1 ] && w.get( at[ s ] + 0x14 ) == after[ 3 * s + 2 ];
+        const unsigned* tail = after + 3 * nt;
+        ok = ok && w.get( obj ) == tail[ 0 ] && w.get( anim + 4 ) == tail[ 1 ] && sym( w.get( obj + 0x58 ) ) == tail[ 2 ]
+            && sym( w.get( obj + 0x5C ) ) == tail[ 3 ] && sym( w.get( obj + 0x60 ) ) == tail[ 4 ] && ( r == obj ? 1u : 0u ) == tail[ 5 ];
+        if ( !ok && ++failed <= 4 )
+            LOG_ERROR( "asset class dtor vector %u (kind %u flags %u) differs from retail: %d log entries, retail %d", v, kind, flags,
+                static_cast< int >( log.size( ) ), static_cast< int >( glog.size( ) ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "asset_destroy matches retail's 0x515E10 / 0x554E90 / 0x55C1E0 / 0x55C230 / 0x5C8C70 (+ 0x5C9D20) on %u images: the hook log, every string, +0, +0x58..+0x60, eax", nv );
+    else
+        LOG_ERROR( "asset_destroy (class dtors) FAILED %d of %u against 0x515E10 / 0x554E90 / 0x55C1E0 / 0x55C230 / 0x5C8C70", failed, nv );
+    return failed == 0;
+}
+
+// asset_destroy( xml ) (engine assets/factory.hxx) against retail's VuXmlAsset dtor 0x5C78F0 (body 0x5C7850) run whole on
+// images (case asset_xml_dtor, cases/package.py): the hook log, the strings, +0 / +0x58 / +0x70 / +0x74 / +0x8C, eax.
+inline bool verify_asset_xml_dtor( )
+{
+    const unsigned* g = g_golden_asset_xml_dtor_words;
+    const std::uint32_t obj = 0x100, nodes = 0x400, rep = 0x600;
+    auto text_at = []( unsigned k ) { return 0x800u + 0x40u * k; };
+    auto sym = [ & ]( std::uint32_t x ) -> unsigned {
+        if ( x == 0 ) return 0;
+        if ( x == obj ) return 1;
+        if ( x == rep ) return 2;
+        if ( x == 0x759104u ) return 3;
+        if ( x == obj + 0x38 ) return 4;
+        if ( x == obj + 0x58 ) return 5;
+        if ( x == text_at( 0 ) ) return 6;
+        if ( x == text_at( 1 ) ) return 7;
+        for ( unsigned k = 0; k < 4; ++k )
+            if ( x == nodes + 0x40u * k ) return 0x10u + k;
+        return 0x100 + ( x & 0xFF );
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned flags = *g++, n = *g++, rep_sym = *g++, untouched = *g++, nt = *g++;
+        std::map< std::uint32_t, std::uint32_t > mem;
+        asset_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0x5A5A5A5Au : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        mem[ obj + 0x70 ] = n ? nodes : 0u;
+        mem[ obj + 0x8C ] = rep_sym == 3 ? 0x759104u : rep;
+        for ( unsigned j = 0; j < n; ++j )
+            mem[ nodes + 0x40u * j + 0x28 ] = j + 1 < n ? nodes + 0x40u * ( j + 1 ) : 0u;
+        const std::uint32_t at[ 2 ] = { obj + 0x20, obj + 0x8 };
+        for ( unsigned k = 0; k < nt; ++k )
+        {
+            const unsigned len = *g++;
+            const unsigned first = len != 0 ? *g : 0u;
+            g += ( len + 3 ) / 4;
+            mem[ at[ k ] ] = len < 16 ? first : text_at( k );
+            mem[ at[ k ] + 0x10 ] = len;
+            mem[ at[ k ] + 0x14 ] = len < 16 ? 15u : ( len | 15u );
+        }
+        std::vector< std::vector< unsigned > > glog( *g++ ), log;
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        const unsigned* after = g;
+        g += 3 * nt + 6;
+        asset_dtor_hooks_t h;
+        h.free_block = [ & ]( std::uint32_t a ) { log.push_back( { 1u, sym( a ) } ); };
+        h.json_clear = [ & ]( std::uint32_t a ) { log.push_back( { 2u, sym( a ) } ); };
+        h.object_delete = [ & ]( std::uint32_t a, std::uint32_t f ) { log.push_back( { 6u, sym( a ), f } ); };
+        h.free_array = [ & ]( std::uint32_t a ) { log.push_back( { 9u, sym( a ) } ); };
+        h.xml_node_dtor = [ & ]( std::uint32_t a ) { log.push_back( { 10u, sym( a ) } ); };
+        const std::uint32_t r = asset_destroy( asset_dtor_kind_t::xml, w, obj, flags, h );
+        bool ok = log == glog && untouched == 1 && nt == 2;
+        for ( unsigned s = 0; s < nt && ok; ++s )
+            ok = ( w.get( at[ s ] ) & 0xFFu ) == after[ 3 * s ] && w.get( at[ s ] + 0x10 ) == after[ 3 * s + 1 ] && w.get( at[ s ] + 0x14 ) == after[ 3 * s + 2 ];
+        const unsigned* tail = after + 3 * nt;
+        ok = ok && w.get( obj ) == tail[ 0 ] && w.get( obj + 0x58 ) == tail[ 1 ] && sym( w.get( obj + 0x70 ) ) == tail[ 2 ]
+            && sym( w.get( obj + 0x74 ) ) == tail[ 3 ] && sym( w.get( obj + 0x8C ) ) == tail[ 4 ] && ( r == obj ? 1u : 0u ) == tail[ 5 ];
+        if ( !ok && ++failed <= 4 )
+            LOG_ERROR( "xml asset dtor vector %u (%u children, flags %u) differs from retail: %d log entries, retail %d", v, n, flags,
+                static_cast< int >( log.size( ) ), static_cast< int >( glog.size( ) ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "asset_destroy( xml ) matches retail's VuXmlAsset dtor 0x5C78F0 / 0x5C7850 on %u images: the hook log, every string, +0..+0x8C, eax", nv );
+    else
+        LOG_ERROR( "asset_destroy( xml ) FAILED %d of %u against 0x5C78F0", failed, nv );
+    return failed == 0;
+}
+
+// asset_destroy( collision_mesh / fluids_mesh ) (engine assets/factory.hxx) against retail's 0x518D60 (+ unload 0x51B140) /
+// 0x5226D0 run whole on images (case asset_dtors3, cases/package.py).
+inline bool verify_asset_dtors3( )
+{
+    const unsigned* g = g_golden_asset_dtors3_words;
+    const std::uint32_t obj = 0x100, bvh = 0x400;
+    auto text_at = []( unsigned k ) { return 0x800u + 0x40u * k; };
+    auto sym = [ & ]( std::uint32_t x ) -> unsigned {
+        if ( x == 0 ) return 0;
+        if ( x == obj ) return 1;
+        if ( x == bvh ) return 2;
+        if ( x == obj + 0x38 ) return 4;
+        if ( x == text_at( 0 ) ) return 6;
+        if ( x == text_at( 1 ) ) return 7;
+        for ( unsigned k = 0; k < 8; ++k )
+            if ( x == 0x1000u + 0x100u * k ) return 0x20u + k;
+        return 0x100 + ( x & 0xFF );
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned kind = *g++, flags = *g++, clear = *g++, counter = *g++, untouched = *g++;
+        std::map< std::uint32_t, std::uint32_t > mem;
+        asset_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0x5A5A5A5Au : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        for ( std::uint32_t o = 0x58; o < 0xAC; o += 4 )
+            mem[ obj + o ] = *g++;
+        mem[ 0x759050u ] = counter;
+        const unsigned nt = *g++;
+        const std::uint32_t at[ 2 ] = { obj + 0x20, obj + 0x8 };
+        for ( unsigned k = 0; k < nt && k < 2; ++k )
+        {
+            const unsigned len = *g++;
+            const unsigned first = len != 0 ? *g : 0u;
+            g += ( len + 3 ) / 4;
+            mem[ at[ k ] ] = len < 16 ? first : text_at( k );
+            mem[ at[ k ] + 0x10 ] = len;
+            mem[ at[ k ] + 0x14 ] = len < 16 ? 15u : ( len | 15u );
+        }
+        std::vector< std::vector< unsigned > > glog( *g++ ), log;
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        const unsigned* after = g;
+        g += 3 * nt + 8;
+        asset_dtor_hooks_t h;
+        h.free_block = [ & ]( std::uint32_t a ) { log.push_back( { 1u, sym( a ) } ); };
+        h.json_clear = [ & ]( std::uint32_t a ) { log.push_back( { 2u, sym( a ) } ); };
+        h.aligned_free = [ & ]( std::uint32_t a ) { log.push_back( { 13u, sym( a ) } ); };
+        h.bt_free = [ & ]( std::uint32_t a ) { log.push_back( { 14u, sym( a ) } ); };
+        h.object_delete = [ & ]( std::uint32_t a, std::uint32_t f ) {
+            log.push_back( { 6u, sym( a ), f } );
+            if ( clear )
+                mem[ obj + 0xA8 ] = 0;
+        };
+        const std::uint32_t r = asset_destroy( static_cast< asset_dtor_kind_t >( kind ), w, obj, flags, h );
+        bool ok = log == glog && untouched == 1 && nt == 2;
+        for ( unsigned s = 0; s < nt && ok; ++s )
+            ok = ( w.get( at[ s ] ) & 0xFFu ) == after[ 3 * s ] && w.get( at[ s ] + 0x10 ) == after[ 3 * s + 1 ] && w.get( at[ s ] + 0x14 ) == after[ 3 * s + 2 ];
+        const unsigned* tail = after + 3 * nt;
+        ok = ok && w.get( obj ) == tail[ 0 ] && w.get( obj + 0x5C ) == tail[ 1 ] && w.get( obj + 0x68 ) == tail[ 2 ] && w.get( obj + 0x74 ) == tail[ 3 ]
+            && w.get( obj + 0x80 ) == tail[ 4 ] && sym( w.get( obj + 0xA8 ) ) == tail[ 5 ] && w.get( 0x759050u ) == tail[ 6 ] && ( r == obj ? 1u : 0u ) == tail[ 7 ];
+        if ( !ok && ++failed <= 4 )
+            LOG_ERROR( "mesh asset dtor vector %u (kind %u flags %u) differs from retail: %d log entries, retail %d", v, kind, flags,
+                static_cast< int >( log.size( ) ), static_cast< int >( glog.size( ) ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "asset_destroy matches retail's 0x518D60 (+ 0x51B140) / 0x5226D0 on %u images: the hook log, every string, the counts, +0xA8, gNumAlignedFree, eax", nv );
+    else
+        LOG_ERROR( "asset_destroy (mesh dtors) FAILED %d of %u against 0x518D60 / 0x5226D0", failed, nv );
+    return failed == 0;
+}
+
+// The asset properties' virtuals (engine assets/factory.hxx) against retail's 0x423860 / 0x423870 / 0x423890 / 0x506BB0 /
+// 0x506BE0 / 0x506B30 run whole (case asset_props, cases/package.py): eax, the hook log, +0 after the dtor.
+inline bool verify_asset_props( )
+{
+    const unsigned* g = g_golden_asset_props_words;
+    const std::uint32_t prop = 0x100, vec = 0x200, names = 0x400, asset = 0x1000, cont = 0x1100, cmap = 0x1140, key = 0x1180, fac = 0x1200;
+    auto sym = [ & ]( std::uint32_t x ) -> unsigned {
+        if ( x == 0 ) return 0;
+        if ( x == prop ) return 1;
+        if ( x == asset ) return 2;
+        if ( x == asset + 0x58 ) return 3;
+        if ( x == cont ) return 4;
+        if ( x == key ) return 5;
+        if ( x == fac ) return 6;
+        return 0x100 + ( x & 0xFF );
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++, arg = *g++, eax = *g++, word0 = *g++, held = *g++, kind = *g++, size = *g++, span = *g++;
+        const unsigned nt = *g++;
+        std::map< std::uint32_t, std::uint32_t > mem;
+        asset_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0x5A5A5A5Au : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        for ( unsigned k = 0; k < nt; ++k )
+        {
+            const std::uint32_t at = fn <= 2 ? names + 24u * k : key;
+            const std::uint32_t heap = fn <= 2 ? 0x800u + 0x40u * k : 0x1300u;
+            const unsigned n = *g++;
+            const unsigned first = n != 0 ? *g : 0u;
+            g += ( n + 3 ) / 4;
+            mem[ at ] = n < 16 ? first : heap;
+            mem[ at + 0x10 ] = n;
+            mem[ at + 0x14 ] = n < 16 ? 15u : ( n | 15u );
+        }
+        std::vector< std::vector< unsigned > > glog( *g++ ), log;
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        if ( fn <= 2 )
+        {
+            mem[ prop + 0x48 ] = vec;
+            mem[ vec ] = names;
+            mem[ vec + 4 ] = names + span;
+        }
+        else
+        {
+            mem[ prop + 0x48 ] = held == 2 ? asset : 0u;
+            mem[ cont ] = kind;
+            mem[ cont + 8 ] = cmap;
+            mem[ cmap + 4 ] = size;
+        }
+        asset_property_hooks_t ph;
+        ph.json_member = [ & ]( std::uint32_t c, const char* k ) {
+            log.push_back( { 7u, sym( c ), std::string( k ) == "VuDBAsset" ? 1u : 0u } );
+            return cont;
+        };
+        ph.json_key = [ & ]( std::uint32_t c, std::uint32_t i ) {
+            log.push_back( { 8u, sym( c ), i } );
+            return key;
+        };
+        asset_dtor_hooks_t dh;
+        dh.free_block = [ & ]( std::uint32_t a ) { log.push_back( { 1u, sym( a ) } ); };
+        dh.factory_release = [ & ]( std::uint32_t a ) { log.push_back( { 3u, sym( fac ), sym( a ) } ); };
+        dh.property_base_dtor = [ & ]( ) { log.push_back( { 4u, 1u } ); };
+        auto ptr = [ & ]( std::uint32_t r, std::uint32_t self_at ) -> unsigned { return r == 0 ? 0u : r == self_at ? 1u : 2u; };
+        unsigned r = 0;
+        bool ok = true;
+        switch ( fn )
+        {
+        case 0: r = asset_name_property_type( ); break;
+        case 1: r = static_cast< unsigned >( asset_name_property_count( w, prop ) ); break;
+        case 2: r = ptr( asset_name_property_choice( w, prop, static_cast< std::int32_t >( arg ) ), names + 24u * arg ); break;
+        case 3: r = db_entry_property_count( w, prop, ph ); break;
+        case 4: r = ptr( db_entry_property_choice( w, prop, arg, ph ), key ); break;
+        default:
+            r = sym( db_entry_property_destroy( w, prop, arg, dh ) );
+            ok = w.get( prop ) == word0;
+            break;
+        }
+        ok = ok && r == eax && log == glog;
+        if ( !ok && ++failed <= 4 )
+            LOG_ERROR( "asset property vector %u (virtual %u, argument %u) differs from retail: eax %u, retail %u", v, fn, arg, r, eax );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the asset properties' virtuals match retail's 0x423860 / 0x423870 / 0x423890 / 0x506BB0 / 0x506BE0 / 0x506B30 on %u calls: eax, the hook log, +0", nv );
+    else
+        LOG_ERROR( "asset property virtuals FAILED %d of %u", failed, nv );
+    return failed == 0;
+}
+
+// asset_create (engine assets/factory.hxx) against retail's create functions 0x515E90 / 0x554ED0 / 0x55C280 / 0x5644E0 /
+// 0x5A9800 / 0x5BB0E0 run whole (case asset_creates, cases/package.py): the size asked, eax, all 32 words of the block.
+inline bool verify_asset_creates( )
+{
+    const unsigned* g = g_golden_asset_creates_words;
+    const std::uint32_t block = 0x1000;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned kind = *g++, null = *g++, size = *g++, eax = *g++;
+        const unsigned* fill = g;
+        const unsigned* after = g + 32;
+        g += 64;
+        std::uint32_t mem[ 32 ];
+        std::memcpy( mem, fill, sizeof( mem ) );
+        asset_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { return mem[ ( a - block ) / 4 ]; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ ( a - block ) / 4 ] = x; };
+        std::vector< std::uint32_t > asked;
+        const std::uint32_t r = asset_create( static_cast< asset_create_kind_t >( kind ), w, [ & ]( std::uint32_t n ) {
+            asked.push_back( n );
+            return null ? 0u : block;
+        } );
+        bool ok = asked.size( ) == 1 && asked[ 0 ] == size && ( r == block ? 1u : 0u ) == eax && ( r == 0 || r == block );
+        for ( int i = 0; i < 32 && ok; ++i )
+            ok = mem[ i ] == after[ i ];
+        if ( !ok && ++failed <= 4 )
+            LOG_ERROR( "asset create vector %u (kind %u null %u) differs from retail", v, kind, null );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "asset_create matches retail's 0x515E90 / 0x554ED0 / 0x55C280 / 0x5644E0 / 0x5A9800 / 0x5BB0E0 on %u blocks: the size, eax, every word", nv );
+    else
+        LOG_ERROR( "asset_create FAILED %d of %u against the create functions", failed, nv );
+    return failed == 0;
+}
+
+// asset_create (engine assets/factory.hxx) against retail's 0x518EC0 / 0x5C7920 / 0x5C8CD0 run whole (case asset_creates2):
+// the hook log (new's size, TiXmlDocument's ctor), eax, all 44 words of the block (+0x94 / +0xA4: the stack word).
+inline bool verify_asset_creates2( )
+{
+    const unsigned* g = g_golden_asset_creates2_words;
+    const std::uint32_t block = 0x1000;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned kind = *g++, null = *g++, eax = *g++, stack = *g++, nlog = *g++;
+        std::vector< unsigned > glog( g, g + 2 * nlog ), log;
+        g += 2 * nlog;
+        const unsigned* fill = g;
+        const unsigned* after = g + 44;
+        g += 88;
+        std::uint32_t mem[ 44 ];
+        std::memcpy( mem, fill, sizeof( mem ) );
+        asset_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { return mem[ ( a - block ) / 4 ]; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ ( a - block ) / 4 ] = x; };
+        asset_create_hooks_t h;
+        h.alloc = [ & ]( std::uint32_t n ) { log.insert( log.end( ), { 11u, n } ); return null ? 0u : block; };
+        h.xml_document_ctor = [ & ]( std::uint32_t a ) { log.insert( log.end( ), { 12u, a - block } ); };
+        h.stack_word = [ & ]( ) { return stack; };
+        const std::uint32_t r = asset_create( static_cast< asset_create_kind_t >( kind ), w, h );
+        bool ok = log == glog && ( r == block ? 1u : 0u ) == eax && ( r == 0 || r == block );
+        for ( int i = 0; i < 44 && ok; ++i )
+            ok = mem[ i ] == after[ i ];
+        if ( !ok && ++failed <= 4 )
+            LOG_ERROR( "asset create vector %u (kind %u null %u) differs from retail", v, kind, null );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "asset_create matches retail's 0x518EC0 / 0x5C7920 / 0x5C8CD0 on %u blocks: the hook log, eax, every word", nv );
+    else
+        LOG_ERROR( "asset_create (2) FAILED %d of %u against 0x518EC0 / 0x5C7920 / 0x5C8CD0", failed, nv );
     return failed == 0;
 }
 
