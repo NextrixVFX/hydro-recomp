@@ -178,6 +178,7 @@ struct vu_dtor_hooks_t
     // batch 28 (the framework dtors below):
     std::function< void( std::uint32_t container ) > json_clear;                             // 0x4FBB10 on retail memory
     std::function< void( std::uint32_t component ) > instigator_remove;                      // g 0x759064: 0x5362A0
+    std::function< void( std::uint32_t block ) > aligned_free;                               // _aligned_free 0x64C15C
 };
 
 template < typename M >
@@ -566,16 +567,67 @@ inline void vu_project_dtor( M& m, std::uint32_t p, const vu_dtor_hooks_t& h )
     vu_refobj_tail( m, p, h );
 }
 
+// Entity classes' dtor bodies (each ends in VuEntity's 0x500870):
+//   0x5CE980 VuKeyframeMotionEntity (inline): _aligned_free of the VuArray buffers +0xD0, +0xBC, +0xB0, +0xA0, +0x90, +0x7C
+//            (in that order; a null one is passed too);
+//   0x5EB000 VuStaticPfxEntity (inline): the VuString +0x70 emptied;
+//   0x5F4AE0 VuSubstituteAssetEntity: the VuStrings +0x90, +0x78, +0x60 emptied;
+//   0x5DB430 VuWaterSurfaceEntity (VuWaterRampEntity's 0x5D6F50 runs it): vtables 0x753F1C / +0x5C 0x753F08; +0x12C (a
+//            ref-counted object) --refcount +4, at 0 slot 0 with 1, +0x12C = 0; 0x59A300 on +0xA4 (its VuStrings +0x6C,
+//            +0x4C, +0x30, +0 emptied); the VuString +0x8C emptied.
+template < typename M >
+inline void vu_keyframe_motion_dtor( M& m, std::uint32_t e, const vu_dtor_hooks_t& h )
+{
+    for ( const std::uint32_t off : { 0xD0u, 0xBCu, 0xB0u, 0xA0u, 0x90u, 0x7Cu } )
+        h.aligned_free( m[ e + off ] );
+    vu_entity_dtor( m, e, h );
+}
+
+template < typename M >
+inline void vu_static_pfx_dtor( M& m, std::uint32_t e, const vu_dtor_hooks_t& h )
+{
+    vu_string_tidy( m, e + 0x70, h );
+    vu_entity_dtor( m, e, h );
+}
+
+template < typename M >
+inline void vu_substitute_asset_dtor( M& m, std::uint32_t e, const vu_dtor_hooks_t& h )
+{
+    for ( const std::uint32_t off : { 0x90u, 0x78u, 0x60u } )
+        vu_string_tidy( m, e + off, h );
+    vu_entity_dtor( m, e, h );
+}
+
+template < typename M >
+inline void vu_water_surface_entity_dtor( M& m, std::uint32_t e, const vu_dtor_hooks_t& h )
+{
+    m[ e ] = 0x753F1C;
+    m[ e + 0x5C ] = 0x753F08;
+    if ( const std::uint32_t o = m[ e + 0x12C ] )
+    {
+        if ( --m[ o + 4 ] == 0 )
+            h.call( o, 0, 1 );
+        m[ e + 0x12C ] = 0;
+    }
+    for ( const std::uint32_t off : { 0x6Cu, 0x4Cu, 0x30u, 0x0u } )   // 0x59A300
+        vu_string_tidy( m, e + 0xA4 + off, h );
+    vu_string_tidy( m, e + 0x8C, h );
+    vu_entity_dtor( m, e, h );
+}
+
 // The deleting dtors (slot 0 / slot 2, thiscall object, flags): the body, then operator delete when flags & 1.
 //   0x423770 VuComponent (body inline)       0x4268F0 Vu2dLayoutComponent     0x50B960 Vu3dLayoutComponent
 //   0x531D90 VuInstigatorComponent           0x534280 VuTransformComponent    0x503B70 VuScriptComponent
 //   0x4052E0 VuScriptPlug / VuScriptOutputPlug  0x542680 VuScriptRef      0x4B4330 VuProject
 //   0x5EFA30 VuOnProjectInitializedEntity (vtable 0x756828, then VuEntity's 0x500870)
 //   0x4032A0 VuMethod0 / 1 / 2 (vtable 0x736EDC only)
-// Answers false when the body did (UNKNOWN; nothing freed).
+//   0x5CE980 VuKeyframeMotionEntity  0x5EB000 VuStaticPfxEntity  0x5F4AB0 VuSubstituteAssetEntity  0x5D6F50 VuWaterRampEntity
+// Answers false when the body did (UNKNOWN; nothing freed). (Slot 12 of the enum's order is the case's VuScriptComponent
+// slot 8 vectors - not a dtor; the check runs vu_script_component_snapshot for it.)
 enum class vu_framework_dtor_t
 {
-    component, layout_2d, layout_3d, instigator, transform, script, plug, ref, project, project_initialized, method
+    component, layout_2d, layout_3d, instigator, transform, script, plug, ref, project, project_initialized, method,
+    snapshot_, keyframe_motion, static_pfx, substitute_asset, water_ramp
 };
 
 template < typename M >
@@ -595,6 +647,11 @@ inline bool vu_framework_delete( M& m, vu_framework_dtor_t kind, std::uint32_t o
     case vu_framework_dtor_t::project: vu_project_dtor( m, o, h ); break;
     case vu_framework_dtor_t::project_initialized: m[ o ] = 0x756828; vu_entity_dtor( m, o, h ); break;
     case vu_framework_dtor_t::method: m[ o ] = 0x736EDC; break;
+    case vu_framework_dtor_t::snapshot_: return false;
+    case vu_framework_dtor_t::keyframe_motion: vu_keyframe_motion_dtor( m, o, h ); break;
+    case vu_framework_dtor_t::static_pfx: vu_static_pfx_dtor( m, o, h ); break;
+    case vu_framework_dtor_t::substitute_asset: vu_substitute_asset_dtor( m, o, h ); break;
+    case vu_framework_dtor_t::water_ramp: vu_water_surface_entity_dtor( m, o, h ); break;
     }
     if ( ok && ( flags & 1u ) != 0 )
         h.free( o );
