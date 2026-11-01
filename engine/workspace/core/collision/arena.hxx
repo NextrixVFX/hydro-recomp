@@ -189,6 +189,9 @@ inline void bt_dbvt_broadphase_get_aabb( const bt_mem_t& m, std::uint32_t proxy,
 inline void bt_dbvt_broadphase_world_aabb( const bt_mem_t& m, std::uint32_t self, std::uint32_t mn, std::uint32_t mx )
 {
     const std::uint32_t r0 = m.rd( m.user, self + 4 ), r1 = m.rd( m.user, self + 0x2C );
+    // Words and _mm_loadu_si128, not a float[ 4 ] filled per lane from m.rd and read by _mm_loadu_ps: MSVC 14.51 /O2's
+    // SSA optimizer keeps only the LAST call's result for all four lanes of that shape (boat batch 20, tools
+    // tmp/b20/miscompile: defined code, correct at /O1 and with /d2SSAOptimizer-).
     std::uint32_t v[ 4 ][ 4 ] = { };   // r0 min, r0 max, r1 min, r1 max (words)
     for ( std::uint32_t k = 0; k < 4; ++k )
     {
