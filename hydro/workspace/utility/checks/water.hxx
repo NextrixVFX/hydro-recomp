@@ -2085,9 +2085,201 @@ inline bool verify_pfx_springs( )
     return failed == 0;
 }
 
+// pfx_boat_hull_emit (world/spray.hxx) against VuPfxEmitBoatHullInstance's emit 0x4CE760 (case boat_hull): fake nodes,
+// boats and fluids objects (triangle and edge records written before the call), VuFluidSolver_prepare 0x524450 and the
+// one-point query 0x5292D0 recorded hooks (both verified on their own). Compared: every call in order (allocations, the
+// prepare's matrix, each query's point x / y / z - its w is UNKNOWN on the blended path -, the sample each particle
+// picked, the loop's sample count and total weight), the accumulator, the VuRand after, every particle word (+0x14
+// skipped where a sample was picked: retail's stale stack).
+struct bhu_check_t
+{
+    const unsigned* calls = nullptr;
+    int ncalls = 0;
+    int at = 0;
+    const unsigned* cursor = nullptr;
+    std::vector< pfx_quad_particle_t > parts;
+    std::vector< int > picks;
+    int bad = 0;
+    void skip_tally( )
+    {
+        while ( at < ncalls && cursor[ 1 ] == 4u )   // the tally record is compared after the call
+        {
+            cursor += 1 + cursor[ 0 ];
+            ++at;
+        }
+    }
+    const unsigned* next( unsigned type )
+    {
+        skip_tally( );
+        if ( at >= ncalls || cursor[ 1 ] != type )
+        {
+            ++bad;
+            return nullptr;
+        }
+        const unsigned* c = cursor + 1;
+        cursor += 1 + cursor[ 0 ];
+        ++at;
+        return c;
+    }
+};
+
+inline unsigned bhu_word( float f )
+{
+    unsigned u;
+    std::memcpy( &u, &f, 4 );
+    return u;
+}
+
+inline bool verify_boat_hull( )
+{
+    int failed = 0, emitted = 0, blended = 0, sample0 = 0, capped = 0;
+    for ( std::size_t index = 0; index < g_golden_bhu_count; ++index )
+    {
+        const unsigned* s = g_golden_bhu_words + g_golden_bhu_offsets[ index ];
+        const bool present = s[ 0 ] != 0u;
+        const float dt = water_bits( s[ 1 ] );
+        float accumulator = water_bits( s[ 2 ] );
+        pfx_rand_t rand;
+        rand.seed = static_cast< std::int32_t >( s[ 3 ] );
+        rand.previous = static_cast< std::int32_t >( s[ 4 ] );
+        std::memcpy( rand.table, s + 5, 128 );
+        s += 37;
+        static pfx_hull_boat_t boat;
+        std::memcpy( boat.transform, s, 64 );
+        std::memcpy( boat.offset, s + 16, 16 );
+        boat.part_flag = static_cast< std::uint8_t >( s[ 20 ] );
+        boat.part_count = static_cast< std::int32_t >( s[ 21 ] );
+        std::memcpy( boat.part_matrix, s + 22, 64 );
+        s += 38;
+        pfx_hull_body_t* bodies[ 2 ] = { &boat.body, &boat.part_body };
+        for ( int b = 0; b < 2; ++b, s += 12 )
+        {
+            std::memcpy( bodies[ b ]->position, s, 12 );
+            std::memcpy( bodies[ b ]->linear, s + 4, 12 );
+            std::memcpy( bodies[ b ]->angular, s + 8, 12 );
+        }
+        std::uint8_t params[ 0x80 ]{};
+        for ( int k = 0, o = 0x30; o < 0x74; o += 4 )
+            if ( o != 0x5C )
+                std::memcpy( params + o, &s[ k++ ], 4 );
+        s += 16;
+        for ( int c = 0; c < 4; ++c )
+            params[ 0x5C + c ] = static_cast< std::uint8_t >( s[ c ] );
+        s += 5;   // + the allocations granted (the recorded calls carry each answer)
+        const int ntri = static_cast< int >( s[ 0 ] ), nedge = static_cast< int >( s[ 1 ] ), ncam = static_cast< int >( s[ 2 ] );
+        s += 3;
+        static fluids_mesh_t mesh;
+        mesh.triangles.assign( s, s + 15 * ntri );
+        s += 15 * ntri;
+        static fluid_solver_t solver;
+        solver.mesh = &mesh;
+        solver.edges.resize( static_cast< std::size_t >( nedge ) );
+        std::memcpy( solver.edges.data( ), s, 40 * static_cast< std::size_t >( nedge ) );
+        s += 10 * nedge;
+        float cameras[ 3 * 4 ];
+        std::memcpy( cameras, s, 12 * static_cast< std::size_t >( ncam ) );
+        s += 3 * ncam;
+        const unsigned acc_after = s[ 0 ];
+        const unsigned* rng_after = s + 1;
+        s += 35;
+        bhu_check_t ck;
+        ck.ncalls = static_cast< int >( s[ 0 ] );
+        ck.calls = ck.cursor = s + 1;
+        const unsigned* tally_rec = nullptr;
+        const unsigned* q = s + 1;
+        for ( int c = 0; c < ck.ncalls; ++c, q += 1 + q[ 0 ] )
+            if ( q[ 1 ] == 4u )
+                tally_rec = q + 1;
+        const int nparts = static_cast< int >( q[ 0 ] );
+        const unsigned* golden_parts = q + 1;
+        ck.parts.resize( 64 );
+        for ( auto& p : ck.parts )
+            for ( auto& w : p.w )
+                w = 0x77777777u;
+        int handed = 0;
+        pfx_hull_hooks_t hooks;
+        hooks.user = &ck;
+        hooks.prepare = []( void* u, const float* m ) {
+            auto& c = *static_cast< bhu_check_t* >( u );
+            const unsigned* r = c.next( 1u );
+            if ( r && std::memcmp( r + 1, m, 64 ) != 0 )
+                ++c.bad;
+        };
+        hooks.point = []( void* u, const float* p, float* out ) {
+            auto& c = *static_cast< bhu_check_t* >( u );
+            const unsigned* r = c.next( 2u );
+            if ( !r )
+                return false;
+            if ( std::memcmp( r + 1, p, 12 ) != 0 )
+                ++c.bad;
+            std::memcpy( out, r + 5, 32 );
+            return true;
+        };
+        static int* handed_p;
+        handed_p = &handed;
+        hooks.allocate = []( void* u ) -> pfx_quad_particle_t* {
+            auto& c = *static_cast< bhu_check_t* >( u );
+            const unsigned* r = c.next( 0u );
+            if ( !r || static_cast< int >( r[ 1 ] ) < 0 )
+                return nullptr;
+            if ( static_cast< int >( r[ 1 ] ) != *handed_p )
+                ++c.bad;
+            return &c.parts[ static_cast< std::size_t >( ( *handed_p )++ ) ];
+        };
+        hooks.picked = []( void* u, int sample ) {
+            auto& c = *static_cast< bhu_check_t* >( u );
+            const unsigned* r = c.next( 3u );
+            if ( !r || static_cast< int >( r[ 1 ] ) != sample )
+                ++c.bad;
+            c.picks.push_back( sample );
+        };
+        pfx_hull_tally_t tally;
+        const int unknown = pfx_boat_hull_emit( accumulator, params, present ? &boat : nullptr, solver, rand, cameras, ncam, dt, hooks, &tally );
+        int bad = ck.bad + unknown;
+        ck.skip_tally( );
+        bad += ck.at == ck.ncalls ? 0 : 1;
+        if ( ( tally_rec != nullptr ) != tally.reached ||
+             ( tally_rec && ( static_cast< int >( tally_rec[ 1 ] ) != tally.samples || tally_rec[ 2 ] != bhu_word( tally.weight ) ) ) )
+            ++bad;
+        if ( bhu_word( accumulator ) != acc_after )
+            ++bad;
+        if ( static_cast< std::uint32_t >( rand.seed ) != rng_after[ 0 ] || static_cast< std::uint32_t >( rand.previous ) != rng_after[ 1 ] ||
+             std::memcmp( rand.table, rng_after + 2, 128 ) != 0 )
+            ++bad;
+        if ( handed != nparts )
+            ++bad;
+        for ( int i = 0; i < nparts && i < handed; ++i )
+        {
+            const unsigned* g = golden_parts + 32 * i;
+            const bool picked = i < static_cast< int >( ck.picks.size( ) ) && ck.picks[ static_cast< std::size_t >( i ) ] >= 0;
+            for ( int w = 0; w < 30; ++w )
+                if ( !( w == 5 && picked ) && ck.parts[ static_cast< std::size_t >( i ) ].w[ w ] != g[ w ] )
+                    ++bad;
+            bad += g[ 30 ] == 0x77777777u && g[ 31 ] == 0x77777777u ? 0 : 1;
+            blended += picked ? 1 : 0;
+            sample0 += picked ? 0 : 1;
+        }
+        emitted += nparts;
+        capped += tally.samples == 128 ? 1 : 0;
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "boat_hull vector %d: %d differences (calls %d of %d, unknown %d)", static_cast< int >( index ), bad, ck.at, ck.ncalls, unknown );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "pfx_boat_hull_emit matches VuPfxEmitBoatHullInstance 0x4CE760 on %d vectors: %d particles (%d from a picked "
+                     "sample, %d from sample 0), %d vectors at the 128-sample cap - calls, accumulator, VuRand, every particle word",
+            static_cast< int >( g_golden_bhu_count ), emitted, blended, sample0, capped );
+    else
+        LOG_ERROR( "boat_hull FAILED %d of %d", failed, static_cast< int >( g_golden_bhu_count ) );
+    return failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
+    ok = verify_boat_hull( ) && ok;
     ok = verify_pfx_springs( ) && ok;
     ok = verify_boat_thrust( ) && ok;
     ok = verify_water_point( ) && ok;
