@@ -7,6 +7,8 @@
 #include <workspace/core/collision/teardown.hxx>
 #include <workspace/core/collision/arena.hxx>
 #include <workspace/core/collision/rebuild.hxx>
+#include <workspace/core/assets/rtti.hxx>
+#include <string>
 
 #include <array>
 #include <cstring>
@@ -2575,5 +2577,47 @@ inline bool verify_bvh_build( )
             n, real, nodes, headers );
     else
         LOG_ERROR( "bvh build FAILED %d of %u", failed, n );
+    return failed == 0;
+}
+// verify_asset_rtti (boat batch 23, the asset area): cases/boat.py asset_rtti
+// - engine assets/rtti.hxx against every asset class's getType RUN in retail:
+// the getter's address, the descriptor it answers, and the whole chain (each
+// descriptor, its parent word, its name) to 0.
+inline bool verify_asset_rtti( )
+{
+    int failed = 0, links = 0;
+    for ( std::size_t i = 0; i < g_golden_asset_rtti_count; ++i )
+    {
+        const golden_asset_rtti_t& g = g_golden_asset_rtti[ i ];
+        const asset_rtti_class_t* c = nullptr;
+        for ( const asset_rtti_class_t& k : g_asset_rtti_classes )
+            if ( k.vtable == g.m_vtable && k.slot == g.m_slot )
+                c = &k;
+        const char* what = nullptr;
+        if ( !c || c->get_type != g.m_getter || c->descriptor != g.m_eax )
+            what = "the class row (getter / descriptor)";
+        std::string names;
+        unsigned n = 0;
+        for ( const asset_rtti_t* r = what ? nullptr : asset_rtti_find( c->descriptor ); r && !what; r = r->parent ? asset_rtti_find( r->parent ) : nullptr )
+        {
+            if ( n >= 4 || r->descriptor != g.m_chain[ 2 * n ] || r->parent != g.m_chain[ 2 * n + 1 ] )
+                what = "a chain link (descriptor / parent)";
+            names += ( n ? ">" : "" ) + std::string( r->name );
+            ++n;
+        }
+        if ( !what && ( n != g.m_count || names != g.m_names ) )
+            what = "the chain length / names";
+        links += static_cast< int >( n );
+        if ( what )
+        {
+            ++failed;
+            LOG_ERROR( "asset rtti vtable 0x%X: %s", g.m_vtable, what );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the asset classes' getType table (assets/rtti.hxx) matches retail's %d getters, %d chain links, exact",
+            static_cast< int >( g_golden_asset_rtti_count ), links );
+    else
+        LOG_ERROR( "asset rtti FAILED %d of %d", failed, static_cast< int >( g_golden_asset_rtti_count ) );
     return failed == 0;
 }
