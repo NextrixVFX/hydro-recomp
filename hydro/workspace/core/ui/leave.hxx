@@ -80,6 +80,44 @@ struct ui_front_end_dbs_t
     const value_t* m_champ_db = nullptr;
 };
 
+// THE TEST PROFILE (the user's decision, batch 16: "--front-end-defaults can
+// exist as a profile with everything unlocked for testing"). Saves / profiles
+// are re-made for the platform, NOT 1:1: this is a DECLARED platform answer
+// set for the hooks the recreated selectors call - not a stand-in for retail
+// logic. Run through ui_front_end_root it yields retail's own defaults for an
+// everything-unlocked profile (each option's current / first choice, through
+// the recreated walks). Each answer, next to the hook it fills:
+//   unlock        the unlock manager g 0x758FE8 slots +92 / +96 / +100 / +104
+//                 (0x45D0C0 / 0x45D4C0 / 0x44D150 / 0x44D2C0 ...): true = unlocked.
+//   license       g 0x758FAC slot +0x18: true = the full game is owned.
+//   progress      the progress manager g 0x758FD8 slot +132 (the boat selector's
+//                 slot 17 0x44D410): true = complete.
+//   race_done / champ_done / ghost_done   slots +48 / +88 / +124 (slot 17
+//                 0x45D720's): true = complete; so slot 26 0x45E300 (a "push")
+//                 finds no not-done choice and keeps the current one.
+//   race_rank / champ_rank   the best placing those slots write: 0 (first).
+//   store_beta    0x4D3170: false (not the store beta build).
+//   package       the asset factory g 0x759004 slot +0x90: true = every
+//                 package / DLC asset present.
+//   next_choice   unset: the recreated slot 26 (select.hxx ui_game_config_next).
+inline ui_profile_t ui_profile_all_unlocked( )
+{
+    ui_profile_t p;
+    p.unlock = []( int, const std::string&, const std::string&, const std::string& ) { return true; };
+    p.license = [] { return true; };
+    p.progress = []( const std::string& ) { return true; };
+    p.store_beta = [] { return false; };
+    p.package = []( const std::string& ) { return true; };
+    p.champ_rank = []( const std::string& ) { return 0; };
+    p.race_rank = []( const std::string&, const std::string&, const std::string& ) { return 0; };
+    p.race_done = []( const std::string&, const std::string&, const std::string& ) { return true; };
+    p.champ_done = []( const std::string& ) { return true; };
+    p.ghost_done = []( const std::string& ) { return true; };
+    p.has_progress = true;
+    p.has_unlock = true;
+    return p;
+}
+
 // THE EXPORT: `root` in (the profile's Last*Selection, or nothing) and out (the
 // root the front end leaves after the boat screen); `op` = gameutil +0x64 when
 // the screens initialise ("push" when pushed). False on any path not
