@@ -50,8 +50,9 @@
 //   - so its inputs are UNKNOWN and it does not run); 0x410FF0, 0x41E240, the
 //   debris pieces' follow / removal; the driver tick of a UI / nuisance /
 //   ghost driver (none in a Race roster - their ticks are the boat agent's);
-//   the hull's splash pfx 0x52BCD0, the lens-water manager g 0x759048; the driver's vt+0x50 and the
-//   "OnBoatRecovered" broadcast inside the respawn. WIRED (world batch 18): the trigger manager's 0x536350
+//   the hull's splash pfx 0x52BCD0, the lens-water manager g 0x759048 (VuLensWaterManagerImpl, the water /
+//   render side's). RESOLVED (world batch 19): the driver's vt+0x50 (the human's 'OnHumanRecovered' and
+//   0x41D790's 'OnBoatRecovered' have no subscriber in a Race - nothing runs) and 0x41E240 (FMOD - platform). WIRED (world batch 18): the trigger manager's 0x536350
 //   (trigger/volume.hxx) and the respawn's 0x534C00(0) (no children: nothing).
 //   PLATFORM HOOKS (not copied - BRIEF): FMOD (every get_event answers false:
 //   no event is made, so no audio calls follow), the stats / voice-over
@@ -581,8 +582,13 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         r->respawn_hooks.transform_children = []( void* ) {};
         r->respawn_hooks.instigator = []( void* u ) { race_drive_t& d = race_drive_of( u ); trigger_instigator_update( d.session->triggers, race_drive_boat( d ).io.instigator ); };
         r->respawn_hooks.enable = []( void* u ) { race_session_enable( *race_drive_of( u ).session, race_drive_boat( race_drive_of( u ) ), true ); };
-        r->respawn_hooks.driver_50 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the driver's vt+0x50 after a respawn (not recreated)" ); };
-        r->respawn_hooks.recovered = []( void* u, std::uint32_t ) { race_unwired( *race_drive_of( u ).session, "the OnBoatRecovered broadcast (VuEventManager, not wired)" ); };
+        // The driver's slot 20 vt+0x50 after a respawn: VuHumanDriver 0x40F4A0 broadcasts "OnHumanRecovered" (an empty
+        // VuParams, 0x505690) - NO SUBSCRIBER exists: the string's one reference is that broadcaster and no asset names it -
+        // so it changes nothing; VuAiDriver / VuAiUiDriver / VuAiNuisanceDriver's slot 20 is the nullsub 0x401560.
+        r->respawn_hooks.driver_50 = []( void* ) { };
+        // "OnBoatRecovered" (0x41D790's broadcast): its only subscriber is VuSlalomGame (ctor 0x48BEC0 - the string's other
+        // reference); no asset names it. In a Race nothing answers: nothing to run.
+        r->respawn_hooks.recovered = []( void*, std::uint32_t ) { };
         // The Decision tick's hooks.
         boat_decision_hooks_t& h = r->hooks;
         h.user = r.get( );
@@ -597,8 +603,10 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         h.respawn = race_drive_respawn;
         h.enable = []( void* u ) { race_session_enable( *race_drive_of( u ).session, race_drive_boat( race_drive_of( u ) ), true ); };
         h.disable = []( void* u ) { race_session_enable( *race_drive_of( u ).session, race_drive_boat( race_drive_of( u ) ), false ); };
-        h.debris_410FF0 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the debris 0x410FF0 (not recreated)" ); };
-        h.boat_41E240 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the boat's 0x41E240 (not recreated)" ); };
+        h.debris_410FF0 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the debris 0x410FF0 (2391 b: the damage pieces' Bullet bodies - the boat agent's) - not recreated" ); };
+        // 0x41E240: an FMOD one-shot at the boat (g 0x759010 EventSystem getEvent on the name at +0x1EC, set3DAttributes at the
+        // transform's +0x80, start, release - imports 0x64C348 / 0x64C358 / 0x64C354): the audio platform layer, a hook.
+        h.boat_41E240 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "audio: the boat's one-shot 0x41E240 (FMOD - platform)" ); };
         h.piece_follow = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the debris pieces' follow 0x5344A0 / 0x50E660 (not recreated)" ); };
         h.piece_remove = []( void* u, int ) { race_unwired( *race_drive_of( u ).session, "the debris pieces' removal (0x411950's dynamics calls, not recreated)" ); };
         h.boost.user = r.get( );
@@ -611,7 +619,9 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
             return false;
         };
         h.hull.splash = []( void* u, const std::string& ) { race_unwired( *race_drive_of( u ).session, "the hull's splash pfx 0x52BCD0 (not wired)" ); };
-        h.hull.lens = []( void* u, float ) { race_unwired( *race_drive_of( u ).session, "the lens-water manager g 0x759048 (not wired)" ); };
+        // VuLensWaterManagerImpl g 0x759048 (the camera's water droplets): vt+0x28 0x513600 adds to its +0x2490, vt+0x2C
+        // 0x513620 stores [0x7358A0] x v at +0x68 - state only its own tick 0x513B90 / draw read (the water / render side's).
+        h.hull.lens = []( void* u, float ) { race_unwired( *race_drive_of( u ).session, "the lens-water manager g 0x759048 vt+0x28 / vt+0x2C (VuLensWaterManagerImpl - the water / render side's) - not wired" ); };
         h.hull.wake = race_drive_hull_wake;
         s.drives[ k ] = r;
     }
