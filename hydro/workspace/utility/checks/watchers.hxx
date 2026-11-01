@@ -173,6 +173,172 @@ inline bool verify_water_controls( )
     return failed == 0;
 }
 
+// VuDirectionalFlowWaveEntity / VuWaterDirectionalFlowWave against retail on Hydroelectric's built water (case flow_wave):
+// six synthetic entities (their transforms and properties are the case's inputs). Per entity: water_build_entity
+// (water_kind_flow: slot 6 0x5D66D0 -> 0x5D6810 / 0x5289B0 / 0x59C3C0 / 0x59C4C0) - the wave's known words (+24 / +40 the
+// bounds' stack words, +0x40 the entry pointer excepted), its entries, the wave list, the pool, every surface's wave tree
+// (summary + FNV-1a 64); water_view_kernel on 24 vertices per mode (slot 3 0x59C390: base 0x59C7C0, tag 0x59C920, +96
+// nothing) - every vertex word; water_flow_refresh (slot 2 0x5D66C0 -> 0x5D6740) - the same state and the layout box (w
+// lanes excepted); on every other entity water_entity_release (slot 7 0x5D6710): destroyed, the list, pool, trees.
+inline bool flow_check_state( const water_built_t& b, int wave, const unsigned*& s, bool words, int& compared )
+{
+    int bad = 0;
+    if ( words )
+    {
+        const water_words_t& w = b.waves[ static_cast< std::size_t >( wave ) ];
+        for ( int k = 0; k < 64; ++k )
+            if ( w.known[ k ] && k != 6 && k != 10 && k != 16 )
+            {
+                ++compared;
+                bad += w.word[ k ] != s[ k ];
+            }
+        s += 64;
+    }
+    const unsigned ne = *s++;
+    int at = b.hold.waves[ static_cast< std::size_t >( wave ) ].entries;
+    for ( unsigned k = 0; k < ne; ++k, s += 2 )
+    {
+        bad += at < 0 || static_cast< unsigned >( at ) != s[ 0 ] || static_cast< unsigned >( b.hold.pool[ at ].surface ) != s[ 1 ];
+        if ( at >= 0 )
+            at = b.hold.pool[ at ].next;
+    }
+    bad += words && at != -1;   // after a release the hold's entry index is stale (retail: the freed wave's word)
+    const unsigned nl = *s++;
+    at = b.hold.list;
+    for ( unsigned k = 0; k < nl; ++k, s += 2 )
+    {
+        bad += static_cast< unsigned >( at ) != s[ 0 ];
+        if ( at < 0 )
+            continue;
+        bad += static_cast< unsigned >( b.hold.pool[ at ].leaf ) != s[ 1 ];
+        at = b.hold.pool[ at ].next;
+    }
+    bad += at != -1;
+    bad += static_cast< unsigned >( b.hold.pool_count ) != *s++;
+    bad += static_cast< unsigned >( b.hold.pool_free ) != *s++;
+    const unsigned nt = *s++;
+    for ( unsigned k = 0; k < nt; ++k, s += 9 )
+    {
+        const std::vector< unsigned > tw = water_tree_words( b.hold.surfaces[ s[ 0 ] ].waves );
+        const std::uint64_t hv = water_fnv64( tw.data( ) + 6, tw.size( ) - 6 );
+        for ( int j = 0; j < 6; ++j )
+            bad += tw[ static_cast< std::size_t >( j ) ] != s[ 1 + j ];
+        bad += static_cast< unsigned >( hv & 0xFFFFFFFFu ) != s[ 7 ] || static_cast< unsigned >( hv >> 32 ) != s[ 8 ];
+        compared += 8;
+    }
+    return bad;
+}
+
+inline bool verify_flow_wave( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "flow_wave: the document did not load" );
+        return false;
+    }
+    water_built_t b{};
+    water_build_world( *tree, b, []( entity_t& e ) { return entity_transform( e ); } );
+    const unsigned* s = g_golden_fwv_words;
+    const unsigned n = *s++;
+    int failed = 0, compared = 0, vertices = 0, releases = 0;
+    std::vector< std::pair< int, const unsigned* > > released;
+    for ( unsigned c = 0; c < n; ++c )
+    {
+        int bad = 0;
+        const int index = static_cast< int >( *s++ );
+        const std::shared_ptr< water_entity_state_t > st = water_entity_state_for( "VuDirectionalFlowWaveEntity" );
+        for ( int k = 0; k < 6; ++k )
+            st->value.word[ k ] = *s++;
+        const unsigned* transform = s;
+        s += k_water_transform_words;
+        water_input_t in{};
+        in.entity = st->value.word;
+        in.transform = transform;
+        water_build_entity( b, water_kind_flow, in );
+        const int wave = static_cast< int >( b.waves.size( ) ) - 1;
+        bad += wave != index;
+        bad += flow_check_state( b, wave, s, true, compared );
+        water_view_t view;
+        water_view_build( b, view );
+        for ( int m = 0; m < 3; ++m )
+        {
+            const unsigned mode = *s++;
+            const unsigned* tags = s;
+            s += 24;
+            water_vertex_t v[ 24 ];
+            std::memcpy( v, s, sizeof( v ) );
+            s += 240;
+            water_query_t ctx{};
+            ctx.count = 24;
+            ctx.vertices = v;
+            ctx.tags = tags;
+            ctx.tag = 1;
+            ctx.flag96 = mode == 2 ? 1u : 0u;
+            ctx.flag100 = mode == 1 ? 1u : 0u;
+            bad += water_view_kernel( &view, wave, ctx ) ? 0 : 1;
+            bad += std::memcmp( v, s, sizeof( v ) ) != 0;
+            s += 240;
+            compared += 240;
+            vertices += 24;
+        }
+        for ( int k = 0; k < 6; ++k )
+            st->value.word[ k ] = *s++;
+        const unsigned* transform2 = s;
+        s += k_water_transform_words;
+        water_layout_box_t layout{};
+        water_flow_refresh( b, *st, wave, transform2, layout );
+        bad += flow_check_state( b, wave, s, true, compared );
+        for ( int k = 0; k < 8; ++k, ++s )
+            if ( layout.known[ k ] )
+            {
+                ++compared;
+                bad += layout.word[ k ] != *s;
+            }
+        if ( *s++ )
+        {
+            // retail releases after all six are made (the case's order): the block kept for then
+            released.emplace_back( wave, s );
+            const unsigned* q = s + 4;   // +0x78, the dtor's this, the dtor count, +4
+            q += 1 + 2 * q[ 0 ];
+            q += 1 + 2 * q[ 0 ];
+            q += 2;
+            q += 1 + 9 * q[ 0 ];
+            s = q;
+        }
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "flow_wave: entity %u (wave %d): %d differences", c, index, bad );
+        }
+    }
+    for ( const auto& r : released )
+    {
+        ++releases;
+        const int wave = r.first;
+        const unsigned* q = r.second;
+        const unsigned e78 = *q++, dtor_this = *q++, dtors = *q++, ref = *q++;
+        water_entity_release( b, wave );   // slot 7 0x5D6710; the entity's +0x78 = 0 is the caller's
+        const bool gone = wave < static_cast< int >( b.wave_gone.size( ) ) && b.wave_gone[ static_cast< std::size_t >( wave ) ];
+        int bad = e78 != 0u || ( gone ? 1u : 0u ) != dtors || ( gone && dtor_this != 1u );
+        bad += gone ? ref != 0xFFFFFFFFu : ref != b.waves[ static_cast< std::size_t >( wave ) ].word[ 1 ];
+        bad += flow_check_state( b, wave, q, false, compared );
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "flow_wave: the release of wave %d: %d differences", wave, bad );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuDirectionalFlowWaveEntity / VuWaterDirectionalFlowWave (slot 6 0x5D66D0: 0x5D6810, 0x5289B0, 0x59C3C0, 0x59C4C0; slot 3 "
+                     "0x59C390; slot 2 0x5D66C0 -> 0x5D6740; slot 7 0x5D6710) match retail on Hydroelectric's built water: %u entities, %d "
+                     "vertices in three modes, %d releases, %d values plus every wave tree",
+            n, vertices, releases, compared );
+    else
+        LOG_ERROR( "flow_wave FAILED %d of %u", failed, n );
+    return failed == 0;
+}
+
 // water_surface_motion (0x5DC3B0 = entity_set_world + the watcher water_surface_refresh / water_ramp_refresh) against retail
 // on Hydroelectric's built water (case water_surface_motion): every surface / ramp entity in entity order handed a new world
 // (rotated about z and moved) through its motion component. Compared per call: the transform's world, the surface's known
@@ -602,6 +768,7 @@ inline bool verify_watchers_all( )
 {
     bool ok = true;
     ok = verify_water_types_game( ) && ok;
+    ok = verify_flow_wave( ) && ok;
     ok = verify_wave_refresh( ) && ok;
     ok = verify_water_controls( ) && ok;
     ok = verify_water_surface_motion( ) && ok;
