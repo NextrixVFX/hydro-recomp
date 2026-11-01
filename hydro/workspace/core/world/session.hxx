@@ -226,6 +226,21 @@ struct race_session_t
     int buoy_hits = 0;                   // dev count (not retail): OnCheckPointBuoyHit broadcasts made
     int prop_hits = 0, prop_splashes = 0;   // dev counts (not retail): 0x437F40 hits taken, dynamic-prop splashes started
     int mine_explosions = 0, explosion_hits = 0;   // dev counts (not retail)
+    // The level's VuBreakablePropEntity (world/breakable.hxx), live from their slot 6 0x434620.
+    struct breakable_live_t
+    {
+        entity_t* entity = nullptr;
+        breakable_t* p = nullptr;
+        rigid_component_t* c = nullptr;
+        level_body_t* body = nullptr;
+        std::uint8_t request = 0;          // +0xD0
+        float velocity[ 3 ] = { };         // +0xD4
+        const void* target = nullptr;      // the weak ref's object (+0xF0): the other body's owner (a session boat's body here)
+        std::uint32_t state = 0;           // the breakable component's +0xE4 (0 whole, 1 broken / debris live, 2 done)
+        race_session_t* session = nullptr;
+    };
+    std::vector< std::unique_ptr< breakable_live_t > > breakables;
+    int breaks = 0;   // dev count (not retail)
     // VuExplosionManagerImpl g 0x759034's listeners (+4 / +8; world/mine.hxx): the human drivers' +0x80 parts, added by
     // their slot 6 0x40F210 (boat human.hxx human_game_initialize).
     std::vector< explosion_listener_t > explosion_listeners;
@@ -822,6 +837,89 @@ inline void race_session_mine_tick( void* user, float )
     }
 }
 
+// VuBreakablePropEntity's Decision tick 0x434A20 (dt), read whole (world/breakable.hxx's head): the breakable
+// component's 0x543640(dt) - its debris fade timer (+0xE8, state +0xE4 1 -> 2 below 0, the debris draw removed): the
+// component's own properties and debris are the renderer's (0x51E790 / 0x5436B0 not recreated), so only the state is
+// kept here. With a request (+0xD0): unless the component's state is already non-zero - 0x546A20 (the static draw off,
+// the body out of the world when added), the debris start 0x51E790 (UNKNOWN: the renderer's), state 1, the draw add;
+// with a target: "OnBreak" (its entity parameter not carried by our fire), "OnCameraShake" {Magnitude, Duration,
+// Falloff, Frequency} and "OnRumble" {Low, High} to the target's event map (0x501160; a session boat's: boat events.hxx);
+// the pfx by Pfx Name (0x52BCD0; slot 10 discarded; slot 2 setMatrix the transform world, slot 3 the kept velocity
+// +0xD4 (its 4th word UNKNOWN: 0 here), slot 11 start); FMOD by Sfx Name (platform). Then +0xD0 = 0 and the weak ref
+// released either way.
+inline void race_session_breakable_tick( void* user, float )
+{
+    race_session_t::breakable_live_t& b = *static_cast< race_session_t::breakable_live_t* >( user );
+    race_session_t& s = *b.session;
+    if ( !b.request )
+        return;
+    if ( b.state == 0 )
+    {
+        if ( s.world.prop_drawn )
+            s.world.prop_drawn( *b.entity, false );
+        if ( b.body->in_world )
+        {
+            vu_dynamics_remove_rigid_body( s.dynamics->impl, b.body->body );
+            b.body->in_world = false;
+        }
+        race_unwired( s, "a breakable's debris 0x51E790 / its draw (Vu3dDrawBreakableModelComponent - the renderer's, not recreated)" );
+        b.state = 1;
+        ++s.breaks;
+        if ( b.target )
+        {
+            if ( s.world.fire )
+                s.world.fire( *b.entity, "OnBreak" );
+            race_session_boat_t* boat = nullptr;
+            for ( const auto& x : s.boats )
+                if ( &x->body.body == b.target )
+                    boat = x.get( );
+            if ( boat && boat->io.camera && boat->driver && !boat->driver->graph.empty( ) )
+            {
+                std::uint8_t shake[ 0x84 ] = { }, rumble[ 0x84 ] = { };
+                std::int32_t n = 0;
+                for ( int k = 0; k < 4; ++k )
+                    race_dyn_prop_param( shake, n, b.p->shake[ k ] );
+                std::memcpy( shake + 0x80, &n, 4 );
+                n = 0;
+                race_dyn_prop_param( rumble, n, b.p->rumble[ 0 ] );
+                race_dyn_prop_param( rumble, n, b.p->rumble[ 1 ] );
+                std::memcpy( rumble + 0x80, &n, 4 );
+                boat_on_camera_shake( boat->io.camera, shake );
+                std::uint8_t* drv = boat->driver->graph[ 0 ].image.data( );
+                boat_on_rumble( drv, load_word( drv, 0 ), rumble );
+            }
+        }
+        const transform_component_t* t = entity_transform( *b.entity );
+        if ( !b.p->pfx.empty( ) && s.world.pfx && s.world.pfx_manager && s.world.pfx_ops && t )
+        {
+            pfx_manager_t& pm = *s.world.pfx_manager;
+            const int e = pfx_manager_create( pm, b.p->pfx.c_str( ), *s.world.pfx_ops );
+            if ( e >= 0 )
+            {
+                const boat_pfx_ops_t o = boat_pfx_runtime_ops( *s.world.pfx );
+                const std::uint32_t hd = pfx_manager_handle( pm, e );
+                if ( o.duration )
+                    o.duration( o.user, pm.entries[ static_cast< std::size_t >( e ) ].instance );
+                const int x = hd ? pfx_manager_lookup( pm, hd ) : -1;
+                if ( x >= 0 )
+                {
+                    const std::uint32_t inst = pm.entries[ static_cast< std::size_t >( x ) ].instance;
+                    std::uint32_t v[ 4 ] = { };
+                    std::memcpy( v, b.velocity, 12 );
+                    o.set_matrix( o.user, inst, t->world );
+                    o.set_velocity( o.user, inst, v );
+                    o.start( o.user, inst );
+                }
+            }
+        }
+        if ( !b.p->sfx.empty( ) )
+            race_unwired( s, "audio: a breakable's Sfx (FMOD getEvent / set3DAttributes / start - platform)" );
+        LOG_INFO( "race: breakable '%s' broke (sync %d)%s", b.entity->m_name.c_str( ), s.dynamics ? s.dynamics->syncs : -1, b.target ? " - by a boat" : "" );
+    }
+    b.request = 0;
+    b.target = nullptr;
+}
+
 // One dynamic game prop's gameInitialize (world/dynprop.hxx, verified by the cases dynamic_prop_bodies /
 // dynamic_prop_step) made live: postLoad 0x5459F0's component step (retail runs it at load; nothing reads the
 // component in between), 0x437580, the body into the dynamics world (vt+0x3C), the motion state's
@@ -980,7 +1078,8 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
             lens_water_emitter_start( &e, lh );
             return;
         }
-        if ( e.m_type != "VuPropEntity" )
+        const bool breakable = e.m_type == "VuBreakablePropEntity";
+        if ( e.m_type != "VuPropEntity" && !breakable )
         {
             ++unknown[ e.m_type.empty( ) ? std::string( "(UNKNOWN node)" ) : e.m_type ];
             return;
@@ -1003,7 +1102,15 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
         b->name = e.m_name;
         level_body_t* bp = b.get( );
         std::string why;
-        const std::uint8_t visible = static_cast< prop_entity_state_t* >( e.m_state.get( ) )->visible;
+        const std::uint8_t visible = breakable ? static_cast< breakable_state_t* >( e.m_state.get( ) )->value.visible
+                                               : static_cast< prop_entity_state_t* >( e.m_state.get( ) )->visible;
+        // The breakable's ctor 0x433F80 ends with the rigid component's +0xF4 = its +0x7C part (the contact callback) and
+        // +0xD8 |= 1 - component state the body is built from.
+        if ( breakable )
+        {
+            c.word_f4 = 1;
+            c.flags_d8 |= 1u;
+        }
         const bool ok = bodies_prop_game_initialize( *bp, c, visible, asset, t->world, t->scale, id, hooks, [] { /* g 0x7590B8 vt+0x28: the renderer */ },
             [ & ]( level_body_t& lb ) {
                 d.objects[ &lb.body ] = &lb.collision;
@@ -1014,6 +1121,19 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
             race_unwired( s, "VuPropEntity '" + e.m_name + "': " + why + " (UNKNOWN, no body)" );
         if ( bp->in_world )
             ++added;
+        // VuBreakablePropEntity's slot 6 0x434620: 0x546910 above, then the "Decision" tick 0x434A20 and the "Build" tick
+        // 0x434D90 (the debris draw 0x5436B0 - the renderer's: not registered).
+        if ( breakable && ok )
+        {
+            auto br = std::make_unique< race_session_t::breakable_live_t >( );
+            br->entity = &e;
+            br->p = &static_cast< breakable_state_t* >( e.m_state.get( ) )->value;
+            br->c = &c;
+            br->body = bp;
+            br->session = &s;
+            tick_register( s.ticks, { br.get( ), race_session_breakable_tick, br.get( ) }, "Decision" );
+            s.breakables.push_back( std::move( br ) );
+        }
         s.level_bodies.push_back( std::move( b ) );
     };
     walk( walk, tree );

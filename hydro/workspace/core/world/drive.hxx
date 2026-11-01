@@ -880,6 +880,30 @@ inline void race_contact_added( void* user, solver_contact_point_t& cp, solver_r
                     }
                 };
             }
+        // A breakable's +0x7C part: 0x434730 (world/breakable.hxx breakable_contact). The other's owner (+0x2C0) for the
+        // weak ref: a session boat or a level body (its component's entity); anything else is UNKNOWN (not run).
+        for ( const auto& bp : s.breakables )
+            if ( &bp->body->body.body == self )
+            {
+                race_session_t::breakable_live_t* b = bp.get( );
+                return [ &s, b, self, other ]( contact_record_t& rec ) {
+                    bool owner = false;
+                    for ( const auto& x : s.boats )
+                        owner = owner || &x->body.body == other;
+                    for ( const auto& lbp : s.level_bodies )
+                        owner = owner || &lbp->body.body == other;
+                    if ( !owner )
+                    {
+                        race_unwired( s, "a breakable contact with a body that is no session boat / level body - its owner UNKNOWN, not run" );
+                        return;
+                    }
+                    std::uint8_t* own = reinterpret_cast< std::uint8_t* >( self );
+                    const int r = breakable_contact( b->p->threshold_mph, own, reinterpret_cast< const std::uint8_t* >( other ), rec.pos, rec.normal,
+                                                     b->request, b->velocity, *b->c, own );
+                    if ( r != 0 )
+                        b->target = other;
+                };
+            }
         return nullptr;
     };
     h.callback0 = prop_callback( object0, object1 );
