@@ -1027,10 +1027,57 @@ inline bool verify_race_track( )
     return failed == 0;
 }
 
+// race_track_start (world/race.hxx) against retail's 0x4D1E10 (oracle case
+// race_track_start) on the running world's own track (HydroelectricRace via
+// race_load_tree, as verify_race_track): per vector the return, the sector
+// out (or none for a null out) and all 16 matrix words (unwritten words keep
+// the sentinel on both sides). One failure per vector.
+inline bool verify_race_track_start( )
+{
+    c_archive archive;
+    std::map< std::string, value_t > templates;
+    const std::unique_ptr< entity_t > tree = race_check_tree( archive, templates, "VuProjectAsset/Games/HydroelectricRace" );
+    track_manager_t tm;
+    if ( !tree || !track_build_from_tree( *tree, tm ) )
+    {
+        LOG_ERROR( "race track start FAILED: HydroelectricRace's track did not build" );
+        return false;
+    }
+    int failed = 0, found = 0;
+    for ( std::size_t k = 0; k < g_golden_race_track_start_count; ++k )
+    {
+        const unsigned* g = g_golden_race_track_start + 20 * k;
+        float distance;
+        std::memcpy( &distance, &g[ 0 ], 4 );
+        std::uint32_t words[ 16 ];
+        for ( auto& w : words )
+            w = 0xA5A5A5A5u;
+        float m[ 16 ];
+        std::memcpy( m, words, 64 );
+        int sector = -1;
+        const bool ret = race_track_start( tm, distance, m, g[ 1 ] ? nullptr : &sector );
+        std::memcpy( words, m, 64 );
+        found += ret ? 1 : 0;
+        const bool same = ( ret ? 1u : 0u ) == g[ 2 ] && static_cast< std::uint32_t >( ret && !g[ 1 ] ? sector : -1 ) == g[ 3 ] &&
+                          std::memcmp( words, g + 4, 64 ) == 0;
+        if ( !same && ++failed <= 6 )
+            LOG_ERROR( "race track start vector %d (distance 0x%08X) differs from retail: ret %d sector %d word0 0x%08X (retail %u %d 0x%08X)",
+                static_cast< int >( k ), g[ 0 ], ret ? 1 : 0, sector, words[ 0 ], g[ 2 ], static_cast< int >( g[ 3 ] ), g[ 4 ] );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "race_track_start matches retail's 0x4D1E10 (VuRaceGame 0x48AF90's start down the track) on the running world's "
+                     "track: %d distances (%d placed), 16 matrix words + sector each, bit for bit",
+            static_cast< int >( g_golden_race_track_start_count ), found );
+    else
+        LOG_ERROR( "race track start FAILED %d of %d vectors", failed, static_cast< int >( g_golden_race_track_start_count ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
     ok = verify_race_track( ) && ok;
+    ok = verify_race_track_start( ) && ok;
     ok = verify_water_templates( ) && ok;
     ok = verify_water_frustum( ) && ok;
     ok = verify_water_grid( ) && ok;
