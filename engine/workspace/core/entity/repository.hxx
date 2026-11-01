@@ -31,9 +31,10 @@
 //   slot 11 0x552860 findEntity( const char* name ): FNV-1a 32 (0x811C9DC5,
 //           0x1000193) of the text, then slot 10.
 // SUBSTITUTION: the project set (an MSVC std::set<VuString> tree) is std::set
-// - same membership and order. Slot 13 0x552960 (838 B) is not read here.
+// - same membership and order.
+//   slot 13 0x552960 ( VuJsonContainer& out ): entity_repository_tree below.
 // Verified against retail: hydro checks/logic.hxx verify_entity_repository
-// (case entity_repository).
+// (case entity_repository), verify_repository_tree (case repository_tree).
 
 // The words an entity lends the repository: +0x30 its hash, +0x54 prev, +0x58
 // next. `entity` is the caller's object (what slot 10 answers).
@@ -118,6 +119,44 @@ inline bool entity_repository_remove_project( entity_repository_t& r, const std:
 inline bool entity_repository_has_project( const entity_repository_t& r, const std::string& name )
 {
     return r.projects.count( name ) != 0;
+}
+
+// slot 13 0x552960 ( VuJsonContainer& out ): every registered entity - the
+// buckets 0 .. 255, each from its head by +0x58 (the next read after the
+// entity is written) - as a tree of its long name's segments. Per entity:
+// path = its long name (0x500BF0: the ancestors' names and its own, root
+// first, "/"-joined); from `out`, while path != its name (entity +0x18, a
+// whole-string compare): the container is made an object (inline 0x4FBB10 +
+// tag 6 + a fresh map) and its member [ the first segment ] (0x564940: before
+// the first '/', or the whole path) taken (0x4FCAB0, a null one inserted),
+// path = the rest (0x5649C0: after the first '/', or the whole path); then
+// the same make-object and member [ path ] with the answer dropped - so the
+// entity itself is a null member unless something already sits there. `out`
+// is not cleared first; an empty repository leaves it as it was.
+// names( link, name, long_name ) gives the entity's +0x18 and 0x500BF0. A
+// path with no '/' that is not the name loops for ever in retail (never so
+// for a real long name, which ends in "/" + the name): returned here, UNKNOWN.
+#include <workspace/core/entity/json.hxx>
+
+template < typename N >
+inline void entity_repository_tree( const entity_repository_t& r, value_t& out, N names )
+{
+    for ( std::uint32_t b = 0; b < 256; ++b )
+        for ( const entity_link_t* e = r.buckets[ b ]; e != nullptr; e = e->next )
+        {
+            std::string name, path;
+            names( *e, name, path );
+            value_t* j = &out;
+            while ( path != name )
+            {
+                const std::size_t slash = path.find( '/' );
+                if ( slash == std::string::npos )
+                    return;   // retail: no end
+                j = &json_member( *j, path.substr( 0, slash ) );
+                path = path.substr( slash + 1 );
+            }
+            json_member( *j, path );
+        }
 }
 
 // ---------------------------------------------------------------------------

@@ -1457,6 +1457,57 @@ inline bool verify_entity_repository( )
     return bad == 0;
 }
 
+// entity/repository.hxx entity_repository_tree against retail's slot 13 0x552960 (case repository_tree): Hydroelectric's
+// 1379 template entities registered in the case's orders into a fresh repository per vector; out's dump after.
+inline bool verify_repository_tree( )
+{
+    logic_check_t c{ g_golden_rtr_words };
+    const unsigned n = c.next( );
+    std::vector< std::string > names( n ), paths( n );
+    std::vector< entity_link_t > links( n );
+    for ( unsigned i = 0; i < n; ++i )
+    {
+        names[ i ] = c.str( );
+        const std::int32_t parent = static_cast< std::int32_t >( c.next( ) );
+        paths[ i ] = parent < 0 ? names[ i ] : paths[ parent ] + "/" + names[ i ];   // 0x500BF0 (parents come first)
+        links[ i ].hash = c.next( );
+    }
+    auto of = [ & ]( const entity_link_t& e, std::string& name, std::string& path )
+    {
+        const std::size_t i = static_cast< std::size_t >( &e - links.data( ) );
+        name = names[ i ], path = paths[ i ];
+    };
+    const unsigned nv = c.next( );
+    value_t out;
+    int bad = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned preset = c.next( );
+        if ( preset == 0 )
+            out = value_t{ };
+        else if ( preset == 1 )
+            json_set_int( out, 7 );
+        for ( auto& l : links )
+            l.prev = nullptr, l.next = nullptr;
+        entity_repository_t r;
+        const unsigned no = c.next( );
+        for ( unsigned k = 0; k < no; ++k )
+            entity_repository_add( r, links[ c.next( ) ] );
+        entity_repository_tree( r, out, of );
+        const std::string want = c.str( );
+        std::string got;
+        vujb_dump( out, got );
+        if ( got != want && bad++ < 6 )
+            LOG_ERROR( "repository_tree vector %u (%u entities): dump differs (%u bytes, retail %u)", v, no,
+                       static_cast< unsigned >( got.size( ) ), static_cast< unsigned >( want.size( ) ) );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuEntityRepositoryImpl slot 13 matches retail (0x552960 0x564940 0x5649C0 0x4FCAB0): %u vectors over %u entities", nv, n );
+    else
+        LOG_ERROR( "repository_tree FAILED %d", bad );
+    return bad == 0;
+}
+
 // entity/repository.hxx vu_property_dtor / vu_entity_dtor against retail's 0x405260 / 0x500870 (case entity_dtors): fake
 // objects in one region, the region's words after and every call out in order.
 struct edt_check_memory_t
