@@ -517,3 +517,58 @@ inline bool verify_control_entity( )
         LOG_ERROR( "control_entity FAILED %d (unrecreated %d)", bad, unrecreated );
     return bad == 0;
 }
+// VuLensWaterEmitterEntity (world/lens.hxx) against retail (case lens_water): the emitter slot 0's answer bit for bit on
+// drawn positions / points / radii / rates; slots 6 / 7 on the entity and a null this (the manager calls and their
+// argument); the ctor's interface vtable 0x7555B0 and the two defaults (schema.hxx: 25 / 64).
+#include <workspace/core/world/lens.hxx>
+
+inline bool verify_lens_water( )
+{
+    logic_check_t c{ g_golden_lwe_words };
+    const unsigned n = c.next( );
+    int bad = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        float pos[ 3 ], pt[ 3 ];
+        for ( float& x : pos )
+            x = control_f( c.next( ) );
+        for ( float& x : pt )
+            x = control_f( c.next( ) );
+        const float rad = control_f( c.next( ) ), drops = control_f( c.next( ) );
+        const std::uint32_t want = c.next( );
+        const std::uint32_t got = control_w( lens_water_emitter_rate( pos, rad, drops, pt ) );
+        if ( got != want )
+        {
+            if ( bad < 6 )
+                LOG_ERROR( "lens_water vector %u: 0x%08X, retail 0x%08X", v, got, want );
+            ++bad;
+        }
+    }
+    const unsigned nc = c.next( );
+    for ( unsigned k = 0; k < nc; ++k )
+    {
+        std::vector< std::uint32_t > want( c.next( ) );
+        for ( auto& x : want )
+            x = c.next( );
+        std::vector< std::uint32_t > got = { want[ 0 ], want[ 1 ] };
+        static const int emitter_tag = 0;
+        const void* emitter = want[ 1 ] ? &emitter_tag : nullptr;
+        struct log_t { std::vector< std::uint32_t >* out; const void* e; } lg{ &got, &emitter_tag };
+        lens_water_hooks_t h;
+        h.user = &lg;
+        h.add = []( void* u, const void* e ) { auto* l = static_cast< log_t* >( u ); l->out->push_back( 0u ); l->out->push_back( e == l->e ? 1u : ( e ? 2u : 0u ) ); };
+        h.remove = []( void* u, const void* e ) { auto* l = static_cast< log_t* >( u ); l->out->push_back( 1u ); l->out->push_back( e == l->e ? 1u : ( e ? 2u : 0u ) ); };
+        if ( want[ 0 ] == 0x5E6720u )
+            lens_water_emitter_start( emitter, h );
+        else
+            lens_water_emitter_stop( emitter, h );
+        bad += got == want ? 0 : 1;
+    }
+    const std::uint32_t vt = c.next( ), radius = c.next( ), drops = c.next( );
+    bad += vt == 0x7555B0u && radius == 0x41C80000u && drops == 0x42800000u ? 0 : 1;
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuLensWaterEmitterEntity matches retail: %u emitter answers (0x5E6780), slots 6 / 7 with the manager, the ctor's defaults", n );
+    else
+        LOG_ERROR( "lens_water FAILED %d", bad );
+    return bad == 0;
+}
