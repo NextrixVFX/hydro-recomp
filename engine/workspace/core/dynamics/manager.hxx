@@ -46,13 +46,16 @@ struct vu_dynamics_t
 };
 
 // Slot 25 @0x4F8900: with +0xD set, the thread system's vt+0x3C(+0x1C, -1),
-// then +0xD = 0.
+// then +0xD = 0 - WHATEVER the wait answered (eax is never read; case
+// dynamics_sync). An absent wait hook is the one false: the wait was not made
+// (+0xD left as it was).
 inline bool vu_dynamics_sync( vu_dynamics_t& d )
 {
     if ( d.pending )
     {
-        if ( !d.hooks.wait || !d.hooks.wait( d.hooks.user, d.thread, -1 ) )
+        if ( !d.hooks.wait )
             return false;
+        ( void )d.hooks.wait( d.hooks.user, d.thread, -1 );
         d.pending = 0;
     }
     return true;

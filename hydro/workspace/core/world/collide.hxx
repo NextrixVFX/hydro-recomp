@@ -10,6 +10,7 @@
 // the scrapes (0x4ADC00) and empties the arrays.
 
 #include <workspace/core/boat/events.hxx>
+#include <workspace/core/boat/meshes.hxx>
 #include <workspace/core/boat/surface.hxx>
 #include <workspace/core/world/pfxmgr.hxx>
 
@@ -18,6 +19,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <xmmintrin.h>
 
 // The engine's VuArray<T> (data, count, capacity; _aligned_malloc 16). Its
 // reserve, here for the 0x1C-byte records, is 0x4AE490 (thiscall(array, n),
@@ -54,20 +56,25 @@ struct collision_impact_t
 };
 
 // A scrape record (+0x54's element, 0x1C bytes): the listener compares only the
-// first four words; the rest is the scrape tick's (0x4ADC00, unread).
+// first four words; the rest is the scrape tick's (0x4ADC00 below).
 struct collision_scrape_t
 {
     const void* body_a;     // +0x00
     const void* body_b;     // +0x04
     std::int32_t part_a;    // +0x08
     std::int32_t part_b;    // +0x0C
-    std::uint32_t rest[ 3 ];
+    std::uint8_t alive;     // +0x10 cleared every tick, 1 once a contact point touched it
+    std::uint8_t pad[ 3 ];  // +0x11 .. +0x13 never written
+    std::uint32_t event;    // +0x14 the FMOD event (getEvent's out word)
+    std::uint32_t handle;   // +0x18 the VuPfxManager handle (0 = none)
 };
 
 struct collision_manager_t
 {
     vu_array_t< collision_impact_t > impacts;   // +0x48
     vu_array_t< collision_scrape_t > scrapes;   // +0x54
+    // +8 / +0xC the two FMOD event groups 0x4AD970 fetches once (0 = not yet).
+    std::uint32_t group_impact = 0, group_scrape = 0;
 };
 
 // The contact-added listener 0x4AD540 (interface slot 0; thiscall this =
@@ -331,4 +338,305 @@ inline void collision_impact_tick( collision_manager_t& m, const collision_table
             pfx_instance_start( heap, inst );
     }
     m.impacts.count = 0;
+}
+
+// One persistent manifold of the dynamics world as the scrape tick reads it
+// (btPersistentManifold: +0x10 the point cache, +0x490 / +0x494 the bodies,
+// +0x498 the cached point count). The bodies are btCollisionObject images
+// (+0x40 .. +0x48 the origin, +0xF4 the internal type, +0x140 .. the linear
+// velocity, +0x150 .. the angular, byte +0x2C8 the surface id, short +0x2CA
+// the group, +0x2C0 the owner entity - `owner0` / `owner1` its image, read
+// only for a boat body: byte +0x467); `mesh0` / `mesh1` = the shape's (+0xD4)
+// +8, a collision mesh or none. `points`: `contacts` btManifoldPoint images of
+// 0x120 bytes (+0x20 / +0x30 the world points on B / A, +0x64 / +0x68 the
+// triangle indices index0 / index1).
+struct collision_manifold_t
+{
+    const std::uint8_t* body0 = nullptr;
+    const std::uint8_t* body1 = nullptr;
+    const std::uint8_t* owner0 = nullptr;
+    const std::uint8_t* owner1 = nullptr;
+    const collision_mesh_asset_t* mesh0 = nullptr;
+    const collision_mesh_asset_t* mesh1 = nullptr;
+    std::int32_t contacts = 0;
+    const std::uint8_t* points = nullptr;
+};
+
+// The scrape tick's outside world. AUDIO (platform: FMOD's event API, hooks):
+// `group` is the manager's +0xC "Global/Scrapes/Scrapes_Player" group;
+// get_event = its vt+0x20 getEvent( name, 1, &record +0x14 ) - the answer is
+// NOT tested: the hook writes the record's event word (it holds the slot's
+// previous bytes on entry); set3DAttributes( event, &position, 0, 0 ),
+// getParameter( event, "speed", &p ) (false = a non-zero FMOD_RESULT) ->
+// setValue( p, speed ), start( event ), stop( event, immediate )
+// (Event::stop - called with a 0 event too). THE PFX: g_vupfxmanager (the
+// manager, its ops) and the system instance's slots 16 (walk: told only), 0
+// (position), 11 (start), 12 (stop) - pfxsim.hxx's on `heap` when null.
+struct collision_scrape_hooks_t
+{
+    void* user = nullptr;
+    void ( *get_event )( void* user, std::uint32_t group, const char* name, std::uint32_t& event ) = nullptr;
+    void ( *set_position )( void* user, std::uint32_t event, const float* xyz ) = nullptr;
+    bool ( *get_parameter )( void* user, std::uint32_t event, const char* name, std::uint32_t& parameter ) = nullptr;
+    void ( *set_value )( void* user, std::uint32_t parameter, float value ) = nullptr;
+    void ( *start )( void* user, std::uint32_t event ) = nullptr;
+    void ( *stop )( void* user, std::uint32_t event, bool immediate ) = nullptr;
+    void ( *pfx_walk )( void* user, std::uint32_t instance ) = nullptr;
+    void ( *pfx_position )( void* user, std::uint32_t instance, const float* xyz ) = nullptr;
+    void ( *pfx_start )( void* user, std::uint32_t instance ) = nullptr;
+    void ( *pfx_stop )( void* user, std::uint32_t instance, bool immediate ) = nullptr;
+};
+
+// A body's part for one contact point: its +0x2C8 surface byte, or - with a
+// collision mesh - the surface id (byte +0x28) of material ( the triangle's
+// u32 +0x70 [ index ] low byte & 0x1F ) in the mesh's +0x7C table (0x2C-byte
+// entries). A read past the asset's arrays is UNKNOWN in retail (the index is
+// Bullet's): counted in `unread`, the part left at the body's byte.
+inline std::int32_t collision_scrape_part( const std::uint8_t* body, const collision_mesh_asset_t* mesh, std::int32_t index, int& unread )
+{
+    std::int32_t part = body[ 0x2C8 ];
+    if ( mesh == nullptr )
+        return part;
+    const std::size_t at = static_cast< std::size_t >( static_cast< std::uint32_t >( index ) ) * 4u;
+    if ( index < 0 || at >= mesh->triangles.bytes.size( ) )
+    {
+        ++unread;
+        return part;
+    }
+    const std::size_t mat = static_cast< std::size_t >( mesh->triangles.bytes[ at ] & 0x1Fu ) * 0x2Cu + 0x28u;
+    if ( mat >= mesh->materials.bytes.size( ) )
+    {
+        ++unread;
+        return part;
+    }
+    return mesh->materials.bytes[ mat ];
+}
+
+// The scrape tick 0x4ADC00 (thiscall manager). Every record's +0x10 = 0. Then
+// per manifold (g_vudynamicsimpl vt+0x6C -> +0x18 the dispatcher: vt+0x20
+// count, vt+0x24 the i-th) with a nonzero point count, both bodies rigid
+// (+0xF4 == 2), ( A +0x2CA | B +0x2CA ) & 0x10 and a boat owner's +0x467 set
+// (as the listener), per contact point: the parts (collision_scrape_part with
+// index0 / index1); the record with (A, B, part A, part B) - or a new one
+// appended (growth max( n, cap + cap / 2 ), memcpy of the count's records):
+// +0x10 = 0, the event from ScrapeSfx[ cell ], the handle from createEffect
+// ( ScrapePfx[ cell ] ) inlined (0x52BCD0 + the serial bump; 0 when no free
+// entry or no instance) - `fresh`. Speed = min( sqrt( |vA - vB|^2 ) x 0.02,
+// 1.0 ) (minss: a NaN gives 1.0), v = linear + angular x ( point - origin ) at
+// A's / B's world point; position = ( point on B + point on A ) x 0.5. With an
+// event: set3DAttributes, "speed", start when fresh. When the handle resolves:
+// slot 16, every VuPfxEmitFountain-derived process +0x20 (its rate scale) =
+// speed, slot 0 position, slot 11 when fresh. Then +0x10 = 1. Last, every
+// record still at +0x10 == 0: stop( event, false ), the handle's slot 12
+// stop( false ), removal 0x4AE4F0 (swap with the last, count - 1; the swapped
+// record is tested next). Returns the unknown mesh reads (0 = none).
+inline int collision_scrape_tick( collision_manager_t& m, const collision_tables_t& t, const collision_manifold_t* manifolds, std::int32_t count,
+                                  pfx_manager_t& pm, const pfx_manager_ops_t& ops, pfx_heap_t& heap, std::uint32_t resources,
+                                  const collision_scrape_hooks_t& k )
+{
+    int unread = 0;
+    for ( std::int32_t i = 0; i < m.scrapes.count; ++i )
+        m.scrapes.data[ static_cast< std::size_t >( i ) ].alive = 0;
+    auto f = []( const std::uint8_t* p, int at ) {
+        float v;
+        std::memcpy( &v, p + at, 4 );
+        return v;
+    };
+    auto stop_pfx = [ & ]( std::uint32_t handle, bool immediate ) {
+        const int e = pfx_manager_lookup( pm, handle );
+        if ( e < 0 )
+            return;
+        const std::uint32_t inst = pm.entries[ static_cast< std::size_t >( e ) ].instance;
+        if ( k.pfx_stop != nullptr )
+            k.pfx_stop( k.user, inst, immediate );
+        else
+            pfx_instance_stop( heap, resources, inst, immediate );
+    };
+    for ( std::int32_t mi = 0; mi < count; ++mi )
+    {
+        const collision_manifold_t& mf = manifolds[ mi ];
+        if ( mf.contacts == 0 )
+            continue;
+        const std::uint8_t* a = mf.body0;
+        const std::uint8_t* b = mf.body1;
+        std::int32_t ta, tb;
+        std::memcpy( &ta, a + 0xF4, 4 );
+        std::memcpy( &tb, b + 0xF4, 4 );
+        if ( ta != 2 || tb != 2 )
+            continue;
+        std::uint16_t ga, gb;
+        std::memcpy( &ga, a + 0x2CA, 2 );
+        std::memcpy( &gb, b + 0x2CA, 2 );
+        if ( ( ( ga | gb ) & 0x10u ) == 0u )
+            continue;
+        std::uint8_t boat = 0;
+        if ( ga & 0x10u )
+            boat = mf.owner0[ 0x467 ];
+        if ( gb & 0x10u )
+            boat |= mf.owner1[ 0x467 ];
+        if ( boat == 0 || mf.contacts <= 0 )
+            continue;
+        for ( std::int32_t c = 0; c < mf.contacts; ++c )
+        {
+            const std::uint8_t* p = mf.points + 0x120 * static_cast< std::size_t >( c );
+            std::int32_t index0, index1;
+            std::memcpy( &index0, p + 0x64, 4 );
+            std::memcpy( &index1, p + 0x68, 4 );
+            const std::int32_t part_a = collision_scrape_part( a, mf.mesh0, index0, unread );
+            const std::int32_t part_b = collision_scrape_part( b, mf.mesh1, index1, unread );
+            std::int32_t at = 0;
+            while ( at < m.scrapes.count )
+            {
+                const collision_scrape_t& r = m.scrapes.data[ static_cast< std::size_t >( at ) ];
+                if ( r.body_a == a && r.body_b == b && r.part_a == part_a && r.part_b == part_b )
+                    break;
+                ++at;
+            }
+            bool fresh = false;
+            if ( at == m.scrapes.count )
+            {
+                const std::int32_t n = m.scrapes.count + 1;
+                if ( n > m.scrapes.capacity )
+                {
+                    const std::int32_t cap = m.scrapes.capacity;
+                    const std::int32_t grow = cap + cap / 2;
+                    vu_array_reserve( m.scrapes, n > grow ? n : grow );
+                }
+                m.scrapes.count = n;
+                collision_scrape_t& r = m.scrapes.data[ static_cast< std::size_t >( n - 1 ) ];
+                r.body_a = a;
+                r.body_b = b;
+                r.part_b = part_b;
+                r.part_a = part_a;
+                r.alive = 0;
+                const std::size_t cell = static_cast< std::size_t >( t.types * part_a + part_b );
+                if ( k.get_event != nullptr )
+                    k.get_event( k.user, m.group_scrape, t.scrape_sfx.data[ cell ].data( ), r.event );
+                const int e = pfx_manager_create( pm, t.scrape_pfx.data[ cell ].data( ), ops );
+                r.handle = e < 0 ? 0u : pfx_manager_handle( pm, e );
+                fresh = true;
+            }
+            collision_scrape_t& r = m.scrapes.data[ static_cast< std::size_t >( at ) ];
+            // A's point velocity: linear + angular x ( point on A - origin ).
+            const float ax = f( p, 0x30 ) - f( a, 0x40 ), ay = f( p, 0x34 ) - f( a, 0x44 ), az = f( p, 0x38 ) - f( a, 0x48 );
+            const float wax = f( a, 0x150 ), way = f( a, 0x154 ), waz = f( a, 0x158 );
+            const float vax = f( a, 0x140 ) + ( way * az - waz * ay );
+            const float vay = f( a, 0x144 ) + ( waz * ax - wax * az );
+            const float vaz = f( a, 0x148 ) + ( wax * ay - way * ax );
+            // B's at the point on B.
+            const float bx = f( p, 0x20 ) - f( b, 0x40 ), by = f( p, 0x24 ) - f( b, 0x44 ), bz = f( p, 0x28 ) - f( b, 0x48 );
+            const float wbx = f( b, 0x150 ), wby = f( b, 0x154 ), wbz = f( b, 0x158 );
+            const float vbx = f( b, 0x140 ) + ( bz * wby - by * wbz );
+            const float vby = f( b, 0x144 ) + ( bx * wbz - bz * wbx );
+            const float vbz = f( b, 0x148 ) + ( by * wbx - bx * wby );
+            const float position[ 3 ] = { ( f( p, 0x20 ) + f( p, 0x30 ) ) * 0.5f, ( f( p, 0x24 ) + f( p, 0x34 ) ) * 0.5f,
+                                          ( f( p, 0x28 ) + f( p, 0x38 ) ) * 0.5f };
+            const float dx = vax - vbx, dy = vay - vby, dz = vaz - vbz;
+            const float raw = _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( dy * dy + dx * dx ) + dz * dz ) ) ) * 0.02f;
+            const float speed = _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( raw ), _mm_set_ss( 1.0f ) ) );
+            if ( r.event != 0u )
+            {
+                if ( k.set_position != nullptr )
+                    k.set_position( k.user, r.event, position );
+                std::uint32_t parameter = 0;
+                if ( k.get_parameter != nullptr && k.get_parameter( k.user, r.event, "speed", parameter ) && k.set_value != nullptr )
+                    k.set_value( k.user, parameter, speed );
+                if ( fresh && k.start != nullptr )
+                    k.start( k.user, r.event );
+            }
+            const int e = pfx_manager_lookup( pm, r.handle );
+            if ( e >= 0 )
+            {
+                const std::uint32_t inst = pm.entries[ static_cast< std::size_t >( e ) ].instance;
+                if ( k.pfx_walk != nullptr )
+                    k.pfx_walk( k.user, inst );
+                std::uint32_t bits;
+                std::memcpy( &bits, &speed, 4 );
+                pfx_system_bind( heap, inst, "VuPfxEmitFountain", 0x20, bits );
+                if ( k.pfx_position != nullptr )
+                    k.pfx_position( k.user, inst, position );
+                else
+                    pfx_system_set_position( heap.find( inst ), reinterpret_cast< const std::uint32_t* >( position ) );
+                if ( fresh )
+                {
+                    if ( k.pfx_start != nullptr )
+                        k.pfx_start( k.user, inst );
+                    else
+                        pfx_instance_start( heap, inst );
+                }
+            }
+            r.alive = 1;
+        }
+    }
+    for ( std::int32_t i = 0; i < m.scrapes.count; ++i )
+    {
+        collision_scrape_t& r = m.scrapes.data[ static_cast< std::size_t >( i ) ];
+        if ( r.alive != 0 )
+            continue;
+        if ( k.stop != nullptr )
+            k.stop( k.user, r.event, false );
+        stop_pfx( r.handle, false );
+        // 0x4AE4F0: swap with the last record, then count - 1 (its resize
+        // never grows here).
+        const std::size_t last = static_cast< std::size_t >( m.scrapes.count - 1 );
+        if ( static_cast< std::size_t >( i ) + 1u < static_cast< std::size_t >( m.scrapes.count ) )
+            std::swap( m.scrapes.data[ static_cast< std::size_t >( i ) ], m.scrapes.data[ last ] );
+        --m.scrapes.count;
+        --i;
+    }
+    return unread;
+}
+
+// The reset 0x4AD2B0 (thiscall manager; called by 0x482D50): the impact count
+// = 0; per scrape record stop( event, true ) and the handle's slot 12
+// stop( true ); the scrape count = 0 (the records' bytes stay).
+inline void collision_manager_reset( collision_manager_t& m, pfx_manager_t& pm, pfx_heap_t& heap, std::uint32_t resources,
+                                     const collision_scrape_hooks_t& k )
+{
+    m.impacts.count = 0;
+    for ( std::int32_t i = 0; i < m.scrapes.count; ++i )
+    {
+        const collision_scrape_t& r = m.scrapes.data[ static_cast< std::size_t >( i ) ];
+        if ( k.stop != nullptr )
+            k.stop( k.user, r.event, true );
+        const int e = pfx_manager_lookup( pm, r.handle );
+        if ( e < 0 )
+            continue;
+        const std::uint32_t inst = pm.entries[ static_cast< std::size_t >( e ) ].instance;
+        if ( k.pfx_stop != nullptr )
+            k.pfx_stop( k.user, inst, true );
+        else
+            pfx_instance_stop( heap, resources, inst, true );
+    }
+    m.scrapes.count = 0;
+}
+
+// The tick 0x4AD970 (thiscall manager, dt unread; retn 4; registered in the
+// "Decision" phase by the init): +8 == 0 -> EventSystem::getGroup(
+// "Global/Collisions/Collisions_Player", true, &+8 ), +0xC == 0 -> getGroup(
+// "Global/Scrapes/Scrapes_Player", true, &+0xC ) (the answers not tested:
+// `get_group` writes the word); the impact tick; the scrape tick; then the dev
+// stats page (g 0x759020 vt+0x20: when its current page is "CollisionManager",
+// clear + "Manifolds: %d\n" with the SCRAPE count) - `dev_page`, a dev hook.
+// Returns the scrape tick's unknown reads.
+struct collision_tick_hooks_t
+{
+    void* user = nullptr;
+    void ( *get_group )( void* user, const char* name, std::uint32_t& group ) = nullptr;
+    void ( *dev_page )( void* user, std::int32_t scrapes ) = nullptr;
+};
+
+inline int collision_manager_tick( collision_manager_t& m, const collision_tables_t& t, const collision_manifold_t* manifolds, std::int32_t count,
+                                   pfx_manager_t& pm, const pfx_manager_ops_t& ops, pfx_heap_t& heap, std::uint32_t resources,
+                                   const collision_impact_hooks_t& impact, const collision_scrape_hooks_t& scrape, const collision_tick_hooks_t& h )
+{
+    if ( m.group_impact == 0u && h.get_group != nullptr )
+        h.get_group( h.user, "Global/Collisions/Collisions_Player", m.group_impact );
+    if ( m.group_scrape == 0u && h.get_group != nullptr )
+        h.get_group( h.user, "Global/Scrapes/Scrapes_Player", m.group_scrape );
+    collision_impact_tick( m, t, pm, ops, heap, impact );
+    const int unread = collision_scrape_tick( m, t, manifolds, count, pm, ops, heap, resources, scrape );
+    if ( h.dev_page != nullptr )
+        h.dev_page( h.user, m.scrapes.count );
+    return unread;
 }
