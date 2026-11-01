@@ -10,7 +10,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x401450,25,sub_401450,,,other classes (by address),absent,,False,False,service
 0x401470,91,sub_401470,,,other classes (by address),absent,,False,False,game
 0x4014D0,136,sub_4014D0,,,other classes (by address),absent,,False,False,game
-0x401560,1,nullsub_1,Vu2dLayoutComponent; Vu3dDrawAnimatedModelComponent; Vu3dDrawBreakableModelComponent; Vu3dDrawComponent; Vu3dDrawManager; Vu3dDrawStaticModelComponent; Vu3dLayoutComponent; VuAIUIDriverStartEntity; VuAchievementManager; VuAchievementNameUITextEntity; VuAchievementValueUITextEntity; VuActiveCameraTriggerEntity; VuAddBoostEntity; VuAddIntegerConstantEntity; VuAddIntegersEntity; VuAiDriver; VuAiManagerImpl; VuAiNuisanceDriver; VuAiNuisanceDriverStartEntity; VuAiUiDriver; VuAiWaypointEntity; VuAmbientLightEntity; VuAngleProperty; VuAnimatedAttachComponent; VuAnimatedModelAsset; VuAnimatedPropEntity; VuAnimationAsset; VuAsset; VuAssetConvertGameMode; VuAssetFactoryImpl; VuAssetFactoryListenerIF; VuAssetGameMode; VuAssetListAsset; VuAssetListGameMode; VuAssetNameProperty; VuAttachEntity; VuAudio; VuAudioAmbientReverbEntity; VuAudioBankAsset; VuAudioBankEntity; VuAudioDspEntity; VuAudioDuckingEntity; VuAudioEmitterEntity; VuAudioEventEntity; VuAudioEventNameProperty; VuAudioProjectAsset; VuAudioProjectEntity; VuAudioReverbEntity; VuAudioReverbNameProperty; VuAudioStreamAsset; VuAwardFlowEntity; VuBankedTurnWaveEntity; VuBarracudaEventUITextEntity; VuBarracudaMetroGfxComposer; VuBarracudaSlalomPenaltyUITextEntity; VuBarracudaTeamScoreUITextEntity; VuBarracudaTrackUIImageEntity; VuBarracudaTrackUITextEntity; VuBarracudaTuningUITextEntity; VuBarracudaUIAwardImageEntity; VuBarracudaUIButtonEntity; VuBarracudaUICreditTextEntity; VuBarracudaUITrophyImageEntity; VuBarracudaUITrophyTextEntity; VuBarracudaUIUnlockCatTextEntity; VuBarracudaUIUnlockInfoTextEntity; VuBarracudaUnlockUITextEntity; VuBaseConfigEntity; VuBaseOceanWaveEntity; VuBasicProperty<...>; VuBoatConfigEntity; VuBoatEntity; VuBoatManager; VuBoatStatEntity; VuBooleanEntity; VuBreakableDynamicGamePropEntity; VuBreakableGamePropEntity; VuBreakablePropEntity; VuBuildFilterEntity; VuBumpWaveEntity; VuChampionshipCompletionUITextEntity; VuChampionshipEntity; VuCheatEntity; VuCheckpointBuoyEntity; VuCircularOceanWaveEntity; VuClearChampDataUIAction; VuClearChampionshipDataUIAction; VuClearGameResultsUIAction; VuCloudManager; VuCloudSaveManager; VuCollisionManager; VuCollisionMeshAsset; VuCompareBooleansEntity; VuCompareIntegersEntity; VuCompareStringsEntity; VuCompiledShaderAsset; VuComponent; VuConstStringEnumProperty; VuControlComponent; VuControlComponentIF; VuControlKeyframeEntity; VuControlMethodEntity; VuControlMethodManager; VuCoronaEntity; VuCoronaOccluderEntity; VuCounterEntity; VuCreditsUITextEntity; VuCubeTextureAsset; VuCurrentAchievementUITextEntity; VuD3d11Gfx; VuDBEntryProperty; VuDefaultGfxComposer; VuDelayEntity; VuDev; VuDevConfig; VuDevConsole; VuDevHostComm; VuDevJumpPointEntity; VuDevMenu; VuDevProfile; VuDevStat; VuDevTimer; VuDifficultyBaseEntity; VuDifficultyImageEntity; VuDifficultyTextEntity; VuDirectionalCoronaEntity; VuDirectionalFlowWaveEntity; VuDirectionalLightEntity; VuDirectionalWaveEntity; VuDisplayScaleSettingsEntity; VuDockedBoatEntity; VuDoesChampDataExistUIAction; VuDoesChampionshipDataExistUIAction; VuDrawManagerImpl; VuDriverEntity; VuDynamicGamePropEntity; VuDynamicLightEntity; VuDynamicPropEntity; VuDynamicsImpl; VuEffectVolumeSettingsEntity; VuEllipticalGfxSettingsEntity; VuEndActionGameUIAction; VuEntity; VuEntityFactory; VuEntityRepositoryImpl; VuEventManager; VuExplosionEntity; VuExplosionManagerImpl; VuFadeManager; VuFloatingMineEntity; VuFluidsMeshAsset; VuFoliageEntity; VuFoliageManager; VuFontAsset; VuForceAffectorEntity; VuFrontEndCameraEntity; VuGame; VuGameActionEntity; VuGameButtonEntity; VuGameConfigEntity; VuGameMode; VuGameModeManagerImpl; VuGamePad; VuGameUtil; VuGamerTagUITextEntity; VuGenericAsset; VuGenericDataAsset; VuGenericEventEntity; VuGenericFile; VuGfxComposer; VuGfxSettingsEntity; VuGfxUtil; VuGhostBoatEntity; VuGhostDriver; VuGhostManager; VuGlobalGfxSettingsEntity; VuGridPositionEntity; VuGroupEntity; VuHUDButtonEntity; VuHUDElementEntity; VuHUDEntity; VuHUDHiddenPackageToastEntity; VuHUDMiniMapEntity; VuHUDOnScreenAxisEntity; VuHUDOnScreenButtonEntity; VuHUDOnScreenControlEntity; VuHUDPauseButtonEntity; VuHUDRecoverButtonEntity; VuHUDSpeedometerEntity; VuHiddenPackageManagerImpl; VuHumanDriver; VuHumanFilterEntity; VuIfEntity; VuInfiniteOceanWaveEntity; VuInfoUITextEntity; VuInputAxisEnumProperty; VuInputButtonEnumProperty; VuInputManagerImpl; VuInputRemappingEntity; VuInstigatorComponent; VuIntegerEntity; VuInvalidNetGameUITextEntity; VuIsAchievementUnlockedEntity; VuIsCircuitTrack; VuIsEventTypeEntity; VuIsPauseMenuActive; VuIsSkuEntity; VuIsTegraEntity; VuKeyboard; VuKeyframeEntity; VuKeyframeMotionEntity; VuLeaderboardManager; VuLeaderboardRowCountUITextEntity; VuLensWaterEmitterEntity; VuLensWaterManagerImpl; VuLicenseEntity; VuLightManager; VuLoadingProgressBarEntity; VuMessageBoxEntity; VuMessageBoxManager; VuMessageBoxScreenEntity; VuMetroAccel; VuMetroAchievementManager; VuMetroAnalyticsManager; VuMetroCloudSaveManager; VuMetroCommunityManager; VuMetroD3d11Gfx; VuMetroD3d11RenderTarget; VuMetroFile; VuMetroGamePad; VuMetroHttpClient; VuMetroKeyboard; VuMetroLeaderboardManager; VuMetroLicenseManager; VuMetroNet; VuMetroProfileManager; VuMetroSignInManager; VuMetroSys; VuMetroThread; VuMetroTitleStorageManager; VuMetroTouch; VuMotionComponent; VuMotionComponentIF; VuMotionEntity; VuMultiDelayEntity; VuMusicVolumeSettingsEntity; VuNotifyProperty; VuOffsetAttachComponent; VuOnAnyButtonOrKeyEntity; VuOnKeyboardEventEntity; VuOnProjectInitializedEntity; VuOnTouchSpecialEntity; VuOncePerLapFilterEntity; VuOneShotFilterEntity; VuOneShotPfxEntity; VuPackFileVersionsUITextEntity; VuPercentageProperty; VuPersistentBaseEntity; VuPersistentBooleanEntity; VuPersistentIntegerEntity; VuPersistentStringEntity; VuPfxAsset; VuPfxBoatSpringConstraintInstance; VuPfxEntity; VuPfxImpl; VuPfxManager; VuPfxProjectEntity; VuPfxSpringConstraintInstance; VuPfxTickAlphaInOutInstance; VuPfxTickAlphaInstance; VuPfxTickDampenVelocityInstance; VuPfxTickLinearAccelerationInstance; VuPfxTickScaleInstance; VuPfxTickWorldScaleZInstance; VuPlatformFilterEntity; VuPlayAnimationEntity; VuPointWaveCallbackIF; VuPointWaveEntity; VuPopScreenUIAction; VuPosterEntity; VuPowerUpBoostEntity; VuPowerUpEntity; VuPowerUpHiddenPackageEntity; VuPowerUpTriggerEntity; VuPreviewEntity; VuProgressManagerImpl; VuProjectAsset; VuProjectManager; VuPropEntity; VuPushScreenUIAction; VuRaceCompletionUITextEntity; VuRaceResultsTableEntity; VuRampEntity; VuRandomTriggerEntity; VuRectangularGfxSettingsEntity; VuRectangularOceanWaveEntity; VuReloadScreenUIAction; VuRestartActionGameUIAction; VuResultGameMode; VuResumeActionGameUIAction; VuRigidBodyComponent; VuRotateMotionEntity; VuRotation3dProperty; VuSandboxGameMode; VuSaveSettingsEntity; VuSayVoiceOverBoxEntity; VuSayVoiceOverEllipsoidEntity; VuSayVoiceOverEntity; VuSceneEntity; VuScreenFadeBoxEntity; VuScreenFadeEllipsoidEntity; VuScreenFadeEntity; VuScriptComponent; VuSellScreen; VuSentientUpsellPresented; VuSentientUpsellResponded; VuSequencerEntity; VuServiceManager; VuSetBoatConfigPlayerEntity; VuSetBooleanEntity; VuSetDefaultSettingsEntity; VuSetFrontEndCameraEntity; VuSetGameModeUIAction; VuSetInfoStringUIAction; VuSetIntegerEntity; VuSetMenuPresenceUIAction; VuSetScreenUIAction; VuSetStringEntity; VuSetTrackBranchProbabilities; VuSettingsManager; VuShaderAsset; VuShortUnlockUITextEntity; VuShowWebPageUIAction; VuShutdownAppUIAction; VuSignInEntity; VuSignInManager; VuSignInManager::VuListener; VuSkyBoxEntity; VuSlalomCompletionUITextEntity; VuSlalomGateEntity; VuSliderEntity; VuStartActionGameUIAction; VuStartLightsOutAction; VuStaticIntEnumProperty; VuStaticModelAsset; VuStaticModelInstance; VuStaticPfxEntity; VuStaticStringEnumProperty; VuStaticWakeWaveEntity; VuSteeringSensitivitySettingsEntity; VuStringAsset; VuStringDBImpl; VuStringEntity; VuSubstituteAssetEntity; VuSubtitleManagerImpl; VuSubtractIntegersEntity; VuSwapSkyboxEntity; VuSwitchEntity; VuSysNotifyEntity; VuSystemComponent; VuTelemetryClientImpl; VuTelemetryServerImpl; VuTemplateAsset; VuTextureAsset; VuThrottleRemappingEntity; VuTickManagerImpl; VuTiltSteeringSettingsEntity; VuTimeTrialCompletionUITextEntity; VuTimedEventAsset; VuTireTrackManager; VuTitleSequenceGameMode; VuTouch::Callback; VuTrackManagerImpl; VuTransformComponent; VuTransformEntity; VuTriggerArrayEntity; VuTriggerBoxEntity; VuTriggerEntity; VuTriggerForwarderEntity; VuTriggerManager; VuTriggerPlaneEntity; VuUIAction; VuUIButtonEntity; VuUIComboBoxEntity; VuUIContainerEntity; VuUIDebugTextEntity; VuUIDrawComponent; VuUIEventEntity; VuUIEventEnumProperty; VuUIFidelitySettingEntity; VuUIFlipIntervalSettingEntity; VuUIGhostLeaderboardEntity; VuUIImageBaseEntity; VuUIImageEntity; VuUILeaderboardEntity; VuUIMiniLeaderboardEntity; VuUIPadCheatComboEvent; VuUIPageLayoutEntity; VuUIProgressBarEntity; VuUIScreenEntity; VuUIScrollingTextEntity; VuUISubtitlesSettingEntity; VuUITextBaseEntity; VuUITextEntity; VuUITouchButtonEntity; VuUIUnitsSettingEntity; VuUnlockAchievementEntity; VuUnlockManagerImpl; VuUnusedAssetsGameMode; VuUserNextUIAction; VuVibrationSettingsEntity; VuViewportManager; VuVoiceOverManagerImpl; VuWakeWaveEntity; VuWater; VuWaterBaseOceanWave; VuWaterDebugDrawer; VuWaterInfiniteOceanWave; VuWaterMapAsset; VuWaterRampEntity; VuWaterSurfaceEntity; VuWaterTextureSettingsEntity; VuWaterWave; VuWhirlpoolWaveEntity; VuXInput; VuXmlAsset; _Ref_count_obj<...>; btDbvtBroadphase,VuUITextBaseEntity+4; VuUITextBaseEntity+6; VuUITextBaseEntity+7; VuUITextBaseEntity+8; VuUIImageBaseEntity+1; VuUIImageBaseEntity+2,physics (Bullet),verified,engine/workspace/core/entity/property.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
+0x401560,1,nullsub_1,Vu2dLayoutComponent; Vu3dDrawAnimatedModelComponent; Vu3dDrawBreakableModelComponent; Vu3dDrawComponent; Vu3dDrawManager; Vu3dDrawStaticModelComponent; Vu3dLayoutComponent; VuAIUIDriverStartEntity; VuAchievementManager; VuAchievementNameUITextEntity; VuAchievementValueUITextEntity; VuActiveCameraTriggerEntity; VuAddBoostEntity; VuAddIntegerConstantEntity; VuAddIntegersEntity; VuAiDriver; VuAiManagerImpl; VuAiNuisanceDriver; VuAiNuisanceDriverStartEntity; VuAiUiDriver; VuAiWaypointEntity; VuAmbientLightEntity; VuAngleProperty; VuAnimatedAttachComponent; VuAnimatedModelAsset; VuAnimatedPropEntity; VuAnimationAsset; VuAsset; VuAssetConvertGameMode; VuAssetFactoryImpl; VuAssetFactoryListenerIF; VuAssetGameMode; VuAssetListAsset; VuAssetListGameMode; VuAssetNameProperty; VuAttachEntity; VuAudio; VuAudioAmbientReverbEntity; VuAudioBankAsset; VuAudioBankEntity; VuAudioDspEntity; VuAudioDuckingEntity; VuAudioEmitterEntity; VuAudioEventEntity; VuAudioEventNameProperty; VuAudioProjectAsset; VuAudioProjectEntity; VuAudioReverbEntity; VuAudioReverbNameProperty; VuAudioStreamAsset; VuAwardFlowEntity; VuBankedTurnWaveEntity; VuBarracudaEventUITextEntity; VuBarracudaMetroGfxComposer; VuBarracudaSlalomPenaltyUITextEntity; VuBarracudaTeamScoreUITextEntity; VuBarracudaTrackUIImageEntity; VuBarracudaTrackUITextEntity; VuBarracudaTuningUITextEntity; VuBarracudaUIAwardImageEntity; VuBarracudaUIButtonEntity; VuBarracudaUICreditTextEntity; VuBarracudaUITrophyImageEntity; VuBarracudaUITrophyTextEntity; VuBarracudaUIUnlockCatTextEntity; VuBarracudaUIUnlockInfoTextEntity; VuBarracudaUnlockUITextEntity; VuBaseConfigEntity; VuBaseOceanWaveEntity; VuBasicProperty<...>; VuBoatConfigEntity; VuBoatEntity; VuBoatManager; VuBoatStatEntity; VuBooleanEntity; VuBreakableDynamicGamePropEntity; VuBreakableGamePropEntity; VuBreakablePropEntity; VuBuildFilterEntity; VuBumpWaveEntity; VuChampionshipCompletionUITextEntity; VuChampionshipEntity; VuCheatEntity; VuCheckpointBuoyEntity; VuCircularOceanWaveEntity; VuClearChampDataUIAction; VuClearChampionshipDataUIAction; VuClearGameResultsUIAction; VuCloudManager; VuCloudSaveManager; VuCollisionManager; VuCollisionMeshAsset; VuCompareBooleansEntity; VuCompareIntegersEntity; VuCompareStringsEntity; VuCompiledShaderAsset; VuComponent; VuConstStringEnumProperty; VuControlComponent; VuControlComponentIF; VuControlKeyframeEntity; VuControlMethodEntity; VuControlMethodManager; VuCoronaEntity; VuCoronaOccluderEntity; VuCounterEntity; VuCreditsUITextEntity; VuCubeTextureAsset; VuCurrentAchievementUITextEntity; VuD3d11Gfx; VuDBEntryProperty; VuDefaultGfxComposer; VuDelayEntity; VuDev; VuDevConfig; VuDevConsole; VuDevHostComm; VuDevJumpPointEntity; VuDevMenu; VuDevProfile; VuDevStat; VuDevTimer; VuDifficultyBaseEntity; VuDifficultyImageEntity; VuDifficultyTextEntity; VuDirectionalCoronaEntity; VuDirectionalFlowWaveEntity; VuDirectionalLightEntity; VuDirectionalWaveEntity; VuDisplayScaleSettingsEntity; VuDockedBoatEntity; VuDoesChampDataExistUIAction; VuDoesChampionshipDataExistUIAction; VuDrawManagerImpl; VuDriverEntity; VuDynamicGamePropEntity; VuDynamicLightEntity; VuDynamicPropEntity; VuDynamicsImpl; VuEffectVolumeSettingsEntity; VuEllipticalGfxSettingsEntity; VuEndActionGameUIAction; VuEntity; VuEntityFactory; VuEntityRepositoryImpl; VuEventManager; VuExplosionEntity; VuExplosionManagerImpl; VuFadeManager; VuFloatingMineEntity; VuFluidsMeshAsset; VuFoliageEntity; VuFoliageManager; VuFontAsset; VuForceAffectorEntity; VuFrontEndCameraEntity; VuGame; VuGameActionEntity; VuGameButtonEntity; VuGameConfigEntity; VuGameMode; VuGameModeManagerImpl; VuGamePad; VuGameUtil; VuGamerTagUITextEntity; VuGenericAsset; VuGenericDataAsset; VuGenericEventEntity; VuGenericFile; VuGfxComposer; VuGfxSettingsEntity; VuGfxUtil; VuGhostBoatEntity; VuGhostDriver; VuGhostManager; VuGlobalGfxSettingsEntity; VuGridPositionEntity; VuGroupEntity; VuHUDButtonEntity; VuHUDElementEntity; VuHUDEntity; VuHUDHiddenPackageToastEntity; VuHUDMiniMapEntity; VuHUDOnScreenAxisEntity; VuHUDOnScreenButtonEntity; VuHUDOnScreenControlEntity; VuHUDPauseButtonEntity; VuHUDRecoverButtonEntity; VuHUDSpeedometerEntity; VuHiddenPackageManagerImpl; VuHumanDriver; VuHumanFilterEntity; VuIfEntity; VuInfiniteOceanWaveEntity; VuInfoUITextEntity; VuInputAxisEnumProperty; VuInputButtonEnumProperty; VuInputManagerImpl; VuInputRemappingEntity; VuInstigatorComponent; VuIntegerEntity; VuInvalidNetGameUITextEntity; VuIsAchievementUnlockedEntity; VuIsCircuitTrack; VuIsEventTypeEntity; VuIsPauseMenuActive; VuIsSkuEntity; VuIsTegraEntity; VuKeyboard; VuKeyframeEntity; VuKeyframeMotionEntity; VuLeaderboardManager; VuLeaderboardRowCountUITextEntity; VuLensWaterEmitterEntity; VuLensWaterManagerImpl; VuLicenseEntity; VuLightManager; VuLoadingProgressBarEntity; VuMessageBoxEntity; VuMessageBoxManager; VuMessageBoxScreenEntity; VuMetroAccel; VuMetroAchievementManager; VuMetroAnalyticsManager; VuMetroCloudSaveManager; VuMetroCommunityManager; VuMetroD3d11Gfx; VuMetroD3d11RenderTarget; VuMetroFile; VuMetroGamePad; VuMetroHttpClient; VuMetroKeyboard; VuMetroLeaderboardManager; VuMetroLicenseManager; VuMetroNet; VuMetroProfileManager; VuMetroSignInManager; VuMetroSys; VuMetroThread; VuMetroTitleStorageManager; VuMetroTouch; VuMotionComponent; VuMotionComponentIF; VuMotionEntity; VuMultiDelayEntity; VuMusicVolumeSettingsEntity; VuNotifyProperty; VuOffsetAttachComponent; VuOnAnyButtonOrKeyEntity; VuOnKeyboardEventEntity; VuOnProjectInitializedEntity; VuOnTouchSpecialEntity; VuOncePerLapFilterEntity; VuOneShotFilterEntity; VuOneShotPfxEntity; VuPackFileVersionsUITextEntity; VuPercentageProperty; VuPersistentBaseEntity; VuPersistentBooleanEntity; VuPersistentIntegerEntity; VuPersistentStringEntity; VuPfxAsset; VuPfxBoatSpringConstraintInstance; VuPfxEntity; VuPfxImpl; VuPfxManager; VuPfxProjectEntity; VuPfxSpringConstraintInstance; VuPfxTickAlphaInOutInstance; VuPfxTickAlphaInstance; VuPfxTickDampenVelocityInstance; VuPfxTickLinearAccelerationInstance; VuPfxTickScaleInstance; VuPfxTickWorldScaleZInstance; VuPlatformFilterEntity; VuPlayAnimationEntity; VuPointWaveCallbackIF; VuPointWaveEntity; VuPopScreenUIAction; VuPosterEntity; VuPowerUpBoostEntity; VuPowerUpEntity; VuPowerUpHiddenPackageEntity; VuPowerUpTriggerEntity; VuPreviewEntity; VuProgressManagerImpl; VuProjectAsset; VuProjectManager; VuPropEntity; VuPushScreenUIAction; VuRaceCompletionUITextEntity; VuRaceResultsTableEntity; VuRampEntity; VuRandomTriggerEntity; VuRectangularGfxSettingsEntity; VuRectangularOceanWaveEntity; VuReloadScreenUIAction; VuRestartActionGameUIAction; VuResultGameMode; VuResumeActionGameUIAction; VuRigidBodyComponent; VuRotateMotionEntity; VuRotation3dProperty; VuSandboxGameMode; VuSaveSettingsEntity; VuSayVoiceOverBoxEntity; VuSayVoiceOverEllipsoidEntity; VuSayVoiceOverEntity; VuSceneEntity; VuScreenFadeBoxEntity; VuScreenFadeEllipsoidEntity; VuScreenFadeEntity; VuScriptComponent; VuSellScreen; VuSentientUpsellPresented; VuSentientUpsellResponded; VuSequencerEntity; VuServiceManager; VuSetBoatConfigPlayerEntity; VuSetBooleanEntity; VuSetDefaultSettingsEntity; VuSetFrontEndCameraEntity; VuSetGameModeUIAction; VuSetInfoStringUIAction; VuSetIntegerEntity; VuSetMenuPresenceUIAction; VuSetScreenUIAction; VuSetStringEntity; VuSetTrackBranchProbabilities; VuSettingsManager; VuShaderAsset; VuShortUnlockUITextEntity; VuShowWebPageUIAction; VuShutdownAppUIAction; VuSignInEntity; VuSignInManager; VuSignInManager::VuListener; VuSkyBoxEntity; VuSlalomCompletionUITextEntity; VuSlalomGateEntity; VuSliderEntity; VuStartActionGameUIAction; VuStartLightsOutAction; VuStaticIntEnumProperty; VuStaticModelAsset; VuStaticModelInstance; VuStaticPfxEntity; VuStaticStringEnumProperty; VuStaticWakeWaveEntity; VuSteeringSensitivitySettingsEntity; VuStringAsset; VuStringDBImpl; VuStringEntity; VuSubstituteAssetEntity; VuSubtitleManagerImpl; VuSubtractIntegersEntity; VuSwapSkyboxEntity; VuSwitchEntity; VuSysNotifyEntity; VuSystemComponent; VuTelemetryClientImpl; VuTelemetryServerImpl; VuTemplateAsset; VuTextureAsset; VuThrottleRemappingEntity; VuTickManagerImpl; VuTiltSteeringSettingsEntity; VuTimeTrialCompletionUITextEntity; VuTimedEventAsset; VuTireTrackManager; VuTitleSequenceGameMode; VuTouch::Callback; VuTrackManagerImpl; VuTransformComponent; VuTransformEntity; VuTriggerArrayEntity; VuTriggerBoxEntity; VuTriggerEntity; VuTriggerForwarderEntity; VuTriggerManager; VuTriggerPlaneEntity; VuUIAction; VuUIButtonEntity; VuUIComboBoxEntity; VuUIContainerEntity; VuUIDebugTextEntity; VuUIDrawComponent; VuUIEventEntity; VuUIEventEnumProperty; VuUIFidelitySettingEntity; VuUIFlipIntervalSettingEntity; VuUIGhostLeaderboardEntity; VuUIImageBaseEntity; VuUIImageEntity; VuUILeaderboardEntity; VuUIMiniLeaderboardEntity; VuUIPadCheatComboEvent; VuUIPageLayoutEntity; VuUIProgressBarEntity; VuUIScreenEntity; VuUIScrollingTextEntity; VuUISubtitlesSettingEntity; VuUITextBaseEntity; VuUITextEntity; VuUITouchButtonEntity; VuUIUnitsSettingEntity; VuUnlockAchievementEntity; VuUnlockManagerImpl; VuUnusedAssetsGameMode; VuUserNextUIAction; VuVibrationSettingsEntity; VuViewportManager; VuVoiceOverManagerImpl; VuWakeWaveEntity; VuWater; VuWaterBaseOceanWave; VuWaterDebugDrawer; VuWaterInfiniteOceanWave; VuWaterMapAsset; VuWaterRampEntity; VuWaterSurfaceEntity; VuWaterTextureSettingsEntity; VuWaterWave; VuWhirlpoolWaveEntity; VuXInput; VuXmlAsset; _Ref_count_obj<...>; btDbvtBroadphase,VuUITextBaseEntity+4; VuUITextBaseEntity+6; VuUITextBaseEntity+7; VuUITextBaseEntity+8; VuUIImageBaseEntity+1; VuUIImageBaseEntity+2,physics (Bullet),verified,engine/workspace/core/entity/property.hxx; hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x401570,96,sub_401570,,,physics (Bullet) (by address),absent,,False,False,game
 0x4015E0,221,sub_4015E0,,,physics (Bullet) (by address),absent,,False,False,game
 0x4016C0,101,sub_4016C0,,,physics (Bullet) (by address),absent,,False,False,service
@@ -85,11 +85,11 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x403500,16,sub_403500,VuAiManagerImpl,VuAiManagerImpl+8,AI,cited,hydro/workspace/core/boat/fleet.hxx,False,False,race
 0x403510,108,sub_403510,VuAiManagerImpl,VuAiManagerImpl+9,AI,absent,,False,False,race
 0x403580,13,sub_403580,VuAiManagerImpl,VuAiManagerImpl+10,AI,verified,hydro/workspace/core/world/start.hxx,False,False,race
-0x403590,302,sub_403590,VuAiManagerImpl,VuAiManagerImpl+11,AI,verified,hydro/workspace/core/boat/fleet.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
+0x403590,302,sub_403590,VuAiManagerImpl,VuAiManagerImpl+11,AI,verified,hydro/workspace/core/boat/fleet.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
 0x4036C0,235,sub_4036C0,VuAiManagerImpl,VuAiManagerImpl+12,AI,cited,hydro/workspace/core/boat/fleet.hxx,False,False,race
 0x4037B0,72,sub_4037B0,VuAiManagerImpl,VuAiManagerImpl+13,AI,cited,hydro/workspace/core/boat/fleet.hxx,False,False,race
 0x403800,243,sub_403800,,,AI (by address),verified,hydro/workspace/core/boat/fleet.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
-0x403900,34,sub_403900,VuAiManagerImpl,VuAiManagerImpl+14,AI,cited,hydro/workspace/core/boat/fleet.hxx,False,False,race
+0x403900,34,sub_403900,VuAiManagerImpl,VuAiManagerImpl+14,AI,cited,hydro/workspace/core/boat/fleet.hxx; hydro/workspace/core/world/session.hxx,False,False,race
 0x403930,2265,sub_403930,,,AI (by address),verified,hydro/workspace/core/boat/fleet.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
 0x404210,7,sub_404210,VuAiManagerImpl,VuAiManagerImpl+15,AI,absent,,False,False,race
 0x404220,185,sub_404220,VuAiManagerImpl,VuAiManagerImpl+16,AI,absent,,False,False,race
@@ -106,8 +106,8 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x404A20,9,sub_404A20,,,entity / component / script framework (by address),absent,,False,False,race
 0x404A30,7,sub_404A30,,,entity / component / script framework (by address),absent,,False,False,race
 0x404A40,114,sub_404A40,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/start.hxx,False,False,race
-0x404AB2,5,sub_404AB2,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/race.hxx,False,False,race
-0x404AC0,96,sub_404AC0,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/node.hxx; engine/workspace/core/entity/values.hxx; hydro/workspace/core/boat/driver.hxx; hydro/workspace/core/ui/hud.hxx,False,False,race
+0x404AB2,5,sub_404AB2,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/session.hxx,False,False,race
+0x404AC0,96,sub_404AC0,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/node.hxx; engine/workspace/core/entity/values.hxx; hydro/workspace/core/boat/driver.hxx; hydro/workspace/core/ui/hud.hxx; hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x404B20,63,sub_404B20,VuAiRayTestResult; VuBoatCameraRayTestResult,VuAiRayTestResult+1; VuBoatCameraRayTestResult+1,boat,verified,hydro/workspace/core/boat/ai.hxx; hydro/workspace/core/boat/camera.hxx,False,False,race
 0x404B60,46,sub_404B60,VuAiRayTestResult,VuAiRayTestResult+0,AI,verified,hydro/workspace/core/boat/ai.hxx,False,False,race
 0x404B90,53,sub_404B90,,,AI (by address),callee,,False,False,game
@@ -186,9 +186,9 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x406B50,9,sub_406B50,VuBasicProperty<...>,VuBasicProperty<...>+8,entity / component / script framework,absent,,False,False,race
 0x406B60,12,sub_406B60,VuBasicProperty<...>,VuBasicProperty<...>+9; VuBasicProperty<...>+10,entity / component / script framework,verified,engine/workspace/core/entity/property.hxx,False,False,race
 0x406B70,172,sub_406B70,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/actions.hxx; engine/workspace/core/entity/pfx.hxx; hydro/workspace/core/boat/parts.hxx; hydro/workspace/core/ui/action.hxx; hydro/workspace/utility/check.hxx,False,False,race
-0x406C20,77,sub_406C20,VuAssetNameProperty; VuAssetProperty<...>; VuAudioEventNameProperty; VuAudioReverbNameProperty; VuBaseAssetProperty; VuBasicProperty<...>; VuConstStringEnumProperty; VuDBEntryProperty; VuInputAxisEnumProperty; VuInputButtonEnumProperty; VuStaticStringEnumProperty; VuUIEventEnumProperty,VuUIEventEnumProperty+2; VuBasicProperty<...>+2; VuAssetProperty<...>+2; VuInputAxisEnumProperty+2; VuInputButtonEnumProperty+2; VuAudioEventNameProperty+2,audio,verified,engine/workspace/core/entity/actions.hxx; engine/workspace/core/entity/pfx.hxx; engine/workspace/core/entity/property.hxx; engine/workspace/core/entity/trigger.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/surface.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
+0x406C20,77,sub_406C20,VuAssetNameProperty; VuAssetProperty<...>; VuAudioEventNameProperty; VuAudioReverbNameProperty; VuBaseAssetProperty; VuBasicProperty<...>; VuConstStringEnumProperty; VuDBEntryProperty; VuInputAxisEnumProperty; VuInputButtonEnumProperty; VuStaticStringEnumProperty; VuUIEventEnumProperty,VuUIEventEnumProperty+2; VuBasicProperty<...>+2; VuAssetProperty<...>+2; VuInputAxisEnumProperty+2; VuInputButtonEnumProperty+2; VuAudioEventNameProperty+2,audio,verified,engine/workspace/core/entity/actions.hxx; engine/workspace/core/entity/pfx.hxx; engine/workspace/core/entity/property.hxx; engine/workspace/core/entity/trigger.hxx; hydro/workspace/core/world/pfxload.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/surface.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x406C70,95,sub_406C70,VuAssetNameProperty; VuAssetProperty<...>; VuAudioEventNameProperty; VuAudioReverbNameProperty; VuBaseAssetProperty; VuBasicProperty<...>; VuConstStringEnumProperty; VuDBEntryProperty; VuInputAxisEnumProperty; VuInputButtonEnumProperty; VuStaticStringEnumProperty; VuUIEventEnumProperty,VuUIEventEnumProperty+3; VuBasicProperty<...>+3; VuAssetProperty<...>+3; VuInputAxisEnumProperty+3; VuInputButtonEnumProperty+3; VuAudioEventNameProperty+3,audio,absent,,False,False,race
-0x406CD0,400,sub_406CD0,VuAssetNameProperty; VuAssetProperty<...>; VuAudioEventNameProperty; VuAudioReverbNameProperty; VuBaseAssetProperty; VuBasicProperty<...>; VuConstStringEnumProperty; VuDBEntryProperty; VuInputAxisEnumProperty; VuInputButtonEnumProperty; VuStaticStringEnumProperty; VuUIEventEnumProperty,VuUIEventEnumProperty+4; VuBasicProperty<...>+4; VuAssetProperty<...>+4; VuInputAxisEnumProperty+4; VuInputButtonEnumProperty+4; VuAudioEventNameProperty+4,audio,verified,engine/workspace/core/entity/actions.hxx; engine/workspace/core/entity/pfx.hxx; engine/workspace/core/entity/property.hxx; engine/workspace/core/entity/trigger.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/surface.hxx,False,False,race
+0x406CD0,400,sub_406CD0,VuAssetNameProperty; VuAssetProperty<...>; VuAudioEventNameProperty; VuAudioReverbNameProperty; VuBaseAssetProperty; VuBasicProperty<...>; VuConstStringEnumProperty; VuDBEntryProperty; VuInputAxisEnumProperty; VuInputButtonEnumProperty; VuStaticStringEnumProperty; VuUIEventEnumProperty,VuUIEventEnumProperty+4; VuBasicProperty<...>+4; VuAssetProperty<...>+4; VuInputAxisEnumProperty+4; VuInputButtonEnumProperty+4; VuAudioEventNameProperty+4,audio,verified,engine/workspace/core/entity/actions.hxx; engine/workspace/core/entity/pfx.hxx; engine/workspace/core/entity/property.hxx; engine/workspace/core/entity/trigger.hxx; hydro/workspace/core/world/pfxload.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/surface.hxx,False,False,race
 0x406E60,108,sub_406E60,VuAssetNameProperty; VuAssetProperty<...>; VuAudioEventNameProperty; VuAudioReverbNameProperty; VuBaseAssetProperty; VuBasicProperty<...>; VuConstStringEnumProperty; VuDBEntryProperty; VuInputAxisEnumProperty; VuInputButtonEnumProperty; VuStaticStringEnumProperty; VuUIEventEnumProperty,VuUIEventEnumProperty+5; VuBasicProperty<...>+5; VuAssetProperty<...>+5; VuInputAxisEnumProperty+5; VuInputButtonEnumProperty+5; VuAudioEventNameProperty+5,audio,absent,,False,False,race
 0x406ED0,109,sub_406ED0,VuAssetNameProperty; VuAssetProperty<...>; VuAudioEventNameProperty; VuAudioReverbNameProperty; VuBaseAssetProperty; VuBasicProperty<...>; VuConstStringEnumProperty; VuDBEntryProperty; VuInputAxisEnumProperty; VuInputButtonEnumProperty; VuStaticStringEnumProperty; VuUIEventEnumProperty,VuUIEventEnumProperty+6; VuBasicProperty<...>+6; VuAssetProperty<...>+6; VuInputAxisEnumProperty+6; VuInputButtonEnumProperty+6; VuAudioEventNameProperty+6,audio,absent,,False,False,race
 0x406F40,153,sub_406F40,,,audio (by address),callee,,False,False,race
@@ -206,17 +206,17 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x407360,34,sub_407360,VuAssetNameProperty; VuAudioEventNameProperty; VuAudioReverbNameProperty; VuBasicProperty<...>; VuConstStringEnumProperty; VuInputAxisEnumProperty; VuInputButtonEnumProperty; VuStaticStringEnumProperty; VuUIEventEnumProperty,VuUIEventEnumProperty+0; VuBasicProperty<...>+0; VuInputAxisEnumProperty+0; VuInputButtonEnumProperty+0; VuAudioEventNameProperty+0; VuStaticStringEnumProperty+0,audio,absent,,False,False,race
 0x407390,62,sub_407390,,,audio (by address),absent,,False,False,race
 0x4073D0,47,sub_4073D0,VuMethod1<...>,VuMethod1<...>+2; VuMethod1<...>+2; VuMethod1<...>+2; VuMethod1<...>+2; VuMethod1<...>+2; VuMethod1<...>+2,entity / component / script framework,absent,,False,False,race
-0x407400,78,sub_407400,,,entity / component / script framework (by address),absent,,False,False,race
+0x407400,78,sub_407400,,,entity / component / script framework (by address),verified,hydro/workspace/core/ui/select.hxx,False,False,race
 0x407450,818,sub_407450,,,entity / component / script framework (by address),absent,,False,False,race
-0x407790,78,sub_407790,,,entity / component / script framework (by address),callee,,False,False,race
+0x407790,78,sub_407790,,,entity / component / script framework (by address),verified,hydro/workspace/core/ui/select.hxx,False,False,race
 0x4077DE,5,sub_4077DE,,,entity / component / script framework (by address),absent,,False,False,race
-0x4077E3,5,sub_4077E3,,,entity / component / script framework (by address),verified,hydro/workspace/core/boat/construct.hxx; hydro/workspace/core/ui/action.hxx; hydro/workspace/core/ui/hud.hxx; hydro/workspace/core/ui/wiring.hxx,False,False,race
+0x4077E3,5,sub_4077E3,,,entity / component / script framework (by address),verified,hydro/workspace/core/boat/construct.hxx; hydro/workspace/core/ui/action.hxx; hydro/workspace/core/ui/hud.hxx; hydro/workspace/core/ui/wiring.hxx; hydro/workspace/core/world/session.hxx,False,False,race
 0x4077E8,5,sub_4077E8,,,entity / component / script framework (by address),absent,,False,False,race
-0x4077ED,5,sub_4077ED,,,entity / component / script framework (by address),cited,hydro/workspace/core/ui/map.hxx; hydro/workspace/core/world/race.hxx,False,False,race
+0x4077ED,5,sub_4077ED,,,entity / component / script framework (by address),cited,hydro/workspace/core/ui/map.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/session.hxx,False,False,race
 0x407800,85,sub_407800,,,entity / component / script framework (by address),callee,,False,False,race
 0x407860,20,sub_407860,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/object.hxx,False,False,race
 0x407880,56,sub_407880,,,entity / component / script framework (by address),absent,,False,False,race
-0x4078C0,1254,VuMatrix_multiply,,,entity / component / script framework (by address),verified,hydro/workspace/core/assets/model.hxx; hydro/workspace/core/assets/scene.hxx; hydro/workspace/core/boat/camera.hxx; hydro/workspace/core/boat/fluid.hxx; hydro/workspace/core/boat/hull.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/core/boat/respawn.hxx; hydro/workspace/core/game/types.hxx; hydro/workspace/core/ui/gauge.hxx; hydro/workspace/core/world/motion.hxx; hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/core/world/spray.hxx; hydro/workspace/core/world/transform.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
+0x4078C0,1254,VuMatrix_multiply,,,entity / component / script framework (by address),verified,hydro/workspace/core/assets/model.hxx; hydro/workspace/core/assets/scene.hxx; hydro/workspace/core/boat/camera.hxx; hydro/workspace/core/boat/fluid.hxx; hydro/workspace/core/boat/hull.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/core/boat/respawn.hxx; hydro/workspace/core/game/types.hxx; hydro/workspace/core/ui/gauge.hxx; hydro/workspace/core/world/motion.hxx; hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/core/world/spray.hxx; hydro/workspace/core/world/transform.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x407DB0,110,VuMatrix_fromScale,,,unattributed,verified,hydro/workspace/core/trigger/volume.hxx; hydro/workspace/core/ui/gauge.hxx; hydro/workspace/core/world/transform.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/ui.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x407E20,6,sub_407E20,,,unattributed,absent,,False,False,race
 0x407E30,6,sub_407E30,VuSayVoiceOverEntity,VuSayVoiceOverEntity+1,audio,absent,,False,False,race
@@ -250,7 +250,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x409260,31,sub_409260,VuBasicProperty<...>,VuBasicProperty<...>+9; VuBasicProperty<...>+10; VuBasicProperty<...>+9; VuBasicProperty<...>+10,entity / component / script framework,verified,engine/workspace/core/entity/values.hxx,False,False,race
 0x409280,81,sub_409280,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+2; VuRotation3dProperty+2; VuBasicProperty<...>+2,entity / component / script framework,verified,engine/workspace/core/entity/actions.hxx; engine/workspace/core/entity/property.hxx; engine/workspace/core/entity/values.hxx; hydro/workspace/core/world/transform.hxx,False,False,race
 0x4092E0,79,sub_4092E0,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+3; VuRotation3dProperty+3,entity / component / script framework,absent,,False,False,race
-0x409330,189,sub_409330,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+4; VuRotation3dProperty+4,entity / component / script framework,verified,engine/workspace/core/entity/actions.hxx; engine/workspace/core/entity/property.hxx; hydro/workspace/core/world/transform.hxx,False,False,race
+0x409330,189,sub_409330,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+4; VuRotation3dProperty+4,entity / component / script framework,verified,engine/workspace/core/entity/actions.hxx; engine/workspace/core/entity/property.hxx; hydro/workspace/core/world/pfxload.hxx; hydro/workspace/core/world/transform.hxx,False,False,race
 0x4093F0,185,sub_4093F0,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+5; VuRotation3dProperty+5,entity / component / script framework,absent,,False,False,race
 0x4094B0,186,sub_4094B0,VuBasicProperty<...>; VuRotation3dProperty,VuBasicProperty<...>+6; VuRotation3dProperty+6,entity / component / script framework,absent,,False,False,race
 0x409570,153,sub_409570,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/graph.hxx,False,False,game
@@ -260,7 +260,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x409700,41,sub_409700,,,entity / component / script framework (by address),absent,,False,False,race
 0x409730,18,sub_409730,VuBoatCameraRayTestResult,VuBoatCameraRayTestResult+0,boat,verified,hydro/workspace/core/boat/camera.hxx,False,False,race
 0x409750,421,VuBoatCamera_ctor,,,boat (by address),verified,hydro/workspace/core/boat/camera.hxx; hydro/workspace/core/boat/parts.hxx; hydro/workspace/core/boat/sections.hxx; hydro/workspace/utility/check.hxx; hydro/workspace/utility/checks/race.hxx,False,False,race
-0x409900,487,VuBoatCamera_tick,,,boat (by address),verified,hydro/workspace/core/boat/camera.hxx; hydro/workspace/core/boat/state.hxx; hydro/workspace/utility/checks/race.hxx,False,False,race
+0x409900,487,VuBoatCamera_tick,,,boat (by address),verified,hydro/workspace/core/boat/camera.hxx; hydro/workspace/core/boat/state.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/utility/checks/race.hxx,False,False,race
 0x409AF0,520,VuBoatDB_readCameraSection,,,boat (by address),verified,hydro/workspace/core/boat/sections.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
 0x409D00,1998,VuBoatCamera_update,,,boat (by address),verified,hydro/workspace/core/boat/camera.hxx; hydro/workspace/utility/checks/race.hxx,False,False,race
 0x40A4D0,1508,VuBoatCamera_updateVariant,,,unattributed,verified,hydro/workspace/core/boat/camera.hxx; hydro/workspace/utility/checks/race.hxx,False,False,race
@@ -334,7 +334,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x410930,164,sub_410930,,,unattributed,callee,,False,False,race
 0x4109E0,93,sub_4109E0,,,unattributed,absent,,False,False,race
 0x410A40,112,VuMatrix_identity,,,unattributed,verified,hydro/workspace/core/boat/parts.hxx; hydro/workspace/core/boat/respawn.hxx; hydro/workspace/core/ui/gauge.hxx; hydro/workspace/core/world/motion.hxx; hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/core/world/transform.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
-0x410AB0,110,sub_410AB0,,,unattributed,verified,hydro/workspace/core/boat/construct.hxx; hydro/workspace/core/boat/fluid.hxx; hydro/workspace/core/boat/hull.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/core/ui/gauge.hxx; hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/core/world/spray.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
+0x410AB0,110,sub_410AB0,,,unattributed,verified,hydro/workspace/core/boat/construct.hxx; hydro/workspace/core/boat/fluid.hxx; hydro/workspace/core/boat/hull.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/core/ui/gauge.hxx; hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/core/world/spray.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x410B20,16,sub_410B20,VuModelSkin,VuModelSkin+0,rendering / gfx,absent,,False,False,race
 0x410B30,3,nullsub_3,PAVbtM::0ABUbtDispatcherInfo::UAEXPAVbtCollisionObject::btConvexConvexAlgorithm::??processCollision::?BA::.?AUbtDummyResult; PBVbtConvex::UAE_NAAVbtVoronoiSimplexSolver::btMinkowskiPenetrationDepthSolver::?1??calcPenDepth::.?AUbtIntermediateResult; VuBarracudaMetroGfxComposer; VuBoatDamageController::VuPiece; VuBoatEntity; VuBreakableDynamicGamePropEntity; VuCheckpointBuoyEntity; VuDefaultGfxComposer; VuDevMenu; VuDevStat; VuDynamicGamePropEntity; VuDynamicsDebugDrawerImpl; VuDynamicsStepCallback; VuFloatingMineEntity; VuForceAffectorEntity; VuGame; VuGhostBoatEntity; VuSimpleStridingMesh; VuStridingMesh; btConstraintSolver; btConvexCast::CastResult; btConvexTriangleMeshShape; btCylinderShape; btCylinderShapeX; btCylinderShapeZ; btDynamicsWorld; btGhostPairCallback; btPointCollector; btPolyhedralConvexAabbCachingShape; btPolyhedralConvexShape; btSequentialImpulseConstraintSolver; btSphereShape; btStridingMeshInterface,VuDynamicsStepCallback+0; VuBoatDamageController::VuPiece+0; VuStridingMesh+10; VuStridingMesh+11; btStridingMeshInterface+10; btStridingMeshInterface+11,physics (Bullet),verified,engine/workspace/core/collision/pairs.hxx; engine/workspace/core/dynamics/island.hxx,False,False,race
 0x410B40,238,sub_410B40,,,physics (Bullet) (by address),verified,hydro/workspace/core/boat/fluid.hxx; hydro/workspace/core/boat/hull.hxx; hydro/workspace/utility/fluid.hxx,False,False,race
@@ -351,7 +351,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x411EF0,502,btConvexTriangleMeshShape_load_Breakable_Mesh_Asset,,,unattributed,cited,hydro/workspace/core/boat/load.hxx,False,False,race
 0x4120F0,118,sub_4120F0,,,unattributed,absent,,False,False,race
 0x412170,66,sub_412170,,,unattributed,verified,hydro/workspace/core/boat/load.hxx,False,False,race
-0x4121C0,173,sub_4121C0,,,unattributed,absent,,False,False,race
+0x4121C0,173,sub_4121C0,,,unattributed,cited,hydro/workspace/core/world/session.hxx,False,False,race
 0x412270,2033,loader_00412270_load_Asset,,,unattributed,cited,engine/workspace/core/collision/compound.hxx; engine/workspace/core/collision/support.hxx,False,False,race
 0x412A70,34,sub_412A70,VuBoatDamageController::VuPiece,VuBoatDamageController::VuPiece+0,boat,absent,,False,False,race
 0x412AA0,93,sub_412AA0,,,boat (by address),verified,hydro/workspace/core/boat/construct.hxx,False,False,race
@@ -431,22 +431,22 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x41B1B0,112,sub_41B1B0,,,unattributed,verified,hydro/workspace/core/boat/parts.hxx; hydro/workspace/utility/check.hxx,False,False,race
 0x41B220,118,sub_41B220,,,unattributed,absent,,False,False,race
 0x41B2A0,110,sub_41B2A0,,,unattributed,verified,hydro/workspace/core/assets/scene.hxx; hydro/workspace/core/world/surface.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
-0x41B310,232,sub_41B310,,,unattributed,absent,,False,False,race
+0x41B310,232,sub_41B310,,,unattributed,verified,hydro/workspace/core/world/session.hxx,False,False,race
 0x41B400,156,sub_41B400,,,unattributed,verified,engine/workspace/core/entity/gfx.hxx; hydro/workspace/core/boat/manager.hxx; hydro/workspace/core/boat/parts.hxx; hydro/workspace/utility/check.hxx,False,False,race
 0x41B4A0,6,sub_41B4A0,VuBoatEntity,VuBoatEntity+1,boat,absent,,False,False,race
 0x41B4B0,39,sub_41B4B0,,,boat (by address),absent,,False,False,race
 0x41B4E0,417,sub_41B4E0,,,boat (by address),verified,hydro/workspace/utility/fluid.hxx,False,False,race
 0x41B690,115,sub_41B690,,,boat (by address),verified,hydro/workspace/core/world/race.hxx,False,False,game
 0x41B710,308,sub_41B710,,,boat (by address),verified,hydro/workspace/core/boat/construct.hxx; hydro/workspace/core/world/race.hxx,False,False,race
-0x41B850,4550,VuGhostBoatEntity_load_Boat,,,boat (by address),verified,hydro/workspace/core/boat/construct.hxx; hydro/workspace/core/boat/parts.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/check.hxx,False,False,race
+0x41B850,4550,VuGhostBoatEntity_load_Boat,,,boat (by address),verified,hydro/workspace/core/boat/construct.hxx; hydro/workspace/core/boat/parts.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/utility/check.hxx,False,False,race
 0x41CA20,34,sub_41CA20,VuBoatEntity,VuBoatEntity+0,boat,absent,,False,False,race
 0x41CA50,183,sub_41CA50,,,boat (by address),verified,hydro/workspace/core/boat/parts.hxx; hydro/workspace/utility/check.hxx,False,False,race
 0x41CB10,1037,sub_41CB10,,,boat (by address),absent,,False,False,race
 0x41CF20,207,sub_41CF20,,,boat (by address),absent,,False,False,race
-0x41CFF0,646,VuBoat_loadFromDB,VuBoatEntity; VuGhostBoatEntity,VuBoatEntity+2; VuGhostBoatEntity+2,boat,verified,hydro/workspace/core/boat/driver.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/core/boat/pilots.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
+0x41CFF0,646,VuBoat_loadFromDB,VuBoatEntity; VuGhostBoatEntity,VuBoatEntity+2; VuGhostBoatEntity+2,boat,verified,hydro/workspace/core/boat/driver.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/core/boat/pilots.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
 0x41D280,83,sub_41D280,,,boat (by address),verified,hydro/workspace/core/boat/driver.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/race.hxx,False,False,race
 0x41D2E0,101,sub_41D2E0,,,boat (by address),verified,hydro/workspace/core/boat/driver.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
-0x41D350,284,sub_41D350,VuBoatEntity; VuGhostBoatEntity,VuBoatEntity+6; VuGhostBoatEntity+6,boat,verified,hydro/workspace/core/boat/manager.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
+0x41D350,284,sub_41D350,VuBoatEntity; VuGhostBoatEntity,VuBoatEntity+6; VuGhostBoatEntity+6,boat,verified,hydro/workspace/core/boat/manager.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
 0x41D470,142,sub_41D470,VuBoatEntity; VuGhostBoatEntity,VuBoatEntity+7; VuGhostBoatEntity+7,boat,verified,hydro/workspace/core/boat/manager.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
 0x41D500,100,VuDBAsset_load_VuDBAsset,,,boat (by address),cited,hydro/workspace/core/boat/pilots.hxx,False,False,race
 0x41D570,305,sub_41D570,,,boat (by address),verified,hydro/workspace/core/boat/hull.hxx; hydro/workspace/core/boat/pilots.hxx; hydro/workspace/core/boat/state.hxx; hydro/workspace/core/boat/tick.hxx; hydro/workspace/core/world/spray.hxx; hydro/workspace/utility/fluid.hxx,False,False,race
@@ -467,10 +467,10 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x41E7B0,411,sub_41E7B0,,,boat (by address),absent,,False,False,race
 0x41E950,209,sub_41E950,,,boat (by address),absent,,False,False,race
 0x41EA30,173,sub_41EA30,,,boat (by address),cited,hydro/workspace/core/boat/construct.hxx,False,False,race
-0x41EAE0,567,sub_41EAE0,VuBoatEntity,VuBoatEntity+12,boat,absent,,False,False,race
-0x41ED20,694,sub_41ED20,,,boat (by address),absent,,False,False,race
-0x41EFF0,819,sub_41EFF0,VuBoatEntity,VuBoatEntity+13,boat,verified,hydro/workspace/core/boat/camera.hxx; hydro/workspace/core/boat/fleet.hxx; hydro/workspace/core/boat/human.hxx; hydro/workspace/core/boat/pilots.hxx; hydro/workspace/core/boat/state.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
-0x41F330,1038,sub_41F330,VuBoatEntity; VuGhostBoatEntity,VuBoatEntity+14; VuGhostBoatEntity+14,boat,cited,hydro/workspace/core/world/race.hxx,False,False,race
+0x41EAE0,567,sub_41EAE0,VuBoatEntity,VuBoatEntity+12,boat,verified,hydro/workspace/core/world/session.hxx; hydro/workspace/core/world/world.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
+0x41ED20,694,sub_41ED20,,,boat (by address),cited,hydro/workspace/core/world/session.hxx,False,False,race
+0x41EFF0,819,sub_41EFF0,VuBoatEntity,VuBoatEntity+13,boat,verified,hydro/workspace/core/boat/camera.hxx; hydro/workspace/core/boat/fleet.hxx; hydro/workspace/core/boat/human.hxx; hydro/workspace/core/boat/pilots.hxx; hydro/workspace/core/boat/state.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
+0x41F330,1038,sub_41F330,VuBoatEntity; VuGhostBoatEntity,VuBoatEntity+14; VuGhostBoatEntity+14,boat,cited,hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/session.hxx,False,False,race
 0x41F740,649,sub_41F740,,,boat (by address),verified,hydro/workspace/core/boat/state.hxx; hydro/workspace/core/world/tree.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
 0x41F9D0,972,sub_41F9D0,,,boat (by address),verified,hydro/workspace/core/boat/state.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
 0x41FDA0,463,sub_41FDA0,,,unattributed,verified,hydro/workspace/core/boat/state.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
@@ -478,10 +478,10 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x420010,203,sub_420010,,,unattributed,verified,hydro/workspace/core/boat/state.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
 0x4200E0,1205,sub_4200E0,,,unattributed,absent,,False,False,race
 0x4205A0,1232,VuBoatDB_readDefaultSection,VuBoatEntity; VuGhostBoatEntity,VuBoatEntity+15; VuGhostBoatEntity+15,boat,verified,hydro/workspace/core/boat/load.hxx; hydro/workspace/core/boat/sections.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
-0x420A70,2583,VuBoatDB_loadAllSections,,,boat (by address),cited,engine/workspace/core/collision/compound.hxx; engine/workspace/core/collision/support.hxx; hydro/workspace/core/boat/driver.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/core/boat/sections.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/boat.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
-0x421490,478,btConvexTriangleMeshShape_load_Boat,,,unattributed,cited,hydro/workspace/core/boat/load.hxx; hydro/workspace/core/world/race.hxx,False,False,race
-0x421670,505,sub_421670,,,unattributed,verified,hydro/workspace/core/boat/construct.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/core/trigger/volume.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/start.hxx; hydro/workspace/core/world/world.hxx; hydro/workspace/utility/checks/boat.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
-0x421870,202,sub_421870,VuBoatEntity; VuGhostBoatEntity,VuBoatEntity+16; VuGhostBoatEntity+16,boat,verified,hydro/workspace/core/boat/entity.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/utility/fluid.hxx,False,False,race
+0x420A70,2583,VuBoatDB_loadAllSections,,,boat (by address),cited,engine/workspace/core/collision/compound.hxx; engine/workspace/core/collision/support.hxx; hydro/workspace/core/boat/driver.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/core/boat/sections.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/utility/checks/boat.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
+0x421490,478,btConvexTriangleMeshShape_load_Boat,,,unattributed,cited,hydro/workspace/core/boat/load.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/core/world/world.hxx,False,False,race
+0x421670,505,sub_421670,,,unattributed,verified,hydro/workspace/core/boat/construct.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/core/trigger/volume.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/core/world/start.hxx; hydro/workspace/core/world/world.hxx; hydro/workspace/utility/checks/boat.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
+0x421870,202,sub_421870,VuBoatEntity; VuGhostBoatEntity,VuBoatEntity+16; VuGhostBoatEntity+16,boat,verified,hydro/workspace/core/boat/entity.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/utility/fluid.hxx,False,False,race
 0x421940,53,sub_421940,VuBoatEntity; VuGhostBoatEntity,VuBoatEntity+18; VuGhostBoatEntity+18,boat,cited,hydro/workspace/core/boat/entity.hxx; hydro/workspace/core/boat/state.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/fluid.hxx,False,False,race
 0x421980,53,sub_421980,VuBoatEntity,VuBoatEntity+17,boat,cited,hydro/workspace/core/boat/entity.hxx; hydro/workspace/core/boat/state.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/fluid.hxx,False,False,race
 0x4219C0,1153,sub_4219C0,,,boat (by address),verified,hydro/workspace/core/boat/hull.hxx; hydro/workspace/utility/fluid.hxx,False,False,race
@@ -513,7 +513,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x423650,220,sub_423650,,,HUD / UI / fonts (by address),absent,,False,False,game
 0x423730,6,sub_423730,VuComponent,VuComponent+0,entity / component / script framework,absent,,False,False,race
 0x423770,62,sub_423770,VuComponent; VuMotionComponent,VuComponent+2; VuMotionComponent+2,entity / component / script framework,absent,,False,False,race
-0x4237B0,132,sub_4237B0,,,entity / component / script framework (by address),verified,hydro/workspace/core/ui/button.hxx,False,False,race
+0x4237B0,132,sub_4237B0,,,entity / component / script framework (by address),verified,hydro/workspace/core/ui/button.hxx; hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x423840,6,sub_423840,VuHUDEntity,VuHUDEntity+1,HUD / UI / fonts,absent,,False,False,race
 0x423850,5,sub_423850,,,HUD / UI / fonts (by address),absent,,True,False,dead
 0x423860,6,sub_423860,VuAssetNameProperty; VuAssetProperty<...>; VuBaseAssetProperty,VuAssetProperty<...>+1; VuAssetNameProperty+1; VuBaseAssetProperty+1; VuAssetProperty<...>+1; VuAssetProperty<...>+1; VuAssetProperty<...>+1,assets,absent,,False,False,race
@@ -586,7 +586,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x426640,133,sub_426640,VuBasicProperty<...>,VuBasicProperty<...>+5,entity / component / script framework,absent,,False,False,race
 0x4266D0,134,sub_4266D0,VuBasicProperty<...>,VuBasicProperty<...>+6,entity / component / script framework,absent,,False,False,race
 0x426760,222,sub_426760,,,entity / component / script framework (by address),callee,,False,False,race
-0x426840,76,sub_426840,VuAssetProperty<...>,VuAssetProperty<...>+11,assets,verified,hydro/workspace/core/ui/entity.hxx,False,False,race
+0x426840,76,sub_426840,VuAssetProperty<...>,VuAssetProperty<...>+11,assets,verified,hydro/workspace/core/ui/entity.hxx; hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x426890,91,sub_426890,,,assets (by address),callee,,False,False,race
 0x4268F0,34,sub_4268F0,Vu2dLayoutComponent,Vu2dLayoutComponent+2,entity / component / script framework,absent,,False,False,race
 0x426920,34,sub_426920,VuUIDrawComponent,VuUIDrawComponent+2,HUD / UI / fonts,absent,,False,False,race
@@ -892,7 +892,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x43A5E0,6,sub_43A5E0,VuGridPositionEntity,VuGridPositionEntity+1,entity / component / script framework,absent,,False,False,race
 0x43A5F0,114,sub_43A5F0,,,entity / component / script framework (by address),callee,,False,False,race
 0x43A670,194,sub_43A670,,,entity / component / script framework (by address),callee,,False,False,race
-0x43A740,86,sub_43A740,VuGridPositionEntity,VuGridPositionEntity+6,entity / component / script framework,verified,hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/start.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
+0x43A740,86,sub_43A740,VuGridPositionEntity,VuGridPositionEntity+6,entity / component / script framework,verified,hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/core/world/start.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
 0x43A7A0,51,sub_43A7A0,VuGridPositionEntity,VuGridPositionEntity+7,entity / component / script framework,absent,,False,False,race
 0x43A7E0,6,sub_43A7E0,VuPosterEntity,VuPosterEntity+1,entity / component / script framework,absent,,False,False,game
 0x43A7F0,117,sub_43A7F0,,,entity / component / script framework (by address),absent,,False,False,game
@@ -925,8 +925,8 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x43BDB0,1078,sub_43BDB0,,,boat (by address),absent,,False,False,race
 0x43C1F0,838,VuDBAsset_load_ApplyPfx,,,boat (by address),callee,,False,False,race
 0x43C540,154,sub_43C540,,,boat (by address),callee,,False,False,race
-0x43C5E0,185,sub_43C5E0,,,unattributed,absent,,False,False,race
-0x43C6A0,89,sub_43C6A0,,,unattributed,absent,,False,False,race
+0x43C5E0,185,sub_43C5E0,,,unattributed,cited,hydro/workspace/core/world/pfxmgr.hxx,False,False,race
+0x43C6A0,89,sub_43C6A0,,,unattributed,cited,hydro/workspace/core/world/pfxmgr.hxx,False,False,race
 0x43C700,445,sub_43C700,,,unattributed,cited,engine/workspace/core/collision/support.hxx,False,False,race
 0x43C8C0,179,sub_43C8C0,VuPowerUpBoostEntity; VuPowerUpEntity; VuPowerUpHiddenPackageEntity; VuPowerUpTriggerEntity,VuPowerUpEntity+0; VuPowerUpBoostEntity+0; VuPowerUpHiddenPackageEntity+0; VuPowerUpTriggerEntity+0,boat,absent,,False,False,race
 0x43C980,131,sub_43C980,,,boat (by address),absent,,False,False,race
@@ -1156,13 +1156,13 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x447110,118,sub_447110,,,HUD / UI / fonts (by address),absent,,False,False,game
 0x447190,6,sub_447190,VuBaseConfigEntity,VuBaseConfigEntity+1,entity / component / script framework,absent,,False,False,game
 0x4471A0,5,sub_4471A0,VuBaseConfigEntity; VuGameConfigEntity; VuGhostGame; VuMetroNet; VuRaceGame; VuSlalomGame; VuTelemetryClientImpl; VuTimeTrialGame; btConvexTriangleMeshShape,VuBaseConfigEntity+20; VuBaseConfigEntity+21; VuGameConfigEntity+20; VuGhostGame+14; VuRaceGame+14; VuSlalomGame+14,physics (Bullet),absent,,False,False,race
-0x4471B0,5,sub_4471B0,VuBaseConfigEntity; VuGameConfigEntity,VuBaseConfigEntity+22; VuGameConfigEntity+22,game modes / race,callee,,False,False,game
-0x4471C0,3174,sub_4471C0,,,game modes / race (by address),callee,,False,False,game
+0x4471B0,5,sub_4471B0,VuBaseConfigEntity; VuGameConfigEntity,VuBaseConfigEntity+22; VuGameConfigEntity+22,game modes / race,verified,hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,game
+0x4471C0,3174,sub_4471C0,,,game modes / race (by address),verified,hydro/workspace/core/ui/select.hxx,False,False,game
 0x447E30,34,sub_447E30,VuBaseConfigEntity,VuBaseConfigEntity+0,entity / component / script framework,absent,,False,False,game
 0x447E60,427,sub_447E60,,,entity / component / script framework (by address),absent,,False,False,game
 0x448010,265,sub_448010,,,entity / component / script framework (by address),absent,,False,False,game
-0x448120,24,sub_448120,VuBaseConfigEntity; VuBoatConfigEntity; VuGameConfigEntity,VuBaseConfigEntity+4; VuBoatConfigEntity+4; VuGameConfigEntity+4,boat,callee,,False,False,game
-0x448140,120,sub_448140,VuBaseConfigEntity,VuBaseConfigEntity+6,entity / component / script framework,absent,,False,False,game
+0x448120,24,sub_448120,VuBaseConfigEntity; VuBoatConfigEntity; VuGameConfigEntity,VuBaseConfigEntity+4; VuBoatConfigEntity+4; VuGameConfigEntity+4,boat,verified,hydro/workspace/core/ui/select.hxx,False,False,game
+0x448140,120,sub_448140,VuBaseConfigEntity,VuBaseConfigEntity+6,entity / component / script framework,cited,hydro/workspace/core/ui/select.hxx,False,False,game
 0x4481C0,244,sub_4481C0,VuBaseConfigEntity; VuBoatConfigEntity; VuGameConfigEntity,VuBaseConfigEntity+0; VuBoatConfigEntity+0; VuGameConfigEntity+0,boat,absent,,False,False,game
 0x4482C0,10,sub_4482C0,VuBaseConfigEntity; VuBoatConfigEntity; VuGameConfigEntity,VuBaseConfigEntity+1; VuBoatConfigEntity+1; VuGameConfigEntity+1,boat,absent,,False,False,game
 0x4482D0,255,sub_4482D0,VuBaseConfigEntity; VuBoatConfigEntity; VuGameConfigEntity,VuBaseConfigEntity+2; VuBoatConfigEntity+2; VuGameConfigEntity+2,boat,absent,,False,False,game
@@ -1179,17 +1179,17 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4491C0,400,loader_004491C0_load_Choices,,,boat (by address),absent,,False,False,game
 0x449350,368,loader_00449350_load_Choices,,,boat (by address),absent,,False,False,game
 0x4494C0,372,loader_004494D0_load_Choices,,,boat (by address),absent,,False,False,game
-0x449640,153,VuBaseConfigEntity_load_VuDBAsset,,,boat (by address),callee,,False,False,game
+0x449640,153,VuBaseConfigEntity_load_VuDBAsset,,,boat (by address),verified,hydro/workspace/core/ui/select.hxx,False,False,game
 0x4496E0,333,sub_4496E0,,,boat (by address),absent,,False,False,game
 0x449830,658,loader_00449830_load_Choices,,,unattributed,absent,,False,False,game
 0x449AD0,68,sub_449AD0,,,unattributed,callee,,False,False,game
-0x449B20,2461,loader_00449B20_load_Choices,,,unattributed,callee,,False,False,game
-0x44A4C0,2978,VuDBAsset_load_References,,,unattributed,callee,,False,False,game
+0x449B20,2461,loader_00449B20_load_Choices,,,unattributed,verified,hydro/workspace/core/ui/select.hxx,False,False,game
+0x44A4C0,2978,VuDBAsset_load_References,,,unattributed,verified,hydro/workspace/core/ui/select.hxx,False,False,game
 0x44B070,90,sub_44B070,,,unattributed,callee,,False,False,game
-0x44B0D0,1704,VuDBAsset_load_Options,,,unattributed,callee,,False,False,game
+0x44B0D0,1704,VuDBAsset_load_Options,,,unattributed,verified,hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,game
 0x44B780,562,loader_0044B780_load_Value,,,unattributed,callee,,False,False,game
 0x44B9C0,902,loader_0044B9C0_load_InfoStringID,,,unattributed,absent,,False,False,game
-0x44BD50,316,sub_44BD50,,,unattributed,callee,,False,False,game
+0x44BD50,316,sub_44BD50,,,unattributed,verified,hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,game
 0x44BE90,73,loader_0044BE90_load_Choices,,,unattributed,absent,,False,False,game
 0x44BEE0,97,loader_0044BEE0_load_ComboBoxID,,,unattributed,absent,,False,False,game
 0x44BF50,61,sub_44BF50,,,unattributed,absent,,False,False,dead
@@ -1201,7 +1201,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x44C240,153,sub_44C240,,,unattributed,callee,,False,False,game
 0x44C2E0,156,sub_44C2E0,,,unattributed,callee,,False,False,game
 0x44C380,87,sub_44C380,,,unattributed,callee,,False,False,game
-0x44C3E0,184,sub_44C3E0,,,unattributed,absent,,False,False,game
+0x44C3E0,184,sub_44C3E0,,,unattributed,callee,,False,False,game
 0x44C4A0,187,sub_44C4A0,,,unattributed,callee,,False,False,game
 0x44C560,109,sub_44C560,,,unattributed,callee,,False,False,game
 0x44C5D0,237,sub_44C5D0,,,unattributed,callee,,False,False,game
@@ -1213,32 +1213,32 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x44C8F0,124,sub_44C8F0,,,boat (by address),callee,,False,False,game
 0x44C970,6,sub_44C970,VuSetBoatConfigPlayerEntity,VuSetBoatConfigPlayerEntity+1,entity / component / script framework,absent,,False,False,game
 0x44C980,112,sub_44C980,,,entity / component / script framework (by address),callee,,False,False,game
-0x44C9F0,751,sub_44C9F0,,,entity / component / script framework (by address),callee,,False,False,game
+0x44C9F0,751,sub_44C9F0,,,entity / component / script framework (by address),verified,hydro/workspace/core/ui/select.hxx,False,False,game
 0x44CCE0,47,sub_44CCE0,VuBoatConfigEntity,VuBoatConfigEntity+0,boat,absent,,False,False,game
-0x44CD10,883,?$VuMethod1@VVuSetBoatConfigPlayerEntity@@VVuRetVal@@ABVVuParams@@_load_BoatConfig,VuBoatConfigEntity,VuBoatConfigEntity+6,boat,absent,,False,False,game
-0x44D090,188,sub_44D090,VuBoatConfigEntity,VuBoatConfigEntity+7,boat,absent,,False,False,game
-0x44D150,359,?$VuMethod1@VVuSetBoatConfigPlayerEntity@@VVuRetVal@@ABVVuParams@@_load_Boat,VuBoatConfigEntity,VuBoatConfigEntity+18,boat,absent,,False,False,game
-0x44D2C0,35,sub_44D2C0,VuBoatConfigEntity,VuBoatConfigEntity+19,boat,absent,,False,False,game
+0x44CD10,883,?$VuMethod1@VVuSetBoatConfigPlayerEntity@@VVuRetVal@@ABVVuParams@@_load_BoatConfig,VuBoatConfigEntity,VuBoatConfigEntity+6,boat,cited,hydro/workspace/core/ui/select.hxx,False,False,game
+0x44D090,188,sub_44D090,VuBoatConfigEntity,VuBoatConfigEntity+7,boat,verified,hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,game
+0x44D150,359,?$VuMethod1@VVuSetBoatConfigPlayerEntity@@VVuRetVal@@ABVVuParams@@_load_Boat,VuBoatConfigEntity,VuBoatConfigEntity+18,boat,cited,hydro/workspace/core/ui/select.hxx,False,False,game
+0x44D2C0,35,sub_44D2C0,VuBoatConfigEntity,VuBoatConfigEntity+19,boat,cited,hydro/workspace/core/ui/select.hxx,False,False,game
 0x44D2F0,283,?$VuMethod1@VVuSetBoatConfigPlayerEntity@@VVuRetVal@@ABVVuParams@@_load_AvailableBoats,VuBoatConfigEntity,VuBoatConfigEntity+20,boat,absent,,False,False,game
 0x44D410,58,sub_44D410,VuBoatConfigEntity,VuBoatConfigEntity+17,boat,absent,,False,False,game
 0x44D450,1303,?$VuMethod1@VVuSetBoatConfigPlayerEntity@@VVuRetVal@@ABVVuParams@@_load_Championship,VuBoatConfigEntity,VuBoatConfigEntity+21,boat,callee,,False,False,game
-0x44D970,1043,?$VuMethod1@VVuSetBoatConfigPlayerEntity@@VVuRetVal@@ABVVuParams@@_load_Choices,VuBoatConfigEntity,VuBoatConfigEntity+22,boat,callee,,False,False,game
+0x44D970,1043,?$VuMethod1@VVuSetBoatConfigPlayerEntity@@VVuRetVal@@ABVVuParams@@_load_Choices,VuBoatConfigEntity,VuBoatConfigEntity+22,boat,verified,hydro/workspace/core/ui/select.hxx,False,False,game
 0x44DD90,633,sub_44DD90,VuBoatConfigEntity,VuBoatConfigEntity+23,boat,absent,,False,False,game
-0x44E010,113,loader_0044E010_load_Boat,,,boat (by address),absent,,False,False,game
-0x44E090,168,loader_0044E090_load_Boat,,,boat (by address),absent,,False,False,game
+0x44E010,113,loader_0044E010_load_Boat,,,boat (by address),verified,hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,game
+0x44E090,168,loader_0044E090_load_Boat,,,boat (by address),verified,hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,game
 0x44E140,368,VuDBAsset_load_Announcer,,,boat (by address),absent,,False,False,game
 0x44E2B0,603,sub_44E2B0,VuBoatConfigEntity,VuBoatConfigEntity+12,boat,absent,,False,False,game
-0x44E510,461,loader_0044E510_load_Boat,,,boat (by address),absent,,False,False,game
+0x44E510,461,loader_0044E510_load_Boat,,,boat (by address),cited,hydro/workspace/core/ui/select.hxx,False,False,game
 0x44E6E0,795,loader_0044E6E0_load_Boat,,,boat (by address),absent,,False,False,game
-0x44EA00,195,?$VuMethod1@VVuSetBoatConfigPlayerEntity@@VVuRetVal@@ABVVuParams@@_load_LastBoatConfigSelection,VuBoatConfigEntity,VuBoatConfigEntity+24,boat,callee,,False,False,game
-0x44EAD0,80,sub_44EAD0,VuBoatConfigEntity,VuBoatConfigEntity+25,boat,absent,,False,False,game
-0x44EB20,452,sub_44EB20,VuBoatConfigEntity,VuBoatConfigEntity+26,boat,absent,,False,False,game
-0x44ECF0,419,sub_44ECF0,,,boat (by address),callee,,False,False,game
-0x44EEA0,105,sub_44EEA0,,,boat (by address),absent,,False,False,game
-0x44EF10,863,sub_44EF10,,,boat (by address),absent,,False,False,game
+0x44EA00,195,?$VuMethod1@VVuSetBoatConfigPlayerEntity@@VVuRetVal@@ABVVuParams@@_load_LastBoatConfigSelection,VuBoatConfigEntity,VuBoatConfigEntity+24,boat,verified,hydro/workspace/core/ui/select.hxx,False,False,game
+0x44EAD0,80,sub_44EAD0,VuBoatConfigEntity,VuBoatConfigEntity+25,boat,cited,hydro/workspace/core/ui/select.hxx,False,False,game
+0x44EB20,452,sub_44EB20,VuBoatConfigEntity,VuBoatConfigEntity+26,boat,cited,hydro/workspace/core/ui/select.hxx,False,False,game
+0x44ECF0,419,sub_44ECF0,,,boat (by address),verified,hydro/workspace/core/ui/select.hxx,False,False,game
+0x44EEA0,105,sub_44EEA0,,,boat (by address),verified,hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,game
+0x44EF10,863,sub_44EF10,,,boat (by address),verified,hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,game
 0x44F270,158,sub_44F270,,,boat (by address),callee,,False,False,game
 0x44F310,228,sub_44F310,,,boat (by address),absent,,False,False,race
-0x44F400,150,sub_44F400,,,unattributed,callee,,False,False,game
+0x44F400,150,sub_44F400,,,unattributed,verified,hydro/workspace/core/ui/select.hxx,False,False,game
 0x44F4A0,6,sub_44F4A0,VuBoatStatEntity,VuBoatStatEntity+1,boat,absent,,False,False,game
 0x44F4B0,16,sub_44F4B0,,,boat (by address),absent,,False,False,game
 0x44F4C0,117,sub_44F4C0,,,boat (by address),callee,,False,False,game
@@ -1385,18 +1385,18 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x45CB90,61,sub_45CB90,VuRotation3dProperty,VuRotation3dProperty+10,entity / component / script framework,absent,,False,False,race
 0x45CBD0,6,sub_45CBD0,VuGameConfigEntity,VuGameConfigEntity+1,game modes / race,absent,,False,False,game
 0x45CBE0,157,sub_45CBE0,,,game modes / race (by address),callee,,False,False,game
-0x45CC80,802,sub_45CC80,,,game modes / race (by address),callee,,False,False,game
+0x45CC80,802,sub_45CC80,,,game modes / race (by address),verified,hydro/workspace/core/ui/select.hxx,False,False,game
 0x45CFB0,147,sub_45CFB0,VuGameConfigEntity,VuGameConfigEntity+0,game modes / race,absent,,False,False,game
 0x45D050,38,sub_45D050,VuGameConfigEntity,VuGameConfigEntity+6,game modes / race,absent,,False,False,game
 0x45D080,56,sub_45D080,VuGameConfigEntity,VuGameConfigEntity+7,game modes / race,absent,,False,False,game
-0x45D0C0,1018,?$VuMethod1@VVuGameConfigEntity@@XABVVuGfxDrawShadowParams@@_load_GameConfig,VuGameConfigEntity,VuGameConfigEntity+18,game modes / race,absent,,False,False,game
-0x45D4C0,606,sub_45D4C0,VuGameConfigEntity,VuGameConfigEntity+19,game modes / race,absent,,False,False,game
+0x45D0C0,1018,?$VuMethod1@VVuGameConfigEntity@@XABVVuGfxDrawShadowParams@@_load_GameConfig,VuGameConfigEntity,VuGameConfigEntity+18,game modes / race,verified,hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,game
+0x45D4C0,606,sub_45D4C0,VuGameConfigEntity,VuGameConfigEntity+19,game modes / race,verified,hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,game
 0x45D720,930,sub_45D720,VuGameConfigEntity,VuGameConfigEntity+17,game modes / race,absent,,False,False,game
 0x45DAD0,284,?$VuMethod1@VVuGameConfigEntity@@XABVVuGfxDrawShadowParams@@_load_Name,VuGameConfigEntity,VuGameConfigEntity+21,game modes / race,callee,,False,False,game
 0x45DBF0,1567,?$VuMethod1@VVuGameConfigEntity@@XABVVuGfxDrawShadowParams@@_load_Championship,VuGameConfigEntity,VuGameConfigEntity+23,game modes / race,absent,,False,False,game
-0x45E210,155,?$VuMethod1@VVuGameConfigEntity@@XABVVuGfxDrawShadowParams@@_load_LastGameConfigSelection,VuGameConfigEntity,VuGameConfigEntity+24,game modes / race,callee,,False,False,game
-0x45E2B0,67,sub_45E2B0,VuGameConfigEntity,VuGameConfigEntity+25,game modes / race,absent,,False,False,game
-0x45E300,2848,?$VuMethod1@VVuGameConfigEntity@@XABVVuGfxDrawShadowParams@@_load_Choices,VuGameConfigEntity,VuGameConfigEntity+26,game modes / race,absent,,False,False,game
+0x45E210,155,?$VuMethod1@VVuGameConfigEntity@@XABVVuGfxDrawShadowParams@@_load_LastGameConfigSelection,VuGameConfigEntity,VuGameConfigEntity+24,game modes / race,verified,hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,game
+0x45E2B0,67,sub_45E2B0,VuGameConfigEntity,VuGameConfigEntity+25,game modes / race,verified,hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,game
+0x45E300,2848,?$VuMethod1@VVuGameConfigEntity@@XABVVuGfxDrawShadowParams@@_load_Choices,VuGameConfigEntity,VuGameConfigEntity+26,game modes / race,cited,hydro/workspace/core/ui/select.hxx,False,False,game
 0x45EE20,1948,sub_45EE20,VuGameConfigEntity,VuGameConfigEntity+12,game modes / race,absent,,False,False,game
 0x45F5C0,328,sub_45F5C0,,,game modes / race (by address),absent,,False,False,game
 0x45F710,333,loader_0045F710_load_Choices,,,unattributed,absent,,False,False,game
@@ -1648,7 +1648,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4725C0,120,sub_4725C0,,,game modes / race (by address),callee,,False,False,game
 0x472640,6,sub_472640,VuSetGameModeUIAction,VuSetGameModeUIAction+1,game modes / race,absent,,False,False,game
 0x472650,225,sub_472650,,,game modes / race (by address),verified,hydro/workspace/core/ui/action.hxx,False,False,game
-0x472740,74,sub_472740,VuSetGameModeUIAction,VuSetGameModeUIAction+12,game modes / race,verified,hydro/workspace/core/ui/action.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,game
+0x472740,74,sub_472740,VuSetGameModeUIAction,VuSetGameModeUIAction+12,game modes / race,verified,hydro/workspace/core/ui/action.hxx; hydro/workspace/core/ui/wiring.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,game
 0x472790,112,sub_472790,,,game modes / race (by address),verified,hydro/workspace/core/ui/action.hxx,False,False,game
 0x472800,153,sub_472800,,,game modes / race (by address),verified,hydro/workspace/core/ui/action.hxx; hydro/workspace/core/ui/wiring.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,game
 0x4728A0,6,sub_4728A0,VuUIButtonEntity,VuUIButtonEntity+1,HUD / UI / fonts,absent,,False,False,game
@@ -1794,8 +1794,8 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x480BA0,3772,?$VuMethod0@VVuRaceGame@@X_load_ChallengeNameAlignment,,,C++ runtime / STL,cited,hydro/workspace/core/world/race.hxx,False,False,race
 0x481A60,34,sub_481A60,VuGame,VuGame+3,game modes / race,absent,,False,False,race
 0x481A90,578,sub_481A90,,,game modes / race (by address),absent,,False,False,race
-0x481CE0,3254,loader_00481CE0_load_Boats,,,game modes / race (by address),verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
-0x4829A0,943,sub_4829A0,,,unattributed,verified,hydro/workspace/core/boat/track.hxx; hydro/workspace/core/world/entities.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/start.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
+0x481CE0,3254,loader_00481CE0_load_Boats,,,game modes / race (by address),verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
+0x4829A0,943,sub_4829A0,,,unattributed,verified,hydro/workspace/core/boat/track.hxx; hydro/workspace/core/world/entities.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/core/world/start.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
 0x482D50,440,sub_482D50,,,unattributed,absent,,False,False,race
 0x482F10,403,sub_482F10,,,unattributed,absent,,False,False,race
 0x4830B0,185,sub_4830B0,VuGame,VuGame+10,game modes / race,absent,,False,False,race
@@ -2953,9 +2953,9 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4AAD10,86,sub_4AAD10,,,boat (by address),absent,,False,False,race
 0x4AAD70,408,sub_4AAD70,VuBoatManager,VuBoatManager+5,boat,cited,hydro/workspace/core/boat/manager.hxx,False,False,race
 0x4AAF10,72,sub_4AAF10,VuBoatManager,VuBoatManager+3,boat,absent,,False,False,race
-0x4AAF60,213,sub_4AAF60,,,boat (by address),verified,hydro/workspace/core/boat/manager.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/start.hxx; hydro/workspace/utility/checks/race.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
+0x4AAF60,213,sub_4AAF60,,,boat (by address),verified,hydro/workspace/core/boat/manager.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/core/world/start.hxx; hydro/workspace/utility/checks/race.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
 0x4AB040,93,sub_4AB040,,,boat (by address),verified,hydro/workspace/core/boat/manager.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/start.hxx; hydro/workspace/utility/checks/race.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
-0x4AB0A0,594,sub_4AB0A0,,,boat (by address),verified,hydro/workspace/core/boat/manager.hxx; hydro/workspace/utility/checks/race.hxx,False,False,race
+0x4AB0A0,594,sub_4AB0A0,,,boat (by address),verified,hydro/workspace/core/boat/manager.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/utility/checks/race.hxx,False,False,race
 0x4AB300,116,sub_4AB300,,,boat (by address),absent,,False,False,race
 0x4AB380,254,sub_4AB380,VuBoatManager,VuBoatManager+0,boat,absent,,False,False,race
 0x4AB480,573,?$VuMethod0@VVuBoatManager@@X_load_DebugCamera,VuBoatManager,VuBoatManager+0,boat,absent,,False,False,race
@@ -3337,11 +3337,11 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4C0930,101,sub_4C0930,,,unattributed,cited,hydro/workspace/core/ui/flow.hxx,False,False,race
 0x4C09A0,57,sub_4C09A0,,,unattributed,cited,hydro/workspace/core/ui/flow.hxx,False,False,race
 0x4C09E0,83,sub_4C09E0,,,unattributed,cited,hydro/workspace/core/ui/flow.hxx,False,False,race
-0x4C0A50,3698,VuDBAsset_load_ProjectAsset,,,unattributed,verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
+0x4C0A50,3698,VuDBAsset_load_ProjectAsset,,,unattributed,verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x4C18D0,1368,VuDBAsset_load_Properties,,,unattributed,verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
-0x4C1E30,1226,sub_4C1E30,,,unattributed,verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/world/race.hxx,False,False,race
-0x4C2300,2370,VuDBAsset_load_DriverName,,,unattributed,cited,hydro/workspace/core/ui/config.hxx,False,False,race
-0x4C2C50,1226,sub_4C2C50,,,unattributed,cited,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/world/race.hxx,False,False,race
+0x4C1E30,1226,sub_4C1E30,,,unattributed,verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
+0x4C2300,2370,VuDBAsset_load_DriverName,,,unattributed,verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
+0x4C2C50,1226,sub_4C2C50,,,unattributed,verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x4C3120,167,sub_4C3120,,,unattributed,verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x4C31D0,417,VuDBAsset_load_AISkins,,,unattributed,verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x4C3380,190,sub_4C3380,,,unattributed,verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
@@ -3503,9 +3503,9 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4CCB30,186,sub_4CCB30,,,unattributed,absent,,False,False,race
 0x4CCBF0,127,sub_4CCBF0,VuUnusedAssetsGameMode,VuUnusedAssetsGameMode+1,assets,absent,,False,False,race
 0x4CCC70,98,sub_4CCC70,VuAssetListGameMode,VuAssetListGameMode+1,assets,absent,,False,False,race
-0x4CCCE0,188,sub_4CCCE0,,,assets (by address),absent,,False,False,race
+0x4CCCE0,188,sub_4CCCE0,,,assets (by address),callee,,False,False,race
 0x4CCDA0,712,sub_4CCDA0,,,assets (by address),absent,,False,False,race
-0x4CD070,134,sub_4CD070,,,assets (by address),absent,,False,False,race
+0x4CD070,134,sub_4CD070,,,assets (by address),callee,,False,False,race
 0x4CD100,48,sub_4CD100,,,assets (by address),absent,,False,False,race
 0x4CD130,116,sub_4CD130,,,assets (by address),absent,,False,False,race
 0x4CD1B0,179,sub_4CD1B0,,,assets (by address),absent,,False,False,race
@@ -3516,26 +3516,26 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4CD3B0,40,sub_4CD3B0,VuPfxBoatSpringConstraint; VuPfxEmitBoatHull; VuPfxEmitBoatThrustQuadFountain; VuPfxEmitDirectionalQuadFountain; VuPfxEmitFountain; VuPfxEmitGeomFountain; VuPfxEmitQuadFountain; VuPfxProcess; VuPfxSpringConstraint; VuPfxTickAlpha; VuPfxTickAlphaInOut; VuPfxTickDampenVelocity; VuPfxTickLinearAcceleration; VuPfxTickScale; VuPfxTickWorldScaleZ,VuPfxBoatSpringConstraint+0; VuPfxEmitBoatThrustQuadFountain+0; VuPfxProcess+0; VuPfxEmitBoatHull+0; VuPfxEmitDirectionalQuadFountain+0; VuPfxEmitGeomFountain+0,boat,absent,,False,False,race
 0x4CD3E0,6,sub_4CD3E0,VuPfxEmitBoatThrustQuadFountain,VuPfxEmitBoatThrustQuadFountain+1,particles,callee,,False,False,race
 0x4CD3F0,6,sub_4CD3F0,VuPfxBoatSpringConstraint,VuPfxBoatSpringConstraint+1,particles,callee,,False,False,race
-0x4CD400,123,sub_4CD400,,,particles (by address),absent,,False,False,game
+0x4CD400,123,sub_4CD400,,,particles (by address),callee,,False,False,game
 0x4CD480,6,sub_4CD480,VuPfxEmitBoatThrustQuadFountain,VuPfxEmitBoatThrustQuadFountain+6,particles,callee,,False,False,race
 0x4CD490,62,sub_4CD490,VuPfxEmitBoatThrustQuadFountain,VuPfxEmitBoatThrustQuadFountain+7,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
-0x4CD4D0,210,sub_4CD4D0,,,particles (by address),absent,,False,False,game
+0x4CD4D0,210,sub_4CD4D0,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,game
 0x4CD5B0,107,sub_4CD5B0,VuPfxEmitBoatThrustQuadFountainInstance,VuPfxEmitBoatThrustQuadFountainInstance+1,particles,verified,hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/core/world/spray.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
-0x4CD620,120,sub_4CD620,,,particles (by address),absent,,False,False,game
+0x4CD620,120,sub_4CD620,,,particles (by address),callee,,False,False,game
 0x4CD6A0,6,sub_4CD6A0,VuPfxBoatSpringConstraint; btCompoundShape,VuPfxBoatSpringConstraint+6; btCompoundShape+11,physics (Bullet),callee,,False,False,race
 0x4CD6B0,27,sub_4CD6B0,VuPfxBoatSpringConstraint,VuPfxBoatSpringConstraint+7,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
-0x4CD6D0,441,sub_4CD6D0,,,particles (by address),absent,,False,False,game
-0x4CD890,139,sub_4CD890,,,particles (by address),absent,,False,False,race
+0x4CD6D0,441,sub_4CD6D0,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,game
+0x4CD890,139,sub_4CD890,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x4CD920,34,sub_4CD920,VuPfxNode,VuPfxNode+0,particles,absent,,False,False,race
 0x4CD950,37,sub_4CD950,,,particles (by address),absent,,False,False,dead
 0x4CD980,421,sub_4CD980,VuPfxBoatSpringConstraintInstance,VuPfxBoatSpringConstraintInstance+1,particles,verified,hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/core/world/spray.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x4CDB30,188,sub_4CDB30,,,particles (by address),callee,,False,False,race
 0x4CDBF0,657,sub_4CDBF0,,,particles (by address),absent,,False,False,race
 0x4CDE90,6,sub_4CDE90,VuPfxEmitBoatHull,VuPfxEmitBoatHull+1,boat,callee,,False,False,race
-0x4CDEA0,120,sub_4CDEA0,,,boat (by address),absent,,False,False,game
+0x4CDEA0,120,sub_4CDEA0,,,boat (by address),callee,,False,False,game
 0x4CDF20,6,sub_4CDF20,VuPfxEmitBoatHull,VuPfxEmitBoatHull+6,boat,callee,,False,False,race
 0x4CDF30,34,sub_4CDF30,VuPfxEmitBoatHull,VuPfxEmitBoatHull+7,boat,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
-0x4CDF60,2025,sub_4CDF60,,,boat (by address),absent,,False,False,game
+0x4CDF60,2025,sub_4CDF60,,,boat (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,game
 0x4CE750,8,sub_4CE750,VuPfxEmitBoatHullInstance,VuPfxEmitBoatHullInstance+0,boat,verified,hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/core/world/pfxsim.hxx,False,False,race
 0x4CE760,4647,sub_4CE760,VuPfxEmitBoatHullInstance,VuPfxEmitBoatHullInstance+1,boat,verified,hydro/workspace/core/world/pfx.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/core/world/spray.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x4CF990,11,sub_4CF990,VuTrackManagerImpl,VuTrackManagerImpl+4,game modes / race,absent,,False,False,race
@@ -3580,7 +3580,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4D26A0,164,sub_4D26A0,,,unattributed,absent,,False,False,race
 0x4D2750,161,sub_4D2750,,,unattributed,absent,,False,False,race
 0x4D2800,11,sub_4D2800,VuGameUtil,VuGameUtil+4,game modes / race,absent,,False,False,game
-0x4D2810,123,sub_4D2810,,,game modes / race (by address),absent,,False,False,game
+0x4D2810,123,sub_4D2810,,,game modes / race (by address),cited,hydro/workspace/core/ui/select.hxx,False,False,game
 0x4D2890,34,sub_4D2890,VuGameUtil,VuGameUtil+0,game modes / race,absent,,False,False,game
 0x4D28C0,234,sub_4D28C0,,,game modes / race (by address),absent,,False,False,game
 0x4D29B0,8,sub_4D29B0,VuGameUtil,VuGameUtil+5,game modes / race,absent,,False,False,game
@@ -4347,7 +4347,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4F2540,92,sub_4F2540,,,unattributed,absent,,False,False,race
 0x4F25A0,215,sub_4F25A0,,,unattributed,absent,,False,False,race
 0x4F2680,103,sub_4F2680,,,unattributed,absent,,False,False,race
-0x4F26F0,245,sub_4F26F0,,,unattributed,absent,,False,False,race
+0x4F26F0,245,sub_4F26F0,,,unattributed,callee,,False,False,race
 0x4F27F0,212,sub_4F27F0,,,unattributed,absent,,False,False,race
 0x4F28D0,350,sub_4F28D0,,,unattributed,absent,,False,False,race
 0x4F2A30,37,sub_4F2A30,,,unattributed,absent,,False,False,dead
@@ -4362,7 +4362,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4F3180,188,sub_4F3180,,,unattributed,callee,,False,False,race
 0x4F3240,121,sub_4F3240,,,unattributed,absent,,False,False,race
 0x4F32C0,688,sub_4F32C0,,,unattributed,callee,,False,False,race
-0x4F3570,48,sub_4F3570,,,unattributed,absent,,False,False,race
+0x4F3570,48,sub_4F3570,,,unattributed,callee,,False,False,race
 0x4F35A0,503,sub_4F35A0,,,unattributed,callee,,False,False,race
 0x4F37A0,110,sub_4F37A0,,,unattributed,callee,,False,False,race
 0x4F3810,55,sub_4F3810,,,unattributed,absent,,False,False,race
@@ -4384,7 +4384,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4F4770,94,sub_4F4770,,,unattributed,absent,,False,False,race
 0x4F47D0,33,sub_4F47D0,,,unattributed,callee,,False,False,race
 0x4F4800,84,sub_4F4800,,,unattributed,absent,,False,False,race
-0x4F4860,56,sub_4F4860,,,unattributed,absent,,False,False,race
+0x4F4860,56,sub_4F4860,,,unattributed,callee,,False,False,race
 0x4F48A0,180,sub_4F48A0,,,unattributed,absent,,False,False,race
 0x4F4960,58,sub_4F4960,,,unattributed,absent,,False,False,race
 0x4F49A0,66,sub_4F49A0,,,unattributed,absent,,False,False,race
@@ -4420,12 +4420,12 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4F6EC0,4,sub_4F6EC0,VuTickManagerImpl,VuTickManagerImpl+15,engine core / math / containers,absent,,False,False,race
 0x4F6ED0,4,sub_4F6ED0,VuTickManagerImpl,VuTickManagerImpl+16,engine core / math / containers,absent,,False,False,race
 0x4F6EE0,121,sub_4F6EE0,,,engine core / math / containers (by address),absent,,False,False,game
-0x4F6F60,165,sub_4F6F60,,,engine core / math / containers (by address),verified,hydro/workspace/core/world/tick.hxx; hydro/workspace/utility/checks/world.hxx,False,False,game
+0x4F6F60,165,sub_4F6F60,,,engine core / math / containers (by address),verified,hydro/workspace/core/world/session.hxx; hydro/workspace/core/world/tick.hxx; hydro/workspace/utility/checks/world.hxx,False,False,game
 0x4F7010,55,sub_4F7010,VuTickManagerImpl,VuTickManagerImpl+0,engine core / math / containers,absent,,False,False,race
-0x4F7050,243,sub_4F7050,VuTickManagerImpl,VuTickManagerImpl+5,engine core / math / containers,verified,hydro/workspace/core/world/tick.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
+0x4F7050,243,sub_4F7050,VuTickManagerImpl,VuTickManagerImpl+5,engine core / math / containers,verified,hydro/workspace/core/world/session.hxx; hydro/workspace/core/world/tick.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
 0x4F7150,355,sub_4F7150,VuTickManagerImpl,VuTickManagerImpl+1,engine core / math / containers,cited,hydro/workspace/core/world/tick.hxx,False,False,race
 0x4F72C0,36,sub_4F72C0,VuTickManagerImpl,VuTickManagerImpl+2,engine core / math / containers,cited,hydro/workspace/core/world/tick.hxx,False,False,race
-0x4F72F0,506,sub_4F72F0,VuTickManagerImpl,VuTickManagerImpl+6,engine core / math / containers,verified,hydro/workspace/core/world/tick.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
+0x4F72F0,506,sub_4F72F0,VuTickManagerImpl,VuTickManagerImpl+6,engine core / math / containers,verified,hydro/workspace/core/world/session.hxx; hydro/workspace/core/world/tick.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
 0x4F74F0,58,sub_4F74F0,VuTickManagerImpl,VuTickManagerImpl+0,engine core / math / containers,absent,,False,False,race
 0x4F7530,17,sub_4F7530,VuTickManagerImpl,VuTickManagerImpl+7,engine core / math / containers,verified,hydro/workspace/core/world/tick.hxx,False,False,race
 0x4F7550,29,sub_4F7550,VuTickManagerImpl,VuTickManagerImpl+8,engine core / math / containers,verified,hydro/workspace/core/world/tick.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
@@ -4527,41 +4527,41 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4FB980,11,sub_4FB980,VuDevMenu,VuDevMenu+4,HUD / UI / fonts,absent,,False,False,game
 0x4FB990,3,nullsub_5,VuDevMenu; VuUIPageLayoutSpaceElement,VuUIPageLayoutSpaceElement+2; VuDevMenu+7; VuDevMenu+8; VuDevMenu+9,HUD / UI / fonts,absent,,False,False,game
 0x4FB9A0,3,nullsub_6,PAVbtM::0ABUbtDispatcherInfo::UAEXPAVbtCollisionObject::btConvexConvexAlgorithm::??processCollision::?BA::.?AUbtDummyResult; VuDevMenu; btConstraintSolver; btConvexTriangleMeshShape; btSequentialImpulseConstraintSolver,VuDevMenu+12; VuDevMenu+13; btConvexTriangleMeshShape+24; btConvexTriangleMeshShape+27; btSequentialImpulseConstraintSolver+3; btConstraintSolver+3,physics (Bullet),verified,engine/workspace/core/dynamics/island.hxx,False,False,race
-0x4FB9B0,322,sub_4FB9B0,,,physics (Bullet) (by address),callee,,False,False,race
-0x4FBB10,154,sub_4FBB10,,,physics (Bullet) (by address),verified,engine/workspace/core/assets/reader.hxx; hydro/workspace/core/ui/config.hxx,False,False,race
+0x4FB9B0,322,sub_4FB9B0,,,physics (Bullet) (by address),verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/ui/select.hxx,False,False,race
+0x4FBB10,154,sub_4FBB10,,,physics (Bullet) (by address),verified,engine/workspace/core/assets/reader.hxx; hydro/workspace/core/ui/config.hxx; hydro/workspace/core/ui/select.hxx,False,False,race
 0x4FBBB0,88,sub_4FBBB0,,,physics (Bullet) (by address),callee,,False,False,race
 0x4FBC10,48,sub_4FBC10,,,physics (Bullet) (by address),callee,,False,False,race
-0x4FBC40,20,sub_4FBC40,,,physics (Bullet) (by address),verified,engine/workspace/core/entity/node.hxx; engine/workspace/core/entity/script.hxx; hydro/workspace/core/world/race.hxx,False,False,race
-0x4FBC60,108,sub_4FBC60,,,physics (Bullet) (by address),verified,hydro/workspace/core/ui/config.hxx,False,False,race
+0x4FBC40,20,sub_4FBC40,,,physics (Bullet) (by address),verified,engine/workspace/core/entity/node.hxx; engine/workspace/core/entity/script.hxx; hydro/workspace/core/ui/select.hxx; hydro/workspace/core/world/race.hxx,False,False,race
+0x4FBC60,108,sub_4FBC60,,,physics (Bullet) (by address),verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/ui/select.hxx,False,False,race
 0x4FBCD0,96,sub_4FBCD0,,,physics (Bullet) (by address),absent,,False,False,race
 0x4FBD30,99,sub_4FBD30,,,physics (Bullet) (by address),absent,,False,False,race
-0x4FBDA0,66,sub_4FBDA0,,,physics (Bullet) (by address),absent,,False,False,race
-0x4FBDF0,157,sub_4FBDF0,,,physics (Bullet) (by address),verified,engine/workspace/core/assets/tree.hxx; engine/workspace/utility/verify.hxx; hydro/workspace/core/boat/camera.hxx; hydro/workspace/core/boat/driver.hxx; hydro/workspace/core/boat/sections.hxx; hydro/workspace/core/ui/config.hxx; hydro/workspace/core/ui/flow.hxx; hydro/workspace/core/world/race.hxx,False,False,race
-0x4FBE90,15,sub_4FBE90,,,physics (Bullet) (by address),verified,hydro/workspace/core/ui/config.hxx,False,False,race
+0x4FBDA0,66,sub_4FBDA0,,,physics (Bullet) (by address),verified,hydro/workspace/core/ui/select.hxx,False,False,race
+0x4FBDF0,157,sub_4FBDF0,,,physics (Bullet) (by address),verified,engine/workspace/core/assets/tree.hxx; engine/workspace/utility/verify.hxx; hydro/workspace/core/boat/camera.hxx; hydro/workspace/core/boat/driver.hxx; hydro/workspace/core/boat/sections.hxx; hydro/workspace/core/ui/config.hxx; hydro/workspace/core/ui/flow.hxx; hydro/workspace/core/world/pfxload.hxx; hydro/workspace/core/world/race.hxx,False,False,race
+0x4FBE90,15,sub_4FBE90,,,physics (Bullet) (by address),verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x4FBEA0,133,sub_4FBEA0,,,physics (Bullet) (by address),verified,hydro/workspace/core/boat/sections.hxx,False,False,race
 0x4FBF30,207,sub_4FBF30,,,physics (Bullet) (by address),absent,,False,False,race
-0x4FC000,137,sub_4FC000,,,physics (Bullet) (by address),verified,hydro/workspace/core/ui/config.hxx,False,False,race
-0x4FC090,173,sub_4FC090,,,physics (Bullet) (by address),verified,hydro/workspace/core/ui/action.hxx; hydro/workspace/core/ui/config.hxx,False,False,race
+0x4FC000,137,sub_4FC000,,,physics (Bullet) (by address),verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/world/pfxload.hxx,False,False,race
+0x4FC090,173,sub_4FC090,,,physics (Bullet) (by address),verified,hydro/workspace/core/ui/action.hxx; hydro/workspace/core/ui/config.hxx; hydro/workspace/core/ui/select.hxx,False,False,race
 0x4FC140,230,sub_4FC140,,,physics (Bullet) (by address),verified,hydro/workspace/core/ui/config.hxx,False,False,race
-0x4FC230,497,sub_4FC230,,,unattributed,callee,,False,False,game
-0x4FC450,30,sub_4FC450,,,unattributed,verified,engine/workspace/core/entity/values.hxx,False,False,race
-0x4FC470,64,sub_4FC470,,,unattributed,absent,,False,False,race
+0x4FC230,497,sub_4FC230,,,unattributed,verified,hydro/workspace/core/ui/select.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,game
+0x4FC450,30,sub_4FC450,,,unattributed,verified,engine/workspace/core/entity/values.hxx; hydro/workspace/core/ui/select.hxx,False,False,race
+0x4FC470,64,sub_4FC470,,,unattributed,callee,,False,False,race
 0x4FC4B0,77,sub_4FC4B0,,,unattributed,callee,,False,False,race
 0x4FC500,23,sub_4FC500,,,unattributed,absent,,False,False,race
-0x4FC520,42,sub_4FC520,,,unattributed,absent,,False,False,race
+0x4FC520,42,sub_4FC520,,,unattributed,verified,hydro/workspace/core/ui/select.hxx,False,False,race
 0x4FC550,56,sub_4FC550,,,unattributed,absent,,False,False,race
 0x4FC590,75,sub_4FC590,,,unattributed,absent,,False,False,race
 0x4FC5E0,88,sub_4FC5E0,,,unattributed,absent,,False,False,race
 0x4FC640,112,sub_4FC640,,,unattributed,verified,hydro/workspace/core/ui/action.hxx; hydro/workspace/core/ui/config.hxx,False,False,race
-0x4FC6B0,144,sub_4FC6B0,,,unattributed,verified,hydro/workspace/core/ui/config.hxx,False,False,race
-0x4FC740,313,sub_4FC740,,,unattributed,absent,,False,False,race
-0x4FC880,114,sub_4FC880,,,unattributed,verified,hydro/workspace/core/ui/config.hxx,False,False,race
+0x4FC6B0,144,sub_4FC6B0,,,unattributed,verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/ui/select.hxx,False,False,race
+0x4FC740,313,sub_4FC740,,,unattributed,callee,,False,False,race
+0x4FC880,114,sub_4FC880,,,unattributed,verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/ui/select.hxx,False,False,race
 0x4FC900,27,sub_4FC900,,,unattributed,callee,,False,False,race
 0x4FC920,69,sub_4FC920,,,unattributed,callee,,False,False,race
-0x4FC970,318,sub_4FC970,,,unattributed,verified,engine/workspace/core/assets/reader.hxx; hydro/workspace/core/ui/config.hxx,False,False,race
-0x4FCAB0,374,sub_4FCAB0,,,unattributed,callee,,False,False,race
+0x4FC970,318,sub_4FC970,,,unattributed,verified,engine/workspace/core/assets/reader.hxx; hydro/workspace/core/ui/config.hxx; hydro/workspace/core/ui/select.hxx,False,False,race
+0x4FCAB0,374,sub_4FCAB0,,,unattributed,verified,hydro/workspace/core/ui/select.hxx,False,False,race
 0x4FCC30,183,sub_4FCC30,,,unattributed,absent,,False,False,race
-0x4FCCF0,102,sub_4FCCF0,,,unattributed,absent,,False,False,race
+0x4FCCF0,102,sub_4FCCF0,,,unattributed,callee,,False,False,race
 0x4FCD60,536,sub_4FCD60,,,unattributed,callee,,False,False,race
 0x4FCF80,48,sub_4FCF80,,,unattributed,callee,,False,False,race
 0x4FCFB0,42,sub_4FCFB0,,,unattributed,absent,,False,False,race
@@ -4627,12 +4627,12 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5005F0,53,sub_5005F0,,,unattributed,callee,,False,False,game
 0x500630,96,sub_500630,,,unattributed,callee,,False,False,race
 0x500690,124,sub_500690,,,unattributed,verified,engine/workspace/core/entity/node.hxx,False,False,race
-0x500710,338,sub_500710,,,unattributed,verified,engine/workspace/core/entity/node.hxx; engine/workspace/core/entity/object.hxx; engine/workspace/utility/verify.hxx; hydro/workspace/core/boat/construct.hxx; hydro/workspace/core/boat/driver.hxx; hydro/workspace/core/ui/action.hxx; hydro/workspace/core/world/race.hxx,False,False,race
+0x500710,338,sub_500710,,,unattributed,verified,engine/workspace/core/entity/node.hxx; engine/workspace/core/entity/object.hxx; engine/workspace/utility/verify.hxx; hydro/workspace/core/boat/construct.hxx; hydro/workspace/core/boat/driver.hxx; hydro/workspace/core/ui/action.hxx; hydro/workspace/core/ui/select.hxx; hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/core/world/race.hxx,False,False,race
 0x500870,341,sub_500870,,,unattributed,absent,,False,False,race
 0x5009D0,136,VuEntity_load_ChildEntities,VuAIUIDriverStartEntity; VuAchievementNameUITextEntity; VuAchievementValueUITextEntity; VuActiveCameraTriggerEntity; VuAddBoostEntity; VuAddIntegerConstantEntity; VuAddIntegersEntity; VuAiDriver; VuAiNuisanceDriver; VuAiNuisanceDriverStartEntity; VuAiUiDriver; VuAiWaypointEntity; VuAmbientLightEntity; VuAnimatedPropEntity; VuAttachEntity; VuAudioAmbientReverbEntity; VuAudioBankEntity; VuAudioDspEntity; VuAudioDuckingEntity; VuAudioEmitterEntity; VuAudioEventEntity; VuAudioProjectEntity; VuAudioReverbEntity; VuAwardFlowEntity; VuBankedTurnWaveEntity; VuBarracudaEventUITextEntity; VuBarracudaSlalomPenaltyUITextEntity; VuBarracudaTeamScoreUITextEntity; VuBarracudaTrackUIImageEntity; VuBarracudaTrackUITextEntity; VuBarracudaTuningUITextEntity; VuBarracudaUIAwardImageEntity; VuBarracudaUIButtonEntity; VuBarracudaUICreditTextEntity; VuBarracudaUITrophyImageEntity; VuBarracudaUITrophyTextEntity; VuBarracudaUIUnlockCatTextEntity; VuBarracudaUIUnlockInfoTextEntity; VuBarracudaUnlockUITextEntity; VuBaseConfigEntity; VuBaseOceanWaveEntity; VuBoatConfigEntity; VuBoatEntity; VuBoatStatEntity; VuBooleanEntity; VuBreakableDynamicGamePropEntity; VuBreakableGamePropEntity; VuBreakablePropEntity; VuBuildFilterEntity; VuBumpWaveEntity; VuChampionshipCompletionUITextEntity; VuChampionshipEntity; VuCheatEntity; VuCheckpointBuoyEntity; VuCircularOceanWaveEntity; VuClearChampDataUIAction; VuClearChampionshipDataUIAction; VuClearGameResultsUIAction; VuCompareBooleansEntity; VuCompareIntegersEntity; VuCompareStringsEntity; VuControlEntity; VuControlKeyframeEntity; VuControlMethodEntity; VuCoronaEntity; VuCoronaOccluderEntity; VuCounterEntity; VuCreditsUITextEntity; VuCurrentAchievementUITextEntity; VuDelayEntity; VuDevJumpPointEntity; VuDifficultyBaseEntity; VuDifficultyImageEntity; VuDifficultyTextEntity; VuDirectionalCoronaEntity; VuDirectionalFlowWaveEntity; VuDirectionalLightEntity; VuDirectionalWaveEntity; VuDisplayScaleSettingsEntity; VuDockedBoatEntity; VuDoesChampDataExistUIAction; VuDoesChampionshipDataExistUIAction; VuDriverEntity; VuDynamicGamePropEntity; VuDynamicLightEntity; VuDynamicPropEntity; VuEffectVolumeSettingsEntity; VuEllipticalGfxSettingsEntity; VuEndActionGameUIAction; VuEntity; VuExplosionEntity; VuFloatingMineEntity; VuFoliageEntity; VuForceAffectorEntity; VuFrontEndCameraEntity; VuGameActionEntity; VuGameButtonEntity; VuGameConfigEntity; VuGamerTagUITextEntity; VuGenericEventEntity; VuGfxSettingsEntity; VuGhostBoatEntity; VuGhostDriver; VuGlobalGfxSettingsEntity; VuGridPositionEntity; VuGroupEntity; VuHUDButtonEntity; VuHUDElementEntity; VuHUDEntity; VuHUDHiddenPackageToastEntity; VuHUDMiniMapEntity; VuHUDOnScreenAxisEntity; VuHUDOnScreenButtonEntity; VuHUDOnScreenControlEntity; VuHUDPauseButtonEntity; VuHUDRecoverButtonEntity; VuHUDSpeedometerEntity; VuHumanDriver; VuHumanFilterEntity; VuIfEntity; VuInfiniteOceanWaveEntity; VuInfoUITextEntity; VuInputRemappingEntity; VuIntegerEntity; VuInvalidNetGameUITextEntity; VuIsAchievementUnlockedEntity; VuIsCircuitTrack; VuIsEventTypeEntity; VuIsPauseMenuActive; VuIsSkuEntity; VuIsTegraEntity; VuKeyframeEntity; VuKeyframeMotionEntity; VuLeaderboardRowCountUITextEntity; VuLensWaterEmitterEntity; VuLicenseEntity; VuLoadingProgressBarEntity; VuMessageBoxEntity; VuMessageBoxScreenEntity; VuMotionEntity; VuMultiDelayEntity; VuMusicVolumeSettingsEntity; VuOnAnyButtonOrKeyEntity; VuOnKeyboardEventEntity; VuOnProjectInitializedEntity; VuOnTouchSpecialEntity; VuOncePerLapFilterEntity; VuOneShotFilterEntity; VuOneShotPfxEntity; VuPackFileVersionsUITextEntity; VuPersistentBaseEntity; VuPersistentBooleanEntity; VuPersistentIntegerEntity; VuPersistentStringEntity; VuPfxEntity; VuPfxProjectEntity; VuPlatformFilterEntity; VuPlayAnimationEntity; VuPointWaveEntity; VuPopScreenUIAction; VuPosterEntity; VuPowerUpBoostEntity; VuPowerUpEntity; VuPowerUpHiddenPackageEntity; VuPowerUpTriggerEntity; VuPreviewEntity; VuPropEntity; VuPushScreenUIAction; VuRaceCompletionUITextEntity; VuRaceResultsTableEntity; VuRampEntity; VuRandomTriggerEntity; VuRectangularGfxSettingsEntity; VuRectangularOceanWaveEntity; VuReloadScreenUIAction; VuRestartActionGameUIAction; VuResumeActionGameUIAction; VuRotateMotionEntity; VuSaveSettingsEntity; VuSayVoiceOverBoxEntity; VuSayVoiceOverEllipsoidEntity; VuSayVoiceOverEntity; VuSceneEntity; VuScreenFadeBoxEntity; VuScreenFadeEllipsoidEntity; VuScreenFadeEntity; VuSellScreen; VuSentientUpsellPresented; VuSentientUpsellResponded; VuSequencerEntity; VuSetBoatConfigPlayerEntity; VuSetBooleanEntity; VuSetDefaultSettingsEntity; VuSetFrontEndCameraEntity; VuSetGameModeUIAction; VuSetInfoStringUIAction; VuSetIntegerEntity; VuSetMenuPresenceUIAction; VuSetScreenUIAction; VuSetStringEntity; VuSetTrackBranchProbabilities; VuShortUnlockUITextEntity; VuShowWebPageUIAction; VuShutdownAppUIAction; VuSignInEntity; VuSkyBoxEntity; VuSlalomCompletionUITextEntity; VuSlalomGateEntity; VuSliderEntity; VuStartActionGameUIAction; VuStartLightsOutAction; VuStaticPfxEntity; VuStaticWakeWaveEntity; VuSteeringSensitivitySettingsEntity; VuStringEntity; VuSubstituteAssetEntity; VuSubtractIntegersEntity; VuSwapSkyboxEntity; VuSwitchEntity; VuSysNotifyEntity; VuThrottleRemappingEntity; VuTiltSteeringSettingsEntity; VuTimeTrialCompletionUITextEntity; VuTransformEntity; VuTriggerArrayEntity; VuTriggerBoxEntity; VuTriggerEntity; VuTriggerForwarderEntity; VuTriggerPlaneEntity; VuUIAction; VuUIButtonEntity; VuUIComboBoxEntity; VuUIContainerEntity; VuUIDebugTextEntity; VuUIEventEntity; VuUIFidelitySettingEntity; VuUIFlipIntervalSettingEntity; VuUIGhostLeaderboardEntity; VuUIImageBaseEntity; VuUIImageEntity; VuUILeaderboardEntity; VuUIMiniLeaderboardEntity; VuUIPadCheatComboEvent; VuUIPageLayoutEntity; VuUIProgressBarEntity; VuUIScreenEntity; VuUIScrollingTextEntity; VuUISubtitlesSettingEntity; VuUITextBaseEntity; VuUITextEntity; VuUITouchButtonEntity; VuUIUnitsSettingEntity; VuUnlockAchievementEntity; VuUserNextUIAction; VuVibrationSettingsEntity; VuWakeWaveEntity; VuWaterDebugDrawer; VuWaterRampEntity; VuWaterSurfaceEntity; VuWaterTextureSettingsEntity; VuWhirlpoolWaveEntity,VuUITextBaseEntity+11; VuUIImageBaseEntity+11; VuUIScreenEntity+11; VuUITouchButtonEntity+11; VuUIProgressBarEntity+11; VuUIPageLayoutEntity+11,water,verified,engine/workspace/core/entity/dynamic.hxx; engine/workspace/core/entity/node.hxx; hydro/workspace/core/game/types.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/check.hxx,False,False,race
 0x500A60,162,sub_500A60,,,water (by address),verified,engine/workspace/core/entity/node.hxx; hydro/workspace/core/world/race.hxx,False,False,race
-0x500B10,108,sub_500B10,,,water (by address),cited,hydro/workspace/core/boat/sections.hxx; hydro/workspace/core/boat/track.hxx; hydro/workspace/core/ui/flow.hxx; hydro/workspace/core/world/entities.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/start.hxx; hydro/workspace/core/world/surface.hxx,False,False,race
-0x500B80,107,sub_500B80,,,water (by address),cited,hydro/workspace/core/ui/flow.hxx,False,False,race
+0x500B10,108,sub_500B10,,,water (by address),verified,hydro/workspace/core/boat/sections.hxx; hydro/workspace/core/boat/track.hxx; hydro/workspace/core/ui/flow.hxx; hydro/workspace/core/world/entities.hxx; hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/core/world/start.hxx; hydro/workspace/core/world/surface.hxx,False,False,race
+0x500B80,107,sub_500B80,,,water (by address),verified,hydro/workspace/core/ui/flow.hxx; hydro/workspace/core/world/pfxmgr.hxx,False,False,race
 0x500BF0,347,sub_500BF0,,,water (by address),verified,hydro/workspace/core/ui/button.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x500D50,96,sub_500D50,,,water (by address),verified,hydro/workspace/core/boat/respawn.hxx; hydro/workspace/core/ui/button.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x500DB0,72,sub_500DB0,,,water (by address),absent,,False,False,race
@@ -4646,7 +4646,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x501300,713,loader_00501300_load_name,,,unattributed,verified,engine/workspace/core/entity/node.hxx; engine/workspace/core/entity/registry.hxx; hydro/workspace/utility/check.hxx,False,False,race
 0x5015D0,208,loader_005015D0_load_ChildEntities,,,unattributed,verified,engine/workspace/core/entity/node.hxx; hydro/workspace/core/game/types.hxx; hydro/workspace/utility/check.hxx,False,False,race
 0x5016A0,92,sub_5016A0,,,unattributed,verified,engine/workspace/core/entity/node.hxx; hydro/workspace/utility/check.hxx,False,False,race
-0x501700,267,sub_501700,,,unattributed,verified,engine/workspace/core/entity/node.hxx; engine/workspace/core/entity/registry.hxx,False,False,race
+0x501700,267,sub_501700,,,unattributed,verified,engine/workspace/core/entity/node.hxx; engine/workspace/core/entity/registry.hxx; hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x501810,239,sub_501810,,,unattributed,verified,engine/workspace/core/entity/node.hxx,False,False,race
 0x501900,483,sub_501900,,,unattributed,callee,,False,False,race
 0x501AF0,463,sub_501AF0,,,unattributed,callee,,False,False,race
@@ -5034,30 +5034,30 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x51C400,6,sub_51C400,VuPfxGroup,VuPfxGroup+1,particles,callee,,False,False,race
 0x51C410,40,sub_51C410,VuPfxGroup,VuPfxGroup+0,particles,absent,,False,False,race
 0x51C440,149,sub_51C440,,,particles (by address),absent,,False,False,game
-0x51C4E0,338,sub_51C4E0,,,particles (by address),absent,,False,False,game
+0x51C4E0,338,sub_51C4E0,,,particles (by address),callee,,False,False,game
 0x51C640,34,sub_51C640,VuPfxImpl,VuPfxImpl+0,particles,absent,,False,False,race
-0x51C670,86,sub_51C670,,,particles (by address),absent,,False,False,game
+0x51C670,86,sub_51C670,,,particles (by address),callee,,False,False,game
 0x51C6D0,37,sub_51C6D0,,,particles (by address),absent,,False,False,dead
 0x51C700,309,sub_51C700,,,particles (by address),absent,,False,False,race
-0x51C840,3688,VuPfxNodeRegistry_registerAllTypes,VuPfxImpl,VuPfxImpl+5,particles,cited,hydro/workspace/core/world/pfx.hxx; hydro/workspace/core/world/pfxsim.hxx,False,False,race
+0x51C840,3688,VuPfxNodeRegistry_registerAllTypes,VuPfxImpl,VuPfxImpl+5,particles,verified,hydro/workspace/core/world/pfx.hxx; hydro/workspace/core/world/pfxload.hxx; hydro/workspace/core/world/pfxsim.hxx,False,False,race
 0x51D6B0,12,sub_51D6B0,VuPfxImpl,VuPfxImpl+6,particles,cited,hydro/workspace/core/world/pfxsim.hxx,False,False,race
-0x51D6C0,282,sub_51D6C0,VuPfxImpl,VuPfxImpl+7,particles,absent,,False,False,race
-0x51D7E0,139,sub_51D7E0,,,particles (by address),absent,,False,False,race
-0x51D870,324,sub_51D870,VuPfxImpl,VuPfxImpl+8,particles,absent,,False,False,race
-0x51D9C0,167,sub_51D9C0,VuPfxImpl,VuPfxImpl+9,particles,absent,,False,False,race
-0x51DA70,110,sub_51DA70,VuPfxImpl,VuPfxImpl+10,particles,verified,hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
+0x51D6C0,282,sub_51D6C0,VuPfxImpl,VuPfxImpl+7,particles,verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
+0x51D7E0,139,sub_51D7E0,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
+0x51D870,324,sub_51D870,VuPfxImpl,VuPfxImpl+8,particles,cited,hydro/workspace/core/world/pfxload.hxx,False,False,race
+0x51D9C0,167,sub_51D9C0,VuPfxImpl,VuPfxImpl+9,particles,cited,hydro/workspace/core/world/pfxload.hxx,False,False,race
+0x51DA70,110,sub_51DA70,VuPfxImpl,VuPfxImpl+10,particles,verified,hydro/workspace/core/world/pfxload.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x51DAE0,91,sub_51DAE0,VuPfxImpl,VuPfxImpl+11,particles,verified,hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
-0x51DB40,134,sub_51DB40,,,particles (by address),absent,,False,False,race
-0x51DBD0,432,sub_51DBD0,,,particles (by address),cited,hydro/workspace/core/world/pfxsim.hxx,False,False,race
+0x51DB40,134,sub_51DB40,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
+0x51DBD0,432,sub_51DBD0,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x51DD80,49,sub_51DD80,,,particles (by address),verified,hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x51DDC0,211,sub_51DDC0,,,particles (by address),absent,,False,False,race
 0x51DEA0,97,sub_51DEA0,,,particles (by address),absent,,False,False,race
 0x51DF10,188,sub_51DF10,,,particles (by address),absent,,False,False,race
 0x51DFD0,731,sub_51DFD0,,,particles (by address),absent,,False,False,race
 0x51E2B0,169,sub_51E2B0,,,particles (by address),absent,,False,False,race
-0x51E360,48,sub_51E360,,,unattributed,absent,,False,False,game
+0x51E360,48,sub_51E360,,,unattributed,callee,,False,False,game
 0x51E390,80,sub_51E390,,,unattributed,cited,hydro/workspace/core/world/pfxsim.hxx,False,False,race
-0x51E3E0,108,sub_51E3E0,,,unattributed,absent,,False,False,race
+0x51E3E0,108,sub_51E3E0,,,unattributed,callee,,False,False,race
 0x51E450,76,sub_51E450,,,unattributed,absent,,False,False,dead
 0x51E4A0,176,sub_51E4A0,,,unattributed,verified,hydro/workspace/core/boat/parts.hxx,False,False,race
 0x51E550,121,sub_51E550,VuBreakableModelInstance,VuBreakableModelInstance+0,rendering / gfx,absent,,False,False,race
@@ -5070,7 +5070,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x51FF30,101,sub_51FF30,VuStaticModelInstance,VuStaticModelInstance+0,rendering / gfx,absent,,False,False,race
 0x51FFA0,81,sub_51FFA0,,,rendering / gfx (by address),absent,,False,False,dead
 0x520000,124,sub_520000,,,rendering / gfx (by address),callee,,False,False,race
-0x520080,164,sub_520080,,,rendering / gfx (by address),verified,hydro/workspace/core/boat/load.hxx,False,False,race
+0x520080,164,sub_520080,,,rendering / gfx (by address),verified,hydro/workspace/core/boat/load.hxx; hydro/workspace/core/world/pfxload.hxx; hydro/workspace/core/world/world.hxx,False,False,race
 0x520130,119,sub_520130,,,rendering / gfx (by address),cited,engine/workspace/core/entity/draw.hxx; hydro/workspace/core/world/entities.hxx; hydro/workspace/core/world/models.hxx; hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/core/world/transform.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x5201B0,65,sub_5201B0,,,rendering / gfx (by address),absent,,False,False,race
 0x520200,432,sub_520200,,,rendering / gfx (by address),absent,,False,False,race
@@ -5150,7 +5150,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x527B40,4,sub_527B40,btCompoundShape,btCompoundShape+10,physics (Bullet),verified,engine/workspace/core/collision/compound.hxx,False,False,race
 0x527B50,35,sub_527B50,btCollisionShape; btTriangleMeshShape,btCollisionShape+0; btTriangleMeshShape+0,physics (Bullet),absent,,False,False,race
 0x527B80,194,sub_527B80,,,physics (Bullet) (by address),verified,engine/workspace/core/dynamics/body.hxx; engine/workspace/utility/boat.hxx; hydro/workspace/core/boat/construct.hxx,False,False,race
-0x527C50,105,sub_527C50,VuStridingMesh,VuStridingMesh+3,rendering / gfx,verified,engine/workspace/core/collision/bvh.hxx; engine/workspace/core/collision/support.hxx; hydro/workspace/core/boat/load.hxx,False,False,race
+0x527C50,105,sub_527C50,VuStridingMesh,VuStridingMesh+3,rendering / gfx,verified,engine/workspace/core/collision/bvh.hxx; engine/workspace/core/collision/support.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/core/world/session.hxx,False,False,race
 0x527CC0,12,sub_527CC0,VuStridingMesh,VuStridingMesh+6,rendering / gfx,verified,engine/workspace/core/collision/support.hxx,False,False,race
 0x527CD0,103,sub_527CD0,VuSimpleStridingMesh,VuSimpleStridingMesh+3,rendering / gfx,absent,,False,False,race
 0x527D40,12,sub_527D40,VuSimpleStridingMesh,VuSimpleStridingMesh+6,rendering / gfx,absent,,False,False,race
@@ -5209,19 +5209,19 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x52B5C0,121,sub_52B5C0,,,unattributed,callee,,False,False,race
 0x52B640,135,sub_52B640,,,unattributed,callee,,False,False,race
 0x52B6F0,11,sub_52B6F0,VuPfxManager,VuPfxManager+4,particles,absent,,False,False,race
-0x52B700,76,sub_52B700,,,particles (by address),absent,,False,False,game
-0x52B750,86,sub_52B750,,,particles (by address),absent,,False,False,game
-0x52B7B0,90,sub_52B7B0,,,particles (by address),absent,,False,False,game
+0x52B700,76,sub_52B700,,,particles (by address),verified,hydro/workspace/core/world/pfxmgr.hxx,False,False,game
+0x52B750,86,sub_52B750,,,particles (by address),verified,hydro/workspace/core/world/pfxmgr.hxx,False,False,game
+0x52B7B0,90,sub_52B7B0,,,particles (by address),verified,hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,game
 0x52B810,118,sub_52B810,VuPfxManager,VuPfxManager+3,particles,absent,,False,False,race
-0x52B890,556,sub_52B890,,,particles (by address),absent,,False,False,game
+0x52B890,556,sub_52B890,,,particles (by address),verified,hydro/workspace/core/world/pfxmgr.hxx,False,False,game
 0x52BAC0,84,sub_52BAC0,,,particles (by address),absent,,False,False,race
 0x52BB20,53,sub_52BB20,,,particles (by address),absent,,False,False,race
-0x52BB60,142,sub_52BB60,,,particles (by address),absent,,False,False,race
-0x52BBF0,63,sub_52BBF0,,,particles (by address),absent,,False,False,game
-0x52BC30,158,sub_52BC30,,,particles (by address),absent,,False,False,game
-0x52BCD0,122,sub_52BCD0,,,particles (by address),cited,hydro/workspace/core/boat/state.hxx,False,False,race
-0x52BD50,141,sub_52BD50,,,particles (by address),absent,,False,False,race
-0x52BDE0,68,sub_52BDE0,,,particles (by address),absent,,False,False,race
+0x52BB60,142,sub_52BB60,,,particles (by address),verified,hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
+0x52BBF0,63,sub_52BBF0,,,particles (by address),verified,hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,game
+0x52BC30,158,sub_52BC30,,,particles (by address),verified,hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,game
+0x52BCD0,122,sub_52BCD0,,,particles (by address),verified,hydro/workspace/core/boat/state.hxx; hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
+0x52BD50,141,sub_52BD50,,,particles (by address),verified,hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
+0x52BDE0,68,sub_52BDE0,,,particles (by address),verified,hydro/workspace/core/world/pfxmgr.hxx,False,False,race
 0x52BE30,6,sub_52BE30,VuWaterWakeWave,VuWaterWakeWave+1,water,callee,,False,False,race
 0x52BE40,40,sub_52BE40,VuWaterWakeWave,VuWaterWakeWave+0,water,absent,,False,False,race
 0x52BE70,6,sub_52BE70,VuWaterFlatWakeWave,VuWaterFlatWakeWave+1,water,callee,,False,False,race
@@ -5268,7 +5268,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x531850,459,sub_531850,,,unattributed,absent,,False,False,race
 0x531A20,6,sub_531A20,Vu3dDrawComponent,Vu3dDrawComponent+1,rendering / gfx,absent,,False,False,race
 0x531A30,6,sub_531A30,Vu3dDrawComponent,Vu3dDrawComponent+0,rendering / gfx,callee,,False,False,race
-0x531A40,452,sub_531A40,,,rendering / gfx (by address),verified,hydro/workspace/core/boat/parts.hxx; hydro/workspace/utility/check.hxx,False,False,race
+0x531A40,452,sub_531A40,,,rendering / gfx (by address),verified,hydro/workspace/core/boat/parts.hxx; hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/check.hxx,False,False,race
 0x531C10,34,sub_531C10,Vu3dDrawComponent,Vu3dDrawComponent+2,rendering / gfx,absent,,False,False,race
 0x531C40,197,sub_531C40,,,rendering / gfx (by address),absent,,False,False,race
 0x531D10,91,sub_531D10,,,rendering / gfx (by address),verified,engine/workspace/core/entity/draw.hxx; hydro/workspace/core/assets/model.hxx; hydro/workspace/core/assets/scene.hxx; hydro/workspace/core/world/entities.hxx; hydro/workspace/core/world/world.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
@@ -5282,7 +5282,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x532130,101,sub_532130,VuAnimatedModelInstance,VuAnimatedModelInstance+0,rendering / gfx,absent,,False,False,race
 0x5321A0,81,sub_5321A0,,,rendering / gfx (by address),absent,,False,False,dead
 0x532200,188,sub_532200,,,rendering / gfx (by address),callee,,False,False,race
-0x5322C0,159,sub_5322C0,,,rendering / gfx (by address),verified,hydro/workspace/core/boat/load.hxx,False,False,race
+0x5322C0,159,sub_5322C0,,,rendering / gfx (by address),verified,hydro/workspace/core/boat/load.hxx; hydro/workspace/core/world/world.hxx,False,False,race
 0x532360,959,sub_532360,,,rendering / gfx (by address),callee,,False,False,race
 0x532720,622,sub_532720,,,rendering / gfx (by address),absent,,False,False,race
 0x532990,305,sub_532990,,,unattributed,absent,,False,False,race
@@ -5477,7 +5477,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x53F5E0,501,sub_53F5E0,,,unattributed,verified,hydro/workspace/core/ui/hud.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x53F800,279,sub_53F800,,,unattributed,absent,,False,False,game
 0x53F920,318,sub_53F920,,,unattributed,absent,,False,False,game
-0x53FA60,122,sub_53FA60,,,unattributed,absent,,False,False,race
+0x53FA60,122,sub_53FA60,,,unattributed,cited,hydro/workspace/core/ui/select.hxx,False,False,race
 0x53FAE0,81,sub_53FAE0,,,unattributed,absent,,False,False,race
 0x53FB40,66,sub_53FB40,,,unattributed,absent,,False,False,game
 0x53FB90,112,sub_53FB90,,,unattributed,callee,,False,False,race
@@ -5753,9 +5753,9 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x552CC0,6,sub_552CC0,VuMotionComponent,VuMotionComponent+0,entity / component / script framework,callee,,False,False,race
 0x552CD0,111,sub_552CD0,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/rig.hxx,False,False,race
 0x552D40,6,sub_552D40,VuPfxEntity,VuPfxEntity+1,particles,absent,,False,False,race
-0x552D50,353,sub_552D50,,,particles (by address),absent,,False,False,game
-0x552EC0,8,sub_552EC0,VuPfxEntity,VuPfxEntity+6,particles,absent,,False,False,race
-0x552ED0,28,sub_552ED0,VuPfxEntity,VuPfxEntity+7,particles,absent,,False,False,race
+0x552D50,353,sub_552D50,,,particles (by address),verified,hydro/workspace/core/world/pfxmgr.hxx,False,False,game
+0x552EC0,8,sub_552EC0,VuPfxEntity,VuPfxEntity+6,particles,verified,hydro/workspace/core/world/pfxmgr.hxx,False,False,race
+0x552ED0,28,sub_552ED0,VuPfxEntity,VuPfxEntity+7,particles,verified,hydro/workspace/core/world/pfxmgr.hxx,False,False,race
 0x552EF0,20,sub_552EF0,,,particles (by address),absent,,False,False,game
 0x552F10,20,sub_552F10,,,particles (by address),absent,,False,False,game
 0x552F30,95,sub_552F30,btPolyhedralConvexShape; btSphereShape; btTriangleShape,btSphereShape+5; btPolyhedralConvexShape+5; btTriangleShape+5,physics (Bullet),absent,,False,False,race
@@ -5886,7 +5886,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x55B3A0,194,sub_55B3A0,,,unattributed,absent,,False,False,race
 0x55B470,55,sub_55B470,,,unattributed,absent,,False,False,service
 0x55B4B0,176,sub_55B4B0,,,unattributed,absent,,False,False,service
-0x55B560,372,sub_55B560,,,unattributed,verified,engine/workspace/core/assets/reader.hxx; engine/workspace/utility/verify.hxx; hydro/workspace/core/world/control.hxx,False,False,race
+0x55B560,372,sub_55B560,,,unattributed,verified,engine/workspace/core/assets/reader.hxx; engine/workspace/utility/verify.hxx; hydro/workspace/core/world/control.hxx; hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x55B6E0,136,sub_55B6E0,,,unattributed,cited,engine/workspace/core/assets/reader.hxx,False,False,race
 0x55B770,757,sub_55B770,,,unattributed,verified,engine/workspace/core/assets/reader.hxx; engine/workspace/utility/verify.hxx,False,False,race
 0x55BA90,171,sub_55BA90,,,unattributed,verified,engine/workspace/core/assets/reader.hxx,False,False,race
@@ -5915,19 +5915,19 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x55C8B0,6,sub_55C8B0,VuPfxEmitQuadFountain,VuPfxEmitQuadFountain+1,particles,callee,,False,False,race
 0x55C8C0,6,sub_55C8C0,VuPfxEmitGeomFountain,VuPfxEmitGeomFountain+1,particles,callee,,False,False,race
 0x55C8D0,6,sub_55C8D0,VuPfxEmitDirectionalQuadFountain,VuPfxEmitDirectionalQuadFountain+1,particles,callee,,False,False,race
-0x55C8E0,1842,VuPfxEmitFountain_ctor,,,particles (by address),cited,hydro/workspace/core/world/pfx.hxx,False,False,race
+0x55C8E0,1842,VuPfxEmitFountain_ctor,,,particles (by address),verified,hydro/workspace/core/world/pfx.hxx,False,False,race
 0x55D020,15,sub_55D020,VuPfxEmitBoatThrustQuadFountainInstance; VuPfxEmitDirectionalQuadFountainInstance; VuPfxEmitGeomFountainInstance; VuPfxEmitQuadFountainInstance,VuPfxEmitQuadFountainInstance+0; VuPfxEmitBoatThrustQuadFountainInstance+0; VuPfxEmitDirectionalQuadFountainInstance+0; VuPfxEmitGeomFountainInstance+0,particles,verified,hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/core/world/pfxsim.hxx,False,False,race
 0x55D030,2525,VuPfxEmitFountain_emit,VuPfxEmitDirectionalQuadFountainInstance; VuPfxEmitGeomFountainInstance; VuPfxEmitQuadFountainInstance,VuPfxEmitQuadFountainInstance+1; VuPfxEmitDirectionalQuadFountainInstance+1; VuPfxEmitGeomFountainInstance+1,particles,verified,engine/workspace/utility/random.hxx; hydro/workspace/core/world/pfx.hxx; hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/core/world/spray.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
-0x55DA10,123,sub_55DA10,,,unattributed,absent,,False,False,race
+0x55DA10,123,sub_55DA10,,,unattributed,callee,,False,False,race
 0x55DA90,6,sub_55DA90,VuPfxEmitDirectionalQuadFountain; VuPfxEmitGeomFountain; VuPfxEmitQuadFountain,VuPfxEmitDirectionalQuadFountain+6; VuPfxEmitGeomFountain+6; VuPfxEmitQuadFountain+6,particles,callee,,False,False,race
 0x55DAA0,55,VuPfxEmitQuadFountainInstance_ctor,VuPfxEmitQuadFountain,VuPfxEmitQuadFountain+7,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
-0x55DAE0,1554,sub_55DAE0,,,particles (by address),absent,,False,False,race
+0x55DAE0,1554,sub_55DAE0,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x55E100,325,sub_55E100,VuPfxEmitBoatThrustQuadFountainInstance; VuPfxEmitQuadFountainInstance,VuPfxEmitQuadFountainInstance+2; VuPfxEmitBoatThrustQuadFountainInstance+2,particles,verified,hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
-0x55E250,123,VuPfxEmitGeomFountain_create,,,particles (by address),absent,,False,False,race
+0x55E250,123,VuPfxEmitGeomFountain_create,,,particles (by address),callee,,False,False,race
 0x55E2D0,55,VuPfxEmitGeomFountainInstance_ctor,VuPfxEmitGeomFountain,VuPfxEmitGeomFountain+7,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
-0x55E310,802,VuPfxEmitGeomFountain_ctor,,,particles (by address),cited,hydro/workspace/core/world/pfx.hxx,False,False,race
+0x55E310,802,VuPfxEmitGeomFountain_ctor,,,particles (by address),verified,hydro/workspace/core/world/pfx.hxx; hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x55E640,672,sub_55E640,VuPfxEmitGeomFountainInstance,VuPfxEmitGeomFountainInstance+2,particles,verified,hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
-0x55E8E0,136,sub_55E8E0,,,particles (by address),absent,,False,False,race
+0x55E8E0,136,sub_55E8E0,,,particles (by address),callee,,False,False,race
 0x55E970,55,sub_55E970,VuPfxEmitDirectionalQuadFountain,VuPfxEmitDirectionalQuadFountain+7,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
 0x55E9B0,361,sub_55E9B0,VuPfxEmitDirectionalQuadFountainInstance,VuPfxEmitDirectionalQuadFountainInstance+2,particles,verified,hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x55EB20,11,sub_55EB20,VuDevConsole,VuDevConsole+4,engine core / math / containers,absent,,False,False,game
@@ -6008,9 +6008,9 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x563A90,191,sub_563A90,VuMetroD3d11IndexBuffer,VuMetroD3d11IndexBuffer+2,engine core / math / containers,callee,,False,False,race
 0x563B50,164,sub_563B50,,,engine core / math / containers (by address),verified,hydro/workspace/core/assets/scene.hxx,False,False,race
 0x563C00,315,sub_563C00,,,engine core / math / containers (by address),absent,,False,False,race
-0x563D40,89,VuPfxBoatSpringConstraintInstance_load_ChildNodes,VuPfxBoatSpringConstraint; VuPfxEmitBoatHull; VuPfxEmitBoatThrustQuadFountain; VuPfxEmitDirectionalQuadFountain; VuPfxEmitFountain; VuPfxEmitGeomFountain; VuPfxEmitQuadFountain; VuPfxGeomPattern; VuPfxGroup; VuPfxNode; VuPfxPattern; VuPfxProcess; VuPfxQuadPattern; VuPfxSpringConstraint; VuPfxSystem; VuPfxTickAlpha; VuPfxTickAlphaInOut; VuPfxTickDampenVelocity; VuPfxTickLinearAcceleration; VuPfxTickScale; VuPfxTickWorldScaleZ; VuPfxTrailPattern,VuPfxNode+2; VuPfxBoatSpringConstraint+2; VuPfxEmitBoatThrustQuadFountain+2; VuPfxProcess+2; VuPfxEmitBoatHull+2; VuPfxGroup+2,boat,cited,hydro/workspace/core/world/pfxsim.hxx,False,False,race
+0x563D40,89,VuPfxBoatSpringConstraintInstance_load_ChildNodes,VuPfxBoatSpringConstraint; VuPfxEmitBoatHull; VuPfxEmitBoatThrustQuadFountain; VuPfxEmitDirectionalQuadFountain; VuPfxEmitFountain; VuPfxEmitGeomFountain; VuPfxEmitQuadFountain; VuPfxGeomPattern; VuPfxGroup; VuPfxNode; VuPfxPattern; VuPfxProcess; VuPfxQuadPattern; VuPfxSpringConstraint; VuPfxSystem; VuPfxTickAlpha; VuPfxTickAlphaInOut; VuPfxTickDampenVelocity; VuPfxTickLinearAcceleration; VuPfxTickScale; VuPfxTickWorldScaleZ; VuPfxTrailPattern,VuPfxNode+2; VuPfxBoatSpringConstraint+2; VuPfxEmitBoatThrustQuadFountain+2; VuPfxProcess+2; VuPfxEmitBoatHull+2; VuPfxGroup+2,boat,verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x563DA0,309,sub_563DA0,VuPfxBoatSpringConstraint; VuPfxEmitBoatHull; VuPfxEmitBoatThrustQuadFountain; VuPfxEmitDirectionalQuadFountain; VuPfxEmitFountain; VuPfxEmitGeomFountain; VuPfxEmitQuadFountain; VuPfxGeomPattern; VuPfxGroup; VuPfxNode; VuPfxPattern; VuPfxProcess; VuPfxQuadPattern; VuPfxSpringConstraint; VuPfxSystem; VuPfxTickAlpha; VuPfxTickAlphaInOut; VuPfxTickDampenVelocity; VuPfxTickLinearAcceleration; VuPfxTickScale; VuPfxTickWorldScaleZ; VuPfxTrailPattern,VuPfxNode+3; VuPfxBoatSpringConstraint+3; VuPfxEmitBoatThrustQuadFountain+3; VuPfxProcess+3; VuPfxEmitBoatHull+3; VuPfxGroup+3,boat,absent,,False,False,race
-0x563EE0,1217,loader_00563EE0_load_BaseType,,,boat (by address),absent,,False,False,race
+0x563EE0,1217,loader_00563EE0_load_BaseType,,,boat (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x5643B0,274,sub_5643B0,,,boat (by address),absent,,False,False,race
 0x5644D0,6,sub_5644D0,VuAssetListAsset,VuAssetListAsset+0,assets,absent,,False,False,race
 0x5644E0,39,sub_5644E0,,,assets (by address),absent,,False,False,race
@@ -6022,27 +6022,27 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5649C0,129,sub_5649C0,,,assets (by address),verified,engine/workspace/core/entity/script.hxx,False,False,race
 0x564A50,130,sub_564A50,,,assets (by address),verified,engine/workspace/core/entity/registry.hxx,False,False,game
 0x564AE0,129,sub_564AE0,,,assets (by address),verified,engine/workspace/core/entity/registry.hxx; hydro/workspace/core/world/race.hxx,False,False,race
-0x564B70,315,sub_564B70,,,assets (by address),absent,,False,False,race
-0x564CB0,263,sub_564CB0,,,assets (by address),absent,,False,False,race
-0x564DC0,104,sub_564DC0,,,unattributed,absent,,False,False,race
-0x564E30,396,sub_564E30,,,unattributed,absent,,False,False,race
-0x564FC0,338,sub_564FC0,,,unattributed,absent,,False,False,race
-0x565120,162,sub_565120,,,unattributed,absent,,False,False,race
-0x5651D0,116,sub_5651D0,,,unattributed,absent,,False,False,race
-0x565250,144,sub_565250,,,unattributed,absent,,False,False,race
-0x5652F0,178,sub_5652F0,,,unattributed,absent,,False,False,race
-0x5653B0,442,sub_5653B0,,,unattributed,absent,,False,False,race
-0x565570,129,sub_565570,,,unattributed,absent,,False,False,race
-0x565600,442,sub_565600,,,unattributed,absent,,False,False,race
-0x5657C0,179,sub_5657C0,,,unattributed,absent,,False,False,race
+0x564B70,315,sub_564B70,,,assets (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
+0x564CB0,263,sub_564CB0,,,assets (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
+0x564DC0,104,sub_564DC0,,,unattributed,verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
+0x564E30,396,sub_564E30,,,unattributed,callee,,False,False,race
+0x564FC0,338,sub_564FC0,,,unattributed,callee,,False,False,race
+0x565120,162,sub_565120,,,unattributed,callee,,False,False,race
+0x5651D0,116,sub_5651D0,,,unattributed,callee,,False,False,race
+0x565250,144,sub_565250,,,unattributed,callee,,False,False,race
+0x5652F0,178,sub_5652F0,,,unattributed,callee,,False,False,race
+0x5653B0,442,sub_5653B0,,,unattributed,callee,,False,False,race
+0x565570,129,sub_565570,,,unattributed,callee,,False,False,race
+0x565600,442,sub_565600,,,unattributed,callee,,False,False,race
+0x5657C0,179,sub_5657C0,,,unattributed,callee,,False,False,race
 0x565880,30,sub_565880,,,unattributed,absent,,False,False,race
-0x5658A0,56,sub_5658A0,,,unattributed,absent,,False,False,race
-0x5658E0,459,sub_5658E0,,,unattributed,absent,,False,False,race
+0x5658A0,56,sub_5658A0,,,unattributed,callee,,False,False,race
+0x5658E0,459,sub_5658E0,,,unattributed,callee,,False,False,race
 0x565AB0,446,sub_565AB0,,,unattributed,absent,,False,False,race
-0x565C70,472,sub_565C70,,,unattributed,absent,,False,False,race
+0x565C70,472,sub_565C70,,,unattributed,callee,,False,False,race
 0x565E50,459,sub_565E50,,,unattributed,absent,,False,False,race
 0x566020,128,sub_566020,,,unattributed,absent,,False,False,race
-0x5660B0,142,sub_5660B0,,,unattributed,absent,,False,False,race
+0x5660B0,142,sub_5660B0,,,unattributed,callee,,False,False,race
 0x566140,142,sub_566140,,,unattributed,absent,,False,False,race
 0x5661D0,85,sub_5661D0,,,unattributed,absent,,False,False,dead
 0x566230,2978,sub_566230,,,unattributed,absent,,False,False,game
@@ -6343,7 +6343,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x58A6E0,7,sub_58A6E0,VuPfxSystemInstance,VuPfxSystemInstance+8,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
 0x58A6F0,7,sub_58A6F0,VuPfxSystemInstance,VuPfxSystemInstance+9,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
 0x58A700,7,sub_58A700,VuPfxSystemInstance,VuPfxSystemInstance+10,particles,verified,hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
-0x58A710,276,sub_58A710,,,particles (by address),absent,,False,False,race
+0x58A710,276,sub_58A710,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x58A830,271,sub_58A830,,,particles (by address),verified,hydro/workspace/core/world/pfxsim.hxx,False,False,race
 0x58A940,299,sub_58A940,,,particles (by address),verified,hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x58AA70,134,sub_58AA70,,,particles (by address),verified,hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
@@ -6357,7 +6357,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x58AFA0,53,sub_58AFA0,VuPfxSystemInstance,VuPfxSystemInstance+15,particles,verified,hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x58AFE0,6,sub_58AFE0,VuPfxPattern,VuPfxPattern+1,particles,callee,,False,False,race
 0x58B000,40,sub_58B000,VuPfxPattern,VuPfxPattern+0,particles,absent,,False,False,race
-0x58B030,521,sub_58B030,,,particles (by address),absent,,False,False,race
+0x58B030,521,sub_58B030,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x58B240,142,sub_58B240,,,particles (by address),verified,hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/utility/checks/pfx.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x58B2D0,278,sub_58B2D0,,,particles (by address),verified,hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x58B3F0,233,sub_58B3F0,,,particles (by address),verified,hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
@@ -6372,11 +6372,11 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x58B950,73,sub_58B950,,,particles (by address),verified,hydro/workspace/core/world/pfxsim.hxx,False,False,race
 0x58B9A0,118,sub_58B9A0,,,particles (by address),verified,hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x58BA20,16,sub_58BA20,,,particles (by address),absent,,False,False,race
-0x58BA30,141,sub_58BA30,,,particles (by address),absent,,False,False,game
+0x58BA30,141,sub_58BA30,,,particles (by address),callee,,False,False,game
 0x58BAC0,663,sub_58BAC0,,,particles (by address),absent,,False,False,race
 0x58BD60,1502,sub_58BD60,,,unattributed,cited,hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x58C340,2377,sub_58C340,,,unattributed,absent,,False,False,race
-0x58CC90,37,sub_58CC90,,,unattributed,absent,,False,False,game
+0x58CC90,37,sub_58CC90,,,unattributed,callee,,False,False,game
 0x58CCC0,353,sub_58CCC0,,,unattributed,absent,,False,False,race
 0x58CE30,16,sub_58CE30,,,unattributed,absent,,False,False,race
 0x58CE40,485,sub_58CE40,,,unattributed,absent,,False,False,race
@@ -6386,70 +6386,70 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x58DDF0,120,sub_58DDF0,,,particles (by address),absent,,False,False,race
 0x58DE70,6,sub_58DE70,VuPfxSpringConstraint,VuPfxSpringConstraint+6,particles,callee,,False,False,race
 0x58DE80,41,sub_58DE80,VuPfxSpringConstraint,VuPfxSpringConstraint+7,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
-0x58DEB0,770,sub_58DEB0,,,particles (by address),absent,,False,False,race
+0x58DEB0,770,sub_58DEB0,,,particles (by address),cited,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x58E1C0,218,sub_58E1C0,VuPfxSpringConstraintInstance,VuPfxSpringConstraintInstance+1,particles,verified,hydro/workspace/core/world/pfx.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x58E2A0,6,sub_58E2A0,VuPfxTickDampenVelocity,VuPfxTickDampenVelocity+1,particles,callee,,False,False,race
-0x58E2B0,120,sub_58E2B0,,,particles (by address),absent,,False,False,race
+0x58E2B0,120,sub_58E2B0,,,particles (by address),callee,,False,False,race
 0x58E330,6,sub_58E330,VuPfxTickAlpha; VuPfxTickAlphaInOut; VuPfxTickDampenVelocity; VuPfxTickLinearAcceleration; VuPfxTickScale; VuPfxTickWorldScaleZ,VuPfxTickDampenVelocity+6; VuPfxTickLinearAcceleration+6; VuPfxTickWorldScaleZ+6; VuPfxTickScale+6; VuPfxTickAlphaInOut+6; VuPfxTickAlpha+6,particles,callee,,False,False,race
 0x58E340,20,sub_58E340,VuPfxTickDampenVelocity,VuPfxTickDampenVelocity+7,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
-0x58E360,322,sub_58E360,,,particles (by address),absent,,False,False,race
+0x58E360,322,sub_58E360,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x58E4B0,115,sub_58E4B0,VuPfxTickDampenVelocityInstance,VuPfxTickDampenVelocityInstance+1,particles,verified,hydro/workspace/core/world/pfx.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x58E530,6,sub_58E530,VuPfxTickLinearAcceleration,VuPfxTickLinearAcceleration+1,particles,callee,,False,False,race
-0x58E540,120,sub_58E540,,,particles (by address),absent,,False,False,race
+0x58E540,120,sub_58E540,,,particles (by address),callee,,False,False,race
 0x58E5C0,20,sub_58E5C0,VuPfxTickLinearAcceleration,VuPfxTickLinearAcceleration+7,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
-0x58E5E0,546,sub_58E5E0,,,particles (by address),absent,,False,False,race
+0x58E5E0,546,sub_58E5E0,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x58E810,124,sub_58E810,VuPfxTickLinearAccelerationInstance,VuPfxTickLinearAccelerationInstance+1,particles,verified,hydro/workspace/core/world/pfx.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x58E890,6,sub_58E890,VuPfxTrailPattern,VuPfxTrailPattern+1,particles,callee,,False,False,race
 0x58E8A0,94,sub_58E8A0,,,particles (by address),verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
-0x58E900,135,sub_58E900,,,particles (by address),absent,,False,False,race
+0x58E900,135,sub_58E900,,,particles (by address),callee,,False,False,race
 0x58E990,6,sub_58E990,VuPfxTrailPattern,VuPfxTrailPattern+6; VuPfxTrailPattern+8,particles,callee,,False,False,race
 0x58E9A0,46,sub_58E9A0,VuPfxTrailPattern,VuPfxTrailPattern+7,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
 0x58E9D0,30,sub_58E9D0,VuPfxTrailPattern,VuPfxTrailPattern+9,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
-0x58E9F0,1586,sub_58E9F0,,,particles (by address),absent,,False,False,race
+0x58E9F0,1586,sub_58E9F0,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x58F030,78,sub_58F030,VuPfxTrailPattern,VuPfxTrailPattern+0,particles,absent,,False,False,race
 0x58F080,53,sub_58F080,VuPfxTrailPatternInstance,VuPfxTrailPatternInstance+0,particles,verified,hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/core/world/pfxsim.hxx,False,False,race
-0x58F0C0,2293,sub_58F0C0,VuPfxTrailPatternInstance,VuPfxTrailPatternInstance+1,particles,cited,hydro/workspace/core/world/pfxsim.hxx,False,False,race
+0x58F0C0,2293,sub_58F0C0,VuPfxTrailPatternInstance,VuPfxTrailPatternInstance+1,particles,verified,hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x58F9C0,34,sub_58F9C0,VuPfxTrailPatternInstance,VuPfxTrailPatternInstance+2,particles,verified,hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x58F9F0,6,sub_58F9F0,VuPfxGeomPattern,VuPfxGeomPattern+1,particles,callee,,False,False,race
-0x58FA00,143,VuPfxGeomPattern_create,,,particles (by address),absent,,False,False,race
+0x58FA00,143,VuPfxGeomPattern_create,,,particles (by address),callee,,False,False,race
 0x58FA90,6,sub_58FA90,VuPfxGeomPattern; VuPfxQuadPattern,VuPfxGeomPattern+6; VuPfxQuadPattern+6,particles,callee,,False,False,race
 0x58FAA0,25,sub_58FAA0,VuPfxGeomPattern,VuPfxGeomPattern+7,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
 0x58FAC0,6,sub_58FAC0,VuPfxGeomPattern,VuPfxGeomPattern+8,particles,callee,,False,False,race
 0x58FAD0,65,sub_58FAD0,VuPfxGeomPattern,VuPfxGeomPattern+9,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
-0x58FB20,610,VuPfxGeomPattern_ctor,,,particles (by address),cited,hydro/workspace/core/world/pfx.hxx,False,False,race
+0x58FB20,610,VuPfxGeomPattern_ctor,,,particles (by address),verified,hydro/workspace/core/world/pfx.hxx; hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x58FD90,34,sub_58FD90,VuPfxGeomPattern,VuPfxGeomPattern+0,particles,absent,,False,False,race
 0x58FDC0,153,sub_58FDC0,,,particles (by address),absent,,False,False,race
-0x58FE60,25,sub_58FE60,VuPfxGeomPattern,VuPfxGeomPattern+4,particles,absent,,False,False,race
+0x58FE60,25,sub_58FE60,VuPfxGeomPattern,VuPfxGeomPattern+4,particles,verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x58FE80,23,sub_58FE80,VuPfxGeomPatternInstance; VuPfxQuadPatternInstance,VuPfxGeomPatternInstance+0; VuPfxQuadPatternInstance+0,particles,verified,hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/core/world/pfxsim.hxx,False,False,race
 0x58FEA0,1277,VuPfxGeomPatternInstance_tick,VuPfxGeomPatternInstance,VuPfxGeomPatternInstance+1,particles,verified,hydro/workspace/core/world/pfx.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x5903A0,763,sub_5903A0,VuPfxGeomPatternInstance,VuPfxGeomPatternInstance+2,particles,verified,hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x5906A0,667,sub_5906A0,VuPfxGeomPatternInstance,VuPfxGeomPatternInstance+3,particles,verified,hydro/workspace/core/world/pfx.hxx; hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x590940,6,sub_590940,VuPfxTickWorldScaleZ,VuPfxTickWorldScaleZ+1,particles,callee,,False,False,race
-0x590950,120,sub_590950,,,particles (by address),absent,,False,False,race
+0x590950,120,sub_590950,,,particles (by address),callee,,False,False,race
 0x5909D0,20,sub_5909D0,VuPfxTickWorldScaleZ,VuPfxTickWorldScaleZ+7,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
-0x5909F0,327,sub_5909F0,,,particles (by address),absent,,False,False,race
+0x5909F0,327,sub_5909F0,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x590B40,81,sub_590B40,VuPfxTickWorldScaleZInstance,VuPfxTickWorldScaleZInstance+1,particles,verified,hydro/workspace/core/world/pfx.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x590BA0,6,sub_590BA0,VuPfxTickScale,VuPfxTickScale+1,particles,callee,,False,False,race
-0x590BB0,120,VuPfxTickScale_create,,,particles (by address),absent,,False,False,race
+0x590BB0,120,VuPfxTickScale_create,,,particles (by address),callee,,False,False,race
 0x590C30,20,sub_590C30,VuPfxTickScale,VuPfxTickScale+7,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
-0x590C50,327,sub_590C50,,,particles (by address),absent,,False,False,race
+0x590C50,327,sub_590C50,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x590DA0,85,sub_590DA0,VuPfxTickScaleInstance,VuPfxTickScaleInstance+1,particles,verified,hydro/workspace/core/world/pfx.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x590E00,6,sub_590E00,VuPfxTickAlphaInOut,VuPfxTickAlphaInOut+1,particles,callee,,False,False,race
-0x590E10,120,VuPfxTickAlphaInOut_create,,,particles (by address),absent,,False,False,race
+0x590E10,120,VuPfxTickAlphaInOut_create,,,particles (by address),callee,,False,False,race
 0x590E90,20,sub_590E90,VuPfxTickAlphaInOut,VuPfxTickAlphaInOut+7,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
-0x590EB0,546,sub_590EB0,,,particles (by address),absent,,False,False,race
+0x590EB0,546,sub_590EB0,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x5910E0,126,sub_5910E0,VuPfxTickAlphaInOutInstance,VuPfxTickAlphaInOutInstance+1,particles,verified,hydro/workspace/core/world/pfx.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x591160,6,sub_591160,VuPfxTickAlpha,VuPfxTickAlpha+1,particles,callee,,False,False,race
-0x591170,120,VuPfxTickAlpha_create,,,particles (by address),absent,,False,False,race
+0x591170,120,VuPfxTickAlpha_create,,,particles (by address),callee,,False,False,race
 0x5911F0,20,sub_5911F0,VuPfxTickAlpha,VuPfxTickAlpha+7,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
-0x591210,322,sub_591210,,,particles (by address),absent,,False,False,race
+0x591210,322,sub_591210,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x591360,85,sub_591360,VuPfxTickAlphaInstance,VuPfxTickAlphaInstance+1,particles,verified,hydro/workspace/core/world/pfx.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x5913C0,6,sub_5913C0,VuPfxQuadPattern,VuPfxQuadPattern+1,particles,callee,,False,False,race
-0x5913D0,145,sub_5913D0,,,particles (by address),absent,,False,False,race
+0x5913D0,145,sub_5913D0,,,particles (by address),callee,,False,False,race
 0x591470,25,sub_591470,VuPfxQuadPattern,VuPfxQuadPattern+7,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
 0x591490,6,sub_591490,VuPfxQuadPattern,VuPfxQuadPattern+8,particles,callee,,False,False,race
 0x5914A0,65,sub_5914A0,VuPfxQuadPattern,VuPfxQuadPattern+9,particles,verified,hydro/workspace/core/world/pfxclass.hxx,False,False,race
-0x5914F0,1698,sub_5914F0,,,particles (by address),absent,,False,False,race
+0x5914F0,1698,sub_5914F0,,,particles (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x591BA0,34,sub_591BA0,VuPfxQuadPattern,VuPfxQuadPattern+0,particles,absent,,False,False,race
 0x591BD0,89,sub_591BD0,,,particles (by address),absent,,False,False,race
 0x591C30,1142,sub_591C30,VuPfxQuadPatternInstance,VuPfxQuadPatternInstance+1,particles,verified,hydro/workspace/core/world/pfx.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
@@ -7038,7 +7038,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5BF8D0,5801,sub_5BF8D0,,,unattributed,absent,,False,False,race
 0x5C1010,69,sub_5C1010,,,unattributed,absent,,False,False,service
 0x5C1060,528,loader_005C1060_load_File,,,unattributed,absent,,False,False,race
-0x5C1270,255,sub_5C1270,VuAssetListAsset; VuDBAsset; VuGenericDataAsset; VuShaderAsset; VuStringAsset; VuTemplateAsset,VuGenericDataAsset+5; VuDBAsset+5; VuAssetListAsset+5; VuStringAsset+5; VuTemplateAsset+5; VuShaderAsset+5,rendering / gfx,absent,,False,False,race
+0x5C1270,255,sub_5C1270,VuAssetListAsset; VuDBAsset; VuGenericDataAsset; VuShaderAsset; VuStringAsset; VuTemplateAsset,VuGenericDataAsset+5; VuDBAsset+5; VuAssetListAsset+5; VuStringAsset+5; VuTemplateAsset+5; VuShaderAsset+5,rendering / gfx,verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x5C1370,121,sub_5C1370,,,rendering / gfx (by address),verified,hydro/workspace/core/assets/scene.hxx,False,False,race
 0x5C13F0,34,sub_5C13F0,VuGfxScene,VuGfxScene+0,rendering / gfx,absent,,False,False,race
 0x5C1420,312,sub_5C1420,,,rendering / gfx (by address),absent,,False,False,race
@@ -7196,7 +7196,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5CAA30,153,sub_5CAA30,,,particles (by address),absent,,False,False,race
 0x5CAAD0,34,sub_5CAAD0,VuPfxAsset,VuPfxAsset+1,particles,absent,,False,False,race
 0x5CAB00,39,sub_5CAB00,,,particles (by address),absent,,False,False,race
-0x5CAB30,77,sub_5CAB30,VuPfxAsset,VuPfxAsset+5,particles,absent,,False,False,race
+0x5CAB30,77,sub_5CAB30,VuPfxAsset,VuPfxAsset+5,particles,verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x5CAB80,57,sub_5CAB80,VuPfxAsset,VuPfxAsset+6,particles,absent,,False,False,race
 0x5CABC0,6,sub_5CABC0,VuFontAsset,VuFontAsset+0,HUD / UI / fonts,absent,,False,False,race
 0x5CAC30,130,sub_5CAC30,VuFontAsset,VuFontAsset+1,HUD / UI / fonts,absent,,False,False,race
