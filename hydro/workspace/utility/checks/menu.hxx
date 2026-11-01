@@ -2,6 +2,7 @@
 
 #include <workspace/core/ui/frame.hxx>
 #include <workspace/core/ui/navigate.hxx>
+#include <workspace/core/ui/ticker.hxx>
 
 #include <cstdio>
 #include <cstring>
@@ -851,6 +852,12 @@ inline bool verify_ui_button_draw( )
 // inputs mirror the case's hooks: a text's text = its name, a button's String
 // ID answer = its name, the asset font everywhere, an image's texture A when its
 // name length is odd, a button's A / B / none; params 41..59 retail's.
+// Batch 13: the Info / config selector / settings combo / boat stat / progress
+// bar leaves run live in retail too (case screen_frame EXTENDED) and are emitted
+// here: Info / stat / bar from OUR ctor state (compared with retail's loaded
+// bits), the selectors' option ComboBoxIDs + records (after retail's slot 4)
+// and the settings combos' record are retail's; the combos' asset properties A /
+// B by parity, both fonts the asset, VuStringDB "<id>~".
 inline bool verify_ui_screen_frame_records( )
 {
     const ui_loaded_t& loaded = ui_loaded( );
@@ -862,7 +869,7 @@ inline bool verify_ui_screen_frame_records( )
         b.m_memory.resize( static_cast< std::size_t >( b.m_capacity ) );
     const ui_texture_t texture_a = { g_golden_frm_textures[ 0 ].m_handle, g_golden_frm_textures[ 0 ].m_width, g_golden_frm_textures[ 0 ].m_height };
     const ui_texture_t texture_b = { g_golden_frm_textures[ 1 ].m_handle, g_golden_frm_textures[ 1 ].m_width, g_golden_frm_textures[ 1 ].m_height };
-    int failed = 0, runs = 0, commands = 0, stubs = 0, emitted = 0;
+    int failed = 0, runs = 0, commands = 0, stubs = 0, emitted = 0, live = 0;
     for ( std::size_t r = 0; r < g_golden_frm_runs_count; ++r )
     {
         const golden_frm_run_t& run = g_golden_frm_runs[ r ];
@@ -907,15 +914,131 @@ inline bool verify_ui_screen_frame_records( )
                 return who.m_name.size( ) % 2 ? &texture_a : nullptr;
             return which == 0 ? &texture_a : which == 1 ? &texture_b : nullptr;
         };
-        in.m_params_tail = [ & ]( const entity_t& who, std::uint8_t params[ 60 ] )
+        const auto tail_of = [ & ]( const entity_t& who, int kind, std::uint8_t params[ 60 ] )
         {
             const int at = index_of( &who );
             for ( int t = 0; t < run.m_tails; ++t )
-                if ( g_golden_frm_tails[ run.m_first_tail + t ].m_index == at )
+            {
+                const golden_frm_tail_t& g = g_golden_frm_tails[ run.m_first_tail + t ];
+                if ( g.m_index == at && ( kind < 0 ? g.m_kind <= 1 : g.m_kind == kind ) )
                 {
-                    const std::vector< std::uint8_t > tail = ui_unhex( g_golden_frm_tails[ run.m_first_tail + t ].m_tail );
+                    const std::vector< std::uint8_t > tail = ui_unhex( g.m_tail );
                     std::memcpy( params + 41, tail.data( ), 19 );
                 }
+            }
+        };
+        in.m_params_tail = [ & ]( const entity_t& who, std::uint8_t params[ 60 ] ) { tail_of( who, -1, params ); };
+        in.m_combo_params_tail = [ & ]( const entity_t& who, int which, std::uint8_t params[ 60 ] ) { tail_of( who, 2 + which, params ); };
+        // The live leaves (batch 13): Info / stat / bar from OUR ctor state (compared with retail's bits as loaded);
+        // the config selectors' option vector + records and the settings combos' record are retail's (slot 4 and
+        // the combo's own code build them - verified by verify_ui_config_expand / verify_ui_combo_draw).
+        bool state_same = true;
+        const auto bits = []( float f )
+        {
+            std::uint32_t b;
+            std::memcpy( &b, &f, 4 );
+            return b;
+        };
+        std::vector< const golden_frm_leaf_t* > leaf_of( tree.size( ), nullptr );
+        std::vector< ui_config_entity_t > configs( tree.size( ) );
+        std::vector< std::vector< value_t > > options( tree.size( ) );
+        for ( int l = 0; l < run.m_leaves; ++l )
+        {
+            const golden_frm_leaf_t& g = g_golden_frm_leaves[ run.m_first_leaf + l ];
+            if ( g.m_index < 0 || g.m_index >= static_cast< int >( tree.size( ) ) )
+            {
+                state_same = false;
+                continue;
+            }
+            const std::size_t k = static_cast< std::size_t >( g.m_index );
+            const entity_t& who = *tree[ k ].second;
+            leaf_of[ k ] = &g;
+            if ( g.m_kind == 0 )
+            {
+                const ui_info_ticker_t t = ui_info_ticker_of( who );
+                const ui_text_base_t base;
+                const std::uint32_t ours[ 5 ] = { bits( base.m_alpha ), bits( t.m_scroll.m_extent ), bits( t.m_scroll.m_gap ), bits( t.m_scroll.m_x ),
+                                                  bits( t.m_scroll.m_y ) };
+                state_same = state_same && who.m_type == "VuInfoUITextEntity" && std::memcmp( ours, g.m_words, sizeof( ours ) ) == 0;
+            }
+            else if ( g.m_kind == 3 )
+                state_same = state_same && who.m_type == "VuBoatStatEntity" && static_cast< std::uint32_t >( ui_boat_stat_t( ).m_value ) == g.m_words[ 0 ];
+            else if ( g.m_kind == 4 )
+            {
+                const ui_progress_bar_t b;
+                state_same = state_same && who.m_type == "VuLoadingProgressBarEntity" && bits( b.m_progress ) == g.m_words[ 0 ] && b.m_visible == g.m_words[ 1 ];
+            }
+            else
+            {
+                ui_config_entity_t& ce = configs[ k ];
+                for ( int r = 0; r < g.m_records; ++r )
+                {
+                    const golden_frm_record_t& gr = g_golden_frm_records[ g.m_first_record + r ];
+                    const std::vector< std::uint8_t > head = ui_unhex( gr.m_head );
+                    ui_config_combo_t c;
+                    c.m_focused = head[ 0 ];
+                    c.m_b41 = head[ 1 ];
+                    c.m_b42 = head[ 2 ];
+                    std::memcpy( &c.m_index, head.data( ) + 4, 4 );
+                    std::memcpy( &c.m_shown, head.data( ) + 8, 4 );
+                    c.m_string_id = gr.m_id;
+                    for ( int j = 0; j < gr.m_choices; ++j )
+                    {
+                        c.m_choice_ids.push_back( g_golden_frm_choices[ gr.m_first + j ].m_id );
+                        c.m_locked.push_back( static_cast< std::uint8_t >( g_golden_frm_choices[ gr.m_first + j ].m_locked ) );
+                    }
+                    ce.m_combos.push_back( c );
+                }
+                options[ k ].resize( static_cast< std::size_t >( g.m_ids ) );
+                for ( int i = 0; i < g.m_ids; ++i )
+                {
+                    value_t id;
+                    id.kind = value_t::kind_t::integer;
+                    id.tag = 1;
+                    id.integer = g_golden_frm_ids[ g.m_first_id + i ];
+                    value_t& o = options[ k ][ static_cast< std::size_t >( i ) ];
+                    o.kind = value_t::kind_t::object;
+                    o.tag = 6;
+                    o.object.push_back( { "ComboBoxID", id } );
+                }
+                for ( const value_t& o : options[ k ] )
+                    ce.m_options.push_back( &o );
+                state_same = state_same && ( g.m_kind == 1 ? ui_frame_kind_of( who ) == ui_frame_kind_t::config : ui_frame_kind_of( who ) == ui_frame_kind_t::combo_box ) &&
+                             ( g.m_kind == 1 || g.m_records == 1 );
+            }
+        }
+        const auto leaf = [ & ]( const entity_t& who ) -> const golden_frm_leaf_t*
+        {
+            const int at = index_of( &who );
+            return at >= 0 ? leaf_of[ static_cast< std::size_t >( at ) ] : nullptr;
+        };
+        in.m_info = [ & ]( const entity_t& who ) { return ui_info_ticker_of( who ).m_scroll; };
+        in.m_stat = []( const entity_t& ) { return ui_boat_stat_t( ); };
+        in.m_bar = []( const entity_t& ) { return ui_progress_bar_t( ); };
+        in.m_config = [ & ]( const entity_t& who ) -> const ui_config_entity_t*
+        {
+            const int at = index_of( &who );
+            return at >= 0 && leaf( who ) ? &configs[ static_cast< std::size_t >( at ) ] : nullptr;
+        };
+        in.m_combo = [ & ]( const entity_t& who ) -> const ui_config_combo_t*
+        {
+            const int at = index_of( &who );
+            return at >= 0 && leaf( who ) && !configs[ static_cast< std::size_t >( at ) ].m_combos.empty( ) ? &configs[ static_cast< std::size_t >( at ) ].m_combos[ 0 ]
+                                                                                                           : nullptr;
+        };
+        in.m_combo_inputs = [ & ]( const entity_t& who )
+        {
+            ui_combo_inputs_t ci;
+            ci.m_label_font = ci.m_value_font = 0x0F0E0D0Cu;   // TXT_FONT, the stand-in asset font
+            ci.m_string = []( const std::string& id ) { return id + "~"; };   // the case's VuStringDB answer
+            const golden_frm_leaf_t* g = leaf( who );
+            ci.m_texture = [ g, &texture_a, &texture_b ]( int which ) -> const ui_texture_t*
+            {
+                if ( !g || which < 0 || which >= 7 || g->m_textures[ which ] < 0 )
+                    return nullptr;
+                return g->m_textures[ which ] ? &texture_b : &texture_a;
+            };
+            return ci;
         };
         ui_impl_t impl;
         const std::vector< std::uint8_t > crop = ui_unhex( run.m_crop );
@@ -930,7 +1053,8 @@ inline bool verify_ui_screen_frame_records( )
         std::vector< ui_gfx_command_t >& list = sort.m_commands[ e.m_index ];
         const std::size_t before = list.size( );
         const ui_frame_t frame = ui_screen_frame( *tree[ 0 ].second, impl, sort, alpha, 4, &in );
-        bool same = frame.m_unknown == 0 && list.size( ) - before == static_cast< std::size_t >( run.m_commands ) &&
+        live += run.m_leaves;
+        bool same = state_same && frame.m_unknown == 0 && list.size( ) - before == static_cast< std::size_t >( run.m_commands ) &&
                     sort.m_key_lo == run.m_key[ 0 ] && sort.m_key_hi == run.m_key[ 1 ];
         for ( int c = 0; same && c < run.m_commands; ++c )
         {
@@ -962,9 +1086,10 @@ inline bool verify_ui_screen_frame_records( )
                        "leaf / key differs", run.m_project, run.m_env, static_cast< int >( list.size( ) - before ), run.m_commands, s, run.m_stubs, frame.m_unknown );
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "ui_screen_frame's records (the export with inputs) match retail's screen draw 0x629D60 with the text / image / button draws live "
-                     "on %d runs over the Screens/* roots: %d leaf draws emitted, %d commands and records byte for byte, %d unrecreated leaves in order",
-            runs, emitted, commands, stubs );
+        LOG_SUCCESS( "ui_screen_frame's records (the export with inputs) match retail's screen draw 0x629D60 with the text / image / button / Info / "
+                     "config / combo box / stat / bar draws live on %d runs over the Screens/* roots: %d leaf draws emitted (%d of them Info / config / "
+                     "combo / stat / bar, their state checked), %d commands and records byte for byte, %d unrecreated leaves in order",
+            runs, emitted, live, commands, stubs );
     else
         LOG_ERROR( "the screen frame's records FAILED %d checks against retail's", failed );
     return failed == 0;
