@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/world/rules.hxx>
+#include <workspace/core/world/tick.hxx>
 
 #include <cstdio>
 #include <cstring>
@@ -280,5 +281,81 @@ inline bool verify_buoy_hit( )
                      static_cast< int >( g_golden_buoy_hit_count ), broadcasts );
     else
         LOG_ERROR( "buoy hit FAILED %d contacts", failed );
+    return failed == 0;
+}
+// tick_run / tick_register (core/world tick.hxx) when a handler registers
+// another DURING its call, against retail's tick 0x4F72F0 with slot 8
+// 0x4F7550 run from inside the handler (oracle case tick_same_pass): the
+// handler loop reads the node's next AFTER the call and re-reads the list head
+// each step (0x4F7415 / 0x4F741D), the phase loop likewise (0x4F7431 /
+// 0x4F7433) - so a handler pushed on the back of the running phase, or of a
+// later phase, runs in the SAME pass; one put in an earlier phase waits for
+// the next tick. Per scenario three ticks' call order - one failure per tick.
+struct tick_same_pass_probe_t
+{
+    tick_manager_t* tm = nullptr;
+    std::vector< int >* calls = nullptr;
+    const int* reg = nullptr;       // caller, new handler, phase
+    bool* once = nullptr;
+    int index = 0;
+    std::vector< tick_same_pass_probe_t >* all = nullptr;
+};
+
+inline const char* tick_phase_name( const tick_manager_t& tm, int index )
+{
+    int k = 0;
+    for ( const tick_phase_t& p : tm.phases )
+        if ( k++ == index )
+            return p.name.c_str( );
+    return "";
+}
+
+inline void tick_same_pass_call( void* user, float )
+{
+    tick_same_pass_probe_t& p = *static_cast< tick_same_pass_probe_t* >( user );
+    p.calls->push_back( p.index );
+    if ( p.index == p.reg[ 0 ] && !*p.once )
+    {
+        *p.once = true;
+        tick_same_pass_probe_t& n = ( *p.all )[ static_cast< std::size_t >( p.reg[ 1 ] ) ];
+        tick_register( *p.tm, { &n, tick_same_pass_call, &n }, tick_phase_name( *p.tm, p.reg[ 2 ] ) );
+    }
+}
+
+inline bool verify_tick_same_pass( )
+{
+    int failed = 0;
+    for ( std::size_t v = 0; v < g_golden_tick_same_pass_count; ++v )
+    {
+        const golden_tick_same_pass_t& g = g_golden_tick_same_pass[ v ];
+        tick_manager_t tm;
+        tick_manager_init( tm );
+        std::vector< int > calls;
+        bool once = false;
+        std::vector< tick_same_pass_probe_t > probes( 4 );
+        for ( int h = 0; h < 4; ++h )
+            probes[ static_cast< std::size_t >( h ) ] = { &tm, &calls, g.m_register, &once, h, &probes };
+        for ( int k = 0; k < 2; ++k )
+            if ( g.m_initial[ 2 * k ] >= 0 )
+            {
+                tick_same_pass_probe_t& p = probes[ static_cast< std::size_t >( g.m_initial[ 2 * k ] ) ];
+                tick_register( tm, { &p, tick_same_pass_call, &p }, tick_phase_name( tm, g.m_initial[ 2 * k + 1 ] ) );
+            }
+        for ( int t = 0; t < 3; ++t )
+        {
+            calls.clear( );
+            tick_run( tm, 1000.0 + t / 60.0 );
+            bool same = calls.size( ) == static_cast< std::size_t >( g.m_count[ t ] );
+            for ( std::size_t c = 0; same && c < calls.size( ); ++c )
+                same = calls[ c ] == g_golden_tick_same_pass_calls[ g.m_first[ t ] + static_cast< int >( c ) ];
+            if ( !same && ++failed <= 10 )
+                LOG_ERROR( "tick same pass: scenario %d tick %d: %d calls, retail %d", static_cast< int >( v ), t, static_cast< int >( calls.size( ) ), g.m_count[ t ] );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "tick_run matches retail's 0x4F72F0 with a registration made inside a handler (%d scenarios x 3 ticks: same / later phase in the same pass, "
+                     "an earlier phase on the next tick)", static_cast< int >( g_golden_tick_same_pass_count ) );
+    else
+        LOG_ERROR( "tick same pass FAILED %d ticks", failed );
     return failed == 0;
 }
