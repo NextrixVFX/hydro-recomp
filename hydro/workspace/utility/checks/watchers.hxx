@@ -572,9 +572,36 @@ inline bool verify_wave_refresh( )
     return failed == 0;
 }
 
+// g_water_types_game (world/pfxclass.hxx) against the six game-tier water getType slots (case water_types_game).
+inline bool verify_water_types_game( )
+{
+    int bad = 0;
+    const std::size_t n = sizeof( g_water_types_game ) / sizeof( g_water_types_game[ 0 ] );
+    for ( std::size_t i = 0; i < g_golden_wtg_count; ++i )
+    {
+        const golden_water_type_t& g = g_golden_wtg[ i ];
+        const water_type_t* t = nullptr;
+        for ( std::size_t j = 0; j < n; ++j )
+            if ( g_water_types_game[ j ].address == g.address )
+                t = &g_water_types_game[ j ];
+        if ( t == nullptr || t->descriptor != g.descriptor || std::strcmp( t->chain, g.chain ) != 0 )
+        {
+            ++bad;
+            LOG_ERROR( "water_types_game 0x%X: descriptor / chain differ (retail 0x%X %s)", g.address, g.descriptor, g.chain );
+        }
+    }
+    bad += n != g_golden_wtg_count ? 1 : 0;
+    if ( bad == 0 )
+        LOG_SUCCESS( "g_water_types_game match the game-tier water classes' %d getType slots (descriptor and chain each)", static_cast< int >( n ) );
+    else
+        LOG_ERROR( "water_types_game FAILED %d", bad );
+    return bad == 0;
+}
+
 inline bool verify_watchers_all( )
 {
     bool ok = true;
+    ok = verify_water_types_game( ) && ok;
     ok = verify_wave_refresh( ) && ok;
     ok = verify_water_controls( ) && ok;
     ok = verify_water_surface_motion( ) && ok;

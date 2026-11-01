@@ -460,3 +460,14 @@ inline const water_type_t g_pfx_types[] = {
     { 0x5CAA20u, 0x736B50u, "VuPfxAsset|VuGenericDataAsset|VuAsset" },
     { 0x5CB950u, 0x736B70u, "VuPfxProjectEntity|VuEntity" },
 };
+
+// The game-tier water classes' getType slots (6 bytes: mov eax, descriptor;
+// ret) - classes no race or front-end level authors (case water_types_game).
+inline const water_type_t g_water_types_game[] = {
+    { 0x59C340u, 0x736A78u, "VuWaterDirectionalFlowWave|VuWaterWave" },
+    { 0x59CAA0u, 0x736A88u, "VuWaterInfiniteOceanWave|VuWaterBaseOceanWave|VuWaterWave" },
+    { 0x5D4F00u, 0x736C00u, "VuWakeWaveEntity|VuEntity" },
+    { 0x5D5890u, 0x736C08u, "VuStaticWakeWaveEntity|VuEntity" },
+    { 0x5D6380u, 0x736C10u, "VuDirectionalFlowWaveEntity|VuEntity" },
+    { 0x5D8170u, 0x736C30u, "VuInfiniteOceanWaveEntity|VuBaseOceanWaveEntity|VuEntity" },
+};
