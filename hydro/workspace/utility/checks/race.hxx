@@ -6,6 +6,7 @@
 #include <workspace/core/boat/human.hxx>
 #include <workspace/core/boat/pilots.hxx>
 #include <workspace/core/boat/manager.hxx>
+#include <workspace/core/boat/powerup.hxx>
 
 #include <algorithm>
 #include <array>
@@ -1212,6 +1213,44 @@ inline bool verify_viewport_tick( )
     return false;
 }
 
+// VuPowerUpBoostEntity slot 15 0x43DB40 against retail (oracle case boost_apply): the boat's +0x314 / +0x318, the
+// return value and VuRandom's state after, bit for bit.
+inline bool verify_boost_apply( )
+{
+    const unsigned* g = g_golden_boost_apply_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        std::uint8_t pu[ 0x144 ] = { }, boat[ 0x520 ] = { };
+        std::memcpy( pu + 0x13C, g, 8 );
+        g += 2;
+        std::memcpy( boat + 0x474, g++, 4 );
+        fleet_random_t rng;
+        rng.seed = static_cast< std::int32_t >( *g++ );
+        rng.last = static_cast< std::int32_t >( *g++ );
+        for ( int k = 0; k < 32; ++k )
+            rng.table[ k ] = static_cast< std::int32_t >( *g++ );
+        const unsigned ret = powerup_boost_apply( pu, boat, rng ) ? 1u : 0u;
+        unsigned mine[ 37 ] = { ret };
+        std::memcpy( mine + 1, boat + 0x314, 8 );
+        mine[ 3 ] = static_cast< unsigned >( rng.seed );
+        mine[ 4 ] = static_cast< unsigned >( rng.last );
+        for ( int k = 0; k < 32; ++k )
+            mine[ 5 + k ] = static_cast< unsigned >( rng.table[ k ] );
+        for ( int k = 0; k < 37; ++k, ++g )
+            if ( mine[ k ] != *g && ++failed <= 8 )
+                LOG_ERROR( "boost_apply vector %u word %d: 0x%08X, retail 0x%08X", v, k, mine[ k ], *g );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuPowerUpBoostEntity slot 15 0x43DB40 (the boost a pickup gives) matches retail: %u vectors x 37 words", nv );
+        return true;
+    }
+    LOG_ERROR( "boost_apply FAILED %d of %u values", failed, nv * 37 );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -1226,5 +1265,6 @@ inline bool verify_race_all( )
     ok = verify_driver_slots( ) && ok;
     ok = verify_boat_manager( ) && ok;
     ok = verify_viewport_tick( ) && ok;
+    ok = verify_boost_apply( ) && ok;
     return ok;
 }
