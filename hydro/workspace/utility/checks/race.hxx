@@ -2,6 +2,7 @@
 
 #include <workspace/core/boat/camera.hxx>
 #include <workspace/core/boat/respawn.hxx>
+#include <workspace/core/boat/anim.hxx>
 
 #include <array>
 #include <cstdio>
@@ -295,10 +296,175 @@ inline bool verify_boat_respawn( )
     return false;
 }
 
+// The animation tick 0x40FFF0 (sequences on one object, retail's state carried) and the wake parameters
+// 0x417F80 against retail (oracle case boat_anim): the object's and its controls' words after, the hook and
+// FMOD streams; the 0x417F80 out block but its stale words.
+inline bool verify_boat_anim( )
+{
+    const unsigned* g = g_golden_boat_anim_words;
+    auto fl = []( unsigned w ) { float v; std::memcpy( &v, &w, 4 ); return v; };
+    struct log_t
+    {
+        float s64 = 0.0f, s68 = 0.0f;
+        const unsigned* create = nullptr;
+        std::vector< unsigned > a, b;
+    } lg;
+    boat_anim_hooks_t hooks;
+    hooks.user = &lg;
+    hooks.driver_64 = []( void* u ) { return static_cast< log_t* >( u )->s64; };
+    hooks.driver_68 = []( void* u ) { return static_cast< log_t* >( u )->s68; };
+    hooks.control_516300 = []( void* u ) { static_cast< log_t* >( u )->a.push_back( 1 ); };
+    hooks.event_create = []( void* u, int slot, const char* ) {
+        log_t& l = *static_cast< log_t* >( u );
+        const unsigned ok = l.create[ slot ];
+        l.a.insert( l.a.end( ), { 2u, static_cast< unsigned >( slot ), ok } );
+        return ok != 0;
+    };
+    hooks.event_start = []( void* u, int ) { static_cast< log_t* >( u )->b.push_back( 3 ); };   // retail starts slot k's event even when it is null
+    hooks.voice = []( void* u, const char* ) { static_cast< log_t* >( u )->a.push_back( 4 ); };
+    hooks.event_update = []( void* u, int slot, const float* p, const float* v, const float* values ) {
+        log_t& l = *static_cast< log_t* >( u );
+        l.b.push_back( 5 );
+        l.b.push_back( static_cast< unsigned >( slot ) );
+        for ( int k = 0; k < 6; ++k )
+        {
+            std::uint32_t w;
+            std::memcpy( &w, k < 3 ? p + k : v + k - 3, 4 );
+            l.b.push_back( w );
+        }
+        for ( int k = 0; k < 3; ++k )
+        {
+            std::uint32_t w;
+            std::memcpy( &w, values + k, 4 );
+            l.b.push_back( 6 );
+            l.b.push_back( w );
+        }
+    };
+    int compared = 0, failed = 0, ticks = 0, bad = 0;
+    auto cmp = [ & ]( const char* what, int a, int b, std::uint32_t ours, std::uint32_t theirs ) {
+        ++compared;
+        if ( ours != theirs && ++failed <= 8 )
+            LOG_ERROR( "boat_anim %s %d +0x%X: 0x%08X, retail 0x%08X", what, a, b, ours, theirs );
+    };
+    const unsigned ns = *g++;
+    for ( unsigned s = 0; s < ns; ++s )
+    {
+        const unsigned nt = *g++;
+        bool events[ 3 ];
+        for ( int k = 0; k < 3; ++k )
+            events[ k ] = *g++ != 0;
+        g += 3;   // the names' lengths (the emitter checked retail's names)
+        for ( unsigned t = 0; t < nt; ++t, ++ticks )
+        {
+            const int failed_before = failed;
+            const float dt = fl( *g++ );
+            lg.s64 = fl( *g++ );
+            lg.s68 = fl( *g++ );
+            bool present[ 3 ];
+            for ( int k = 0; k < 3; ++k )
+                present[ k ] = *g++ != 0;
+            std::uint8_t assets[ 3 ][ 0x20 ] = { };
+            for ( int k = 0; k < 3; ++k )
+                std::memcpy( assets[ k ] + 0x18, g++, 4 );
+            std::uint8_t boat[ 0x520 ] = { };
+            std::memcpy( boat + 0x310, g++, 4 );
+            boat[ 0x32F ] = static_cast< std::uint8_t >( *g++ );
+            lg.create = g;
+            g += 3;
+            float vel[ 4 ], pos[ 4 ];
+            std::memcpy( vel, g, 16 );
+            g += 4;
+            std::memcpy( pos, g, 16 );
+            g += 4;
+            std::uint8_t engine[ 0x100 ] = { };
+            std::memcpy( engine + 0xEC, g, 12 );
+            g += 3;
+            std::uint8_t obj[ 0xE0 ], ctl[ 3 ][ 0x20 ];
+            std::memcpy( obj, g, 0xE0 );
+            g += 0xE0 / 4;
+            for ( int k = 0; k < 3; ++k, g += 8 )
+                std::memcpy( ctl[ k ], g, 0x20 );
+            boat_anim_t a;
+            a.anim = obj;
+            a.boat = boat;
+            for ( int k = 0; k < 3; ++k )
+            {
+                a.control[ k ] = present[ k ] ? ctl[ k ] : nullptr;
+                a.asset[ k ] = assets[ k ];
+                a.event[ k ] = events[ k ];
+            }
+            a.position = pos;
+            a.velocity = vel;
+            a.engine = engine;
+            lg.a.clear( );
+            lg.b.clear( );
+            boat_anim_tick( a, dt, hooks );
+            for ( int w = 0; w < 0xE0 / 4; ++w, ++g )
+            {
+                std::uint32_t mine;
+                std::memcpy( &mine, obj + 4 * w, 4 );
+                cmp( "object", ticks, 4 * w, mine, *g );
+            }
+            for ( int k = 0; k < 3; ++k )
+                for ( int w = 0; w < 8; ++w, ++g )
+                {
+                    std::uint32_t mine;
+                    std::memcpy( &mine, ctl[ k ] + 4 * w, 4 );
+                    cmp( "control", ticks * 10 + k, 4 * w, mine, *g );
+                }
+            const unsigned na = *g++;
+            const std::vector< unsigned > ea( g, g + na );
+            g += na;
+            const unsigned nb = *g++;
+            const std::vector< unsigned > eb( g, g + nb );
+            g += nb;
+            cmp( "hook stream", ticks, 0, ea == lg.a ? 0u : 1u, 0u );
+            cmp( "fmod stream", ticks, 0, eb == lg.b ? 0u : 1u, 0u );
+            bad += failed != failed_before ? 1 : 0;
+        }
+    }
+    const unsigned nw = *g++;
+    for ( unsigned v = 0; v < nw; ++v )
+    {
+        float m[ 16 ];
+        std::memcpy( m, g, 64 );
+        g += 16;
+        std::uint8_t hull[ 0xA8 ] = { };
+        std::memcpy( hull + 0x98, g, 16 );
+        g += 4;
+        std::uint8_t body[ 0x160 ] = { };
+        std::memcpy( body + 0x140, g, 32 );
+        g += 8;
+        std::uint8_t solver[ 0x60 ] = { };
+        std::memcpy( solver + 0x5C, g++, 4 );
+        std::uint8_t out[ 0x30 ] = { };
+        boat_wake_params( hull, m, body, solver, out );
+        const unsigned* theirs = g;
+        g += 12;
+        const unsigned stale = *g++;
+        for ( int w = 0; w < 12; ++w )
+            if ( !( stale >> w & 1 ) )
+            {
+                std::uint32_t mine;
+                std::memcpy( &mine, out + 4 * w, 4 );
+                cmp( "wake", static_cast< int >( v ), 4 * w, mine, theirs[ w ] );
+            }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "The animation tick 0x40FFF0 (%d ticks in %u sequences) and the wake parameters 0x417F80 (%u vectors) "
+                     "match retail: %d values, bit for bit", ticks, ns, nw, compared );
+        return true;
+    }
+    LOG_ERROR( "boat_anim FAILED %d of %d values (%d of %d ticks)", failed, compared, bad, ticks );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
     ok = verify_boat_camera( ) && ok;
     ok = verify_boat_respawn( ) && ok;
+    ok = verify_boat_anim( ) && ok;
     return ok;
 }
