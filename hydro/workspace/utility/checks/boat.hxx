@@ -3,6 +3,7 @@
 #include <workspace/core/collision/box.hxx>
 #include <workspace/core/collision/cylinder.hxx>
 #include <workspace/core/collision/sphere.hxx>
+#include <workspace/core/boat/ai.hxx>
 #include <workspace/core/boat/driver.hxx>
 #include <workspace/core/boat/load.hxx>
 #include <workspace/core/boat/sections.hxx>
@@ -1373,6 +1374,406 @@ inline bool verify_boat_decision( )
     return failed == 0;
 }
 
+// The blocks of an AI-closure vector: `count` blocks of `sizes`, before then
+// after, from the golden words at `s` (advanced past them).
+struct ai_blocks_t
+{
+    std::vector< std::uint8_t > b[ 4 ];
+    const std::uint8_t* want[ 4 ] = { };
+};
+
+inline ai_blocks_t ai_read_blocks( const unsigned*& s, const int* sizes, int count )
+{
+    ai_blocks_t r;
+    for ( int k = 0; k < count; ++k )
+    {
+        r.b[ k ].assign( reinterpret_cast< const std::uint8_t* >( s ), reinterpret_cast< const std::uint8_t* >( s ) + sizes[ k ] );
+        s += sizes[ k ] / 4;
+    }
+    for ( int k = 0; k < count; ++k )
+    {
+        r.want[ k ] = reinterpret_cast< const std::uint8_t* >( s );
+        s += sizes[ k ] / 4;
+    }
+    return r;
+}
+
+// The first differing byte (block x 0x1000 + byte), or -1.
+inline int ai_first_diff( const ai_blocks_t& r, const int* sizes, int count )
+{
+    for ( int k = 0; k < count; ++k )
+        for ( int at = 0; at < sizes[ k ]; ++at )
+            if ( r.b[ k ][ at ] != r.want[ k ][ at ] )
+                return 0x1000 * k + at;
+    return -1;
+}
+
+// ai_controls (boat/ai.hxx) against retail's 0x40D5A0 (oracle case
+// ai_controls): every byte of the driver, boat and animation blocks after,
+// and the hooks' calls in order.
+inline bool verify_ai_controls( )
+{
+    const int sizes[ 3 ] = { 0xD4, 0x520, 0xDC };
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_ai_controls_count; ++index )
+    {
+        const unsigned* s = g_golden_ai_controls_words + g_golden_ai_controls_offsets[ index ];
+        float dt, steer, throttle;
+        std::memcpy( &dt, s++, 4 );
+        std::memcpy( &steer, s++, 4 );
+        std::memcpy( &throttle, s++, 4 );
+        const std::uint8_t boost = static_cast< std::uint8_t >( *s++ );
+        ai_blocks_t r = ai_read_blocks( s, sizes, 3 );
+        std::vector< unsigned > calls;
+        ai_controls_hooks_t hooks;
+        hooks.user = &calls;
+        hooks.misfire = []( void* u ) { static_cast< std::vector< unsigned >* >( u )->push_back( 1 ); };
+        hooks.voice = []( void* u, const char* line ) { static_cast< std::vector< unsigned >* >( u )->push_back( std::strcmp( line, "NeedPickUpPowerBoost" ) == 0 ? 2u : 99u ); };
+        ai_controls( r.b[ 0 ].data( ), r.b[ 1 ].data( ), r.b[ 2 ].data( ), dt, steer, throttle, boost, hooks );
+        int bad = ai_first_diff( r, sizes, 3 );
+        const unsigned n = *s++;
+        if ( bad < 0 && ( n != calls.size( ) || std::memcmp( s, calls.data( ), 4 * n ) != 0 ) )
+            bad = 0xD000;
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "ai controls vector %d differs from retail at 0x%X (block x 0x1000 + byte; 0xD000 the calls)",
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuAiDriver's control output 0x40D5A0 matches retail: %d vectors", static_cast< int >( g_golden_ai_controls_count ) );
+    else
+        LOG_ERROR( "ai controls FAILED %d of %d vectors", failed, static_cast< int >( g_golden_ai_controls_count ) );
+    return failed == 0;
+}
+
+// ai_steer (boat/ai.hxx) against retail's 0x40D110 (oracle case ai_steer):
+// both outputs' bits (left 0xCDCDCDCD when dt <= 0).
+inline bool verify_ai_steer( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_ai_steer_count; ++index )
+    {
+        const unsigned* s = g_golden_ai_steer_words + g_golden_ai_steer_offsets[ index ];
+        float v[ 12 ], speed, wanted, dt;
+        std::memcpy( v, s, 48 );
+        s += 12;
+        std::memcpy( &speed, s++, 4 );
+        std::memcpy( &wanted, s++, 4 );
+        std::memcpy( &dt, s++, 4 );
+        std::uint8_t body[ 0x300 ] = { }, solver[ 0x104 ] = { };
+        std::memcpy( body + 0x140, s, 0x20 );
+        s += 8;
+        std::memcpy( solver + 0x54, s++, 4 );
+        unsigned out[ 2 ] = { 0xCDCDCDCDu, 0xCDCDCDCDu };
+        ai_steer( body, solver, v, v + 4, v + 8, speed, wanted, dt, reinterpret_cast< float* >( &out[ 0 ] ), reinterpret_cast< float* >( &out[ 1 ] ) );
+        if ( ( out[ 0 ] != s[ 0 ] || out[ 1 ] != s[ 1 ] ) && ++failed <= 4 )
+            LOG_ERROR( "ai steer vector %d: steer 0x%08X throttle 0x%08X, retail 0x%08X 0x%08X", static_cast< int >( index ), out[ 0 ], out[ 1 ], s[ 0 ], s[ 1 ] );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuAiDriver's steering / throttle 0x40D110 matches retail (CRT asinf as the double asin): %d vectors",
+                     static_cast< int >( g_golden_ai_steer_count ) );
+    else
+        LOG_ERROR( "ai steer FAILED %d of %d vectors", failed, static_cast< int >( g_golden_ai_steer_count ) );
+    return failed == 0;
+}
+
+// ai_path_follow (boat/ai.hxx) against retail's 0x40BEC0 (oracle case
+// ai_path_follow): the target and direction words after, but the stale
+// stack words retail never writes (the mask).
+inline bool verify_ai_path_follow( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_ai_path_follow_count; ++index )
+    {
+        const unsigned* s = g_golden_ai_path_follow_words + g_golden_ai_path_follow_offsets[ index ];
+        const std::int32_t count = static_cast< std::int32_t >( *s++ );
+        std::vector< const std::uint8_t* > points;
+        for ( std::int32_t k = 0; k < count; ++k, s += 0xD0 / 4 )
+            points.push_back( reinterpret_cast< const std::uint8_t* >( s ) );
+        float pos[ 4 ];
+        std::memcpy( pos, s, 16 );
+        s += 4;
+        unsigned out[ 8 ];
+        for ( unsigned& w : out )
+            w = 0xCDCDCDCDu;
+        ai_path_follow( points.data( ), count, pos, reinterpret_cast< float* >( out ), reinterpret_cast< float* >( out + 4 ) );
+        const unsigned stale = s[ 8 ];
+        int bad = -1;
+        for ( int w = 0; w < 8 && bad < 0; ++w )
+            if ( !( stale & ( 1u << w ) ) && out[ w ] != s[ w ] )
+                bad = w;
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "ai path follow vector %d (%d points) differs from retail at word %d (0..3 target): 0x%08X, retail 0x%08X",
+                       static_cast< int >( index ), static_cast< int >( count ), bad, out[ bad ], s[ bad ] );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuAiDriver's path follow 0x40BEC0 matches retail: %d vectors", static_cast< int >( g_golden_ai_path_follow_count ) );
+    else
+        LOG_ERROR( "ai path follow FAILED %d of %d vectors", failed, static_cast< int >( g_golden_ai_path_follow_count ) );
+    return failed == 0;
+}
+
+// ai_avoid (boat/ai.hxx) against retail's 0x40C750 (oracle case ai_avoid):
+// the hooks replay the case's scripted world - each ray call returns its
+// table, getAabb its body's box - and record what they were asked; the
+// target words after (but the stale ones), the ray calls' from / to and the
+// getAabb bodies must all be retail's.
+struct ai_avoid_world_t
+{
+    std::vector< std::vector< std::uint8_t > > bodies;
+    std::vector< std::array< float, 6 > > boxes;
+    std::vector< std::vector< ai_ray_hit_t > > rays;
+    std::vector< std::array< unsigned, 8 > > calls;
+    std::vector< unsigned > aabbs;
+};
+
+inline bool verify_ai_avoid( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_ai_avoid_count; ++index )
+    {
+        const unsigned* s = g_golden_ai_avoid_words + g_golden_ai_avoid_offsets[ index ];
+        float margin, pos[ 4 ], target[ 4 ];
+        std::memcpy( &margin, s++, 4 );
+        std::memcpy( pos, s, 16 );
+        std::memcpy( target, s + 4, 16 );
+        s += 8;
+        ai_avoid_world_t w;
+        const unsigned nb = *s++;
+        for ( unsigned k = 0; k < nb; ++k )
+        {
+            w.bodies.emplace_back( reinterpret_cast< const std::uint8_t* >( s ), reinterpret_cast< const std::uint8_t* >( s ) + 0x300 );
+            s += 0x300 / 4;
+            std::array< float, 6 > box;
+            std::memcpy( box.data( ), s, 24 );
+            s += 6;
+            w.boxes.push_back( box );
+        }
+        const unsigned nr = *s++;
+        for ( unsigned r = 0; r < nr; ++r )
+        {
+            std::vector< ai_ray_hit_t > hits( *s++ );
+            for ( ai_ray_hit_t& h : hits )
+            {
+                h.body = w.bodies[ *s++ ].data( );
+                std::memcpy( &h.fraction, s++, 4 );
+                std::memcpy( h.normal, s, 16 );
+                s += 4;
+                h.world = *s++ != 0;
+            }
+            w.rays.push_back( hits );
+        }
+        ai_avoid_hooks_t hooks;
+        hooks.user = &w;
+        hooks.ray = []( void* u, const float* from, const float* to, const ai_ray_hit_t** hits ) -> int
+        {
+            ai_avoid_world_t& w = *static_cast< ai_avoid_world_t* >( u );
+            std::array< unsigned, 8 > c;
+            std::memcpy( c.data( ), from, 16 );
+            std::memcpy( c.data( ) + 4, to, 16 );
+            const std::size_t k = w.calls.size( );
+            w.calls.push_back( c );
+            if ( k >= w.rays.size( ) )
+                return 0;
+            *hits = w.rays[ k ].data( );
+            return static_cast< int >( w.rays[ k ].size( ) );
+        };
+        hooks.aabb = []( void* u, const std::uint8_t* body, float* mn, float* mx )
+        {
+            ai_avoid_world_t& w = *static_cast< ai_avoid_world_t* >( u );
+            for ( std::size_t k = 0; k < w.bodies.size( ); ++k )
+                if ( w.bodies[ k ].data( ) == body )
+                {
+                    std::memcpy( mn, w.boxes[ k ].data( ), 12 );
+                    std::memcpy( mx, w.boxes[ k ].data( ) + 3, 12 );
+                    w.aabbs.push_back( static_cast< unsigned >( k ) );
+                }
+        };
+        ai_avoid( margin, w.bodies[ 0 ].data( ), pos, target, hooks );
+        unsigned out[ 4 ];
+        std::memcpy( out, target, 16 );
+        const unsigned* want = s;
+        const unsigned stale = s[ 4 ];
+        s += 5;
+        int bad = -1;
+        for ( int k = 0; k < 4 && bad < 0; ++k )
+            if ( !( stale & ( 1u << k ) ) && out[ k ] != want[ k ] )
+                bad = k;
+        const unsigned nc = *s++;
+        if ( bad < 0 && nc != w.calls.size( ) )
+            bad = 0x100;
+        for ( unsigned k = 0; k < nc && bad < 0; ++k )
+            if ( std::memcmp( w.calls[ k ].data( ), s + 8 * k, 32 ) != 0 )
+                bad = 0x100 + 1 + static_cast< int >( k );
+        s += 8 * nc;
+        const unsigned na = *s++;
+        if ( bad < 0 && ( na != w.aabbs.size( ) || std::memcmp( s, w.aabbs.data( ), 4 * na ) != 0 ) )
+            bad = 0x200;
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "ai avoid vector %d differs from retail at %d (0..3 target word, 0x100 + k ray call k, 0x200 the getAabb calls)",
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuAiDriver's obstacle avoidance 0x40C750 (its ray-test result logic; the world's traversal hooked) matches retail: %d vectors",
+                     static_cast< int >( g_golden_ai_avoid_count ) );
+    else
+        LOG_ERROR( "ai avoid FAILED %d of %d vectors", failed, static_cast< int >( g_golden_ai_avoid_count ) );
+    return failed == 0;
+}
+
+// ai_tick (boat/ai.hxx) against retail's whole 0x40B940 (oracle case
+// ai_tick): the driver (but its stale words) and boat blocks after, the ray
+// calls' from / to and the controls hooks' calls, with the scripted world
+// replayed as in verify_ai_avoid.
+inline bool verify_ai_tick( )
+{
+    auto take = []( const unsigned*& s, std::size_t bytes ) {
+        std::vector< std::uint8_t > v( reinterpret_cast< const std::uint8_t* >( s ), reinterpret_cast< const std::uint8_t* >( s ) + bytes );
+        s += bytes / 4;
+        return v;
+    };
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_ai_tick_count; ++index )
+    {
+        const unsigned* s = g_golden_ai_tick_words + g_golden_ai_tick_offsets[ index ];
+        float dt;
+        std::memcpy( &dt, s++, 4 );
+        std::vector< std::uint8_t > anim( 0x80 ), solver( 0x104 ), other( 0xA0 );
+        std::memcpy( anim.data( ) + 0x78, s++, 4 );
+        std::memcpy( solver.data( ) + 0x54, s++, 4 );
+        std::vector< std::uint8_t > driver = take( s, 0xD4 ), boat = take( s, 0x520 ), eng = take( s, 0x40 ), xf = take( s, 0xA0 );
+        ai_avoid_world_t w;
+        w.bodies.push_back( take( s, 0x300 ) );
+        std::vector< std::vector< std::uint8_t > > points( *s++ );
+        std::vector< const std::uint8_t* > point_ptrs;
+        for ( auto& p : points )
+        {
+            p = take( s, 0xD0 );
+            point_ptrs.push_back( p.data( ) );
+        }
+        const bool has_other = *s++ != 0;
+        std::memcpy( other.data( ) + 0x80, s, 16 );
+        s += 4;
+        std::vector< std::vector< std::uint8_t > > boats( *s++ );
+        std::vector< const std::uint8_t* > boat_ptrs;
+        for ( auto& b : boats )
+        {
+            const unsigned place = *s++;
+            if ( place == 0xFFFFFFFFu )
+            {
+                boat_ptrs.push_back( boat.data( ) );
+                continue;
+            }
+            b.assign( 0x4D0, 0 );
+            std::memcpy( b.data( ) + 0x4CC, &place, 4 );
+            boat_ptrs.push_back( b.data( ) );
+        }
+        for ( int k = 0; k < 2; ++k )
+        {
+            w.bodies.push_back( take( s, 0x300 ) );
+            std::array< float, 6 > box;
+            std::memcpy( box.data( ), s, 24 );
+            s += 6;
+            w.boxes.push_back( box );
+        }
+        w.boxes.insert( w.boxes.begin( ), std::array< float, 6 >{ } );   // the boat's own body: never asked
+        for ( int r = 0; r < 4; ++r )
+        {
+            std::vector< ai_ray_hit_t > hits( *s++ );
+            for ( ai_ray_hit_t& h : hits )
+            {
+                h.body = w.bodies[ 1 + *s++ ].data( );
+                std::memcpy( &h.fraction, s++, 4 );
+                std::memcpy( h.normal, s, 16 );
+                s += 4;
+                h.world = true;
+            }
+            w.rays.push_back( hits );
+        }
+        ai_tick_t t;
+        t.driver = driver.data( );
+        t.boat = boat.data( );
+        t.body = w.bodies[ 0 ].data( );
+        t.solver = solver.data( );
+        t.transform = xf.data( );
+        t.engine = eng.data( );
+        t.owner = boat.data( );
+        t.animation = anim.data( );
+        t.other = has_other ? other.data( ) : nullptr;
+        t.points = point_ptrs.data( );
+        t.count = static_cast< std::int32_t >( points.size( ) );
+        t.boats = boat_ptrs.data( );
+        t.boat_count = static_cast< std::int32_t >( boats.size( ) );
+        struct sink_t
+        {
+            ai_avoid_world_t* w;
+            std::vector< unsigned > calls;
+        } sink{ &w, { } };
+        ai_tick_hooks_t hooks;
+        hooks.avoid.user = &w;
+        hooks.avoid.ray = []( void* u, const float* from, const float* to, const ai_ray_hit_t** hits ) -> int
+        {
+            ai_avoid_world_t& w = *static_cast< ai_avoid_world_t* >( u );
+            std::array< unsigned, 8 > c;
+            std::memcpy( c.data( ), from, 16 );
+            std::memcpy( c.data( ) + 4, to, 16 );
+            const std::size_t k = w.calls.size( );
+            w.calls.push_back( c );
+            if ( k >= w.rays.size( ) )
+                return 0;
+            *hits = w.rays[ k ].data( );
+            return static_cast< int >( w.rays[ k ].size( ) );
+        };
+        hooks.avoid.aabb = []( void* u, const std::uint8_t* body, float* mn, float* mx )
+        {
+            ai_avoid_world_t& w = *static_cast< ai_avoid_world_t* >( u );
+            for ( std::size_t k = 0; k < w.bodies.size( ); ++k )
+                if ( w.bodies[ k ].data( ) == body )
+                {
+                    std::memcpy( mn, w.boxes[ k ].data( ), 12 );
+                    std::memcpy( mx, w.boxes[ k ].data( ) + 3, 12 );
+                }
+        };
+        hooks.controls.user = &sink;
+        hooks.controls.misfire = []( void* u ) { static_cast< sink_t* >( u )->calls.push_back( 1 ); };
+        hooks.controls.voice = []( void* u, const char* line ) { static_cast< sink_t* >( u )->calls.push_back( std::strcmp( line, "NeedPickUpPowerBoost" ) == 0 ? 2u : 99u ); };
+        ai_tick( t, dt, hooks );
+        const std::uint8_t* want_driver = reinterpret_cast< const std::uint8_t* >( s );
+        s += 0xD4 / 4;
+        const std::uint8_t* want_boat = reinterpret_cast< const std::uint8_t* >( s );
+        s += 0x520 / 4;
+        std::vector< bool > stale( 0xD4 / 4, false );
+        const unsigned ns = *s++;
+        for ( unsigned k = 0; k < ns; ++k )
+            stale[ *s++ ] = true;
+        int bad = -1;
+        for ( int at = 0; at < 0xD4 && bad < 0; ++at )
+            if ( !stale[ at / 4 ] && driver[ at ] != want_driver[ at ] )
+                bad = at;
+        for ( int at = 0; at < 0x520 && bad < 0; ++at )
+            if ( boat[ at ] != want_boat[ at ] )
+                bad = 0x1000 + at;
+        const unsigned nc = *s++;
+        if ( bad < 0 && nc != w.calls.size( ) )
+            bad = 0xC000;
+        for ( unsigned k = 0; k < nc && bad < 0; ++k )
+            if ( std::memcmp( w.calls[ k ].data( ), s + 8 * k, 32 ) != 0 )
+                bad = 0xC001 + static_cast< int >( k );
+        s += 8 * nc;
+        const unsigned nh = *s++;
+        if ( bad < 0 && ( nh != sink.calls.size( ) || std::memcmp( s, sink.calls.data( ), 4 * nh ) != 0 ) )
+            bad = 0xD000;
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "ai tick vector %d differs from retail at 0x%X (driver byte; 0x1xxx boat; 0xC00k ray call k; 0xD000 the hooks)",
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuAiDriver's tick 0x40B940 (its closure composed; the world's ray traversal / getAabb / audio / voice hooked) matches retail: %d vectors",
+                     static_cast< int >( g_golden_ai_tick_count ) );
+    else
+        LOG_ERROR( "ai tick FAILED %d of %d vectors", failed, static_cast< int >( g_golden_ai_tick_count ) );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
@@ -1393,5 +1794,10 @@ inline bool verify_boat_all( )
     ok = verify_boat_engine_audio( ) && ok;
     ok = verify_boat_hull_tick( ) && ok;
     ok = verify_boat_decision( ) && ok;
+    ok = verify_ai_controls( ) && ok;
+    ok = verify_ai_steer( ) && ok;
+    ok = verify_ai_path_follow( ) && ok;
+    ok = verify_ai_avoid( ) && ok;
+    ok = verify_ai_tick( ) && ok;
     return ok;
 }

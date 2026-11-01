@@ -75,6 +75,9 @@
     <ClInclude Include="workspace\core\assets\texture.hxx">
       <Filter>workspace\core\assets</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\boat\ai.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\boat\construct.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
