@@ -468,6 +468,22 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     water_build_world( *m_tree, m_water, []( entity_t& e ) { return entity_transform( e ); } );
     LOG_INFO( "water: %u surfaces, %u waves built from the tree; %d water entities not built", static_cast< unsigned >( m_water.surfaces.size( ) ),
         static_cast< unsigned >( m_water.waves.size( ) ), m_water.skipped );
+    water_view_build( m_water, m_water_view );
+    // The point waves' descriptors (VuPointWaveEntity_tick 0x5D4C50: transform +0x80, then the entity's seven
+    // properties), emitted when the graph reaches their Emit plug. An entity without a known world is skipped.
+    m_point_waves.clear( );
+    for ( const auto& named : path_of )
+    {
+        entity_t& e = *const_cast< entity_t* >( named.first );
+        const point_wave_properties_t* p = entity_action< point_wave_properties_t >( e );
+        const transform_component_t* t = e.m_type == "VuPointWaveEntity" ? entity_transform( e ) : nullptr;
+        if ( !p || !t || e.m_world_unknown )
+            continue;
+        point_wave_source_t source{};
+        std::memcpy( source.position, t->world + 12, 16 );
+        std::memcpy( source.properties, p->word, 28 );
+        m_point_waves.emplace( named.second, source );
+    }
     // Which types' construction is not captured - what to recreate next.
     for ( const auto& pair : unknown_types )
         LOG_VERBOSE( "entity tree: UNKNOWN %-40s x%d", pair.first.c_str( ), pair.second );

@@ -1308,6 +1308,7 @@ inline const action_kind_t* entity_action_kind( const std::string& cls )
         HYDRO_ACTION_KIND( "VuSkyBoxEntity", sky_box_properties_t, sky_box_construct, sky_box_load ),
         HYDRO_ACTION_KIND( "VuWaterTextureSettingsEntity", water_texture_properties_t, water_texture_construct, water_texture_load ),
         HYDRO_ACTION_KIND( "VuSetFrontEndCameraEntity", front_end_camera_properties_t, front_end_camera_construct, front_end_camera_load ),
+        HYDRO_ACTION_KIND( "VuPointWaveEntity", point_wave_properties_t, point_wave_construct, point_wave_load ),
     };
     for ( const action_kind_t& k : kinds )
         if ( cls == k.m_class )

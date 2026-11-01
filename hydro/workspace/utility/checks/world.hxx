@@ -308,6 +308,9 @@ inline bool world_action_words( const entity_t& e, std::vector< std::uint32_t >&
         vec( p->target );
         w.push_back( f( p->far_plane ) );
     }
+    else if ( const auto* p = entity_action< point_wave_properties_t >( e ); p && e.m_type == "VuPointWaveEntity" )
+        for ( float x : p->word )
+            w.push_back( f( x ) );
     else
         return false;
     return true;
@@ -316,7 +319,7 @@ inline bool world_action_words( const entity_t& e, std::vector< std::uint32_t >&
 // The action / logic / motion / settings entities' property loads (engine
 // entity/actions.hxx, through types.hxx's action table and the tree's
 // entity_load_properties) against retail's VuEntity::load (oracle case
-// load_actions: nine types from the templates and projects plus hand-built).
+// load_actions: ten types from the templates and projects plus hand-built).
 inline bool verify_actions( )
 {
     std::map< std::string, entity_t* > by_name;
@@ -344,7 +347,7 @@ inline bool verify_actions( )
         }
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "the action / logic / settings loads match retail's VuEntity::load on %d entities of 9 types: %d values, bit for bit",
+        LOG_SUCCESS( "the action / logic / settings loads match retail's VuEntity::load on %d entities of 10 types: %d values, bit for bit",
             static_cast< int >( g_golden_actions_count ), compared );
     else
         LOG_ERROR( "the action / logic / settings loads FAILED %d checks", failed );

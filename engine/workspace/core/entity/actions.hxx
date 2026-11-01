@@ -272,3 +272,25 @@ inline void front_end_camera_load( front_end_camera_properties_t& p, const value
     property_vector3( v, "Target Position", p.target, d.target );
     property_float( v, "Far Plane", p.far_plane, d.far_plane, false );
 }
+
+// VuPointWaveEntity (create 0x5D42B0, ctor 0x5D43B0; schema.hxx g_schema_VuPointWaveEntity): seven floats +0x80 ..
+// +0x98 - Falloff Time 5, Magnitude 1, Range Start 0, Range End 20, Speed 10, Frequency 5, Foaminess 1 - in the
+// order VuPointWaveEntity_tick 0x5D4C50 copies them into the wave's descriptor (surface.hxx water_point_wave_emit).
+struct point_wave_properties_t
+{
+    float word[ 7 ];   // +0x80 .. +0x98
+};
+
+inline void point_wave_construct( point_wave_properties_t& p )
+{
+    const std::uint32_t d[ 7 ] = { 0x40A00000u, 0x3F800000u, 0x00000000u, 0x41A00000u, 0x41200000u, 0x40A00000u, 0x3F800000u };
+    for ( int k = 0; k < 7; ++k )
+        p.word[ k ] = actions_bits( d[ k ] );
+}
+
+inline void point_wave_load( point_wave_properties_t& p, const value_t& v, const point_wave_properties_t& d )
+{
+    static const char* const names[ 7 ] = { "Falloff Time", "Magnitude", "Range Start", "Range End", "Speed", "Frequency", "Foaminess" };
+    for ( int k = 0; k < 7; ++k )
+        property_float( v, names[ k ], p.word[ k ], d.word[ k ], false );
+}
