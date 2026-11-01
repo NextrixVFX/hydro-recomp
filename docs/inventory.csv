@@ -6546,7 +6546,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x59B4C0,928,sub_59B4C0,,,unattributed,verified,hydro/workspace/core/world/kernel.hxx,False,False,race
 0x59B860,1405,sub_59B860,,,unattributed,verified,hydro/workspace/core/world/kernel.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x59BDE0,1373,sub_59BDE0,,,unattributed,verified,hydro/workspace/core/world/kernel.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
-0x59C340,6,sub_59C340,VuWaterDirectionalFlowWave,VuWaterDirectionalFlowWave+1,water,absent,,False,False,game
+0x59C340,6,sub_59C340,VuWaterDirectionalFlowWave,VuWaterDirectionalFlowWave+1,water,callee,,False,False,game
 0x59C350,40,sub_59C350,VuWaterDirectionalFlowWave,VuWaterDirectionalFlowWave+0,water,absent,,False,False,game
 0x59C380,10,sub_59C380,VuWaterBankedTurnWave; VuWaterBumpWave; VuWaterDirectionalFlowWave; VuWaterRampWave,VuWaterDirectionalFlowWave+2; VuWaterRampWave+2; VuWaterBumpWave+2; VuWaterBankedTurnWave+2,water,verified,hydro/workspace/core/world/surface.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x59C390,40,sub_59C390,VuWaterDirectionalFlowWave,VuWaterDirectionalFlowWave+3,water,absent,,False,False,game
@@ -6555,7 +6555,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x59C7C0,349,sub_59C7C0,,,water (by address),verified,hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/check.hxx,False,False,game
 0x59C920,360,sub_59C920,,,water (by address),absent,,False,False,game
 0x59CA90,6,sub_59CA90,VuWaterBaseOceanWave,VuWaterBaseOceanWave+1,water,callee,,False,False,race
-0x59CAA0,6,sub_59CAA0,VuWaterInfiniteOceanWave,VuWaterInfiniteOceanWave+1,water,absent,,False,False,game
+0x59CAA0,6,sub_59CAA0,VuWaterInfiniteOceanWave,VuWaterInfiniteOceanWave+1,water,callee,,False,False,game
 0x59CAB0,53,sub_59CAB0,VuWaterBaseOceanWave; VuWaterCircularOceanWave; VuWaterInfiniteOceanWave; VuWaterRectangularOceanWave,VuWaterBaseOceanWave+0; VuWaterRectangularOceanWave+0; VuWaterCircularOceanWave+0; VuWaterInfiniteOceanWave+0,water,cited,hydro/workspace/core/world/surface.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x59CAF0,6,sub_59CAF0,VuWaterRectangularOceanWave,VuWaterRectangularOceanWave+1,water,callee,,False,False,race
 0x59CB00,6,sub_59CB00,VuWaterCircularOceanWave,VuWaterCircularOceanWave+1,water,callee,,False,False,race
@@ -6572,12 +6572,12 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x59D6C0,570,VuWaterOceanWave_BuildBezierPatches,,,unattributed,verified,hydro/workspace/core/world/field.hxx; hydro/workspace/core/world/surface.hxx; hydro/workspace/core/world/water.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x59D900,60,VuWaterInfiniteOceanWave_Sample,VuWaterInfiniteOceanWave,VuWaterInfiniteOceanWave+3,water,verified,hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,game
 0x59D940,101,VuWaterRectangularOceanWave_ctor,,,water (by address),verified,hydro/workspace/core/world/wave.hxx,False,False,race
-0x59D9B0,115,sub_59D9B0,,,water (by address),cited,hydro/workspace/core/world/watchers.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/watchers.hxx,False,False,race
+0x59D9B0,115,sub_59D9B0,,,water (by address),verified,hydro/workspace/core/world/watchers.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/watchers.hxx,False,False,race
 0x59DA30,60,sub_59DA30,VuWaterRectangularOceanWave,VuWaterRectangularOceanWave+3,water,verified,hydro/workspace/core/world/kernel.hxx; hydro/workspace/core/world/wave.hxx,False,False,race
 0x59DA70,370,sub_59DA70,VuWaterRectangularOceanWave,VuWaterRectangularOceanWave+5,water,absent,,False,False,race
 0x59DBF0,215,sub_59DBF0,,,water (by address),verified,hydro/workspace/core/world/watchers.hxx; hydro/workspace/core/world/wave.hxx,False,False,race
 0x59DCD0,236,sub_59DCD0,,,water (by address),verified,hydro/workspace/core/world/wave.hxx,False,False,race
-0x59DDC0,250,sub_59DDC0,,,water (by address),cited,hydro/workspace/core/world/watchers.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/watchers.hxx,False,False,race
+0x59DDC0,250,sub_59DDC0,,,water (by address),verified,hydro/workspace/core/world/watchers.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/watchers.hxx,False,False,race
 0x59DEC0,60,sub_59DEC0,VuWaterCircularOceanWave,VuWaterCircularOceanWave+3,water,verified,hydro/workspace/core/world/kernel.hxx; hydro/workspace/core/world/wave.hxx,False,False,race
 0x59DF00,361,sub_59DF00,VuWaterCircularOceanWave,VuWaterCircularOceanWave+5,water,absent,,False,False,race
 0x59E070,1187,VuWaterInfiniteOceanWave_SampleA,,,water (by address),verified,hydro/workspace/core/world/kernel.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,game
@@ -6596,7 +6596,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5A1430,6,sub_5A1430,VuWaterWhirlpoolWave,VuWaterWhirlpoolWave+1,water,callee,,False,False,race
 0x5A1440,40,sub_5A1440,VuWaterWhirlpoolWave,VuWaterWhirlpoolWave+0,water,cited,hydro/workspace/core/world/surface.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x5A1470,270,sub_5A1470,,,water (by address),verified,hydro/workspace/core/world/wave.hxx,False,False,race
-0x5A1580,248,sub_5A1580,,,water (by address),cited,hydro/workspace/core/world/watchers.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/watchers.hxx,False,False,race
+0x5A1580,248,sub_5A1580,,,water (by address),verified,hydro/workspace/core/world/watchers.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/watchers.hxx,False,False,race
 0x5A1680,29,sub_5A1680,VuWaterWhirlpoolWave,VuWaterWhirlpoolWave+2,water,verified,hydro/workspace/core/world/surface.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x5A16A0,72,sub_5A16A0,VuWaterWhirlpoolWave,VuWaterWhirlpoolWave+3,water,cited,hydro/workspace/core/world/kernel.hxx; hydro/workspace/core/world/wave.hxx,False,False,race
 0x5A16F0,563,sub_5A16F0,VuWaterWhirlpoolWave,VuWaterWhirlpoolWave+4,water,absent,,False,False,race
@@ -6632,7 +6632,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5A4D40,6,sub_5A4D40,VuWaterBankedTurnWave,VuWaterBankedTurnWave+1,water,callee,,False,False,race
 0x5A4D50,40,sub_5A4D50,VuWaterBankedTurnWave,VuWaterBankedTurnWave+0,water,cited,hydro/workspace/core/world/surface.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
 0x5A4D80,365,sub_5A4D80,,,water (by address),verified,hydro/workspace/core/world/wave.hxx,False,False,race
-0x5A4EF0,328,sub_5A4EF0,,,water (by address),cited,hydro/workspace/core/world/watchers.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/watchers.hxx,False,False,race
+0x5A4EF0,328,sub_5A4EF0,,,water (by address),verified,hydro/workspace/core/world/watchers.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/watchers.hxx,False,False,race
 0x5A5040,72,sub_5A5040,VuWaterBankedTurnWave,VuWaterBankedTurnWave+3,water,cited,hydro/workspace/core/world/kernel.hxx,False,False,race
 0x5A5090,898,sub_5A5090,VuWaterBankedTurnWave,VuWaterBankedTurnWave+4,water,absent,,False,False,race
 0x5A5420,414,sub_5A5420,VuWaterBankedTurnWave,VuWaterBankedTurnWave+5,water,absent,,False,False,race
@@ -7193,11 +7193,11 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5CA9E0,6,sub_5CA9E0,VuShaderAsset,VuShaderAsset+0,rendering / gfx,absent,,False,False,race
 0x5CA9F0,39,sub_5CA9F0,,,rendering / gfx (by address),absent,,False,False,race
 0x5CAA20,6,sub_5CAA20,VuPfxAsset,VuPfxAsset+0,particles,verified,hydro/workspace/utility/checks/watchers.hxx,False,False,race
-0x5CAA30,153,sub_5CAA30,,,particles (by address),cited,hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
-0x5CAAD0,34,sub_5CAAD0,VuPfxAsset,VuPfxAsset+1,particles,cited,hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
+0x5CAA30,153,sub_5CAA30,,,particles (by address),verified,hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
+0x5CAAD0,34,sub_5CAAD0,VuPfxAsset,VuPfxAsset+1,particles,verified,hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x5CAB00,39,sub_5CAB00,,,particles (by address),cited,hydro/workspace/core/world/pfxmgr.hxx,False,False,race
 0x5CAB30,77,sub_5CAB30,VuPfxAsset,VuPfxAsset+5,particles,verified,hydro/workspace/core/world/effects.hxx; hydro/workspace/core/world/pfxload.hxx; hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
-0x5CAB80,57,sub_5CAB80,VuPfxAsset,VuPfxAsset+6,particles,cited,hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
+0x5CAB80,57,sub_5CAB80,VuPfxAsset,VuPfxAsset+6,particles,verified,hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x5CABC0,6,sub_5CABC0,VuFontAsset,VuFontAsset+0,HUD / UI / fonts,absent,,False,False,race
 0x5CAC30,130,sub_5CAC30,VuFontAsset,VuFontAsset+1,HUD / UI / fonts,absent,,False,False,race
 0x5CACC0,32,sub_5CACC0,,,HUD / UI / fonts (by address),absent,,False,False,race
@@ -7370,13 +7370,13 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5D4D30,224,sub_5D4D30,,,water (by address),cited,hydro/workspace/core/world/watchers.hxx,False,False,race
 0x5D4E10,73,sub_5D4E10,,,water (by address),callee,,False,False,race
 0x5D4E60,158,VuPointWaveEntity_initEmitPlug,,,water (by address),verified,hydro/workspace/core/world/graph.hxx,False,False,race
-0x5D4F00,6,sub_5D4F00,VuWakeWaveEntity,VuWakeWaveEntity+1,water,absent,,False,False,game
+0x5D4F00,6,sub_5D4F00,VuWakeWaveEntity,VuWakeWaveEntity+1,water,callee,,False,False,game
 0x5D4F10,115,VuWakeWaveEntity_create,,,water (by address),absent,,False,False,game
 0x5D4F90,111,sub_5D4F90,,,water (by address),absent,,False,False,game
 0x5D5000,1618,VuWakeWaveEntity_ctor,,,water (by address),absent,,False,False,game
 0x5D5660,515,sub_5D5660,VuWakeWaveEntity,VuWakeWaveEntity+0,water,absent,,False,False,game
 0x5D5870,30,sub_5D5870,VuWakeWaveEntity,VuWakeWaveEntity+2,water,absent,,False,False,game
-0x5D5890,6,sub_5D5890,VuStaticWakeWaveEntity,VuStaticWakeWaveEntity+1,water,absent,,False,False,game
+0x5D5890,6,sub_5D5890,VuStaticWakeWaveEntity,VuStaticWakeWaveEntity+1,water,callee,,False,False,game
 0x5D58A0,117,VuStaticWakeWaveEntity_create,,,water (by address),absent,,False,False,game
 0x5D5920,104,sub_5D5920,,,water (by address),absent,,False,False,game
 0x5D5990,1170,VuStaticWakeWaveEntity_ctor,,,water (by address),absent,,False,False,game
@@ -7387,7 +7387,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5D5F20,310,sub_5D5F20,,,water (by address),absent,,False,False,game
 0x5D6060,153,sub_5D6060,,,water (by address),absent,,False,False,game
 0x5D6100,640,sub_5D6100,,,water (by address),absent,,False,False,game
-0x5D6380,6,sub_5D6380,VuDirectionalFlowWaveEntity,VuDirectionalFlowWaveEntity+1,water,absent,,False,False,game
+0x5D6380,6,sub_5D6380,VuDirectionalFlowWaveEntity,VuDirectionalFlowWaveEntity+1,water,callee,,False,False,game
 0x5D6390,114,VuDirectionalFlowWaveEntity_create,,,water (by address),absent,,False,False,game
 0x5D6410,680,VuDirectionalFlowWaveEntity_ctor,,,water (by address),absent,,False,False,game
 0x5D66C0,8,sub_5D66C0,VuDirectionalFlowWaveEntity,VuDirectionalFlowWaveEntity+2,water,absent,,False,False,game
@@ -7415,7 +7415,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5D7E30,265,sub_5D7E30,,,water (by address),verified,hydro/workspace/core/world/watchers.hxx; hydro/workspace/utility/checks/watchers.hxx,False,False,race
 0x5D7F40,536,sub_5D7F40,,,water (by address),absent,,False,False,race
 0x5D8160,6,sub_5D8160,VuBaseOceanWaveEntity,VuBaseOceanWaveEntity+1,water,callee,,False,False,race
-0x5D8170,6,sub_5D8170,VuInfiniteOceanWaveEntity,VuInfiniteOceanWaveEntity+1,water,absent,,False,False,game
+0x5D8170,6,sub_5D8170,VuInfiniteOceanWaveEntity,VuInfiniteOceanWaveEntity+1,water,callee,,False,False,game
 0x5D8180,7,sub_5D8180,VuInfiniteOceanWaveEntity,VuInfiniteOceanWaveEntity+13,water,cited,hydro/workspace/core/world/watchers.hxx,False,False,game
 0x5D8190,6,sub_5D8190,VuRectangularOceanWaveEntity,VuRectangularOceanWaveEntity+1,water,callee,,False,False,race
 0x5D81A0,7,sub_5D81A0,VuCircularOceanWaveEntity; VuRectangularOceanWaveEntity,VuCircularOceanWaveEntity+13; VuRectangularOceanWaveEntity+13,water,verified,hydro/workspace/core/world/surface.hxx; hydro/workspace/core/world/watchers.hxx,False,False,race

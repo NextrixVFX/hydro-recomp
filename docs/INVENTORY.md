@@ -18,10 +18,10 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 1480 | 656344 |
-| callee | 968 | 221295 |
-| cited | 316 | 114866 |
-| absent | 5874 | 1233755 |
+| verified | 1487 | 657529 |
+| callee | 974 | 221331 |
+| cited | 309 | 113681 |
+| absent | 5868 | 1233719 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -36,12 +36,12 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 | HUD / UI / fonts | 648 | 67 | 142 | 7 | 432 | 42549 of 184315 |
 | game modes / race | 766 | 68 | 56 | 14 | 628 | 33606 of 179957 |
 | rendering / gfx | 552 | 73 | 43 | 31 | 405 | 25130 of 126915 |
-| water | 325 | 139 | 63 | 35 | 88 | 49682 of 96416 |
+| water | 325 | 143 | 69 | 31 | 82 | 50623 of 96416 |
 | boat | 264 | 162 | 40 | 18 | 44 | 66146 of 87400 |
 | engine core / math / containers | 391 | 32 | 15 | 18 | 326 | 5728 of 76072 |
 | other classes | 731 | 11 | 3 | 2 | 715 | 6413 of 67698 |
 | assets | 286 | 24 | 32 | 4 | 226 | 3697 of 61239 |
-| particles | 215 | 129 | 50 | 11 | 25 | 35583 of 45495 |
+| particles | 215 | 132 | 50 | 8 | 25 | 35827 of 45495 |
 | audio | 163 | 6 | 33 | 0 | 124 | 838 of 30823 |
 | input | 156 | 1 | 6 | 6 | 143 | 24 of 30388 |
 | C++ runtime / STL | 227 | 6 | 34 | 2 | 185 | 5082 of 30128 |
@@ -58,8 +58,8 @@ Over-approximate (a referenced vtable brings every slot) and under-approximate (
 
 | tier | functions | verified | callee | cited | absent | runtime / STL / thunk | platform layer | game + engine logic not verified |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| race | 4905 | 1308 | 671 | 298 | 2628 | 68 | 610 | 3005 |
-| game | 2431 | 170 | 296 | 16 | 1949 | 77 | 313 | 1872 |
+| race | 4905 | 1315 | 671 | 291 | 2628 | 68 | 610 | 2998 |
+| game | 2431 | 170 | 302 | 16 | 1943 | 77 | 313 | 1872 |
 | service | 452 | 0 | 0 | 0 | 452 | 45 | 98 | 309 |
 | dead | 850 | 2 | 1 | 2 | 845 | 61 | 126 | 661 |
 
