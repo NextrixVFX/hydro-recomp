@@ -263,6 +263,7 @@ inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
         case water_kind_point: break;
         case water_kind_rectangular:
         case water_kind_circular:
+        case water_kind_infinite:
             if ( !k.ocean.patches[ 0 ] )
                 return false;   // no field (complexity 0)
             break;
@@ -272,6 +273,13 @@ inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
         {
             if ( ctx.flag100 && ctx.tags[ i ] != ctx.tag )
                 continue;
+            if ( k.kind == water_kind_infinite )
+            {
+                // SampleHeight 0x59E9E0 / SampleHeight2 0x59EB80
+                ocean_infinite_vertex96( k.ocean, *water_record( ctx, i, 0 ), *water_record( ctx, i, 4 ), *water_record( ctx, i, 8 ),
+                    water_record( ctx, i, 0xC ) );
+                continue;
+            }
             if ( k.kind == water_kind_rectangular || k.kind == water_kind_circular )
             {
                 // 0x59F840 / 0x59FB80, 0x5A0920 / 0x5A0C40: height and flow only

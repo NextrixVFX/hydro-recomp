@@ -1196,17 +1196,10 @@ inline bool verify_pfx_reload( )
 // 0x5D8D30 on Hydroelectric's built water (case water_release): every such entity in order, every third with its wave's
 // refcount first forced to 1. Compared per release: which wave's dtor ran, the wave list node by node, the pool count and
 // free node, every wave's refcount (gone ones excepted).
-inline bool verify_water_release( )
+inline bool water_release_check( entity_t& tree, const unsigned* s, const char* label, const char* where )
 {
-    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
-    if ( !tree )
-    {
-        LOG_ERROR( "water_release: the document did not load" );
-        return false;
-    }
     water_built_t b{};
-    water_build_world( *tree, b, []( entity_t& e ) { return entity_transform( e ); } );
-    const unsigned* s = g_golden_wrl_words;
+    water_build_world( tree, b, []( entity_t& e ) { return entity_transform( e ); } );
     const unsigned n = *s++;
     int failed = 0, destroyed = 0, forced = 0;
     for ( unsigned r = 0; r < n; ++r )
@@ -1254,17 +1247,28 @@ inline bool verify_water_release( )
         if ( bad )
         {
             ++failed;
-            LOG_ERROR( "water_release: release %u (wave %d): %d differences", r, wave, bad );
+            LOG_ERROR( "%s: release %u (wave %d): %d differences", label, r, wave, bad );
         }
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "water_entity_release matches the wave entities' slot 7 0x5D3690 / 0x5D3F10 / 0x5D6710 / 0x5D5E90 / 0x5D8D30 on "
-                     "Hydroelectric's built water: %u releases (%d with the refcount forced), %d dtors in order, the list, the pool and every "
+        LOG_SUCCESS( "water_entity_release matches the wave entities' slot 7 0x5D3690 / 0x5D3F10 / 0x5D6710 / 0x5D5E90 / 0x5D8D30 / 0x5D8A00 on "
+                     "%s built water: %u releases (%d with the refcount forced), %d dtors in order, the list, the pool and every "
                      "refcount after each",
-            n, forced, destroyed );
+            where, n, forced, destroyed );
     else
-        LOG_ERROR( "water_release FAILED %d of %u", failed, n );
+        LOG_ERROR( "%s FAILED %d of %u", label, failed, n );
     return failed == 0;
+}
+
+inline bool verify_water_release( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "water_release: the document did not load" );
+        return false;
+    }
+    return water_release_check( *tree, g_golden_wrl_words, "water_release", "Hydroelectric's" );
 }
 
 // A tree as case water_surface_release's flat words: root, free, leaves, used, free count, node count, then per node its
@@ -1762,7 +1766,7 @@ inline bool verify_water_map_unload( )
 // vtable 0x7508C0), two rectangular oceans, one surface. Compared as verify_water_build: every water entity's loaded
 // property and transform words, every surface's and wave's recreated words, the surface tree and the surface's wave tree
 // node for node, the wave list, each wave's entries, the pool.
-inline bool verify_water_build_menu( )
+inline std::unique_ptr< entity_t > water_menu_document_tree( )
 {
     const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_wbm_document );
     static const value_t document = c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_wbm_document_bytes ) ).parse( );
@@ -1777,7 +1781,12 @@ inline bool verify_water_build_menu( )
     world.m_state_for = entity_state_for;
     world.m_properties_load = entity_load_properties;
     world.m_properties_mark = entity_mark_properties;
-    const std::unique_ptr< entity_t > tree = entity_load_project( member( document, "VuProject" ), "Data/Projects/Background.vuprj", world );
+    return entity_load_project( member( document, "VuProject" ), "Data/Projects/Background.vuprj", world );
+}
+
+inline bool verify_water_build_menu( )
+{
+    const std::unique_ptr< entity_t > tree = water_menu_document_tree( );
     if ( !tree )
     {
         LOG_ERROR( "water_build_menu: the document did not load" );
@@ -1963,10 +1972,123 @@ inline bool verify_ocean_infinite( )
     return failed == 0;
 }
 
+// The infinite ocean's +96 kernels (case ocean_infinite96): slot 3 0x59D900 with ctx+0x60 set -> SampleHeight 0x59E9E0 and,
+// with ctx+100, SampleHeight2 0x59EB80 - through water_view_kernel (kernel.hxx: ocean_infinite_vertex96) on 32-byte records.
+// Compared: the record words +8..+0x1C (height, flow x / y, foam, the two pads) bit for bit.
+inline bool verify_ocean_infinite96( )
+{
+    const unsigned* s = g_golden_oi96_words;
+    const unsigned n = *s++;
+    int failed = 0, live = 0, points = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned variant = *s++;
+        water_view_t view{};
+        view.kernels.resize( 1 );
+        water_wave_kernel_t& kk = view.kernels[ 0 ];
+        kk.kind = water_kind_infinite;
+        ocean_patch_t& k = kk.ocean;
+        k.shift = static_cast< int >( *s++ );
+        k.mask = ( 1 << k.shift ) - 1;
+        std::memcpy( &k.scale, s++, 4 );
+        std::memcpy( &k.sine, s++, 4 );
+        std::memcpy( &k.cosine, s++, 4 );
+        std::memcpy( &k.now, s, 8 );
+        std::memcpy( &k.time[ 0 ], s + 2, 8 );
+        std::memcpy( &k.time[ 1 ], s + 4, 8 );
+        s += 6;
+        k.current = static_cast< int >( *s++ );
+        k.previous = static_cast< int >( *s++ );
+        const unsigned np = *s++;
+        k.patches[ 0 ] = reinterpret_cast< const float* >( s );
+        k.patches[ 1 ] = reinterpret_cast< const float* >( s + np );
+        s += 2 * np;
+        const unsigned count = *s++;
+        const unsigned* pts = s;
+        const unsigned* tags = s + 2 * count;
+        const unsigned* out = tags + count;
+        s = out + 6 * count;
+        std::vector< unsigned > rec( 8 * count );
+        std::vector< uint32_t > tag( count );
+        for ( unsigned i = 0; i < count; ++i )
+        {
+            const float r[ 6 ] = { 0.0f, 0.0f, 2.0f, 0.25f, -0.5f, 1.5f };
+            std::memcpy( &rec[ 8 * i ], r, sizeof( r ) );
+            rec[ 8 * i ] = pts[ 2 * i ];
+            rec[ 8 * i + 1 ] = pts[ 2 * i + 1 ];
+            rec[ 8 * i + 6 ] = rec[ 8 * i + 7 ] = 0x77777777u;
+            tag[ i ] = tags[ i ];
+            live += !variant || tags[ i ] == 1u ? 1 : 0;
+        }
+        water_query_t ctx{};
+        ctx.count = static_cast< int >( count );
+        ctx.flag96 = 1;
+        ctx.flag100 = variant;
+        ctx.tags = tag.data( );
+        ctx.tag = 1;
+        ctx.records = reinterpret_cast< unsigned char* >( rec.data( ) );
+        ctx.stride = 32;
+        int bad = water_view_kernel( &view, 0, ctx ) ? 0 : 1;
+        for ( unsigned i = 0; i < count; ++i )
+            for ( int j = 0; j < 6; ++j )
+                bad += rec[ 8 * i + 2 + j ] != out[ 6 * i + j ];
+        points += static_cast< int >( count );
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "ocean_infinite96: vector %u (variant %u): %d words differ", v, variant, bad );
+        }
+    }
+    if ( s != g_golden_oi96_words + g_golden_oi96_size )
+    {
+        ++failed;
+        LOG_ERROR( "ocean_infinite96: the golden words were not consumed exactly" );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ocean_infinite_vertex96 (water_view_kernel's +96 infinite kind) matches VuWaterInfiniteOceanWave SampleHeight 0x59E9E0 / "
+                     "SampleHeight2 0x59EB80 (slot 3 0x59D900): %u vectors, %d records, %d evaluated, bit for bit",
+            n, points, live );
+    else
+        LOG_ERROR( "ocean_infinite96 FAILED %d of %u", failed, n );
+    return failed == 0;
+}
+
+// THE FRONT END'S OCEAN FIELDS (case ocean_field_menu): water_build_world on Screens/Background's water (the same document
+// as verify_water_build_menu), its three ocean waves (the infinite 0x528A50 -> 0x59CB10, n = 128; two rectangular) - the
+// field arrays after the build, three water_built_tick, slot 3 in both modes (the infinite's +96 = SampleHeight 0x59E9E0)
+// - compared as verify_ocean_field (world/field.hxx, kernel.hxx).
+// The infinite ocean's slot 7 0x5D8A00 (case water_release_menu): water_entity_release on the front end's built water (the
+// infinite ocean, then the two rectangular oceans' 0x5D8D30, the third with its refcount forced), compared as
+// verify_water_release.
+inline bool verify_water_release_menu( )
+{
+    const std::unique_ptr< entity_t > tree = water_menu_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "water_release_menu: the document did not load" );
+        return false;
+    }
+    return water_release_check( *tree, g_golden_wrm_words, "water_release_menu", "the front end's" );
+}
+
+inline bool verify_ocean_field_menu( )
+{
+    const std::unique_ptr< entity_t > tree = water_menu_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "ocean_field_menu: the document did not load" );
+        return false;
+    }
+    return ocean_field_check( *tree, OCEAN_FIELD_GOLDEN( "ocean_field_menu", ofm ), "the front end's" );
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
     ok = verify_ocean_infinite( ) && ok;
+    ok = verify_ocean_infinite96( ) && ok;
+    ok = verify_ocean_field_menu( ) && ok;
+    ok = verify_water_release_menu( ) && ok;
     ok = verify_water_build_menu( ) && ok;
     ok = verify_water_map_unload( ) && ok;
     ok = verify_water_shutdown( ) && ok;

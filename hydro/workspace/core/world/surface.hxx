@@ -1014,7 +1014,8 @@ inline void water_built_destroy( water_built_t& b, int wave )
 // wave at +0x74), VuBumpWaveEntity 0x5D3F10 (+0x68), VuWhirlpoolWaveEntity and
 // VuDirectionalFlowWaveEntity 0x5D6710 (+0x78), VuDirectionalWaveEntity and
 // VuStaticWakeWaveEntity 0x5D5E90 (+0x80), the ocean entities' 0x5D8D30
-// (+0x94; 0x5D81A0 is its getter): the entity's reference (+4) dropped - slot
+// (+0x94; 0x5D81A0 is its getter), VuInfiniteOceanWaveEntity 0x5D8A00 (+0x88;
+// measured, case water_release_menu): the entity's reference (+4) dropped - slot
 // 0 with 1 at zero -, then VuWater's removal 0x529800 of the same pointer (a
 // no-op when the dtor already unlinked it), then the entity's word = 0 (the
 // caller's). VuWaterRampEntity's 0x5D7030 releases its surface (+0x128) first
