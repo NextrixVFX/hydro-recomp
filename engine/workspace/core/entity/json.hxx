@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -702,6 +704,224 @@ inline int json_read_file( json_text_reader_t& r, value_t& out, const std::strin
     return got;
 }
 
+// --- VuJsonWriter (0x4FFBC0 .. 0x500360), batch 29 --------------------------
+// The writer object: +0 byte compact (0 = pretty: a newline and the indent
+// before containers and elements), +1 byte trailing comma, +4 the output
+// std::string*, +8 the indent std::string (one tab per level). Its users found
+// (0x4046F0 aidebug, 0x4BC670, 0x4C3590 VuGameModeManager's ProjectAsset,
+// 0x4CA850 preview, 0x53C1F0 VuStringDBImpl) build it with word +0 = 0.
+// SUBSTITUTION: the numbers go through MSVCR110's sprintf_s ("%d", "%lld",
+// "%.8g" of the float widened to double): json_crt_format models that CRT -
+// the C library's digits with the exponent padded to MSVCR110's three digits
+// ("1e+020"); a non-finite float (MSVCR110 prints "1.#INF" / "1.#QNAN" / its
+// precision-mangled forms, not measured) makes the result UNKNOWN.
+struct json_writer_t
+{
+    bool compact = false;                 // +0
+    bool trailing = false;                // +1
+    std::string* out = nullptr;           // +4
+    std::string indent;                   // +8
+    bool unknown = false;                 // a non-finite float was written (its text is UNKNOWN)
+};
+
+inline std::string json_crt_format( const char* format, double d )
+{
+    char buf[ 64 ];
+    std::snprintf( buf, sizeof( buf ), format, d );
+    std::string s( buf );
+    const std::size_t e = s.find( 'e' );
+    if ( e != std::string::npos && e + 2 < s.size( ) )
+    {
+        std::string digits = s.substr( e + 2 );
+        while ( digits.size( ) < 3 )
+            digits.insert( digits.begin( ), '0' );
+        s = s.substr( 0, e + 2 ) + digits;
+    }
+    return s;
+}
+
+// 0x4FFDA0 / 0x500150: sprintf_s "%d" (16 bytes) / "%lld" (32 bytes), appended up to the NUL.
+inline void json_write_int( json_writer_t& w, std::int32_t v )
+{
+    char buf[ 16 ];
+    std::snprintf( buf, sizeof( buf ), "%d", v );
+    w.out->append( buf );
+}
+
+inline void json_write_int64( json_writer_t& w, std::int64_t v )
+{
+    char buf[ 32 ];
+    std::snprintf( buf, sizeof( buf ), "%lld", static_cast< long long >( v ) );
+    w.out->append( buf );
+}
+
+// 0x4FFE10 (the float in xmm1): sprintf_s "%.8g" of (double) f into 16 bytes; exactly "-0" becomes "0" (strcpy_s).
+inline void json_write_float( json_writer_t& w, float f )
+{
+    if ( !std::isfinite( f ) )
+    {
+        w.unknown = true;
+        return;
+    }
+    std::string s = json_crt_format( "%.8g", static_cast< double >( f ) );
+    if ( s == "-0" )
+        s = "0";
+    w.out->append( s );
+}
+
+// 0x4FFED0: "true" when the bool byte (+8) is non-zero, else "false".
+inline void json_write_bool( json_writer_t& w, bool b )
+{
+    w.out->append( b ? "true" : "false" );
+}
+
+// 0x4FFF20: '"', each character up to the first NUL - 8 \b, 9 \t, 10 \n, 12 \f, 13 \r, '"' \", '\\' \\ (the jump
+// table 0x5000D8 through the byte map 0x5000F8 over c - 8 in 0 .. 0x54, signed char), anything else as it is - then
+// '"'; the whole appended up to its NUL.
+inline void json_write_string( json_writer_t& w, const std::string& text )
+{
+    std::string s( 1, '"' );
+    for ( const char* p = text.c_str( ); *p; ++p )
+    {
+        switch ( *p )
+        {
+        case 8: s += "\\b"; break;
+        case 9: s += "\\t"; break;
+        case 10: s += "\\n"; break;
+        case 12: s += "\\f"; break;
+        case 13: s += "\\r"; break;
+        case '"': s += "\\\""; break;
+        case '\\': s += "\\\\"; break;
+        default: s += *p; break;
+        }
+    }
+    s += '"';
+    w.out->append( s.c_str( ) );
+}
+
+// Pretty mode's line break: '\n' and the indent.
+inline void json_write_break( json_writer_t& w )
+{
+    if ( w.compact )
+        return;
+    w.out->push_back( '\n' );
+    w.out->append( w.indent );
+}
+
+inline void json_write_value( json_writer_t& w, const value_t& v );
+
+// 0x5001C0: not an array, or empty -> "[]". Else the break, "[", one more tab; per element (index order) a break
+// unless it is an array / object (those break themselves), the element, "," unless it is the last (or the trailing
+// flag); one tab less, the break, "]".
+inline void json_write_array( json_writer_t& w, const value_t& v )
+{
+    const std::size_t n = v.tag == 5 ? v.list.size( ) : 0;
+    if ( n == 0 )
+    {
+        w.out->append( "[]" );
+        return;
+    }
+    json_write_break( w );
+    w.out->append( "[" );
+    w.indent.append( "\t" );
+    for ( std::size_t i = 0; i < n; ++i )
+    {
+        const value_t& e = v.list[ i ];
+        if ( e.tag != 5 && e.tag != 6 )
+            json_write_break( w );
+        json_write_value( w, e );
+        if ( i + 1 < n || w.trailing )
+            w.out->append( "," );
+    }
+    w.indent.pop_back( );
+    json_write_break( w );
+    w.out->append( "]" );
+}
+
+// 0x500360: the keys by getMemberKeys 0x4FBF30 (map order); none -> "{}". Else the break, "{", one more tab; per
+// key a break, the key as a string, " : " (pretty) or ":" (compact), the member (0x4F22B0's find; the null
+// container 0x7593A0 when absent), "," unless last (or trailing); one tab less, the break, "}".
+inline void json_write_object( json_writer_t& w, const value_t& v )
+{
+    const std::vector< std::string > keys = json_member_keys( v );
+    if ( keys.empty( ) )
+    {
+        w.out->append( "{}" );
+        return;
+    }
+    static const value_t null_value{ };
+    json_write_break( w );
+    w.out->append( "{" );
+    w.indent.append( "\t" );
+    for ( std::size_t i = 0; i < keys.size( ); ++i )
+    {
+        json_write_break( w );
+        json_write_string( w, keys[ i ] );
+        w.out->append( w.compact ? ":" : " : " );
+        const value_t* member = &null_value;
+        if ( v.tag == 6 )
+            for ( const auto& field : v.object )
+                if ( field.first == keys[ i ] )
+                {
+                    member = &field.second;
+                    break;
+                }
+        json_write_value( w, *member );
+        if ( i + 1 < keys.size( ) || w.trailing )
+            w.out->append( "," );
+    }
+    w.indent.pop_back( );
+    json_write_break( w );
+    w.out->append( "}" );
+}
+
+// 0x4FFCC0: by the tag (jump table 0x4FFD7C) - 0 "null", 1 int, 2 float, 3 bool, 4 string, 5 array, 6 object, 7
+// int64; any other tag writes nothing.
+inline void json_write_value( json_writer_t& w, const value_t& v )
+{
+    switch ( v.tag )
+    {
+    case 0: w.out->append( "null" ); break;
+    case 1: json_write_int( w, v.integer ); break;
+    case 2: json_write_float( w, v.real ); break;
+    case 3: json_write_bool( w, ( v.integer & 0xFF ) != 0 ); break;
+    case 4: json_write_string( w, v.text ); break;
+    case 5: json_write_array( w, v ); break;
+    case 6: json_write_object( w, v ); break;
+    case 7: json_write_int64( w, v.int64 ); break;
+    default: break;
+    }
+}
+
+// The file system 0x4FFBC0 writes through (g 0x75908C, PLATFORM): vt+0x34 open( path, 1 ) (0 = none), vt+0x44
+// write( handle, bytes, size ), vt+0x3C close.
+struct json_write_hooks_t
+{
+    void* user = nullptr;
+    void* ( *open )( void* user, const std::string& path ) = nullptr;
+    void ( *write )( void* user, void* handle, const char* bytes, std::uint32_t size ) = nullptr;
+    void ( *close )( void* user, void* handle ) = nullptr;
+};
+
+// 0x4FFBC0 (thiscall writer, const VuJsonContainer&, const VuString& path; retn 8): the text into a local string
+// (the indent emptied first), then open; not opened -> false; else the UTF-8 BOM EF BB BF, the text, close, true.
+inline bool json_write_file( json_writer_t& w, const value_t& v, const std::string& path, const json_write_hooks_t& fs, std::string* text_out = nullptr )
+{
+    std::string text;
+    w.out = &text;
+    w.indent.clear( );
+    json_write_value( w, v );
+    if ( text_out )
+        *text_out = text;
+    void* handle = fs.open ? fs.open( fs.user, path ) : nullptr;
+    if ( handle == nullptr )
+        return false;
+    const char bom[ 3 ] = { '\xEF', '\xBB', '\xBF' };
+    fs.write( fs.user, handle, bom, 3 );
+    fs.write( fs.user, handle, text.c_str( ), static_cast< std::uint32_t >( text.size( ) ) );
+    fs.close( fs.user, handle );
+    return true;
+}
 // DUPLICATES (for the integrator): VuJsonContainer is recreated three times
 // over value_t -
 //   (a) this file + assets/tree.hxx (member / vec3) + entity/values.hxx

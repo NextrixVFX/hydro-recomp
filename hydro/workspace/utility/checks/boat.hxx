@@ -11,6 +11,7 @@
 #include <workspace/core/boat/state.hxx>
 #include <workspace/core/boat/track.hxx>
 #include <workspace/core/boat/fleet.hxx>
+#include <workspace/core/boat/effects.hxx>
 
 #include <array>
 #include <cstdio>
@@ -2204,11 +2205,191 @@ inline bool verify_ai_race( )
     return fleet_check( g_golden_ai_race_words, g_golden_ai_race_frames, true, "ai_race" );
 }
 
+// The pfx controller's fill (boat/effects.hxx boat_pfx_clear / boat_pfx_read /
+// boat_pfx_create) against retail's 0x419EF0 / 0x419D70 / 0x419FF0 (oracle
+// case boat_pfx_fill): per round the hook calls replayed in order (each
+// compared op for op, its answer retail's) and the controller after - +0,
+// +0x18, +0x94 and every list record's name, system, bone and local matrix.
+struct boat_pfx_replay_t
+{
+    std::vector< std::vector< unsigned > > want;   // op, args (a text as its words), answer
+    std::size_t at = 0;
+    bool bad = false;
+};
+
+inline std::vector< unsigned > boat_pfx_text_words( const std::string& s )
+{
+    std::vector< unsigned > w{ static_cast< unsigned >( s.size( ) ) };
+    for ( std::size_t k = 0; k < s.size( ); k += 4 )
+    {
+        unsigned x = 0;
+        for ( std::size_t j = 0; j < 4 && k + j < s.size( ); ++j )
+            x |= static_cast< unsigned >( static_cast< unsigned char >( s[ k + j ] ) ) << ( 8 * j );
+        w.push_back( x );
+    }
+    return w;
+}
+
+// One call: `got` (op + its arguments) must equal the next logged entry minus
+// its answer (ops 1 / 4 / 5 / 6 / 8 carry one); returns the answer.
+inline unsigned boat_pfx_replay( void* user, std::vector< unsigned > got )
+{
+    boat_pfx_replay_t& r = *static_cast< boat_pfx_replay_t* >( user );
+    if ( r.at >= r.want.size( ) )
+    {
+        r.bad = true;
+        return 0;
+    }
+    const std::vector< unsigned >& w = r.want[ r.at++ ];
+    const bool answers = got[ 0 ] == 1 || got[ 0 ] == 4 || got[ 0 ] == 5 || got[ 0 ] == 6 || got[ 0 ] == 8;
+    if ( w.size( ) != got.size( ) + ( answers ? 1u : 0u ) || !std::equal( got.begin( ), got.end( ), w.begin( ) ) )
+    {
+        r.bad = true;
+        return 0;
+    }
+    return answers ? w.back( ) : 0u;
+}
+
+inline boat_pfx_fill_hooks_t boat_pfx_replay_hooks( boat_pfx_replay_t& r )
+{
+    boat_pfx_fill_hooks_t h;
+    h.user = &r;
+    h.create = []( void* u, const char* n ) {
+        std::vector< unsigned > g{ 1u };
+        for ( unsigned x : boat_pfx_text_words( n ) ) g.push_back( x );
+        return boat_pfx_replay( u, g );
+    };
+    h.release = []( void* u, std::uint32_t s ) { boat_pfx_replay( u, { 2u, s } ); };
+    h.start = []( void* u, std::uint32_t s ) { boat_pfx_replay( u, { 3u, s } ); };
+    h.root = []( void* u, std::uint32_t s ) { return boat_pfx_replay( u, { 4u, s } ); };
+    h.type_of = []( void* u, std::uint32_t o ) { return boat_pfx_replay( u, { 5u, o } ); };
+    h.find_bone = []( void* u, const char* n ) {
+        std::vector< unsigned > g{ 6u };
+        for ( unsigned x : boat_pfx_text_words( n ) ) g.push_back( x );
+        return static_cast< std::int32_t >( boat_pfx_replay( u, g ) );
+    };
+    h.fluids_set = []( void* u, const std::string& n ) {
+        std::vector< unsigned > g{ 7u };
+        for ( unsigned x : boat_pfx_text_words( n ) ) g.push_back( x );
+        boat_pfx_replay( u, g );
+    };
+    h.word = []( void* u, std::uint32_t a ) { return boat_pfx_replay( u, { 8u, a } ); };
+    h.put = []( void* u, std::uint32_t a, std::uint32_t v ) { boat_pfx_replay( u, { 9u, a, v } ); };
+    return h;
+}
+
+inline bool verify_boat_pfx_fill( )
+{
+    auto document = []( const unsigned* words )
+    {
+        const unsigned char* raw = reinterpret_cast< const unsigned char* >( words + 1 );
+        return c_reader( std::vector< std::uint8_t >( raw, raw + words[ 0 ] ) ).parse( );
+    };
+    const value_t docs[ 2 ] = { document( g_golden_boat_sections_boatdb ), document( g_golden_boat_pfx_fill_synthetic ) };
+    auto text = []( const unsigned*& s )
+    {
+        const unsigned length = *s++;
+        std::string out( reinterpret_cast< const char* >( s ), length );
+        s += ( length + 3 ) / 4;
+        return out;
+    };
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_pfx_fill_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_pfx_fill_words + g_golden_boat_pfx_fill_offsets[ index ];
+        const value_t& doc = docs[ *s++ ? 1 : 0 ];
+        const boat_driver_t driver = boat_driver_of( *s++ );
+        s++;   // the fluids object's word 0 (its read is in the log)
+        const unsigned rounds = *s++;
+        boat_pfx_t c;
+        c.boat = 0x6E001000u;
+        c.fluids = 0x6E001800u;
+        int bad = -1;
+        for ( unsigned round = 0; round < rounds; ++round )
+        {
+            const value_t* sections[ 2 ] = { nullptr, nullptr };
+            const unsigned paths = *s++;
+            for ( unsigned p = 0; p < paths; ++p )
+            {
+                const value_t* node = &doc;
+                const unsigned keys = *s++;
+                for ( unsigned k = 0; k < keys; ++k )
+                    node = &member( *node, text( s ).c_str( ) );
+                if ( p < 2 )
+                    sections[ p ] = node;
+            }
+            boat_pfx_replay_t r;
+            const unsigned n = *s++;
+            for ( unsigned e = 0; e < n; ++e )
+            {
+                std::vector< unsigned > w{ *s++ };
+                const unsigned op = w[ 0 ];
+                if ( op == 1 || op == 6 || op == 7 )
+                {
+                    const unsigned* t0 = s;
+                    text( s );
+                    w.insert( w.end( ), t0, s );
+                    if ( op != 7 )
+                        w.push_back( *s++ );
+                }
+                else if ( op == 2 || op == 3 )
+                    w.push_back( *s++ );
+                else
+                {
+                    w.push_back( *s++ );
+                    w.push_back( *s++ );
+                }
+                r.want.push_back( w );
+            }
+            const boat_pfx_fill_hooks_t h = boat_pfx_replay_hooks( r );
+            const bool ran = boat_pfx_fill( c, *sections[ 0 ], *sections[ 1 ], driver, true, h );
+            if ( bad < 0 && ( !ran || r.bad || r.at != r.want.size( ) ) )
+                bad = 0x100 * round + 1;
+            const std::string s0 = text( s ), s18 = text( s );
+            const unsigned w94 = *s++;
+            if ( bad < 0 && ( s0 != c.fluids_asset || s18 != c.hull_effect || w94 != c.extra ) )
+                bad = 0x100 * round + 2;
+            for ( int l = 0; l < 7; ++l )
+            {
+                const unsigned count = *s++;
+                if ( bad < 0 && count != c.list[ l ].size( ) )
+                    bad = 0x100 * round + 0x10 + l;
+                for ( unsigned k = 0; k < count; ++k )
+                {
+                    const std::string name = text( s );
+                    unsigned words[ 18 ];
+                    std::memcpy( words, s, sizeof( words ) );
+                    s += 18;
+                    if ( bad >= 0 || k >= c.list[ l ].size( ) )
+                        continue;
+                    const boat_pfx_record_t& rec = c.list[ l ][ k ];
+                    unsigned ours[ 18 ];
+                    ours[ 0 ] = rec.system;
+                    ours[ 1 ] = static_cast< unsigned >( rec.bone );
+                    std::memcpy( ours + 2, rec.local, 64 );
+                    if ( name != rec.name || std::memcmp( ours, words, sizeof( words ) ) != 0 )
+                        bad = 0x100 * round + 0x20 + l;
+                }
+            }
+        }
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "boat pfx fill vector %d differs from retail at 0x%X (round x 0x100 + 1 calls, 2 strings / +0x94, 0x1L count, 0x2L record)",
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the pfx controller's fill 0x419EF0 / 0x419D70 / 0x419FF0 matches retail: %d vectors (two rounds each)",
+                     static_cast< int >( g_golden_boat_pfx_fill_count ) );
+    else
+        LOG_ERROR( "boat pfx fill FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_pfx_fill_count ) );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
     ok = verify_boat_sections( ) && ok;
     ok = verify_boat_engine( ) && ok;
+    ok = verify_boat_pfx_fill( ) && ok;
     ok = verify_boat_ai_driver( ) && ok;
     ok = verify_boat_driver_load( ) && ok;
     ok = verify_boat_tick_state( ) && ok;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <workspace/core/world/wavemap.hxx>
+
 // THE RACE'S WAKE, water side (world/wake.hxx) against retail (case water_wake): two hulls - a plain wake and a flat one -
 // driven along Hydroelectric's largest surface by water_wake_update (0x417D80's water half: 0x5287D0 / 0x528850, the
 // ctor 0x52BEB0, the bounds 0x52C720, 0x529B90 / 0x529A90, the previous segment's release) with the records retail's run
@@ -271,4 +273,91 @@ inline bool verify_wake_reuse( )
     else
         LOG_ERROR( "wake_reuse FAILED: %d differences, %d indices reused", bad, reused );
     return bad == 0 && reused > 0;
+}
+
+// world/wavemap.hxx against retail's wave texture (case water_texture): 12 param sets x formats 3 / 8 - after 0x608010
+// the omega / h0 hashes; after each of 3 rounds of the tick 0x607D00 + the build 0x607F10 the current index, the time,
+// the param copy and FNV-1a 64 of the tensor, speq, the heights and all 7 mip levels (the first round of the first set
+// also every height word and the mip 1 bytes).
+inline bool verify_water_texture( )
+{
+    const unsigned* g = g_golden_wtx_words;
+    std::size_t at = 0;
+    auto next = [ & ]( ) { return g[ at++ ]; };
+    auto h64 = [ & ]( ) { const std::uint64_t lo = next( ); const std::uint64_t hi = next( ); return lo | ( hi << 32 ); };
+    const unsigned n = next( );
+    int bad = 0, rounds = 0, rebuilds = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        water_texture_t t;
+        const std::uint32_t format = next( );
+        for ( int i = 0; i < 8; ++i )
+        {
+            const std::uint32_t w = next( );
+            std::memcpy( &t.live[ i ], &w, 4 );
+            std::memcpy( &t.built[ i ], &w, 4 );
+        }
+        water_texture_init( t, format );
+        const std::uint64_t ho = h64( ), hh = h64( );
+        bool ok = water_fnv64( t.field.omega.data( ), t.field.omega.size( ) ) == ho && water_fnv64( t.field.h0.data( ), t.field.h0.size( ) ) == hh;
+        if ( !ok && bad < 4 )
+            LOG_ERROR( "water_texture set %u: the spectrum differs", v );
+        bad += !ok;
+        const unsigned nr = next( );
+        for ( unsigned k = 0; k < nr; ++k )
+        {
+            const unsigned nc = next( );
+            if ( nc == 2u )
+            {
+                const unsigned j = next( ), w = next( );
+                std::memcpy( &t.live[ j ], &w, 4 );
+                ++rebuilds;
+            }
+            const std::uint32_t dtw = next( );
+            float dt;
+            std::memcpy( &dt, &dtw, 4 );
+            water_texture_tick( t, dt );
+            water_texture_build( t, water_texture_hooks_t{ } );
+            ++rounds;
+            bool r = static_cast< unsigned >( t.current ) == next( );
+            std::uint32_t tw[ 2 ];
+            std::memcpy( tw, &t.time, 8 );
+            r = tw[ 0 ] == next( ) && r;
+            r = tw[ 1 ] == next( ) && r;
+            for ( int i = 0; i < 8; ++i )
+            {
+                std::uint32_t w;
+                std::memcpy( &w, &t.built[ i ], 4 );
+                r = w == next( ) && r;
+            }
+            r = water_fnv64( t.field.data.data( ), t.field.data.size( ) ) == h64( ) && r;
+            r = water_fnv64( t.field.speq.data( ), 128 ) == h64( ) && r;
+            r = water_fnv64( t.heights.data( ), t.heights.size( ) ) == h64( ) && r;
+            for ( int l = 0; l < 7; ++l )
+                r = water_check_fnv( t.mips[ l ] ) == h64( ) && r;
+            const unsigned ne = next( );
+            if ( ne )
+            {
+                for ( unsigned i = 0; i < 4096u && i < ne; ++i )
+                {
+                    std::uint32_t w;
+                    std::memcpy( &w, &t.heights[ i ], 4 );
+                    r = w == next( ) && r;
+                }
+                for ( unsigned i = 4096u; i < ne; ++i )
+                    r = t.mips[ 1 ][ i - 4096u ] == next( ) && r;
+            }
+            if ( !r )
+            {
+                if ( bad < 4 )
+                    LOG_ERROR( "water_texture set %u (format %u) round %u differs", v, format, k );
+                ++bad;
+            }
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "the water renderer's wave texture matches retail (0x608010 0x608030 0x6080D0, tick 0x607D00, build 0x607F10: 0x608370 0x608BB0 0x6084B0 0x6085C0 0x608730): %u sets, %d rounds (%d with a param change), tensor / speq / heights / all 7 mips", n, rounds, rebuilds );
+    else
+        LOG_ERROR( "water_texture FAILED %d", bad );
+    return bad == 0;
 }

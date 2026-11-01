@@ -193,6 +193,7 @@ copy /Y "$(ProjectDir)impl\engine.hxx" "$(ProjectDir)..\hydro\impl\engine\engine
     <ClInclude Include="workspace\core\entity\rigid.hxx" />
     <ClInclude Include="workspace\core\entity\schema.hxx" />
     <ClInclude Include="workspace\core\entity\script.hxx" />
+    <ClInclude Include="workspace\core\entity\sort.hxx" />
     <ClInclude Include="workspace\core\entity\trigger.hxx" />
     <ClInclude Include="workspace\core\entity\values.hxx" />
     <ClInclude Include="workspace\core\render\device.hxx" />

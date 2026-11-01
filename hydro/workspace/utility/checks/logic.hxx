@@ -2293,3 +2293,123 @@ inline bool verify_lens_water_tick( )
         LOG_ERROR( "lens_water_tick FAILED %d", bad );
     return bad == 0;
 }
+// lens.hxx lens_water_add_emitter / lens_water_remove_emitter against retail's slots 14 0x513640 (VuArray resize
+// 0x415690) and 15 0x513670 (remove-swap 0x5154A0) (case lens_emitters): 600 ops - count, capacity and the block's
+// words up to the count (and the swapped-out word just past it after a remove) after each.
+inline bool verify_lens_emitters( )
+{
+    logic_check_t c{ g_golden_lem_words };
+    const unsigned n = c.next( );
+    lens_water_manager_t m;
+    int bad = 0, peak = 0, swaps = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = c.next( ), value = c.next( );
+        if ( kind == 1u )
+            lens_water_add_emitter( m, value );
+        else
+            lens_water_remove_emitter( m, value );
+        const unsigned count = c.next( ), capacity = c.next( ), nw = c.next( );
+        bool ok = count == static_cast< unsigned >( m.emitter_count ) && capacity == static_cast< unsigned >( m.emitter_capacity );
+        if ( nw > count )
+            ++swaps;
+        for ( unsigned k = 0; k < nw; ++k )
+        {
+            const unsigned want = c.next( );
+            ok = k < m.emitters.size( ) && m.emitters[ k ] == want && ok;
+        }
+        if ( m.emitter_count > peak )
+            peak = m.emitter_count;
+        if ( !ok )
+        {
+            if ( bad < 4 )
+                LOG_ERROR( "lens_emitters op %u (kind %u) differs", v, kind );
+            ++bad;
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuLensWaterManagerImpl's emitter list matches retail (slots 14 0x513640 / 15 0x513670, 0x415690, 0x5154A0): %u ops, up to %d emitters, %d swapped-out words", n, peak, swaps );
+    else
+        LOG_ERROR( "lens_emitters FAILED %d", bad );
+    return bad == 0;
+}
+// entity/sort.hxx vc_sort_range against retail's std::sort instantiation _Sort 0x501810 (case entity_sort): 260 arrays
+// (n up to 600, ties, shaped inputs, small ideals for the heap path) - the final order index for index.
+inline bool verify_entity_sort( )
+{
+    logic_check_t c{ g_golden_esr_words };
+    const unsigned n = c.next( );
+    int bad = 0, unstable = 0;
+    unsigned elements = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned count = c.next( );
+        const std::int32_t ideal = static_cast< std::int32_t >( c.next( ) );
+        std::vector< std::int32_t > keys( count );
+        for ( auto& k : keys )
+            k = static_cast< std::int32_t >( c.next( ) );
+        std::vector< std::uint32_t > order( count );
+        for ( unsigned j = 0; j < count; ++j )
+            order[ j ] = j;
+        auto pred = [ &keys ]( std::uint32_t a, std::uint32_t b ) { return keys[ a ] < keys[ b ]; };
+        vc_sort_range( order.data( ), order.data( ) + count, ideal, pred );
+        bool ok = true, stable = true;
+        for ( unsigned j = 0; j < count; ++j )
+        {
+            const unsigned want = c.next( );
+            ok = order[ j ] == want && ok;
+            if ( j > 0 && keys[ want ] == keys[ order[ j - 1 ] ] && want < order[ j - 1 ] )
+                stable = false;
+        }
+        unstable += !stable;
+        elements += count;
+        if ( !ok )
+        {
+            if ( bad < 4 )
+                LOG_ERROR( "entity_sort vector %u (n %u, ideal %d) differs", v, count, ideal );
+            ++bad;
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "vc_sort matches retail's std::sort _Sort 0x501810 (0x501900 0x501AF0 0x501CC0 0x501DA0 0x501E00 0x501EB0): %u arrays, %u elements, %d with ties out of input order", n, elements, unstable );
+    else
+        LOG_ERROR( "entity_sort FAILED %d", bad );
+    return bad == 0;
+}
+// entity/json.hxx json_write_value against retail's VuJsonWriter writeValue 0x4FFCC0 (case json_write): 40 retail-read
+// documents x the four flag pairs - the whole text and the indent left behind (MSVCR110's sprintf_s modelled on both
+// sides: json_crt_format / the case's stand-in).
+inline bool verify_json_write( )
+{
+    logic_check_t c{ g_golden_jsw_words };
+    const unsigned n = c.next( );
+    int bad = 0;
+    std::size_t chars = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const std::string bytes = c.str( );
+        const std::vector< std::uint8_t > blob( bytes.begin( ), bytes.end( ) );
+        value_t root;
+        const bool read = c_reader::read_at_start( blob, root );
+        json_writer_t w;
+        w.compact = c.next( ) != 0;
+        w.trailing = c.next( ) != 0;
+        std::string text;
+        w.out = &text;
+        json_write_value( w, root );
+        const std::string want = c.str( ), indent = c.str( );
+        chars += want.size( );
+        if ( !read || w.unknown || text != want || w.indent != indent )
+        {
+            if ( bad < 4 )
+                LOG_ERROR( "json_write vector %u (compact %d, trailing %d) differs: %u chars vs retail %u", v, w.compact ? 1 : 0, w.trailing ? 1 : 0,
+                           static_cast< unsigned >( text.size( ) ), static_cast< unsigned >( want.size( ) ) );
+            ++bad;
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuJsonWriter matches retail (writeValue 0x4FFCC0, 0x4FFDA0 0x4FFE10 0x4FFED0 0x4FFF20 0x5001C0 0x500360 0x500150): %u documents x flags, %u characters", n, static_cast< unsigned >( chars ) );
+    else
+        LOG_ERROR( "json_write FAILED %d", bad );
+    return bad == 0;
+}
