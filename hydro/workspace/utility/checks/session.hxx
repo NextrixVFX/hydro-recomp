@@ -422,9 +422,104 @@ inline bool verify_mine_explode( )
     return failed == 0;
 }
 
+// breakable_load_properties (world/breakable.hxx) against retail's VuEntity::load on the breakable templates /
+// projects plus hand-built ones (oracle case breakable_properties): Initially Visible, the 7 floats, the 2 names.
+inline bool verify_breakable_properties( )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_breakable_properties_document );
+    static std::vector< value_t > documents;
+    documents.push_back( c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_breakable_properties_document_bytes ) ).parse( ) );
+    static const entity_registry_t registry = build_entity_registry( { } );
+    entity_world_t world = race_entity_world( registry, nullptr );
+    const std::unique_ptr< entity_t > tree = entity_load_project( member( documents.back( ), "VuProject" ), "Data/Projects/Check.vuprj", world );
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_breakable_properties_count; ++k )
+    {
+        const golden_entity_targets_t& want = g_golden_breakable_properties[ k ];
+        const entity_t* e = nullptr;
+        if ( tree )
+            for ( auto& child : tree->m_children )
+                if ( child->m_name == want.m_child )
+                    e = child.get( );
+        const breakable_state_t* s = e && e->m_state && e->m_type == "VuBreakablePropEntity" ? static_cast< const breakable_state_t* >( e->m_state.get( ) ) : nullptr;
+        if ( !s || want.m_count != 8 )
+        {
+            LOG_ERROR( "breakable properties: %s (%s) missing, without state or not 8 words", want.m_child, want.m_source );
+            ++failed;
+            continue;
+        }
+        const breakable_t& v = s->value;
+        std::uint32_t got[ 8 ];
+        got[ 0 ] = v.visible;
+        std::memcpy( got + 1, &v.threshold_mph, 4 );
+        std::memcpy( got + 2, v.shake, 16 );
+        std::memcpy( got + 6, v.rumble, 8 );
+        bool bad = v.pfx != want.m_texts[ 0 ] || v.sfx != want.m_texts[ 1 ];
+        for ( int w = 0; w < 8; ++w )
+            bad = bad || got[ w ] != want.m_values[ w ];
+        if ( bad && ++failed <= 8 )
+            LOG_ERROR( "breakable properties: %s (%s) differ from retail's", want.m_child, want.m_source );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "breakable_load_properties matches VuBreakablePropEntity's loads on %d entities (8 words + 2 names), bit for bit",
+                     static_cast< int >( g_golden_breakable_properties_count ) );
+    else
+        LOG_ERROR( "the breakable properties FAILED on %d of %d entities", failed, static_cast< int >( g_golden_breakable_properties_count ) );
+    return failed == 0;
+}
+
+// breakable_contact (world/breakable.hxx) against retail's 0x434730 on 600 hand-built contacts (oracle case
+// breakable_contact): the request byte, the kept velocity (when one is kept), the component's +0xD0, the own body's
+// +0xD8 and whether the target became the other's owner (the caller's weak ref: set iff a request and an owner).
+inline bool verify_breakable_contact( )
+{
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_breakable_contact_count; ++k )
+    {
+        const golden_breakable_contact_t& want = g_golden_breakable_contact[ k ];
+        std::uint8_t own[ 0x2E0 ] = { }, other[ 0x2E0 ] = { };
+        const int at[ 9 ] = { 0x40, 0x44, 0x48, 0x140, 0x144, 0x148, 0x150, 0x154, 0x158 };
+        for ( int i = 0; i < 9; ++i )
+        {
+            std::memcpy( own + at[ i ], &want.own[ i ], 4 );
+            std::memcpy( other + at[ i ], &want.other[ i ], 4 );
+        }
+        std::memcpy( own + 0xD8, &want.own[ 9 ], 4 );
+        std::memcpy( own + 0x2D0, &want.own[ 10 ], 4 );
+        std::memcpy( other + 0xD8, &want.other[ 9 ], 4 );
+        std::memcpy( other + 0x2D0, &want.other[ 10 ], 4 );
+        float threshold, point[ 3 ], normal[ 3 ], velocity[ 3 ] = { 0.0f, 0.0f, 0.0f };
+        std::memcpy( &threshold, &want.threshold, 4 );
+        std::memcpy( point, want.point, 12 );
+        std::memcpy( normal, want.normal, 12 );
+        rigid_component_t c;
+        c.flags_d0 = want.d0;
+        std::uint8_t request = 0;
+        const int r = breakable_contact( threshold, own, other, point, normal, request, velocity, c, own );
+        std::uint32_t d8, vw[ 3 ];
+        std::memcpy( &d8, own + 0xD8, 4 );
+        std::memcpy( vw, velocity, 12 );
+        const int target = request && want.other[ 11 ] ? 1 : 0;
+        const bool bad = request != want.request || c.flags_d0 != want.out_d0 || d8 != want.out_d8 || target != want.target ||
+                         ( r == 1 ? std::memcmp( vw, want.velocity, 12 ) != 0 : ( want.velocity[ 0 ] | want.velocity[ 1 ] | want.velocity[ 2 ] ) != 0u );
+        if ( bad && ++failed <= 8 )
+            LOG_ERROR( "breakable contact %d: request %d (retail %d) +0xD0 0x%X (0x%X) +0xD8 0x%X (0x%X) velocity %08X %08X %08X (%08X %08X %08X)",
+                       static_cast< int >( k ), request, want.request, c.flags_d0, want.out_d0, d8, want.out_d8, vw[ 0 ], vw[ 1 ], vw[ 2 ],
+                       want.velocity[ 0 ], want.velocity[ 1 ], want.velocity[ 2 ] );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "breakable_contact matches VuBreakablePropEntity's contact callback 0x434730 on %d contacts, bit for bit",
+                     static_cast< int >( g_golden_breakable_contact_count ) );
+    else
+        LOG_ERROR( "the breakable contact FAILED on %d of %d contacts", failed, static_cast< int >( g_golden_breakable_contact_count ) );
+    return failed == 0;
+}
+
 inline bool verify_session_all( )
 {
     bool ok = true;
+    ok = verify_breakable_properties( ) && ok;
+    ok = verify_breakable_contact( ) && ok;
     ok = verify_mine_explode( ) && ok;
     ok = verify_mine_properties( ) && ok;
     ok = verify_action_mode( ) && ok;
