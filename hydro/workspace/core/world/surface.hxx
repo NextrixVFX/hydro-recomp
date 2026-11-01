@@ -1165,6 +1165,86 @@ inline int water_ramp_entity_release( water_built_t& b, int surface, int wave, b
 }
 
 // ---------------------------------------------------------------------------
+// VUWATER'S OWN LIFECYCLE (vtable 0x74D05C: slot 0 0x528120, slot 3 release
+// 0x528410, slot 4 0x527E80, slot 5 init 0x528200 - the renderer, the dev
+// menu and the "Water" tick: render / platform, not recreated).
+//
+// The release's hooks (all optional; one reached while missing is COUNTED):
+struct water_release_hooks_t
+{
+    void* user = nullptr;
+    // g_vutickmanager 0x759008 vt+0x28( water ): its ticks unregistered.
+    void ( *tick_unregister )( void* user ) = nullptr;
+    // +0x14, a refcounted object (its +4) - the water shader: dropped, its
+    // slot 0 with 1 at zero (VuWaterShader's 0x59A1B0 -> 0x59A3A0: render
+    // side). `shader_refs` = its +4 (null = no object: retail would fault).
+    std::uint32_t* shader_refs = nullptr;
+    void ( *shader_destroy )( void* user ) = nullptr;
+    // +0x1C, the renderer (when set): 0x5953F0 then operator delete - its
+    // thread, render side.
+    bool renderer = false;
+    void ( *renderer_destroy )( void* user ) = nullptr;
+    // Told (not retail: a notification) as the surface tree reaches 0x598D10.
+    void ( *tree_destroying )( void* user, const water_tree_t& tree ) = nullptr;
+};
+
+// Slot 3 0x528410 (thiscall water): the tick unregistered; while the wave list
+// (+0x30) is not empty, its head's wave unlinked (the first node holding it,
+// pooled), 0x529B90 on it, its reference dropped - slot 0 with 1 at zero (the
+// body of 0x529800, water_built_remove); the +0x14 object dropped, +0x14 = 0;
+// the renderer destroyed; the surface tree (+0x3C, when set) destroyed by
+// 0x598D10 and deleted. Surfaces are not touched (their entities own them).
+inline int water_built_release( water_built_t& b, const water_release_hooks_t& hooks )
+{
+    int unrecreated = 0;
+    if ( hooks.tick_unregister )
+        hooks.tick_unregister( hooks.user );
+    else
+        ++unrecreated;
+    while ( b.hold.list >= 0 )
+        water_built_remove( b, b.hold.pool[ b.hold.list ].leaf );
+    if ( !hooks.shader_refs )
+        ++unrecreated;
+    else if ( --*hooks.shader_refs == 0u )
+    {
+        if ( hooks.shader_destroy )
+            hooks.shader_destroy( hooks.user );
+        else
+            ++unrecreated;
+    }
+    if ( hooks.renderer )
+    {
+        if ( hooks.renderer_destroy )
+            hooks.renderer_destroy( hooks.user );
+        else
+            ++unrecreated;
+    }
+    if ( hooks.tree_destroying )
+        hooks.tree_destroying( hooks.user, b.hold.surface_tree );
+    water_tree_destroy( b.hold.surface_tree );
+    return unrecreated;
+}
+
+// Slot 4 0x527E80: g_vuwater 0x759058 = 0 - `water` is the caller's pointer.
+inline void water_global_clear( water_built_t*& water )
+{
+    water = nullptr;
+}
+
+// Slot 0 0x528120 (the scalar deleting dtor): 0x528150 then operator delete.
+// 0x528150: the listener list (+0x34, size +0x38), the +0x28 list (size
+// +0x2C: nothing of it is modelled here) and the surface list (+0x20, size
+// +0x24) each emptied - nodes and sentinel freed -, the pool's block (+0xC)
+// freed, the base vtable 0x736EE8. Here: the surface list and the pool
+// dropped.
+inline void water_built_destroy_water( water_built_t& b )
+{
+    b.surface_list.clear( );
+    b.hold.pool.clear( );
+    b.hold.pool.shrink_to_fit( );
+}
+
+// ---------------------------------------------------------------------------
 // VuPointWaveEntity (vtable 0x75344C; slot 0 0x405000 = VuEntity's dtor
 // 0x500870 + operator delete): the words its slot 6 / tick / slot 7 use.
 struct water_point_entity_t
