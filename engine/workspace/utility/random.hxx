@@ -30,6 +30,10 @@
 // ZEROED table. Emulating the three functions that write 0x736810 (0x40DA90,
 // 0x410FF0, 0x430830) filled nothing, so WHERE THE GLOBAL TABLE IS SEEDED IS
 // NOT ESTABLISHED.
+// ANSWERED since (hydro boat/fleet.hxx fleet_random_seed, oracle case
+// random_seed): the engine init 0x566230 (from 0x4D9900) copies a VuRandom(0)
+// over 0x736810 - 0x50FC70 / 0x50FCA0 seed it from QueryPerformanceCounter's
+// low + high words | 0x80000000, i.e. from the clock: nondeterministic in retail.
 //
 // That matters: from a zeroed table the first draw returns exactly 0.0,
 // because the shuffle reads table[last / 0x4000000] before writing it. A
