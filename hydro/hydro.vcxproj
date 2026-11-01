@@ -232,6 +232,7 @@
     <ClInclude Include="workspace\utility\checks\water.hxx" />
     <ClInclude Include="workspace\utility\checks\widgets.hxx" />
     <ClInclude Include="workspace\utility\checks\world.hxx" />
+    <ClInclude Include="workspace\utility\checks\wrapper.hxx" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\engine\engine.vcxproj">
