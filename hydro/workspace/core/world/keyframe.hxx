@@ -140,13 +140,14 @@ inline int control_compare( std::uint32_t a, std::uint32_t b )
 }
 
 // SUBSTITUTION (see the head): the VC11 CRT qsort (CUTOFF 8, shortsort by the
-// maximum, median of three, the explicit stack) on the 8-byte pairs.
-inline void control_qsort( std::vector< std::pair< std::uint32_t, int > >& a, int num )
+// maximum, median of three, the explicit stack) over element indices: cmp( i, j )
+// the comparator's answer for elements i and j, swp( i, j ) their exchange. Every
+// qsort import call site (0x64C178) sorts through this.
+template < class Cmp, class Swap >
+inline void vc_qsort( int num, Cmp cmp, Swap swp )
 {
     if ( num < 2 )
         return;
-    auto cmp = [ & ]( int i, int j ) { return control_compare( a[ i ].first, a[ j ].first ); };
-    auto swp = [ & ]( int i, int j ) { if ( i != j ) std::swap( a[ i ], a[ j ] ); };
     int lostk[ 32 ], histk[ 32 ];
     int stkptr = 0;
     int lo = 0, hi = num - 1;
@@ -208,6 +209,13 @@ inline void control_qsort( std::vector< std::pair< std::uint32_t, int > >& a, in
         lo = lostk[ stkptr ];
         hi = histk[ stkptr ];
     }
+}
+
+// The keyframe sort: vc_qsort on the 8-byte pairs by 0x5CCB60.
+inline void control_qsort( std::vector< std::pair< std::uint32_t, int > >& a, int num )
+{
+    vc_qsort( num, [ & ]( int i, int j ) { return control_compare( a[ i ].first, a[ j ].first ); },
+              [ & ]( int i, int j ) { if ( i != j ) std::swap( a[ i ], a[ j ] ); } );
 }
 
 // VuArray growth (0x415690 resize / 0x5CD490's push): past the capacity it

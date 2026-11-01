@@ -657,6 +657,119 @@ inline bool verify_race_results( )
     return failed == 0;
 }
 
+// timetrial_write_results (world/modes.hxx) against retail's VuTimeTrialGame slot 12 0x48F560 run whole (oracle case
+// timetrial_results): the once flag, IsChampionship / the circuit / the laps / the track, the racer (+0x18 [0]) and the
+// human (+0x24 [0]: the same boat or another), their drivers (the five vtables through boat_driver_of and two fakes),
+// TrackDB / BoatDB / the progress manager's round (VUJB read by c_reader), the pre-filled root, the VuRandom state.
+// Compared per vector: the whole root (canonical), +0x738, the 34 VuRandom words after, the StringDB ids asked for in
+// order, the progress-manager calls and the qsort's element count - one failure per differing vector.
+inline bool verify_timetrial_results( )
+{
+    int failed = 0;
+    const unsigned* w = g_golden_ttr_words;
+    std::size_t s = 0;
+    const auto next = [ & ] { return *w++; };
+    const auto text = [ & ] { return std::string( g_golden_ttr_text[ s++ ] ); };
+    const auto doc = [ & ] {
+        const std::string hex = text( );
+        std::vector< std::uint8_t > bytes;
+        for ( std::size_t k = 0; k + 1 < hex.size( ); k += 2 )
+            bytes.push_back( static_cast< std::uint8_t >( std::stoul( hex.substr( k, 2 ), nullptr, 16 ) ) );
+        return c_reader( bytes ).parse( );
+    };
+    static const std::uint32_t k_vt[ 5 ] = { 0x737B5Cu, 0x737F44u, 0x737CDCu, 0x737C4Cu, 0x737DDCu };
+    const unsigned nv = next( );
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        std::uint8_t once = static_cast< std::uint8_t >( next( ) );
+        timetrial_results_in_t in;
+        in.championship = static_cast< std::uint8_t >( next( ) );
+        in.circuit = static_cast< std::uint8_t >( next( ) );
+        in.laps = static_cast< std::int32_t >( next( ) );
+        const bool two = next( ) != 0;
+        in.track = text( );
+        std::vector< std::uint8_t > images[ 2 ] = { std::vector< std::uint8_t >( 0x520, 0 ), std::vector< std::uint8_t >( 0x520, 0 ) };
+        race_results_entry_t entries[ 2 ];
+        for ( int b = 0; b < 2; ++b )
+        {
+            std::uint8_t* img = images[ b ].data( );
+            img[ 0x32F ] = static_cast< std::uint8_t >( next( ) );
+            const unsigned time = next( ), best = next( );
+            std::memcpy( img + 0x4B4, &time, 4 );
+            std::memcpy( img + 0x4B8, &best, 4 );
+            rules_put_i32( img, 0x4CC, static_cast< std::int32_t >( next( ) ) );
+            rules_put_i32( img, 0x4D4, static_cast< std::int32_t >( next( ) ) );
+            const unsigned kind = next( );
+            race_results_entry_t& e = entries[ b ];
+            e.boat_class = text( );
+            e.boat_name = text( );
+            e.driver_name = text( );
+            if ( kind < 5 )
+            {
+                const boat_driver_t d = boat_driver_of( k_vt[ kind ] );
+                e.human = d.slot[ 0 ], e.local = d.slot[ 2 ];
+            }
+            else
+                e.human = kind == 5, e.local = false;
+        }
+        in.racer = { images[ 0 ].data( ), entries[ 0 ] };
+        in.human = two ? timetrial_results_boat_t{ images[ 1 ].data( ), entries[ 1 ] } : in.racer;
+        const value_t tdb = doc( ), bdb = doc( ), cur = doc( );
+        in.track_db = &tdb;
+        in.boat_db = &bdb;
+        int pm = 0;
+        in.current = [ & ]( ) { ++pm; return &cur; };
+        std::vector< std::string > ids;
+        in.string_db = [ & ]( const char* id ) {
+            ids.push_back( id );
+            return "TN" + std::string( id ) + "#" + std::to_string( v );
+        };
+        fleet_random_t rnd;
+        {
+            unsigned words[ 34 ];
+            for ( unsigned& x : words )
+                x = next( );
+            std::memcpy( &rnd, words, sizeof( words ) );
+        }
+        in.random = &rnd;
+        value_t root;
+        const std::string pre = text( );
+        if ( pre == "string" )
+            ui_json_set_string( ui_json_child( root, "GameResults" ), "junk text" );
+        else if ( pre == "table_int" )
+            race_results_set( ui_json_child( ui_json_child( root, "GameResults" ), "Table" ), 1, 77 );
+        else if ( pre == "stale" )
+        {
+            race_results_set( ui_json_child( ui_json_child( root, "GameResults" ), "Old" ), 1, 5 );
+            race_results_set( ui_json_child( root, "Old" ), 1, 6 );
+        }
+        const bool known = timetrial_write_results( root, once, in );
+        const std::string want_root = text( );
+        const unsigned want_once = next( );
+        bool same = known && race_results_canonical( root ) == want_root && once == want_once;
+        unsigned out[ 34 ];
+        std::memcpy( out, &rnd, sizeof( out ) );
+        for ( unsigned x : out )
+            same = next( ) == x && same;
+        const unsigned nid = next( );
+        same = ids.size( ) == nid && same;
+        for ( unsigned k = 0; k < nid; ++k )
+            same = text( ) == ( k < ids.size( ) ? ids[ k ] : std::string( ) ) && same;
+        same = static_cast< unsigned >( pm ) == next( ) && same;
+        const unsigned nq = next( );
+        for ( unsigned k = 0; k < nq; ++k )
+            next( );   // the qsort's element count: the rows the tree holds
+        if ( !same && ++failed <= 4 )
+            LOG_ERROR( "timetrial results vector %u: ours %.400s\n retail %.400s", v, race_results_canonical( root ).c_str( ), want_root.c_str( ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "timetrial_write_results matches VuTimeTrialGame slot 12 0x48F560 on %u vectors (the whole root, +0x738, VuRandom, the "
+                     "StringDB ids, the round calls)", nv );
+    else
+        LOG_ERROR( "the time trial results writer FAILED on %d of %u vectors", failed, nv );
+    return failed == 0;
+}
+
 // race_rules_cheat_finish (world/rules.hxx) against retail's OnCheatFinish 0x483190 -> 0x4848C0 (oracle case
 // cheat_finish): 300 human lists of 0..4 boats - the six words of each boat after, and the AI manager's vt+0x30 calls.
 inline bool verify_cheat_finish( )
@@ -925,6 +1038,7 @@ inline bool verify_session_all( )
     ok = verify_kinematic_step( ) && ok;
     ok = verify_cheat_finish( ) && ok;
     ok = verify_race_results( ) && ok;
+    ok = verify_timetrial_results( ) && ok;
     ok = verify_breakable_properties( ) && ok;
     ok = verify_breakable_contact( ) && ok;
     ok = verify_breakable_dynamic_contact( ) && ok;

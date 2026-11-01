@@ -18,6 +18,7 @@
 #include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/lens.hxx>
 #include <workspace/core/world/mine.hxx>
+#include <workspace/core/world/modes.hxx>
 #include <workspace/core/world/pfxmgr.hxx>
 #include <workspace/core/world/pfxsim.hxx>
 #include <workspace/core/world/dynprop.hxx>
@@ -120,6 +121,8 @@ struct race_world_t
     std::function< void( int project, race_hud_verb_t verb, float dt ) > hud;
     // A VuEventManager broadcast reaching the world's graph (the HUD's / the level's subscribers).
     std::function< void( const char* name, const ui_params_t* params ) > broadcast;   // params null: an empty VuParams
+    // VuStringDBImpl's getString (g 0x759078 slot 6 0x53B830, world/strings.hxx): c_world's string DB. Null: UNKNOWN.
+    std::function< std::string( const char* id ) > string_db;
     // The world's VuPfx runtime / VuPfxManager g 0x75905C (c_effects; null: none - the boats' pfx calls are UNKNOWN).
     pfx_runtime_t* pfx = nullptr;
     pfx_manager_t* pfx_manager = nullptr;
@@ -156,6 +159,8 @@ struct race_session_t
     // results writer (VuRaceGame slot 12 0x489C60) fills - the UI's results table (core/ui/results.hxx) reads it.
     value_t util;
     bool results_logged = false;   // ours: the first GameResults write logged
+    std::uint8_t timetrial_written = 0;   // VuTimeTrialGame +0x738 (0x48F560's once flag; its ctor 0x48ED30 zeroes it)
+    const value_t* boat_db = nullptr;     // BoatDB's document (gameutil +8's +0x58)
     std::uint32_t aligned_frees = 0;   // gNumAlignedFree 0x759050's increments by the session end's body dtors
     race_game_t game;
     race_start_game_t start;
@@ -2281,6 +2286,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     {
         timetrial_rules_construct( s.rules );
         s.rules.track_db = db.track_db;
+        s.boat_db = db.boat_db;
         for ( std::size_t k = 0; k < s.start_boats.size( ); ++k )
             if ( s.start_boats[ k ].cls.slot[ 0 ] )
             {
@@ -2326,15 +2332,8 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     // null container, type 0).
     s.rules.screen_hooks.game_results_tick = [ &s ]( float dt )
     {
-        if ( s.start.timetrial )
-        {
-            race_unwired( s, "VuTimeTrialGame slot 12 0x48F560 (its results writer, ~3.8 KB) - not recreated, not run (UNKNOWN)" );
-            return;
-        }
-        std::vector< race_results_entry_t > entries( s.rules_boats.size( ) );
-        for ( std::size_t k = 0; k < entries.size( ); ++k )
-        {
-            race_results_entry_t& e = entries[ k ];
+        const auto entry_of = [ &s ]( std::size_t k ) {
+            race_results_entry_t e;
             if ( k < s.boats.size( ) )
             {
                 const race_session_boat_t& b = *s.boats[ k ];
@@ -2352,15 +2351,58 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
                 e.human = s.start_boats[ k ].cls.slot[ 0 ];   // vt+0x30
                 e.local = s.start_boats[ k ].cls.slot[ 2 ];   // vt+0x38
             }
+            return e;
+        };
+        if ( s.start.timetrial )
+        {
+            // VuTimeTrialGame slot 12 0x48F560 (world/modes.hxx timetrial_write_results, case timetrial_results): the boat
+            // manager's +0x18 / +0x24 lists' first boats (by image) as the racer / the human.
+            const auto first_of = [ &s, &entry_of ]( const boat_manager_list_t& l ) {
+                timetrial_results_boat_t b;
+                for ( std::size_t k = 0; !l.boats.empty( ) && k < s.boats.size( ); ++k )
+                    if ( l.boats[ 0 ] == s.boats[ k ]->graph.objects[ 0 ].image.data( ) )
+                        b = { s.boats[ k ]->graph.objects[ 0 ].image.data( ), entry_of( k ) };
+                return b;
+            };
+            timetrial_results_in_t in;
+            in.championship = s.game.championship;
+            in.circuit = s.rules_game.circuit;
+            in.laps = s.start.laps;
+            in.track = s.game.track;
+            in.racer = first_of( s.manager.lists.racers );
+            in.human = first_of( s.manager.lists.humans );
+            in.track_db = s.rules.track_db;
+            in.boat_db = s.boat_db;
+            in.string_db = s.world.string_db;
+            in.random = s.random;
+            if ( !in.racer.boat || !in.human.boat )
+            {
+                race_unwired( s, "0x48F560: the boat manager's +0x18 / +0x24 list has no first boat (retail reads [0] of an empty list: UNKNOWN) - not run" );
+                return;
+            }
+            if ( in.championship )
+            {
+                race_unwired( s, "0x48F560 in a championship: the progress manager's vt+0x6C (the profile's round, a saves-side hook) - not run (UNKNOWN)" );
+                return;
+            }
+            if ( !timetrial_write_results( s.util, s.timetrial_written, in ) )
+                race_unwired( s, "0x48F560: a path not recreated (no VuStringDB / VuRandom bound, a negative place) - logged UNKNOWN" );
         }
-        if ( !race_game_write_results( s.util, s.rules_game, s.rules_boats, entries, dt ) )
-            race_unwired( s, "0x489C60: the places over more than 32 boats or a negative place (UNKNOWN) - that row not written" );
+        else
+        {
+            std::vector< race_results_entry_t > entries( s.rules_boats.size( ) );
+            for ( std::size_t k = 0; k < entries.size( ); ++k )
+                entries[ k ] = entry_of( k );
+            if ( !race_game_write_results( s.util, s.rules_game, s.rules_boats, entries, dt ) )
+                race_unwired( s, "0x489C60: the places over more than 32 boats or a negative place (UNKNOWN) - that row not written" );
+        }
         if ( !s.results_logged )
         {
             s.results_logged = true;
             const value_t& results = ui_json_find( s.util, "GameResults" );
             const value_t& table = ui_json_find( results, "Table" );
-            LOG_INFO( "race: GameResults written (VuRaceGame slot 12 0x489C60) - CircuitRace %d, %d rows", ui_json_find( results, "CircuitRace" ).integer,
+            LOG_INFO( "race: GameResults written (%s) - CircuitRace %d, %d rows",
+                      s.start.timetrial ? "VuTimeTrialGame slot 12 0x48F560" : "VuRaceGame slot 12 0x489C60", ui_json_find( results, "CircuitRace" ).integer,
                       table.tag == 5 ? static_cast< int >( table.list.size( ) ) : -1 );
             for ( std::size_t k = 0; table.tag == 5 && k < table.list.size( ); ++k )
             {
@@ -2372,6 +2414,10 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
                           ui_json_find( row, "BestLapTime" ).real, ui_json_find( row, "LapsCompleted" ).integer, ui_json_find( row, "IsFinished" ).integer,
                           ui_json_find( row, "IsHuman" ).integer, ui_json_find( row, "IsLocal" ).integer, ui_json_find( row, "PlayerUID" ).integer,
                           ui_json_find( row, "PadIndex" ).tag == 1 ? " PadIndex 0" : "" );
+                if ( ui_json_find( row, "TierEntry" ).tag == 3 || ui_json_find( row, "TierAchieved" ).tag == 1 )
+                    LOG_INFO( "race: results row %d: Tier %d TierName '%s' TierTime %.3f TierAchieved %d", static_cast< int >( k ) + 1,
+                              ui_json_find( row, "Tier" ).integer, ui_json_text( ui_json_find( row, "TierName" ) ).c_str( ),
+                              ui_json_find( row, "TierTime" ).real, ui_json_find( row, "TierAchieved" ).integer );
             }
         }
     };

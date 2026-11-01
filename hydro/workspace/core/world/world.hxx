@@ -1097,6 +1097,10 @@ public:
         load_huds( mode == "TimeTrial" ? game_mode_defs( )[ 1 ].huds : k_race_hud_projects );
         m_race.world.hud = [ this ]( int project, race_hud_verb_t verb, float step ) { hud( project, verb, step ); };
         m_race.world.broadcast = [ this ]( const char* name, const ui_params_t* params ) { race_broadcast( name, params ); };
+        m_race.world.string_db = [ this ]( const char* id ) {
+            string_db_ready( );
+            return string_db_get( m_string_db, id ? id : "" );
+        };
         const bool started = race_session_start( m_race, mode, game_data, dbs, m_archive, *m_tree, track( ), m_vurandom,
                                                  [ this ] { project_initialized( ); } );
         if ( !m_project_initialized )
