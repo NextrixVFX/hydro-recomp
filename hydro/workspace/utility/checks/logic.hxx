@@ -196,12 +196,18 @@ inline bool verify_logic_types( )
         }
     }
     bad += n != g_golden_lgt_count ? 1 : 0;
-    // VuControlComponent's name getter 0x619F50
-    bad += g_golden_lgt_name_count == 1 && g_golden_lgt_names[ 0 ].address == 0x619F50u
-        && std::strcmp( g_golden_lgt_names[ 0 ].chain, control_component_name( ) ) == 0 ? 0 : 1;
+    // the components' name getters (VuControlComponent's 0x619F50 first)
+    const std::size_t nn = sizeof( g_component_names ) / sizeof( g_component_names[ 0 ] );
+    bad += g_golden_lgt_name_count == nn && std::strcmp( g_component_names[ 0 ].name, control_component_name( ) ) == 0 ? 0 : 1;
+    for ( std::size_t i = 0; i < g_golden_lgt_name_count && i < nn; ++i )
+        if ( g_golden_lgt_names[ i ].address != g_component_names[ i ].address || std::strcmp( g_golden_lgt_names[ i ].chain, g_component_names[ i ].name ) != 0 )
+        {
+            ++bad;
+            LOG_ERROR( "logic_types name getter 0x%X differs (retail %s)", g_golden_lgt_names[ i ].address, g_golden_lgt_names[ i ].chain );
+        }
     if ( bad == 0 )
-        LOG_SUCCESS( "g_logic_types match the logic / script classes' %d getType slots (descriptor and chain each); VuControlComponent's name 0x619F50",
-                     static_cast< int >( n ) );
+        LOG_SUCCESS( "g_logic_types match the logic / script / framework classes' %d getType slots (descriptor and chain each); %d component name getters",
+                     static_cast< int >( n ), static_cast< int >( nn ) );
     else
         LOG_ERROR( "logic_types FAILED %d", bad );
     return bad == 0;
