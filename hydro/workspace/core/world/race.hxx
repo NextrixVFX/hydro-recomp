@@ -6,9 +6,11 @@
 #include <workspace/core/boat/hull.hxx>
 #include <workspace/core/boat/track.hxx>
 #include <workspace/core/entity/node.hxx>
+#include <workspace/core/entity/property.hxx>
 #include <workspace/core/game/types.hxx>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -68,6 +70,195 @@ inline entity_world_t race_entity_world( const entity_registry_t& registry, std:
     world.m_properties_load = []( entity_t& e, const value_t& p ) { waypoint_load_properties( e, p ); entity_load_properties( e, p ); };
     world.m_properties_mark = []( entity_t& e ) { waypoint_mark_properties( e ); entity_mark_properties( e ); };
     return world;
+}
+
+// ---- VuGame's boat load 0x481CE0 ------------------------------------------
+//
+// The VuBoatEntity as the entity tree sees it (create 0x41B690 = operator
+// new(0x520) + 0x41B710 + ctor 0x41B850; VuEntity ctor 0x500710(0): +0x14 0,
+// vtable 0x7383D4, no ctor-made children). Its three string properties (the
+// +0x44 list in ctor order, every one VuAssetProperty-shaped: load 0x406C20,
+// value read 0x406CD0) - "Driver Type" -> +0x74 (default "AI"), "Boat" ->
+// +0x8C ("Default"), "Skin" -> +0xA4 ("", notify byte 1: its watcher, the skin
+// pass 0x421490, fires when a string value differs from the reset target).
+// The boat's components (transform / layout / draw / instigator) are the boat
+// image's (boat construct.hxx), not modelled on this node.
+constexpr entity_ctor_t k_race_boat_ctor{ "VuBoatEntity", 0x007383D4u, 0u };
+
+struct race_boat_state_t
+{
+    std::string driver_type = "AI", boat = "Default", skin;   // +0x74 / +0x8C / +0xA4
+    std::uint32_t hash = 0;                                   // +0x30, 0x500A60
+};
+
+inline const entity_ctor_t* race_ctor_for( const std::string& cls )
+{
+    return cls == "VuBoatEntity" ? &k_race_boat_ctor : entity_ctor_for( cls );
+}
+
+struct race_load_hooks_t
+{
+    // The boat's vt+8 (0x41CFF0, the postLoad: driver, sections, transform) on
+    // the boat's GameData entry - its own unit.
+    std::function< void( entity_t& boat, const value_t& data ) > post_load;
+    // The Skin watcher 0x421490 (the skin pass - the rendering side).
+    std::function< void( entity_t& boat ) > skin;
+    // VuUIFont's reload 0x626CF0 (ui draw.hxx's ui_font_params) for the font
+    // object at this game offset, after its name changed.
+    std::function< void( int offset, const std::string& name ) > font_reload;
+};
+
+// The game fields 0x481CE0 writes. The VuRaceGame ctor 0x489030 is not
+// recreated: the caller presets laps / fonts (its values are an input).
+struct race_game_t
+{
+    std::vector< std::unique_ptr< entity_t > > boats;   // +0x38 data, +0x3C count
+    std::int32_t capacity = 0;                           // +0x40
+    std::int32_t laps = 0;                               // +0x4C
+    std::string difficulty;                              // +0x50
+    std::string track;                                   // +0x68
+    std::uint8_t championship = 0;                       // +0x80
+    std::string fonts[ 14 ];                             // each font object's +8
+};
+
+// The 14 HUD font objects (game offset, name) in 0x481CE0's call order.
+inline const std::pair< int, const char* >* race_game_fonts( )
+{
+    static const std::pair< int, const char* > fonts[ 14 ] = {
+        { 0x8C, "HUD_PlaceLabelFont" }, { 0xF0, "HUD_PlaceDataFont" }, { 0x154, "HUD_TimeLabelFont" },
+        { 0x1B8, "HUD_TimeDataFont" }, { 0x21C, "HUD_BestLabelFont" }, { 0x280, "HUD_BestDataFont" },
+        { 0x2E4, "HUD_LapLabelFont" }, { 0x348, "HUD_LapDataFont" }, { 0x3CC, "HUD_ChallengeNameFont" },
+        { 0x430, "HUD_ChallengeTimeFont" }, { 0x4F8, "HUD_ChallengeTimeBehindFont" },
+        { 0x494, "HUD_ChallengeTimeAheadFont" }, { 0x55C, "HUD_ChallengeResultTextFont" },
+        { 0x5C0, "HUD_ChallengeResultTimeFont" } };
+    return fonts;
+}
+
+// The boat's three property loads (0x406C20 each, list order): the target is
+// reset to the default, a string value (tag 4) that differs is stored, and the
+// Skin's notify fires its watcher then.
+inline void race_boat_load_properties( entity_t& e, const value_t& properties, const race_load_hooks_t& hooks )
+{
+    race_boat_state_t& s = *static_cast< race_boat_state_t* >( e.m_state.get( ) );
+    property_string( properties, "Driver Type", s.driver_type, "AI" );
+    property_string( properties, "Boat", s.boat, "Default" );
+    s.skin.clear( );
+    const value_t& skin = member( properties, "Skin" );
+    if ( skin.tag == 4 && skin.text != s.skin )
+    {
+        s.skin = skin.text;
+        if ( hooks.skin )
+            hooks.skin( e );
+    }
+}
+
+// 0x500A60(seed) (thiscall; retn 4): +0x30 = FNV-1a of the name from `seed`;
+// the hash then runs on over "/" (0x6CB0C4) and seeds every child's; each
+// component's slot 5 (a hook) and the entity's vt+0x10 (VuBoatEntity: 0x401560,
+// a nop) follow. Only a boat's hash has a place here.
+inline std::uint32_t race_entity_hash( entity_t& e, std::uint32_t seed )
+{
+    std::uint32_t h = seed;
+    for ( unsigned char c : e.m_name )
+        h = ( h ^ c ) * 0x1000193u;
+    if ( e.m_type == "VuBoatEntity" && e.m_state )
+        static_cast< race_boat_state_t* >( e.m_state.get( ) )->hash = h;
+    std::uint32_t path = ( h ^ static_cast< unsigned char >( '/' ) ) * 0x1000193u;
+    for ( auto& child : e.m_children )
+        race_entity_hash( *child, path );
+    return h;
+}
+
+// 0x564AE0's file part: after the LAST '/', else the whole name.
+inline std::string race_file_part( const std::string& name )
+{
+    const std::size_t slash = name.rfind( '/' );
+    return slash == std::string::npos ? name : name.substr( slash + 1 );
+}
+
+// 0x481CE0 itself (this = the game, `game_data` = GameData). `util_data` is
+// g_vugameutil's +0x50 container (0x4D3260 reads ["GameData"]["Level"] there -
+// when that is not an object, g_vudevconfig's "ActionGameData", a hook: null
+// here), `trackdb` TrackDB's document (g_vugameutil +0x10's +0x58). Per entry
+// of GameData["Boats"] (0x4FBC40: an array's count, else 0): the registry's
+// create for "VuBoatEntity" (0x484940 - [0x73628C]), the name "Boat%02d"
+// (k + 1), vt+0x2C = VuEntity::load 0x5009D0 on the entry (out of range / not
+// an array -> the null container), 0x500A60(0x811C9DC5), push_back (capacity
+// max(n, c + c / 2) when full). Then "Difficulty" (tag 4) -> +0x50,
+// "IsChampionship" (tag 3) -> +0x80, the track = the Level's file part ->
+// +0x68, TrackDB["VuDBAsset"][track]["LapCount"] (1 int, 2 float truncated, 7
+// the int64's low dword; anything else keeps +0x4C), each font object renamed
+// and reloaded when its name differs (0x626B00), then the game's vt+0x10 on
+// GameData (VuRaceGame slot 4 = 0x4021A0, ret 4: nothing). False when the
+// registry cannot create the boat type (retail would push null - UNKNOWN).
+inline bool race_load_boats( race_game_t& game, const value_t& game_data, const value_t& util_data, const value_t& trackdb,
+                             const entity_registry_t& registry, const race_load_hooks_t& hooks )
+{
+    entity_world_t world = race_entity_world( registry, nullptr );
+    world.m_ctor_for = race_ctor_for;
+    const auto state_for = world.m_state_for;
+    world.m_state_for = [ state_for ]( const std::string& cls ) -> std::shared_ptr< void > {
+        return cls == "VuBoatEntity" ? std::make_shared< race_boat_state_t >( ) : state_for( cls );
+    };
+    const auto properties_load = world.m_properties_load;
+    world.m_properties_load = [ properties_load, &hooks ]( entity_t& e, const value_t& p ) {
+        if ( e.m_type == "VuBoatEntity" )
+            race_boat_load_properties( e, p, hooks );
+        else
+            properties_load( e, p );
+    };
+    static const value_t null{};
+    const value_t& boats = member( game_data, "Boats" );
+    const int count = boats.tag == 5 ? static_cast< int >( boats.list.size( ) ) : 0;
+    for ( int k = 0; k < count; ++k )
+    {
+        std::unique_ptr< entity_t > boat = entity_create( "VuBoatEntity", world );
+        if ( !boat )
+            return false;
+        char name[ 16 ];
+        std::snprintf( name, sizeof( name ), "Boat%02d", k + 1 );
+        boat->m_name = name;
+        const value_t& entry = k < static_cast< int >( boats.list.size( ) ) ? boats.list[ static_cast< std::size_t >( k ) ] : null;
+        entity_load( *boat, &entry, world );
+        if ( hooks.post_load )
+            hooks.post_load( *boat, entry );
+        race_entity_hash( *boat, 0x811C9DC5u );
+        const std::int32_t n = static_cast< std::int32_t >( game.boats.size( ) ) + 1;
+        if ( n > game.capacity )
+        {
+            std::int32_t grown = game.capacity + game.capacity / 2;
+            if ( n > grown )
+                grown = n;
+            if ( grown > game.capacity )
+                game.capacity = grown;
+        }
+        game.boats.push_back( std::move( boat ) );
+    }
+    const value_t& difficulty = member( game_data, "Difficulty" );
+    if ( difficulty.tag == 4 )
+        game.difficulty = difficulty.text;
+    const value_t& championship = member( game_data, "IsChampionship" );
+    if ( championship.tag == 3 )
+        game.championship = static_cast< std::uint8_t >( championship.integer );
+    const value_t& gd = member( util_data, "GameData" );
+    const value_t& level = member( gd.tag == 6 ? gd : null, "Level" );
+    game.track = race_file_part( level.tag == 4 ? level.text : std::string( ) );
+    const value_t& laps = member( member( member( trackdb, "VuDBAsset" ), game.track.c_str( ) ), "LapCount" );
+    if ( laps.tag == 1 )
+        game.laps = laps.integer;
+    else if ( laps.tag == 2 )
+        game.laps = _mm_cvtt_ss2si( _mm_set_ss( laps.real ) );
+    else if ( laps.tag == 7 )
+        game.laps = static_cast< std::int32_t >( static_cast< std::uint64_t >( laps.int64 ) & 0xFFFFFFFFu );
+    const auto* fonts = race_game_fonts( );
+    for ( int k = 0; k < 14; ++k )
+        if ( game.fonts[ k ] != fonts[ k ].second )
+        {
+            game.fonts[ k ] = fonts[ k ].second;
+            if ( hooks.font_reload )
+                hooks.font_reload( fonts[ k ].first, game.fonts[ k ] );
+        }
+    return true;
 }
 
 // The project asset's AssetData "File" path (0x55FBE0), or empty.

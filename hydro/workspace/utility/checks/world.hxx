@@ -1338,9 +1338,115 @@ inline bool verify_race_track_start( )
     return failed == 0;
 }
 
+// race_load_boats (world/race.hxx) against retail's VuGame boat load 0x481CE0
+// (oracle case game_boat_load) on hand-built GameData documents - a declared
+// INPUT until the front end's GameData builder is recreated - with the real
+// TrackDB or a hand-built one: per vector the boat list (count, capacity; per
+// boat name, vtable, +0x14, +0x30 hash, children, the three property values
+// and the property list), the game's +0x4C / +0x50 / +0x68 / +0x80 and the 14
+// font names, and the hooks in call order (postLoad on which entry, the skin
+// pass with which skin, each font reload). One failure per vector.
+inline bool verify_game_boat_load( )
+{
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    std::vector< std::uint8_t > bytes;
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) || !archive.read( "VuDBAsset/TrackDB", bytes ) )
+    {
+        LOG_ERROR( "game boat load FAILED: the pack's TrackDB is not readable" );
+        return false;
+    }
+    const value_t real_trackdb = c_reader( bytes ).parse( );
+    const entity_registry_t registry = build_entity_registry( { } );
+    const unsigned* w = g_golden_game_boat_load_words;
+    const char* const* t = g_golden_game_boat_load_texts;
+    const auto parse = []( unsigned k ) {
+        const unsigned char* raw = g_golden_game_boat_load_blobs[ k ];
+        return c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_game_boat_load_blob_sizes[ k ] ) ).parse( );
+    };
+    int failed = 0, boats_total = 0, calls_total = 0;
+    for ( std::size_t v = 0; v < g_golden_game_boat_load_vectors; ++v )
+    {
+        const value_t root = parse( w[ 0 ] );
+        const value_t trackdb = w[ 1 ] == 0xFFFFFFFFu ? value_t{ } : parse( w[ 1 ] );
+        const value_t& game_data = member( root, "GameData" );
+        race_game_t game;
+        game.laps = static_cast< std::int32_t >( w[ 2 ] );
+        game.difficulty.clear( );
+        const char* difficulty = t[ 0 ];
+        const char* track = t[ 1 ];
+        for ( int k = 0; k < 14; ++k )
+            game.fonts[ k ] = t[ 2 + k ];
+        const char* const* fonts_after = t + 16;
+        const unsigned count = w[ 3 ], capacity = w[ 4 ], laps = w[ 5 ], championship = w[ 6 ], nboats = w[ 7 ], ncalls = w[ 8 ];
+        w += 9;
+        t += 30;
+        std::vector< std::string > calls;
+        race_load_hooks_t hooks;
+        hooks.post_load = [ & ]( entity_t&, const value_t& data ) {
+            const value_t& list = member( game_data, "Boats" );
+            int at = -3;
+            for ( std::size_t k = 0; k < list.list.size( ); ++k )
+                if ( &list.list[ k ] == &data )
+                    at = static_cast< int >( k );
+            calls.push_back( "0 " + std::to_string( game.boats.size( ) ) + " " + std::to_string( at ) );
+        };
+        hooks.skin = [ & ]( entity_t& e ) {
+            calls.push_back( "1 " + std::to_string( game.boats.size( ) ) + " " + static_cast< race_boat_state_t* >( e.m_state.get( ) )->skin );
+        };
+        hooks.font_reload = [ & ]( int offset, const std::string& name ) { calls.push_back( "2 " + std::to_string( offset ) + " " + name ); };
+        bool same = race_load_boats( game, game_data, root, w[ -8 ] == 0xFFFFFFFFu ? real_trackdb : trackdb, registry, hooks );
+        same = same && game.boats.size( ) == count && static_cast< unsigned >( game.capacity ) == capacity &&
+               static_cast< unsigned >( game.laps ) == laps && game.championship == championship && game.difficulty == difficulty &&
+               game.track == track && nboats == count;
+        for ( int k = 0; k < 14; ++k )
+            same = same && game.fonts[ k ] == fonts_after[ k ];
+        for ( unsigned b = 0; b < nboats; ++b )
+        {
+            const unsigned nprops = w[ 4 ];
+            if ( same && b < game.boats.size( ) )
+            {
+                const entity_t& e = *game.boats[ b ];
+                const race_boat_state_t& s = *static_cast< const race_boat_state_t* >( e.m_state.get( ) );
+                same = e.m_ctor && e.m_ctor->m_vtable == w[ 0 ] && e.m_flags == w[ 1 ] && s.hash == w[ 2 ] && e.m_children.size( ) == w[ 3 ] &&
+                       nprops == 3 && e.m_name == t[ 0 ] && s.driver_type == t[ 1 ] && s.boat == t[ 2 ] && s.skin == t[ 3 ] &&
+                       std::string( t[ 4 ] ) == "Driver Type" && std::string( t[ 5 ] ) == "Boat" && std::string( t[ 6 ] ) == "Skin";
+            }
+            w += 5;
+            t += 4 + nprops;
+        }
+        boats_total += static_cast< int >( nboats );
+        same = same && calls.size( ) == ncalls;
+        for ( unsigned c = 0; c < ncalls; ++c )
+        {
+            std::string want = std::to_string( w[ 0 ] ) + " " + std::to_string( static_cast< int >( w[ 1 ] ) ) + " ";
+            if ( w[ 0 ] == 0 )
+                want += std::to_string( static_cast< int >( w[ 2 ] ) );
+            else
+                want += *t++;
+            same = same && c < calls.size( ) && calls[ c ] == want;
+            w += 3;
+        }
+        calls_total += static_cast< int >( ncalls );
+        if ( !same && ++failed <= 6 )
+            LOG_ERROR( "game boat load vector %d differs from retail: %d boats (cap %d) laps %d track '%s' difficulty '%s' %d calls "
+                       "(retail %u / %u / %d / '%s' / '%s' / %u)",
+                static_cast< int >( v ), static_cast< int >( game.boats.size( ) ), game.capacity, game.laps, game.track.c_str( ),
+                game.difficulty.c_str( ), static_cast< int >( calls.size( ) ), count, capacity, static_cast< int >( laps ), track, difficulty, ncalls );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "race_load_boats matches retail's VuGame boat load 0x481CE0 on %d hand-built GameData documents: %d boats "
+                     "(name, hash, the three properties), list growth, laps / difficulty / track / championship, 14 fonts, %d hook calls in order",
+            static_cast< int >( g_golden_game_boat_load_vectors ), boats_total, calls_total );
+    else
+        LOG_ERROR( "game boat load FAILED %d of %d vectors", failed, static_cast< int >( g_golden_game_boat_load_vectors ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_game_boat_load( ) && ok;
     ok = verify_race_track( ) && ok;
     ok = verify_race_track_start( ) && ok;
     ok = verify_water_templates( ) && ok;

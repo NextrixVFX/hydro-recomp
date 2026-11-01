@@ -493,11 +493,6 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
             return static_cast< c_archive* >( user )->read( asset.c_str( ), blob );
         },
         &m_archive );
-    // KNOWN GAP (surface.hxx, the water area's): the race project instantiates
-    // the level through templates, and the WaterMap property's template mark
-    // (VuAssetProperty slot 7 = 0x406A70: default = value) is not recreated -
-    // water_entity_load falls back to the empty ctor default - so every
-    // surface here arrives with no name and keeps a null map.
     int maps_named = 0;
     for ( const std::string& name : m_water.map_names )
         maps_named += name.empty( ) ? 0 : 1;
