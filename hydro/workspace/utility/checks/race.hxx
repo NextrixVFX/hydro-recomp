@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/boat/camera.hxx>
+#include <workspace/core/boat/respawn.hxx>
 
 #include <array>
 #include <cstdio>
@@ -168,9 +169,136 @@ inline bool verify_boat_camera( )
     return false;
 }
 
+// The respawn 0x41D790 / 0x41DA90 against retail's own runs on Hydroelectric's track (oracle case
+// boat_respawn): the track built by track_build_from_tree (as verify_track_build), each vector's blocks fed to
+// boat_respawn with the scripted water answers; every word of the six blocks after (but the stale ones) and the
+// hook log (order, the water points, the event hash) compared.
+inline bool verify_boat_respawn( )
+{
+    const std::unique_ptr< entity_t > tree = track_document_tree( );
+    track_manager_t tm;
+    if ( !tree || !track_build_from_tree( *tree, tm ) )
+    {
+        LOG_ERROR( "boat_respawn: the track did not build" );
+        return false;
+    }
+    static const int sizes[ 6 ] = { 0x520, 0xC8, 0x2D4, 0x10, 0x308, 0x2C };
+    struct run_t
+    {
+        const unsigned* heights = nullptr;
+        unsigned next = 0;
+        std::vector< unsigned > log;
+    } run;
+    boat_respawn_hooks_t hooks;
+    hooks.user = &run;
+    hooks.water = []( void* u, const float* p ) {
+        run_t& r = *static_cast< run_t* >( u );
+        r.log.push_back( 1 );
+        for ( int k = 0; k < 3; ++k )
+        {
+            std::uint32_t w;
+            std::memcpy( &w, p + k, 4 );
+            r.log.push_back( w );
+        }
+        const unsigned bits = r.next < 8 ? r.heights[ r.next ] : 0xFF7FFFFFu;
+        ++r.next;
+        return respawn_bits( bits );
+    };
+    hooks.transform_children = []( void* u ) { static_cast< run_t* >( u )->log.push_back( 2 ); };
+    hooks.instigator = []( void* u ) { static_cast< run_t* >( u )->log.push_back( 3 ); };
+    hooks.enable = []( void* u ) { static_cast< run_t* >( u )->log.push_back( 6 ); };
+    hooks.driver_50 = []( void* u ) { static_cast< run_t* >( u )->log.push_back( 7 ); };
+    hooks.recovered = []( void* u, std::uint32_t hash ) {
+        run_t& r = *static_cast< run_t* >( u );
+        r.log.push_back( 4 );
+        r.log.push_back( 5 );
+        r.log.push_back( hash );
+    };
+    const unsigned* g = g_golden_boat_respawn_words;
+    int compared = 0, failed = 0, bad = 0;
+    const unsigned nv = *g++;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        std::vector< std::uint8_t > blocks[ 6 ];
+        for ( int k = 0; k < 6; ++k )
+        {
+            blocks[ k ].assign( reinterpret_cast< const std::uint8_t* >( g ), reinterpret_cast< const std::uint8_t* >( g ) + sizes[ k ] );
+            g += sizes[ k ] / 4;
+        }
+        const bool has_proxy = *g++ != 0;
+        const std::int32_t checkpoint = static_cast< std::int32_t >( *g++ );
+        run.heights = g;
+        run.next = 0;
+        run.log.clear( );
+        g += 8;
+        const unsigned used = *g++;
+        vu_rigid_body_t body;
+        std::memcpy( &body, blocks[ 2 ].data( ), 0x2D4 );
+        boat_respawn_t r;
+        r.boat = blocks[ 0 ].data( );
+        r.transform = blocks[ 1 ].data( );
+        r.body = &body;
+        r.proxy = has_proxy ? blocks[ 3 ].data( ) : nullptr;
+        r.camera = blocks[ 4 ].data( );
+        r.instigator = blocks[ 5 ].data( );
+        r.checkpoint = checkpoint;
+        boat_respawn( tm, r, hooks );
+        std::memcpy( blocks[ 2 ].data( ), &body, 0x2D4 );
+        const int failed_before = failed;
+        const unsigned* after[ 6 ];
+        for ( int k = 0; k < 6; ++k )
+        {
+            after[ k ] = g;
+            g += sizes[ k ] / 4;
+        }
+        for ( int k = 0; k < 6; ++k )
+        {
+            std::vector< bool > stale( sizes[ k ] / 4, false );
+            const unsigned ns = *g++;
+            for ( unsigned j = 0; j < ns; ++j )
+                stale[ *g++ ] = true;
+            for ( int w = 0; w < sizes[ k ] / 4; ++w )
+            {
+                if ( stale[ w ] )
+                    continue;
+                std::uint32_t mine;
+                std::memcpy( &mine, blocks[ k ].data( ) + 4 * w, 4 );
+                ++compared;
+                if ( mine != after[ k ][ w ] && ++failed <= 8 )
+                    LOG_ERROR( "boat_respawn vector %u block %d +0x%X: 0x%08X, retail 0x%08X", v, k, 4 * w, mine, after[ k ][ w ] );
+            }
+        }
+        std::vector< unsigned > expect;
+        const unsigned nl = *g++;
+        for ( unsigned j = 0; j < nl; ++j )
+        {
+            const unsigned code = *g++;
+            expect.push_back( code );
+            if ( code == 1 )
+                for ( int k = 0; k < 3; ++k )
+                    expect.push_back( *g++ );
+            else if ( code == 5 )
+                expect.push_back( *g++ );
+        }
+        ++compared;
+        if ( ( expect != run.log || used != run.next ) && ++failed <= 8 )
+            LOG_ERROR( "boat_respawn vector %u: the hook log differs (%zu words vs retail %zu; water %u vs %u)", v, run.log.size( ), expect.size( ), run.next, used );
+        bad += failed != failed_before ? 1 : 0;
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "The respawn 0x41D790 (slot 22, the sector walk, 0x4D29F0) and the reset 0x41DA90 match retail on "
+                     "Hydroelectric's track: %u vectors, %d values, bit for bit", nv, compared );
+        return true;
+    }
+    LOG_ERROR( "boat_respawn FAILED %d of %d values (%d of %u vectors)", failed, compared, bad, nv );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
     ok = verify_boat_camera( ) && ok;
+    ok = verify_boat_respawn( ) && ok;
     return ok;
 }
