@@ -2376,3 +2376,40 @@ inline bool verify_entity_sort( )
         LOG_ERROR( "entity_sort FAILED %d", bad );
     return bad == 0;
 }
+// entity/json.hxx json_write_value against retail's VuJsonWriter writeValue 0x4FFCC0 (case json_write): 40 retail-read
+// documents x the four flag pairs - the whole text and the indent left behind (MSVCR110's sprintf_s modelled on both
+// sides: json_crt_format / the case's stand-in).
+inline bool verify_json_write( )
+{
+    logic_check_t c{ g_golden_jsw_words };
+    const unsigned n = c.next( );
+    int bad = 0;
+    std::size_t chars = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const std::string bytes = c.str( );
+        const std::vector< std::uint8_t > blob( bytes.begin( ), bytes.end( ) );
+        value_t root;
+        const bool read = c_reader::read_at_start( blob, root );
+        json_writer_t w;
+        w.compact = c.next( ) != 0;
+        w.trailing = c.next( ) != 0;
+        std::string text;
+        w.out = &text;
+        json_write_value( w, root );
+        const std::string want = c.str( ), indent = c.str( );
+        chars += want.size( );
+        if ( !read || w.unknown || text != want || w.indent != indent )
+        {
+            if ( bad < 4 )
+                LOG_ERROR( "json_write vector %u (compact %d, trailing %d) differs: %u chars vs retail %u", v, w.compact ? 1 : 0, w.trailing ? 1 : 0,
+                           static_cast< unsigned >( text.size( ) ), static_cast< unsigned >( want.size( ) ) );
+            ++bad;
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuJsonWriter matches retail (writeValue 0x4FFCC0, 0x4FFDA0 0x4FFE10 0x4FFED0 0x4FFF20 0x5001C0 0x500360 0x500150): %u documents x flags, %u characters", n, static_cast< unsigned >( chars ) );
+    else
+        LOG_ERROR( "json_write FAILED %d", bad );
+    return bad == 0;
+}
