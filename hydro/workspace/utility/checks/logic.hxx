@@ -1376,6 +1376,142 @@ inline bool verify_json_access( )
         LOG_ERROR( "json_access FAILED %d", bad );
     return bad == 0;
 }
+// entity/json.hxx json_member against retail's member-or-insert 0x4FC090 (case json_member) on c_reader-built roots
+// whose objects keep the file's (unsorted) key order: per op the returned member, the int written into it, the root.
+inline bool verify_json_member( )
+{
+    logic_check_t c{ g_golden_jsm_words };
+    const unsigned n = c.next( );
+    int bad = 0, ops = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const std::string bytes = c.str( );
+        const std::vector< std::uint8_t > blob( bytes.begin( ), bytes.end( ) );
+        value_t root;
+        c_reader::read_at_start( blob, root );
+        const unsigned no = c.next( );
+        for ( unsigned k = 0; k < no; ++k, ++ops )
+        {
+            const std::string key = c.str( ), want_member = c.str( );
+            const bool wrote = c.next( ) != 0;
+            const std::string want_root = c.str( );
+            value_t& m = json_member( root, key );
+            std::string member, whole;
+            vujb_dump( m, member );
+            if ( wrote )
+                json_set_int( m, static_cast< std::int32_t >( 100 + k ) );
+            vujb_dump( root, whole );
+            if ( ( member != want_member || whole != want_root ) && bad++ < 6 )
+                LOG_ERROR( "json_member document %u op %u (key '%s'): member %s, root %s", v, k, key.c_str( ),
+                           member == want_member ? "ok" : "differs", whole == want_root ? "ok" : "differs" );
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "json_member matches retail's member-or-insert 0x4FC090 (0x4FC6B0 0x4FC970) on unsorted objects: %u documents, %d ops", n, ops );
+    else
+        LOG_ERROR( "json_member FAILED %d", bad );
+    return bad == 0;
+}
+
+// entity/json.hxx's text reader against retail's VuJsonReader (case json_text): loadFromString 0x4FEEC0 on 173 texts
+// (every value / comment / escape / number branch and error) and loadFromFile 0x4FEDF0 on a fake file system - per
+// vector the answer, the container's dump, the error text (every line), the cursor's offset and the file-system calls.
+// Vectors the case marks unknown (a float its correctly rounded stand-in for MSVCR110's sscanf_s may not match) are
+// skipped and counted.
+struct json_text_check_fs_t
+{
+    std::string path;
+    std::string bytes;
+    bool exists = false;
+    const char* buffer = nullptr;
+    std::vector< std::pair< std::uint32_t, std::uint32_t > > calls;
+};
+
+inline bool verify_json_text( )
+{
+    logic_check_t c{ g_golden_jst_words };
+    const unsigned n = c.next( );
+    int bad = 0, unknown = 0, texts = 0, files = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = c.next( ), unk = c.next( ), want_ret = c.next( ), want_cursor = c.next( );
+        const std::string text = c.str( ), want_dump = c.str( ), want_error = c.str( );
+        json_text_reader_t r;
+        r.error = "junk";
+        value_t out;
+        json_set_int( out, 5 );
+        int got = 0;
+        std::uint32_t cursor = ~0u;
+        json_text_check_fs_t fs;
+        std::vector< std::pair< std::uint32_t, std::uint32_t > > want_calls;
+        if ( kind == 0 )
+        {
+            ++texts;
+            const std::string buffer = text;   // NUL-terminated by std::string
+            got = json_read_text( r, out, buffer.c_str( ) );
+            cursor = static_cast< std::uint32_t >( r.cursor - buffer.c_str( ) );
+        }
+        else
+        {
+            ++files;
+            fs.path = c.str( );
+            fs.exists = c.next( ) != 0;
+            fs.bytes = text;
+            const unsigned calls = c.next( );
+            for ( unsigned k = 0; k < calls; ++k )
+            {
+                const std::uint32_t op = c.next( );
+                want_calls.push_back( { op, c.next( ) } );
+            }
+            json_file_hooks_t hooks;
+            hooks.user = &fs;
+            hooks.open = []( void* u, const std::string& path ) -> void*
+            {
+                auto& f = *static_cast< json_text_check_fs_t* >( u );
+                f.calls.push_back( { 0x34u, 0u } );
+                return path == f.path && f.exists ? &f : nullptr;
+            };
+            hooks.size = []( void* u, void* ) -> std::uint32_t
+            {
+                auto& f = *static_cast< json_text_check_fs_t* >( u );
+                f.calls.push_back( { 0x2Cu, 0u } );
+                return static_cast< std::uint32_t >( f.bytes.size( ) );
+            };
+            hooks.read = []( void* u, void*, char* buffer, std::uint32_t size )
+            {
+                auto& f = *static_cast< json_text_check_fs_t* >( u );
+                f.calls.push_back( { 0x40u, size } );
+                std::memcpy( buffer, f.bytes.data( ), size );
+                f.buffer = buffer;
+            };
+            hooks.close = []( void* u, void* )
+            {
+                static_cast< json_text_check_fs_t* >( u )->calls.push_back( { 0x3Cu, 0u } );
+            };
+            got = json_read_file( r, out, fs.path, hooks );
+            if ( fs.buffer != nullptr )
+                cursor = static_cast< std::uint32_t >( reinterpret_cast< std::uintptr_t >( r.cursor ) - reinterpret_cast< std::uintptr_t >( fs.buffer ) );
+        }
+        if ( unk != 0 )
+        {
+            ++unknown;
+            continue;
+        }
+        std::string dump;
+        vujb_dump( out, dump );
+        const bool same = got == static_cast< int >( want_ret ) && cursor == want_cursor && dump == want_dump &&
+                          r.error == want_error && fs.calls == want_calls;
+        if ( !same && bad++ < 8 )
+            LOG_ERROR( "json_text vector %u (%s %.40s): answer %d (retail %u), cursor %u (%u), dump %s, error %s, calls %s", v,
+                       kind == 0 ? "text" : "file", text.c_str( ), got, want_ret, cursor, want_cursor, dump == want_dump ? "ok" : "differs",
+                       r.error == want_error ? "ok" : "differs", fs.calls == want_calls ? "ok" : "differ" );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuJsonReader matches retail (0x4FEEC0 0x4FEDF0 0x4FEF40 0x4FEFD0 0x4FF090 0x4FF1E0 0x4FF3E0 0x4FF510 0x4FF5B0 0x4FF790 0x4FF820 0x4FF870 0x4FFA70 0x4FFB60 0x559EB0 0x559B50): %d texts, %d files, %d unknown skipped", texts, files, unknown );
+    else
+        LOG_ERROR( "json_text FAILED %d", bad );
+    return bad == 0;
+}
 // world/voice.hxx against retail's VuVoiceOverManagerImpl (case voice_over): two sessions (Base.apf's VoiceOverDB and a
 // synthetic one) - init 0x4B7970's entries in full (keys, EventName, MaxPlayCount, StartDelay, the shuffled Waveforms
 // from the logged rand values), then 260 ops each (say now 0x4B7EA0, queue 0x4B7F50, tick 0x4B8000, the FMOD callback
