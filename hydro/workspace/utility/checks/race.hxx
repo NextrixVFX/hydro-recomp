@@ -7,6 +7,7 @@
 #include <workspace/core/boat/pilots.hxx>
 #include <workspace/core/boat/manager.hxx>
 #include <workspace/core/boat/powerup.hxx>
+#include <workspace/core/boat/meshes.hxx>
 
 #include <algorithm>
 #include <array>
@@ -1360,6 +1361,124 @@ inline bool verify_powerup_tick( )
     return false;
 }
 
+// The two mesh-asset loads against retail's (oracle case mesh_assets): every collision mesh BoatDB names and every
+// fluids mesh in Base.apf, read from the pack here and loaded by collision_mesh_load / fluids_mesh_load; compared:
+// the return, the stream's end, the surface names asked, every array's size / capacity (/ owns) and FNV-1a of its
+// bytes (the materials' after the surface ids went in), the aabbs, the flag, the bvh header and words. One failure
+// per asset.
+inline bool verify_mesh_assets( )
+{
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) )
+    {
+        LOG_ERROR( "verify_mesh_assets: Base.apf not found" );
+        return false;
+    }
+    const unsigned* g = g_golden_mesh_assets_words;
+    auto text = [ & ]( ) {
+        const unsigned n = *g++;
+        std::string s( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        return s;
+    };
+    auto fnv = []( const std::vector< std::uint8_t >& b, std::int32_t n ) {
+        if ( n == 0 )
+            return 0u;
+        std::uint32_t h = 0x811C9DC5u;
+        for ( std::uint8_t c : b )
+            h = ( h ^ c ) * 0x01000193u;
+        return h;
+    };
+    int failed = 0, collisions = 0, fluids = 0;
+    std::vector< std::uint32_t > mine, want;
+    auto vu = [ & ]( const mesh_vu_array_t& a ) {
+        mine.push_back( static_cast< std::uint32_t >( a.size ) );
+        mine.push_back( static_cast< std::uint32_t >( a.capacity ) );
+        mine.push_back( fnv( a.bytes, a.size ) );
+    };
+    auto bt = [ & ]( const mesh_bt_array_t& a ) {
+        mine.push_back( static_cast< std::uint32_t >( a.size ) );
+        mine.push_back( static_cast< std::uint32_t >( a.capacity ) );
+        mine.push_back( a.owns );
+        mine.push_back( fnv( a.bytes, a.size ) );
+    };
+    auto words = [ & ]( const void* p, int n ) {
+        const std::uint32_t* w = static_cast< const std::uint32_t* >( p );
+        mine.insert( mine.end( ), w, w + n );
+    };
+    for ( int kind = 0; kind < 2; ++kind )
+    {
+        const unsigned count = *g++;
+        for ( unsigned k = 0; k < count; ++k )
+        {
+            const std::string name = text( );
+            const unsigned size = *g++, ret = *g++, end = *g++;
+            std::vector< std::string > want_names;
+            if ( kind == 0 )
+            {
+                want_names.resize( *g++ );
+                for ( auto& n : want_names )
+                    n = text( );
+            }
+            const unsigned nwords = kind == 0 ? 12 + 8 + 1 + 14 + 1 + 20 + 2 : 9 + 8 + 2;
+            want.assign( g, g + nwords );
+            g += nwords;
+            mine.clear( );
+            std::vector< std::uint8_t > blob;
+            const std::string key = std::string( kind == 0 ? "VuCollisionMeshAsset/" : "VuFluidsMeshAsset/" ) + name;
+            const bool read = archive.read( key.c_str( ), blob );
+            mesh_stream_t s{ blob.data( ), blob.size( ), 0 };
+            std::vector< std::string > names;
+            bool ok = false;
+            if ( kind == 0 )
+            {
+                collision_mesh_asset_t a;
+                ok = read && collision_mesh_load( s, a, [ & ]( const std::string& n ) -> std::uint8_t {
+                    names.push_back( n );
+                    return n == "Metal" ? 3 : n == "Wood" ? 5 : n == "Duck" ? 9 : 1;
+                } );
+                vu( a.vertices ), vu( a.indices ), vu( a.triangles ), vu( a.materials );
+                words( a.aabb, 8 );
+                mine.push_back( a.flag );
+                words( a.bvh.header, 14 );
+                mine.push_back( a.bvh.use_quantization );
+                bt( a.bvh.leaf ), bt( a.bvh.contiguous ), bt( a.bvh.quantized_leaf ), bt( a.bvh.quantized ), bt( a.bvh.subtrees );
+                mine.push_back( static_cast< std::uint32_t >( a.bvh.traversal ) );
+                mine.push_back( static_cast< std::uint32_t >( a.bvh.subtree_count ) );
+                ++collisions;
+            }
+            else
+            {
+                fluids_mesh_asset_t a;
+                ok = read && fluids_mesh_load( s, a );
+                vu( a.vertices ), vu( a.edges ), vu( a.records );
+                words( a.aabb, 8 );
+                mine.push_back( a.w9c );
+                mine.push_back( a.wa0 );
+                ++fluids;
+            }
+            const bool same = ok && ret == 1 && blob.size( ) == size && s.at == end && names == want_names && mine == want;
+            if ( !same && ++failed <= 8 )
+            {
+                std::size_t at = 0;
+                while ( at < mine.size( ) && at < want.size( ) && mine[ at ] == want[ at ] )
+                    ++at;
+                LOG_ERROR( "mesh_assets %s: load %d, end %zu (retail %u), %zu names (retail %zu), first differing word %zu",
+                           key.c_str( ), ok ? 1 : 0, s.at, end, names.size( ), want_names.size( ), at );
+            }
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuCollisionMeshAsset 0x51AF20 / VuFluidsMeshAsset 0x523770 loads match retail on Base.apf: %d collision, %d fluids meshes",
+                     collisions, fluids );
+        return true;
+    }
+    LOG_ERROR( "mesh_assets FAILED %d of %d assets", failed, collisions + fluids );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -1376,5 +1495,6 @@ inline bool verify_race_all( )
     ok = verify_viewport_tick( ) && ok;
     ok = verify_boost_apply( ) && ok;
     ok = verify_powerup_tick( ) && ok;
+    ok = verify_mesh_assets( ) && ok;
     return ok;
 }
