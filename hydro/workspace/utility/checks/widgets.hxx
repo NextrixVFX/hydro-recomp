@@ -682,9 +682,90 @@ inline bool verify_ui_game_config_release( )
     return failed == 0;
 }
 
+// ui_text_layout_draw (core/ui draw.hxx) against retail's VuUITextBaseEntity
+// layout draw slot 13 0x627B30 (oracle case text_layout_draw) on the text-base
+// entities of four projects under TxtWorld's environments: each new command's
+// words and record (the rect and the text) byte for byte, one sort per buffer
+// through all vectors. The fields are retail's bytes (verify_ui_text_draw
+// compares OUR loaded ones with them for the same entities).
+inline bool verify_ui_text_layout_draw( )
+{
+    constexpr std::uint32_t k_material[ 2 ] = { 0x5D001000u, 0x5D001800u };   // TxtWorld's font materials
+    ui_gfx_sort_t sort;
+    sort.m_buffers[ 0 ].m_capacity = 0x300000;
+    sort.m_buffers[ 1 ].m_used = 0x35;
+    sort.m_buffers[ 1 ].m_capacity = 0x100000;
+    for ( auto& b : sort.m_buffers )
+        b.m_memory.resize( static_cast< std::size_t >( b.m_capacity ) );
+    int failed = 0, commands = 0, rects = 0;
+    for ( std::size_t k = 0; k < g_golden_tld_vectors_count; ++k )
+    {
+        const golden_tld_vector_t& v = g_golden_tld_vectors[ k ];
+        const golden_txt_env_t& e = g_golden_txt_envs[ v.m_env ];
+        ui_crop_t crop;
+        std::memcpy( &crop.m_matrix[ 0 ], &e.m_crop[ 0 ], 4 );
+        std::memcpy( &crop.m_matrix[ 5 ], &e.m_crop[ 1 ], 4 );
+        std::memcpy( &crop.m_matrix[ 12 ], &e.m_crop[ 2 ], 4 );
+        std::memcpy( &crop.m_matrix[ 13 ], &e.m_crop[ 3 ], 4 );
+        ui_font_draw_env_t env;
+        std::memcpy( &env.m_matrix[ 0 ], &e.m_matrix[ 0 ], 4 );
+        std::memcpy( &env.m_matrix[ 5 ], &e.m_matrix[ 1 ], 4 );
+        std::memcpy( &env.m_matrix[ 12 ], &e.m_matrix[ 2 ], 4 );
+        std::memcpy( &env.m_matrix[ 13 ], &e.m_matrix[ 3 ], 4 );
+        std::memcpy( &env.m_top, &e.m_top, 4 );
+        for ( int m = 0; m < 2; ++m )
+        {
+            env.m_material[ m ] = k_material[ m ];
+            env.m_material_key[ m ] = g_golden_txt_material_keys[ m ];
+        }
+        env.m_rect_material = g_golden_tld_rect_material[ 0 ];
+        env.m_rect_material_key = g_golden_tld_rect_material[ 1 ];
+        ui_string_db_t db;
+        db.m_present = e.m_sdb != 0;
+        db.m_slot12 = e.m_sdb_answer != 0;
+        ui_text_font_t font;
+        font.m_asset = true;
+        font.m_asset_font = 0x0F0E0D0Cu;
+        font.m_default = e.m_default != 0;
+        font.m_default_font = 0x0B0A0908u;
+        const std::vector< std::uint8_t > raw = ui_unhex( v.m_text );
+        const std::string text( raw.begin( ), raw.end( ) );
+        const ui_text_base_t t = ui_text_base_of( ui_unhex( v.m_fields ), v.m_depth );
+        sort.m_index = e.m_index;
+        sort.m_key_lo = e.m_key_lo;
+        sort.m_key_hi = e.m_key_hi;
+        std::vector< ui_gfx_command_t >& list = sort.m_commands[ e.m_index ];
+        const std::size_t before = list.size( );
+        const bool known = ui_text_layout_draw( sort, env, crop, db, t, font, text, static_cast< std::uint8_t >( v.m_layout ) );
+        bool same = known && list.size( ) - before == static_cast< std::size_t >( v.m_commands );
+        for ( int c = 0; same && c < v.m_commands; ++c )
+        {
+            const golden_txt_command_t& want = g_golden_tld_commands[ v.m_first + c ];
+            const ui_gfx_command_t& got = list[ before + static_cast< std::size_t >( c ) ];
+            const std::vector< std::uint8_t > record = ui_unhex( want.m_record );
+            const auto& memory = sort.m_buffers[ e.m_index ].m_memory;
+            same = std::memcmp( got.m_words, want.m_words, sizeof( got.m_words ) ) == 0 && got.m_words[ 3 ] + record.size( ) <= memory.size( ) &&
+                   std::memcmp( memory.data( ) + got.m_words[ 3 ], record.data( ), record.size( ) ) == 0;
+            rects += got.m_words[ 2 ] == k_ui_rect_callback ? 1 : 0;
+            ++commands;
+        }
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui text layout draw: vector %d (%s %d, byte %d) gave %d commands, retail %d - or a word / record byte differs", static_cast< int >( k ),
+                       v.m_project, v.m_index, v.m_layout, static_cast< int >( list.size( ) - before ), v.m_commands );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_text_layout_draw matches retail's VuUITextBaseEntity layout draw slot 13 0x627B30 (rect draw 0x507A00, slot 14 0x627C60) "
+                     "on %d vectors: %d commands (%d rects) and records byte for byte",
+            static_cast< int >( g_golden_tld_vectors_count ), commands, rects );
+    else
+        LOG_ERROR( "the UI text layout draw FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_widgets_all( )
 {
     bool ok = true;
+    ok = verify_ui_text_layout_draw( ) && ok;
     ok = verify_ui_game_config_release( ) && ok;
     ok = verify_ui_message_box_draw( ) && ok;
     ok = verify_ui_slider_draw( ) && ok;
