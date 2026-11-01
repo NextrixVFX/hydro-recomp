@@ -559,6 +559,8 @@ struct asset_dtor_hooks_t
     std::function< void( ) > property_base_dtor;              // 0x405260 ( this )
     std::function< void( ) > entity_dtor;                     // 0x500870 ( this )
     std::function< void( std::uint32_t, std::uint32_t ) > object_delete;   // an object's slot 0 ( object, flags )
+    std::function< void( std::uint32_t ) > free_array;        // operator delete[] (0x64C148's import)
+    std::function< void( std::uint32_t ) > xml_node_dtor;     // TiXmlNode's dtor 0x5AA280 ( node )
 };
 
 enum class asset_dtor_kind_t
@@ -571,6 +573,7 @@ enum class asset_dtor_kind_t
     generic_data,        // 0x55C1E0
     db,                  // 0x55C230
     timed_event,         // 0x5C8C70
+    xml,                 // 0x5C78F0
 };
 
 inline void asset_string_reset( const asset_words_t& w, std::uint32_t at, const asset_dtor_hooks_t& h )
@@ -623,6 +626,10 @@ inline void substitute_entity_dtor( const asset_words_t& w, std::uint32_t self, 
 //   0x5C8C70 VuTimedEventAsset: +0 = 0x7524D8; with +0x58 non-null its events [+0x58, +0x5C) - 0x30 bytes each -
 //            destroyed by 0x5C9D20 (per event the +0x20 container cleared, then the +4 string reset), the block freed
 //            and +0x58 / +0x5C / +0x60 = 0.
+//   0x5C78F0 VuXmlAsset (body 0x5C7850): +0 = 0x752458; the embedded TiXmlDocument's (+0x58) children - first +0x70,
+//            next each node's +0x28, read before the delete - deleted through their slot 0 ( 1 ); +0x70 / +0x74 = 0;
+//            +0x58 = 0x750F2C; the +0x8C TiXmlString's rep freed (operator delete[]) unless it is the null rep 0x759104
+//            (+0x8C is left as it was); TiXmlNode's dtor 0x5AA280 on +0x58 (TinyXML: a hook).
 inline void asset_events_destroy( const asset_words_t& w, std::uint32_t first, std::uint32_t last, const asset_dtor_hooks_t& h )
 {
     for ( std::uint32_t e = first; e != last; e += 0x30 )   // 0x5C9D20 (fastcall first, last)
@@ -676,13 +683,30 @@ inline void asset_class_dtor( asset_dtor_kind_t kind, const asset_words_t& w, st
                 w.put( self + at, 0u );
         }
         break;
+    case asset_dtor_kind_t::xml:
+        w.put( self, 0x752458u );
+        for ( std::uint32_t n = w.get( self + 0x70 ); n != 0; )
+        {
+            const std::uint32_t next = w.get( n + 0x28 );
+            if ( h.object_delete )
+                h.object_delete( n, 1u );
+            n = next;
+        }
+        w.put( self + 0x70, 0u );
+        w.put( self + 0x74, 0u );
+        w.put( self + 0x58, 0x750F2Cu );
+        if ( w.get( self + 0x8C ) != 0x759104u && h.free_array )
+            h.free_array( w.get( self + 0x8C ) );
+        if ( h.xml_node_dtor )
+            h.xml_node_dtor( self + 0x58 );
+        break;
     default:
         break;
     }
     asset_base_dtor( w, self, h );
 }
 
-// 0x515D70 / 0x53FD10 / 0x5F4AB0 / 0x515E10 / 0x554E90 / 0x55C1E0 / 0x55C230 / 0x5C8C70: the scalar-deleting dtors.
+// 0x515D70 / 0x53FD10 / 0x5F4AB0 / 0x515E10 / 0x554E90 / 0x55C1E0 / 0x55C230 / 0x5C8C70 / 0x5C78F0: the scalar-deleting dtors.
 inline std::uint32_t asset_destroy( asset_dtor_kind_t kind, const asset_words_t& w, std::uint32_t self, std::uint32_t flags,
                                     const asset_dtor_hooks_t& h )
 {

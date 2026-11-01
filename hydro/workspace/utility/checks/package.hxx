@@ -442,6 +442,81 @@ inline bool verify_asset_dtors2( )
     return failed == 0;
 }
 
+// asset_destroy( xml ) (engine assets/factory.hxx) against retail's VuXmlAsset dtor 0x5C78F0 (body 0x5C7850) run whole on
+// images (case asset_xml_dtor, cases/package.py): the hook log, the strings, +0 / +0x58 / +0x70 / +0x74 / +0x8C, eax.
+inline bool verify_asset_xml_dtor( )
+{
+    const unsigned* g = g_golden_asset_xml_dtor_words;
+    const std::uint32_t obj = 0x100, nodes = 0x400, rep = 0x600;
+    auto text_at = []( unsigned k ) { return 0x800u + 0x40u * k; };
+    auto sym = [ & ]( std::uint32_t x ) -> unsigned {
+        if ( x == 0 ) return 0;
+        if ( x == obj ) return 1;
+        if ( x == rep ) return 2;
+        if ( x == 0x759104u ) return 3;
+        if ( x == obj + 0x38 ) return 4;
+        if ( x == obj + 0x58 ) return 5;
+        if ( x == text_at( 0 ) ) return 6;
+        if ( x == text_at( 1 ) ) return 7;
+        for ( unsigned k = 0; k < 4; ++k )
+            if ( x == nodes + 0x40u * k ) return 0x10u + k;
+        return 0x100 + ( x & 0xFF );
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned flags = *g++, n = *g++, rep_sym = *g++, untouched = *g++, nt = *g++;
+        std::map< std::uint32_t, std::uint32_t > mem;
+        asset_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0x5A5A5A5Au : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        mem[ obj + 0x70 ] = n ? nodes : 0u;
+        mem[ obj + 0x8C ] = rep_sym == 3 ? 0x759104u : rep;
+        for ( unsigned j = 0; j < n; ++j )
+            mem[ nodes + 0x40u * j + 0x28 ] = j + 1 < n ? nodes + 0x40u * ( j + 1 ) : 0u;
+        const std::uint32_t at[ 2 ] = { obj + 0x20, obj + 0x8 };
+        for ( unsigned k = 0; k < nt; ++k )
+        {
+            const unsigned len = *g++;
+            const unsigned first = len != 0 ? *g : 0u;
+            g += ( len + 3 ) / 4;
+            mem[ at[ k ] ] = len < 16 ? first : text_at( k );
+            mem[ at[ k ] + 0x10 ] = len;
+            mem[ at[ k ] + 0x14 ] = len < 16 ? 15u : ( len | 15u );
+        }
+        std::vector< std::vector< unsigned > > glog( *g++ ), log;
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        const unsigned* after = g;
+        g += 3 * nt + 6;
+        asset_dtor_hooks_t h;
+        h.free_block = [ & ]( std::uint32_t a ) { log.push_back( { 1u, sym( a ) } ); };
+        h.json_clear = [ & ]( std::uint32_t a ) { log.push_back( { 2u, sym( a ) } ); };
+        h.object_delete = [ & ]( std::uint32_t a, std::uint32_t f ) { log.push_back( { 6u, sym( a ), f } ); };
+        h.free_array = [ & ]( std::uint32_t a ) { log.push_back( { 9u, sym( a ) } ); };
+        h.xml_node_dtor = [ & ]( std::uint32_t a ) { log.push_back( { 10u, sym( a ) } ); };
+        const std::uint32_t r = asset_destroy( asset_dtor_kind_t::xml, w, obj, flags, h );
+        bool ok = log == glog && untouched == 1 && nt == 2;
+        for ( unsigned s = 0; s < nt && ok; ++s )
+            ok = ( w.get( at[ s ] ) & 0xFFu ) == after[ 3 * s ] && w.get( at[ s ] + 0x10 ) == after[ 3 * s + 1 ] && w.get( at[ s ] + 0x14 ) == after[ 3 * s + 2 ];
+        const unsigned* tail = after + 3 * nt;
+        ok = ok && w.get( obj ) == tail[ 0 ] && w.get( obj + 0x58 ) == tail[ 1 ] && sym( w.get( obj + 0x70 ) ) == tail[ 2 ]
+            && sym( w.get( obj + 0x74 ) ) == tail[ 3 ] && sym( w.get( obj + 0x8C ) ) == tail[ 4 ] && ( r == obj ? 1u : 0u ) == tail[ 5 ];
+        if ( !ok && ++failed <= 4 )
+            LOG_ERROR( "xml asset dtor vector %u (%u children, flags %u) differs from retail: %d log entries, retail %d", v, n, flags,
+                static_cast< int >( log.size( ) ), static_cast< int >( glog.size( ) ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "asset_destroy( xml ) matches retail's VuXmlAsset dtor 0x5C78F0 / 0x5C7850 on %u images: the hook log, every string, +0..+0x8C, eax", nv );
+    else
+        LOG_ERROR( "asset_destroy( xml ) FAILED %d of %u against 0x5C78F0", failed, nv );
+    return failed == 0;
+}
+
 // The asset properties' virtuals (engine assets/factory.hxx) against retail's 0x423860 / 0x423870 / 0x423890 / 0x506BB0 /
 // 0x506BE0 / 0x506B30 run whole (case asset_props, cases/package.py): eax, the hook log, +0 after the dtor.
 inline bool verify_asset_props( )
