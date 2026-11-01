@@ -82,6 +82,7 @@ struct boat_pfx_ops_t
     void ( *start )( void* user, std::uint32_t system ) = nullptr;                          // 11
     void ( *stop )( void* user, std::uint32_t system, bool immediate ) = nullptr;           // 12
     void ( *tick )( void* user, std::uint32_t system, float dt ) = nullptr;                 // 13
+    float ( *duration )( void* user, std::uint32_t system ) = nullptr;                      // 10 (the splash discards it)
     // 0x41E2E0 (ecx the boat, xmm1 a, xmm2 b) = boat/state.hxx boat_driver_raise( driver, human, a, b ).
     void ( *raise )( void* user, float a, float b ) = nullptr;
 };
@@ -304,10 +305,14 @@ inline bool boat_pfx_tick( boat_pfx_t& c, const boat_pfx_boat_t& b, float dt, co
     return true;
 }
 
-// The binding onto the recreated VuPfx runtime (world/pfxsim.hxx's heap: a
-// system is its heap word): slots 0 / 2 / 3 / 5 / 7 as world/pfxclass.hxx's
-// setters, 11 / 12 / 13 as pfx_system_start / _stop / _tick (with rt.hooks).
-// `raise` stays the caller's (boat_driver_raise on the boat's driver).
+// The binding onto the recreated VuPfx runtime: the water agent's instance
+// exports (world/pfxsim.hxx pfx_instance_*, verified by its case pfx_calls; a
+// system is its heap word) - slot 0 as world/pfxclass.hxx's setter (no
+// instance export), 2 / 3 / 5 / 7 / 10 / 11 / 12 / 13 as pfx_instance_set_matrix /
+// _set_velocity / _set_colour / _aabb / _duration / _start / _stop / _tick (with
+// rt.hooks). `raise` stays the caller's (boat_driver_raise on the boat's
+// driver). A piece's pfx release (boat_piece_hooks_t::pfx_release, 0x41A0E0 /
+// g_vupfximpl vt+0x2C) is pfx_system_release( rt.heap, rt.resources, s ).
 inline boat_pfx_ops_t boat_pfx_runtime_ops( pfx_runtime_t& rt )
 {
     boat_pfx_ops_t o;
@@ -317,30 +322,25 @@ inline boat_pfx_ops_t boat_pfx_runtime_ops( pfx_runtime_t& rt )
         std::memcpy( w, p, sizeof( w ) );
         pfx_system_set_position( static_cast< pfx_runtime_t* >( u )->heap.find( s ), w );
     };
-    o.set_matrix = []( void* u, std::uint32_t s, const float* m ) {
-        std::uint32_t w[ 16 ];
-        std::memcpy( w, m, sizeof( w ) );
-        pfx_system_set_matrix( static_cast< pfx_runtime_t* >( u )->heap.find( s ), w );
-    };
+    o.set_matrix = []( void* u, std::uint32_t s, const float* m ) { pfx_instance_set_matrix( static_cast< pfx_runtime_t* >( u )->heap, s, m ); };
     o.set_velocity = []( void* u, std::uint32_t s, const std::uint32_t* v ) {
-        pfx_system_set_words5c( static_cast< pfx_runtime_t* >( u )->heap.find( s ), v );
+        float f[ 4 ];
+        std::memcpy( f, v, 16 );
+        pfx_instance_set_velocity( static_cast< pfx_runtime_t* >( u )->heap, s, f );
     };
-    o.set_color = []( void* u, std::uint32_t s, const float* c ) {
-        std::uint32_t w[ 4 ];
-        std::memcpy( w, c, sizeof( w ) );
-        pfx_system_set_wordsac( static_cast< pfx_runtime_t* >( u )->heap.find( s ), w );
-    };
+    o.set_color = []( void* u, std::uint32_t s, const float* c ) { pfx_instance_set_colour( static_cast< pfx_runtime_t* >( u )->heap, s, c ); };
     o.aabb = []( void* u, std::uint32_t s ) -> const std::uint32_t* {
-        return static_cast< pfx_runtime_t* >( u )->heap.find( s + pfx_system_aabb_offset( ) );
+        return reinterpret_cast< const std::uint32_t* >( pfx_instance_aabb( static_cast< pfx_runtime_t* >( u )->heap, s ) );
     };
-    o.start = []( void* u, std::uint32_t s ) { pfx_system_start( static_cast< pfx_runtime_t* >( u )->heap, s ); };
+    o.duration = []( void* u, std::uint32_t s ) { return pfx_instance_duration( static_cast< pfx_runtime_t* >( u )->heap, s ); };
+    o.start = []( void* u, std::uint32_t s ) { pfx_instance_start( static_cast< pfx_runtime_t* >( u )->heap, s ); };
     o.stop = []( void* u, std::uint32_t s, bool immediate ) {
         pfx_runtime_t& rt = *static_cast< pfx_runtime_t* >( u );
-        pfx_system_stop( rt.heap, rt.resources, s, immediate );
+        pfx_instance_stop( rt.heap, rt.resources, s, immediate );
     };
     o.tick = []( void* u, std::uint32_t s, float dt ) {
         pfx_runtime_t& rt = *static_cast< pfx_runtime_t* >( u );
-        pfx_system_tick( rt.heap, s, dt, rt.hooks );
+        pfx_instance_tick( rt.heap, s, dt, rt.hooks );
     };
     return o;
 }
@@ -534,7 +534,7 @@ inline void boat_debris_follow( solver_rigid_t& body, const solver_rigid_t& piec
 // 0x75905C by the name (world/pfxmgr.hxx pfx_manager_create: `create` here,
 // the caller's); none -> nothing. Else a handle (pfx_manager_handle: the
 // entry's serial bumped, past the cap 1), the instance's slot 10 (the Duration
-// getter, its x87 answer discarded - not called here), and when the handle is
+// getter, its x87 answer discarded - ops.duration when set), and when the handle is
 // nonzero and looks up (pfx_manager_lookup) the looked-up entry's instance
 // gets setMatrix( lookAtBasis 0x50CA70( (vx, vy, 0), (0, 0, 1) ) with row 3 =
 // the transform's +0x80 .. +0x88 ), slot 3 ( vx, vy, 0, the body's +0x14C
@@ -546,6 +546,8 @@ inline void boat_hull_splash( pfx_manager_t& m, const char* name, int ( *create 
     if ( e < 0 )
         return;
     const std::uint32_t h = pfx_manager_handle( m, e );
+    if ( o.duration )   // slot 10 on the created entry's instance: fld, then fstp st(0)
+        o.duration( o.user, m.entries[ static_cast< std::size_t >( e ) ].instance );
     if ( h == 0u )
         return;
     const int x = pfx_manager_lookup( m, h );

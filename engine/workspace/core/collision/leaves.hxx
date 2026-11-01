@@ -152,3 +152,50 @@ inline bt_leaf_result_t bt_leaf_call( const bt_leaf_t& l, std::uint8_t* object, 
     }
     return r;
 }
+// The scalar deleting destructors of the race's Bullet classes whose own dtor
+// is empty (boat batch 17; tmp/b17/dtors.py finds them by their whole body):
+// [this] = the class's vtable; when the flag's bit 0 is set operator delete(
+// this ) (the CRT import at 0x64C150 - the allocator: a hook); eax = this; ret 4.
+// The comment names the first vtable slots that point there.
+struct bt_scalar_dtor_t
+{
+    std::uint32_t address;
+    std::uint32_t vtable;
+};
+
+inline constexpr bt_scalar_dtor_t k_bt_scalar_dtors[] = {
+    { 0x413300u, 0x7380B4u },   // btMotionState+0
+    { 0x4F8F10u, 0x74BFCCu },   // btOverlappingPairCallback+0; btGhostPairCallback+0
+    { 0x50CF70u, 0x74C5F8u },   // VuDynamicsRayTest::RayTestWrapper+0; btCollisionWorld::RayResultCallback+0
+    { 0x5188F0u, 0x74CB2Cu },   // btInternalTriangleIndexCallback+0; LocalSupportVertexCallback+0
+    { 0x527B50u, 0x74CF98u },   // btCollisionShape+0; btTriangleMeshShape+0
+    { 0x54BF60u, 0x74E8D0u },   // btGjkEpaPenetrationDepthSolver+0; btConvexPenetrationDepthSolver+0
+    { 0x54BFB0u, 0x74E8BCu },   // btConvexCast::CastResult+3
+    { 0x54DB60u, 0x74E6BCu },   // btTriangleCallback+0; 1PAV::ABVbtTransform::SAXPBVbtConvexShape::btCollisionWorld::??objec
+    { 0x54F300u, 0x74E81Cu },   // 1PAVbtCollisionObject::ABVbtTransform::SAXPBVbtConvexShape::btCollisionWorld::??objectQuer
+    { 0x54F550u, 0x74E7CCu },   // btSingleRayCallback+0; btSingleSweepCallback+0
+    { 0x5524C0u, 0x74E750u },   // btManifoldResult+0; btDiscreteCollisionDetectorInterface::Result+0
+    { 0x56C6D0u, 0x74F6D8u },   // btSphereTriangleCollisionAlgorithm::CreateFunc+0; btBoxBoxCollisionAlgorithm::CreateFunc+0
+    { 0x56D170u, 0x74F684u },   // btCollisionConfiguration+0
+    { 0x56D2C0u, 0x74F784u },   // btDispatcher+0
+    { 0x56D7A0u, 0x74F778u },   // btCollisionPairCallback+0; btOverlapCallback+0
+    { 0x56FA90u, 0x74F880u },   // btBroadphaseInterface+0
+    { 0x574BC0u, 0x74F938u },   // btConstraintSolver+0
+    { 0x575B70u, 0x74FB4Cu },   // btIDebugDraw+0
+    { 0x5AF020u, 0x751784u },   // Z::111::ABVbtVector3::QAEXPAVbtTriangleCallback::btBvhTriangleMeshShape::?1??performConvex
+    { 0x5B6F90u, 0x751C2Cu },   // btSubsimplexConvexCast+0; btConvexCast+0
+    { 0x5B8DE0u, 0x751DB8u },   // btDiscreteCollisionDetectorInterface+0; btGjkPairDetector+0
+    { 0x5F6540u, 0x7573CCu },   // btEmptyAlgorithm+0; btCollisionAlgorithm+0
+    { 0x5FFF10u, 0x757BCCu },   // btSimulationIslandManager::IslandCallback+0
+};
+
+// One call: the object's first word becomes the vtable; elease (operator
+// delete) runs when flags & 1. Returns self (eax).
+inline std::uint32_t bt_scalar_dtor_run( const bt_scalar_dtor_t& d, std::uint8_t* object, std::uint32_t self, std::uint32_t flags,
+                                         void ( *release )( void* user, std::uint32_t object ), void* user )
+{
+    std::memcpy( object, &d.vtable, 4 );
+    if ( ( flags & 1u ) != 0 && release != nullptr )
+        release( user, self );
+    return self;
+}

@@ -3,6 +3,7 @@
 #include <workspace/core/collision/raytest.hxx>
 #include <workspace/core/boat/rays.hxx>
 #include <workspace/core/boat/effects.hxx>
+#include <workspace/core/collision/leaves.hxx>
 
 #include <array>
 #include <cstring>
@@ -1308,5 +1309,47 @@ inline bool verify_debris_launch( )
         return true;
     }
     LOG_ERROR( "debris_launch FAILED %d of %d", failed, static_cast< int >( g_golden_debris_launch_count ) );
+    return false;
+}
+// verify_bt_dtors (boat batch 17): engine collision/leaves.hxx k_bt_scalar_dtors
+// against cases/boat.py bt_dtors - every row with flags 0 / 1 / 2 / 3 / ~1: eax,
+// the object's words, the operator delete calls.
+inline bool verify_bt_dtors( )
+{
+    const unsigned* g = g_golden_bt_dtors_words;
+    const unsigned n = *g++;
+    int failed = 0, deletes = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned address = *g++, flags = *g++, self = *g++;
+        std::uint8_t object[ 64 ];
+        std::memcpy( object, g, 64 );
+        g += 16;
+        const unsigned eax = *g++;
+        const unsigned* after = g;
+        g += 16;
+        const unsigned nd = *g++;
+        const std::vector< unsigned > want( g, g + nd );
+        g += nd;
+        const bt_scalar_dtor_t* d = nullptr;
+        for ( const bt_scalar_dtor_t& x : k_bt_scalar_dtors )
+            if ( x.address == address )
+                d = &x;
+        std::vector< unsigned > got;
+        const unsigned r = d ? bt_scalar_dtor_run( *d, object, self, flags, []( void* u, std::uint32_t o ) {
+            static_cast< std::vector< unsigned >* >( u )->push_back( o );
+        }, &got ) : 0xEEEEEEEEu;
+        deletes += static_cast< int >( nd );
+        if ( ( !d || r != eax || got != want || std::memcmp( object, after, 64 ) != 0 ) && ++failed <= 4 )
+            LOG_ERROR( "bt_dtors 0x%06X flags 0x%X: eax 0x%08X (retail 0x%08X), %d deletes (retail %d)", address, flags, r, eax,
+                       static_cast< int >( got.size( ) ), static_cast< int >( nd ) );
+    }
+    if ( failed == 0 && n == 5 * ( sizeof( k_bt_scalar_dtors ) / sizeof( k_bt_scalar_dtors[ 0 ] ) ) )
+    {
+        LOG_SUCCESS( "the %d empty-dtor scalar deleting destructors (k_bt_scalar_dtors) match retail: %u calls, %d deletes",
+                     static_cast< int >( sizeof( k_bt_scalar_dtors ) / sizeof( k_bt_scalar_dtors[ 0 ] ) ), n, deletes );
+        return true;
+    }
+    LOG_ERROR( "bt_dtors FAILED %d of %u", failed, n );
     return false;
 }
