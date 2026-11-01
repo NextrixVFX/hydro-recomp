@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/ui/combo.hxx>
+#include <workspace/core/ui/difficulty.hxx>
 #include <workspace/core/ui/frame.hxx>
 #include <workspace/core/ui/leaves.hxx>
 #include <workspace/core/ui/ticker.hxx>
@@ -598,9 +599,186 @@ inline bool verify_ui_screen_frame_leaves( )
     return failed == 0;
 }
 
+// verify_ui_difficulty: retail's class picker 0x459D70 and VuDifficultyImageEntity
+// 0x45AF40 / VuDifficultyTextEntity 0x45AA30 (oracle case difficulty_draw) on
+// every such entity of the Screens projects x the scenarios (root / round / dev
+// documents, Loading Screen written raw): the picker's answer and its progress
+// slot-27 calls, then the draw's commands byte for byte (one sort per buffer)
+// and the VuStringDB ids. The fields from OUR loaded entity (compared with
+// retail's bytes; the text's font params 0..40 from OUR "Font C / B / A " over
+// FontDB - 41..59 retail's, UNKNOWN); the real BoatDB / ChampDB documents.
+inline bool verify_ui_difficulty( )
+{
+    ui_gfx_sort_t sort;
+    ui_lv_sort( sort );
+    const value_t boat_db = ui_fr_document( 0 ), champ_db = ui_fr_document( 3 );
+    const char* const fonts[ 3 ] = { "Font C ", "Font B ", "Font A " };
+    const char* const ids[ 3 ] = { "C String ID", "B String ID", "A String ID" };
+    int failed = 0, runs = 0, commands = 0, fields = 0, strings = 0, classes[ 4 ] = { };
+    for ( std::size_t n = 0; n < g_golden_dd_entities_count; ++n )
+    {
+        const golden_dd_entity_t& ge = g_golden_dd_entities[ n ];
+        const entity_t* e = ui_lv_entity( ge.m_project, ge.m_index );
+        const std::vector< std::uint8_t > raw = ui_unhex( ge.m_fields );
+        bool same = e && e->m_type == ( ge.m_text ? "VuDifficultyTextEntity" : "VuDifficultyImageEntity" ) && raw.size( ) == ( ge.m_text ? 0x1Cu : 0x14u );
+        const auto take = [ & ]( const char* name, void* out, const std::uint8_t* want, std::size_t bytes )
+        {
+            if ( !same || !ui_frame_take( *e, name, out, bytes ) || std::memcmp( out, want, bytes ) != 0 )
+                same = false;
+            ++fields;
+        };
+        ui_difficulty_image_t im;
+        ui_difficulty_text_t tx;
+        if ( same && !ge.m_text )
+        {
+            take( "Screen Scale", im.m_screen_scale, raw.data( ), 8 );
+            take( "Loading Screen", &im.m_loading_screen, raw.data( ) + 8, 1 );
+            take( "Position X", &im.m_position[ 0 ], raw.data( ) + 0xC, 4 );
+            take( "Position Y", &im.m_position[ 1 ], raw.data( ) + 0x10, 4 );
+            im.m_depth = ui_frame_depth( *e );
+            same = same && ui_lv_bits( im.m_depth ) == ge.m_depth;
+        }
+        else if ( same )
+        {
+            const std::vector< std::uint8_t > flags = ui_unhex( ge.m_flags );
+            take( "Screen Scale", tx.m_screen_scale, raw.data( ), 8 );
+            take( "Loading Screen", &tx.m_loading_screen, raw.data( ) + 8, 1 );
+            take( "X", &tx.m_rect[ 0 ], raw.data( ) + 0xC, 4 );
+            take( "Y", &tx.m_rect[ 1 ], raw.data( ) + 0x10, 4 );
+            take( "Width", &tx.m_rect[ 2 ], raw.data( ) + 0x14, 4 );
+            take( "Height", &tx.m_rect[ 3 ], raw.data( ) + 0x18, 4 );
+            same = same && flags.size( ) == 12;
+            if ( same )
+            {
+                take( "Horizontal Alignment", &tx.m_h_align, flags.data( ), 4 );
+                take( "Vertical Alignment", &tx.m_v_align, flags.data( ) + 4, 4 );
+                take( "No Clip", &tx.m_no_clip, flags.data( ) + 8, 1 );
+                take( "Single Line", &tx.m_single_line, flags.data( ) + 9, 1 );
+                take( "Wordbreak", &tx.m_wordbreak, flags.data( ) + 10, 1 );
+            }
+            for ( int k = 0; same && k < 3; ++k )
+            {
+                const ui_slot_t* id = ui_property_value( *e, ids[ k ] );
+                same = id && id->m_text == ge.m_ids[ k ];
+                if ( same )
+                    tx.m_string_id[ k ] = id->m_text;
+                const std::vector< std::uint8_t > want = ui_unhex( ge.m_params[ k ] );
+                const ui_slot_t* name = ui_property_value( *e, fonts[ k ] );
+                same = same && name && want.size( ) == 60;
+                if ( !same )
+                    break;
+                std::memcpy( tx.m_params[ k ], want.data( ), 60 );   // 41..59: retail's (UNKNOWN)
+                std::memset( tx.m_params[ k ], 0, 41 );
+                std::string asset;
+                ui_font_params( ui_font_db( 0 ), name->m_text, tx.m_params[ k ], asset );
+                same = std::memcmp( tx.m_params[ k ], want.data( ), 41 ) == 0;
+                fields += 2;
+            }
+            tx.m_depth = ui_frame_depth( *e );
+            same = same && ui_lv_bits( tx.m_depth ) == ge.m_depth;
+        }
+        if ( !same )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "ui difficulty: %s entity %d: OUR loaded fields differ from retail's", ge.m_project, ge.m_index );
+            continue;
+        }
+        for ( int r = 0; r < ge.m_runs; ++r )
+        {
+            const golden_dd_run_t& run = g_golden_dd_runs[ ge.m_first + r ];
+            const golden_txt_env_t& te = g_golden_txt_envs[ run.m_env ];
+            const value_t root = c_reader( ui_unhex( run.m_root ) ).parse( );
+            const std::vector< std::uint8_t > round_raw = ui_unhex( run.m_round ), dev_raw = ui_unhex( run.m_dev );
+            const value_t round = round_raw.empty( ) ? value_t( ) : c_reader( round_raw ).parse( );
+            const value_t dev = dev_raw.empty( ) ? value_t( ) : c_reader( dev_raw ).parse( );
+            int rounds = 0;
+            ui_difficulty_env_t de;
+            de.m_root = &root;
+            de.m_dev = dev_raw.empty( ) ? nullptr : &dev;
+            de.m_boat_db = &boat_db;
+            de.m_champ_db = &champ_db;
+            de.m_round = [ & ]( ) -> const value_t& { ++rounds; return round; };
+            const int k = ui_difficulty_class( run.m_loading != 0, de );
+            ++classes[ k + 1 ];
+            bool ok = k == run.m_class && rounds == run.m_rounds;
+            ui_font_draw_env_t env;
+            const std::vector< std::uint8_t > matrix = ui_unhex( run.m_matrix );
+            std::memcpy( env.m_matrix, matrix.data( ), 64 );
+            std::memcpy( &env.m_top, &te.m_top, 4 );
+            for ( int m = 0; m < 2; ++m )
+            {
+                env.m_material[ m ] = 0x5D001000u + 0x800u * static_cast< std::uint32_t >( m );   // TxtWorld's font materials
+                env.m_material_key[ m ] = g_golden_txt_material_keys[ m ];
+            }
+            env.m_texture_material = g_golden_dd_material[ 0 ];
+            env.m_texture_material_key = g_golden_dd_material[ 1 ];
+            sort.m_index = te.m_index;
+            sort.m_key_lo = te.m_key_lo;
+            sort.m_key_hi = te.m_key_hi;
+            std::vector< ui_gfx_command_t >& list = sort.m_commands[ te.m_index ];
+            const std::size_t before = list.size( );
+            std::vector< std::string > asked;
+            // the draw asks the picker again (its slot-27 calls are not counted twice: the case counts the first)
+            if ( !ge.m_text )
+            {
+                ui_texture_t textures[ 2 ];
+                for ( int t = 0; t < 2; ++t )
+                    textures[ t ] = { g_golden_dd_textures[ t ].m_handle, g_golden_dd_textures[ t ].m_width, g_golden_dd_textures[ t ].m_height };
+                const int c = k >= 0 ? run.m_choice[ k ] : 3;
+                ui_difficulty_image_draw( sort, env, im, k, c < 2 ? &textures[ c ] : nullptr );
+            }
+            else
+            {
+                ui_string_db_t db;
+                db.m_present = true;   // the case always serves VuStringDB
+                db.m_slot12 = te.m_sdb_answer != 0;
+                ui_text_font_t font;
+                if ( k >= 0 )
+                {
+                    font.m_asset = run.m_fonts[ k ] != 0;
+                    font.m_asset_font = g_golden_dd_fonts[ 0 ];
+                }
+                font.m_default = te.m_default != 0;
+                font.m_default_font = g_golden_dd_fonts[ 1 ];
+                ok = ui_difficulty_text_draw( sort, env, db, tx, k, font, [ & ]( const std::string& id ) { asked.push_back( id ); return id + "~"; } ) && ok;
+            }
+            ok = ok && list.size( ) - before == static_cast< std::size_t >( run.m_commands ) && static_cast< int >( asked.size( ) ) == run.m_strings;
+            for ( int s = 0; ok && s < run.m_strings; ++s )
+            {
+                ok = asked[ static_cast< std::size_t >( s ) ] == g_golden_dd_strings[ run.m_first_string + s ];
+                ++strings;
+            }
+            for ( int c = 0; ok && c < run.m_commands; ++c )
+            {
+                const golden_txt_command_t& want = g_golden_dd_commands[ run.m_first + c ];
+                const ui_gfx_command_t& h = list[ before + static_cast< std::size_t >( c ) ];
+                const std::vector< std::uint8_t > record = ui_unhex( want.m_record );
+                const auto& memory = sort.m_buffers[ te.m_index ].m_memory;
+                ok = std::memcmp( h.m_words, want.m_words, sizeof( h.m_words ) ) == 0 && h.m_words[ 3 ] + record.size( ) <= memory.size( ) &&
+                     std::memcmp( memory.data( ) + h.m_words[ 3 ], record.data( ), record.size( ) ) == 0;
+                ++commands;
+            }
+            ++runs;
+            if ( !ok && ++failed <= 8 )
+                LOG_ERROR( "ui difficulty: %s entity %d scenario %d: class %d (retail %d), %d slot-27 calls (retail %d), %d commands (retail %d) - or "
+                           "an id / word / record differs", ge.m_project, ge.m_index, run.m_scenario, k, run.m_class, rounds, run.m_rounds,
+                           static_cast< int >( list.size( ) - before ), run.m_commands );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_difficulty_class / ui_difficulty_image_draw / ui_difficulty_text_draw match retail's picker 0x459D70 (0x4D31D0, 0x4D32F0, "
+                     "0x4D37B0) and the draws 0x45AF40 / 0x45AA30 on %d entities x the scenarios (%d runs: %d none, %d C, %d B, %d A; %d of OUR "
+                     "loaded fields): %d commands byte for byte, %d string ids",
+            static_cast< int >( g_golden_dd_entities_count ), runs, classes[ 0 ], classes[ 1 ], classes[ 2 ], classes[ 3 ], fields, commands, strings );
+    else
+        LOG_ERROR( "the UI difficulty picker / draws FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_leaves_all( )
 {
     bool ok = true;
+    ok = verify_ui_difficulty( ) && ok;
     ok = verify_ui_screen_frame_leaves( ) && ok;
     ok = verify_ui_stat_bar( ) && ok;
     ok = verify_ui_combo_draw( ) && ok;

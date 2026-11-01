@@ -2,6 +2,7 @@
 
 #include <workspace/core/ui/combo.hxx>
 #include <workspace/core/ui/compose.hxx>
+#include <workspace/core/ui/difficulty.hxx>
 #include <workspace/core/ui/image.hxx>
 #include <workspace/core/ui/leave.hxx>
 #include <workspace/core/ui/leaves.hxx>
@@ -38,7 +39,8 @@
 //   button - member 0x443280 (image.hxx ui_button_draw).
 // Recreated too, each emitted only when inputs carries its runtime state:
 //   info (m_info), config (m_config: 0x448F40), combo_box (m_combo: 0x475B10),
-//   stat (m_stat: 0x44FB60), bar (m_bar: 0x4632E0).
+//   stat (m_stat: 0x44FB60), bar (m_bar: 0x4632E0), difficulty_image / _text
+//   (m_difficulty: 0x45AF40 / 0x45AA30 over the class picker 0x459D70).
 // Everything else is `other`: NOT recreated; m_target names the retail function.
 
 enum class ui_frame_kind_t
@@ -52,7 +54,9 @@ enum class ui_frame_kind_t
     config,     // VuGameConfigEntity / VuBoatConfigEntity: 0x4077E8 -> slot 16 0x448F40 -> 0x448F50 (combo.hxx ui_config_draw; needs m_config)
     combo_box,  // the settings combo entities: 0x4390BE -> slot 17 0x475B10 -> 0x4578D0 (combo.hxx ui_combo_draw; needs m_combo)
     stat,       // VuBoatStatEntity 0x44FB60 (leaves.hxx ui_boat_stat_draw; needs m_stat)
-    bar         // VuLoadingProgressBarEntity 0x4632E0 (leaves.hxx ui_progress_bar_draw; needs m_bar)
+    bar,        // VuLoadingProgressBarEntity 0x4632E0 (leaves.hxx ui_progress_bar_draw; needs m_bar)
+    difficulty_image,  // VuDifficultyImageEntity: 0x4077E3 -> slot 12 0x45AF40 (difficulty.hxx; needs m_difficulty)
+    difficulty_text    // VuDifficultyTextEntity: 0x4077E3 -> slot 12 0x45AA30 (difficulty.hxx; needs m_difficulty)
 };
 
 struct ui_draw_target_t
@@ -109,8 +113,8 @@ inline const ui_draw_target_t k_ui_draw_targets[ ] = {
     { 0x0073CC74u, 0x00627040u, 0x00627C60u, ui_frame_kind_t::text, 0x00443920u },   // Screens/SinglePlayer (1 loaded)
     { 0x0073CCB4u, 0x00627040u, 0x00627C60u, ui_frame_kind_t::text, 0x00443920u },   // Screens/SinglePlayer (1 loaded)
     { 0x0073CCF4u, 0x00627040u, 0x00627C60u, ui_frame_kind_t::text, 0x00443920u },   // Screens/SinglePlayer (1 loaded)
-    { 0x0073CE3Cu, 0x004077E3u, 0x0045AF40u, ui_frame_kind_t::other, 0x00000000u },   // Screens/BoatConfig (11 loaded)
-    { 0x0073CE74u, 0x004077E3u, 0x0045AA30u, ui_frame_kind_t::other, 0x00000000u },   // Screens/BoatConfig (11 loaded)
+    { 0x0073CE3Cu, 0x004077E3u, 0x0045AF40u, ui_frame_kind_t::difficulty_image, 0x00000000u },   // Screens/BoatConfig (11 loaded)
+    { 0x0073CE74u, 0x004077E3u, 0x0045AA30u, ui_frame_kind_t::difficulty_text, 0x00000000u },   // Screens/BoatConfig (11 loaded)
     { 0x0073D1DCu, 0x004077E8u, 0x00448F40u, ui_frame_kind_t::config, 0x00000000u },   // Screens/GameConfigChampionship (5 loaded)
     { 0x0073D45Cu, 0x0045FB90u, 0x0045FB90u, ui_frame_kind_t::other, 0x00000000u },   // Screens/ControlsGamepad (2 loaded)
     { 0x0073D4F4u, 0x0045FB90u, 0x0045FB90u, ui_frame_kind_t::other, 0x00000000u },   // Screens/ControlsGamepad (14 loaded)
@@ -207,6 +211,14 @@ struct ui_frame_inputs_t
     std::function< ui_boat_stat_t( const entity_t& ) > m_stat;
     // VuLoadingProgressBarEntity's +0x84 / +0x88 (leaves.hxx). Null: unrecreated.
     std::function< ui_progress_bar_t( const entity_t& ) > m_bar;
+    // The difficulty leaves (difficulty.hxx): the class picker 0x459D70's environment. Null: unrecreated.
+    const ui_difficulty_env_t* m_difficulty = nullptr;
+    // Their per-class inputs (k = 0 C / 1 B / 2 A): the image's Texture Asset k (+0x4C -> +0x58; null none),
+    // the text's Font k (0x626B80), its params' UNKNOWN bytes 41..59, VuStringDB slot 7 on its String ID.
+    std::function< const ui_texture_t*( const entity_t&, int k ) > m_class_texture;
+    std::function< ui_text_font_t( const entity_t&, int k ) > m_class_font;
+    std::function< void( const entity_t&, int k, std::uint8_t params[ 60 ] ) > m_class_params_tail;
+    std::function< std::string( const std::string& id ) > m_string;
 };
 
 // A loaded entity's own / its first UI draw component's property bits.
@@ -246,6 +258,54 @@ inline void ui_frame_params( const entity_t& e, const ui_frame_inputs_t& in, std
     std::string asset;
     if ( in.m_fontdb )
         ui_font_params( *in.m_fontdb, font ? font->m_text : std::string( ), params, asset );
+}
+
+// The difficulty leaves from the loaded properties (the field lists verify_ui_
+// difficulty compares with retail's bytes); the class from the picker.
+inline bool ui_frame_emit_difficulty( ui_gfx_sort_t& sort, const ui_font_draw_env_t& env, const entity_t& e, bool text, const ui_frame_inputs_t& in )
+{
+    if ( !text )
+    {
+        ui_difficulty_image_t f;
+        ui_frame_take( e, "Screen Scale", f.m_screen_scale, 8 );
+        ui_frame_take( e, "Loading Screen", &f.m_loading_screen, 1 );
+        ui_frame_take( e, "Position X", &f.m_position[ 0 ], 4 );
+        ui_frame_take( e, "Position Y", &f.m_position[ 1 ], 4 );
+        f.m_depth = ui_frame_depth( e );
+        const int k = ui_difficulty_class( f.m_loading_screen != 0, *in.m_difficulty );
+        ui_difficulty_image_draw( sort, env, f, k, k >= 0 && in.m_class_texture ? in.m_class_texture( e, k ) : nullptr );
+        return true;
+    }
+    ui_difficulty_text_t t;
+    ui_frame_take( e, "Screen Scale", t.m_screen_scale, 8 );
+    ui_frame_take( e, "Loading Screen", &t.m_loading_screen, 1 );
+    ui_frame_take( e, "X", &t.m_rect[ 0 ], 4 );
+    ui_frame_take( e, "Y", &t.m_rect[ 1 ], 4 );
+    ui_frame_take( e, "Width", &t.m_rect[ 2 ], 4 );
+    ui_frame_take( e, "Height", &t.m_rect[ 3 ], 4 );
+    ui_frame_take( e, "Horizontal Alignment", &t.m_h_align, 4 );
+    ui_frame_take( e, "Vertical Alignment", &t.m_v_align, 4 );
+    ui_frame_take( e, "No Clip", &t.m_no_clip, 1 );
+    ui_frame_take( e, "Single Line", &t.m_single_line, 1 );
+    ui_frame_take( e, "Wordbreak", &t.m_wordbreak, 1 );
+    const char* const fonts[ 3 ] = { "Font C ", "Font B ", "Font A " };
+    const char* const ids[ 3 ] = { "C String ID", "B String ID", "A String ID" };
+    for ( int k = 0; k < 3; ++k )
+    {
+        if ( const ui_slot_t* id = ui_property_value( e, ids[ k ] ) )
+            t.m_string_id[ k ] = id->m_text;
+        std::memset( t.m_params[ k ], 0, 60 );
+        if ( in.m_class_params_tail )
+            in.m_class_params_tail( e, k, t.m_params[ k ] );
+        const ui_slot_t* font = ui_property_value( e, fonts[ k ] );
+        std::string asset;
+        if ( in.m_fontdb )
+            ui_font_params( *in.m_fontdb, font ? font->m_text : std::string( ), t.m_params[ k ], asset );
+    }
+    t.m_depth = ui_frame_depth( e );
+    const int k = ui_difficulty_class( t.m_loading_screen != 0, *in.m_difficulty );
+    const ui_text_font_t font = k >= 0 && in.m_class_font ? in.m_class_font( e, k ) : ui_text_font_t( );
+    return ui_difficulty_text_draw( sort, env, in.m_db, t, k, font, in.m_string );
 }
 
 // One recreated leaf's draw from the loaded properties (the field lists the
@@ -398,6 +458,8 @@ inline bool ui_frame_emit( ui_gfx_sort_t& sort, const ui_impl_t& impl, const ui_
         ui_progress_bar_draw( sort, env, f, in.m_bar( e ), d.m_alpha );
         return true;
     }
+    if ( d.m_kind == ui_frame_kind_t::difficulty_image || d.m_kind == ui_frame_kind_t::difficulty_text )
+        return ui_frame_emit_difficulty( sort, env, e, d.m_kind == ui_frame_kind_t::difficulty_text, in );
     return true;
 }
 
@@ -419,6 +481,9 @@ inline bool ui_frame_ready( ui_frame_kind_t kind, const ui_frame_inputs_t* in )
         return in && in->m_stat;
     case ui_frame_kind_t::bar:
         return in && in->m_bar;
+    case ui_frame_kind_t::difficulty_image:
+    case ui_frame_kind_t::difficulty_text:
+        return in && in->m_difficulty;
     default:
         return true;
     }
