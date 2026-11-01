@@ -2565,6 +2565,7 @@ inline bool verify_water_all( )
     ok = verify_logic_plugs( ) && ok;
     ok = verify_logic_game( ) && ok;
     ok = verify_logic_types( ) && ok;
+    ok = verify_control_entity( ) && ok;
     ok = verify_ocean_kernels96( ) && ok;
     ok = verify_water_built_tick( ) && ok;
     ok = verify_water_query96( ) && ok;

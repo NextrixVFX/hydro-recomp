@@ -332,3 +332,188 @@ inline bool verify_logic_game( )
         LOG_ERROR( "logic_game FAILED %d (%d unrecreated paths reached)", bad, unrecreated );
     return bad == 0;
 }
+
+// VuControlEntity (world/keyframe.hxx) against retail (case control_entity): per scenario the children, the component's
+// records, the ref / component / templated inputs, the six bools and the real-time step as retail had them, the
+// documents parsed by c_reader (= 0x55B560); each step replayed on control_entity_t with hooks logging what the case's
+// stubs logged. Compared after every step: the state words (the entity, every keyframe's time / VuArray / property
+// list by name hash, the component's +0x14 and records) and the log (fires, interface slots, tick registrations);
+// nothing may count unrecreated.
+#include <workspace/core/world/keyframe.hxx>
+
+struct control_check_t
+{
+    std::vector< std::vector< std::uint32_t > > log;
+};
+
+inline std::uint32_t control_check_fnv( const std::string& s )
+{
+    std::uint32_t h = 0x811C9DC5u;
+    for ( const unsigned char c : s )
+        h = ( h ^ c ) * 0x01000193u;
+    return h;
+}
+
+inline std::vector< std::uint32_t > control_check_state( const control_entity_t& e, const control_component_t* comp )
+{
+    std::vector< std::uint32_t > w = { e.initially_active, e.one_shot, e.network_sync, e.loop, e.ease, e.real_time, e.active, e.done };
+    w.push_back( e.target == nullptr ? 0u : ( e.target == comp ? 1u : 2u ) );
+    w.push_back( static_cast< std::uint32_t >( e.keys.size( ) ) );
+    w.push_back( static_cast< std::uint32_t >( e.capacity ) );
+    for ( const auto& k : e.keys )
+    {
+        w.push_back( k.first );
+        w.push_back( static_cast< std::uint32_t >( k.second ) );
+    }
+    w.push_back( e.duration );
+    w.push_back( e.time );
+    for ( const control_child_t& ch : e.children )
+    {
+        if ( !ch.keyframe )
+            continue;
+        w.push_back( ch.frame.time );
+        w.push_back( static_cast< std::uint32_t >( ch.frame.values.size( ) ) );
+        w.push_back( static_cast< std::uint32_t >( ch.frame.capacity ) );
+        w.insert( w.end( ), ch.frame.values.begin( ), ch.frame.values.end( ) );
+        w.push_back( static_cast< std::uint32_t >( ch.frame.properties.size( ) ) );
+        for ( const control_property_t& p : ch.frame.properties )
+        {
+            w.push_back( control_check_fnv( p.name ) );
+            w.push_back( p.fallback );
+            w.push_back( p.current );
+        }
+    }
+    if ( comp )
+    {
+        w.push_back( comp->controller == nullptr ? 0u : ( comp->controller == &e ? 1u : 2u ) );
+        for ( int i = 0; i < comp->count( ); ++i )
+        {
+            w.push_back( comp->records[ 3 * i + 1 ] );
+            w.push_back( comp->records[ 3 * i + 2 ] );
+        }
+    }
+    return w;
+}
+
+inline bool verify_control_entity( )
+{
+    logic_check_t c{ g_golden_cte_words };
+    const unsigned n = c.next( );
+    int bad = 0, steps = 0, reported = 0, unrecreated = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        control_entity_t e;
+        const unsigned nk = c.next( );
+        for ( unsigned k = 0; k < nk; ++k )
+        {
+            control_child_t ch;
+            ch.keyframe = c.next( ) != 0;
+            ch.name = c.str( );
+            e.children.push_back( ch );
+        }
+        control_component_t comp;
+        const unsigned nr = c.next( );
+        for ( unsigned r = 0; r < nr; ++r )
+        {
+            comp.names.push_back( c.str( ) );
+            comp.records.push_back( 0u );
+            comp.records.push_back( c.next( ) );
+            comp.records.push_back( c.next( ) );
+        }
+        const bool linked = c.next( ) != 0, has = c.next( ) != 0, templated = c.next( ) != 0;
+        std::uint8_t bools[ 6 ];
+        for ( auto& b : bools )
+            b = static_cast< std::uint8_t >( c.next( ) );
+        const std::uint32_t rt = c.next( );
+        const std::string doc_bytes = c.str( );
+        value_t doc = c_reader( std::vector< std::uint8_t >( doc_bytes.begin( ), doc_bytes.end( ) ) ).parse( );
+        value_t tdoc;
+        if ( c.next( ) )
+        {
+            const std::string t = c.str( );
+            tdoc = c_reader( std::vector< std::uint8_t >( t.begin( ), t.end( ) ) ).parse( );
+        }
+        control_check_t log;
+        control_component_t* cp = has ? &comp : nullptr;
+        comp.user = &log;
+        comp.changed = []( void* u, control_component_t& ) { static_cast< control_check_t* >( u )->log.push_back( { 2u, 0u } ); };
+        comp.begin = []( void* u, control_component_t& ) { static_cast< control_check_t* >( u )->log.push_back( { 2u, 1u } ); };
+        comp.end = []( void* u, control_component_t& ) { static_cast< control_check_t* >( u )->log.push_back( { 2u, 2u } ); };
+        struct env_t { control_check_t* log; float rt; } env{ &log, control_f( rt ) };
+        control_hooks_t h;
+        h.user = &env;
+        h.unrecreated = &unrecreated;
+        h.fire = []( void* u, control_entity_t&, const char* plug ) { static_cast< env_t* >( u )->log->log.push_back( { 1u, control_check_fnv( plug ) } ); };
+        h.tick_register = []( void* u, control_entity_t&, bool on )
+        {
+            if ( on )
+                static_cast< env_t* >( u )->log->log.push_back( { 3u, control_check_fnv( "Motion" ), 0x7529F8u, 1u, 0x5CD9F0u } );
+            else
+                static_cast< env_t* >( u )->log->log.push_back( { 4u, 1u } );
+        };
+        h.real_dt = []( void* u ) { return static_cast< env_t* >( u )->rt; };
+        const control_component_t* bound = linked && has ? &comp : nullptr;
+        const unsigned ns = c.next( );
+        for ( unsigned s = 0; s < ns; ++s )
+        {
+            const unsigned op = c.next( );
+            const unsigned a0 = c.next( ), a1 = c.next( ), a2 = c.next( );
+            std::vector< std::vector< std::uint32_t > > want_log( c.next( ) );
+            for ( auto& l : want_log )
+            {
+                l.resize( c.next( ) );
+                for ( auto& x : l )
+                    x = c.next( );
+            }
+            std::vector< std::uint32_t > want( c.next( ) );
+            for ( auto& x : want )
+                x = c.next( );
+            log.log.clear( );
+            int expect_ret = -1;
+            switch ( op )
+            {
+                case 0:
+                    e.initially_active = bools[ 0 ]; e.one_shot = bools[ 1 ]; e.network_sync = bools[ 2 ];
+                    e.loop = bools[ 3 ]; e.ease = bools[ 4 ]; e.real_time = bools[ 5 ];
+                    break;
+                case 1: control_load( e, doc ); break;
+                case 2: control_load_template( e, tdoc ); break;
+                case 3: control_post_load( e, bound, templated ); break;
+                case 4: control_game_init( e, linked, linked ? cp : nullptr, h ); break;
+                case 5: control_game_release( e, h ); break;
+                case 6: control_reset( e ); break;
+                case 7: control_rebind( e, bound ); break;
+                case 8: control_child_added( e, static_cast< int >( a0 ), bound ); break;
+                case 9: control_activate( e, h ); expect_ret = static_cast< int >( a0 ); break;
+                case 10: control_deactivate( e, h ); expect_ret = static_cast< int >( a0 ); break;
+                case 11: control_tick( e, control_f( a0 ), h ); break;
+                case 12:
+                {
+                    std::uint8_t p[ 8 ];
+                    std::memcpy( p, &a0, 4 );
+                    std::memcpy( p + 4, &a1, 4 );
+                    control_manual_tick( e, p, static_cast< std::int32_t >( a2 ), h );
+                    break;
+                }
+                default: ++bad; break;
+            }
+            ++steps;
+            const std::vector< std::uint32_t > got = control_check_state( e, has ? &comp : nullptr );
+            int diff = expect_ret > 0 ? 1 : 0;   // the VuRetVal type word retail wrote (0: void)
+            for ( std::size_t i = 0; i < ( std::max )( got.size( ), want.size( ) ); ++i )
+                diff += i >= got.size( ) || i >= want.size( ) || got[ i ] != want[ i ] ? 1 : 0;
+            diff += log.log == want_log ? 0 : 1;
+            if ( diff && reported++ < 6 )
+                LOG_ERROR( "control_entity scenario %u step %u (op %u): %d words differ (state %d / %d words, log %d / %d)", v, s, op, diff,
+                           static_cast< int >( got.size( ) ), static_cast< int >( want.size( ) ), static_cast< int >( log.log.size( ) ),
+                           static_cast< int >( want_log.size( ) ) );
+            bad += diff;
+        }
+    }
+    bad += unrecreated;
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuControlEntity matches retail: %u scenarios, %d steps (slots 2 / 3 / 4 / 6 / 7 / 8 / 9, 0x5CD990, Activate, Deactivate, OnManualTick, the tick; every state word and log entry)", n, steps );
+    else
+        LOG_ERROR( "control_entity FAILED %d (unrecreated %d)", bad, unrecreated );
+    return bad == 0;
+}
