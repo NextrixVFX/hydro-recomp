@@ -1759,9 +1759,52 @@ inline bool verify_race_begin( )
     return failed == 0;
 }
 
+// race_boat_draw_instance / race_boat_draw_matrix (world/session.hxx) against
+// retail's VuBoatEntity draw 0x41EAE0 run whole on the normal pass (oracle case
+// boat_draw; the instance draws, damage and pfx calls intercepted): per vector
+// the instance drawn (model 0 / 1 / 2 or none) and, when one is, the 16 words of
+// the matrix it was handed. The colour / alpha words the draw writes into the
+// instance are not compared (our renderer does not take them).
+inline bool verify_boat_draw( )
+{
+    int failed = 0, drawn = 0;
+    for ( std::size_t v = 0; v < g_golden_boat_draw_count; ++v )
+    {
+        const unsigned* g = g_golden_boat_draw + 46 * v;
+        std::vector< std::uint8_t > boat( 0x520, 0 ), xf( 0xC8, 0 );
+        std::memcpy( xf.data( ) + 0x50, g, 64 );
+        std::memcpy( boat.data( ) + 0x49C, g + 16, 16 );
+        std::memcpy( boat.data( ) + 0x10C, g + 20, 8 );
+        const int flag_at[ 4 ] = { 0x464, 0x465, 0x466, 0x46B };
+        for ( int k = 0; k < 4; ++k )
+            boat[ static_cast< std::size_t >( flag_at[ k ] ) ] = static_cast< std::uint8_t >( g[ 22 + k ] );
+        float eye[ 3 ];
+        std::memcpy( eye, g + 26, 12 );
+        const int pick = race_boat_draw_instance( boat.data( ), xf.data( ), eye );
+        int bad = static_cast< unsigned >( pick ) == g[ 29 ] ? 0 : 1;
+        if ( !bad && pick >= 0 )
+        {
+            ++drawn;
+            float m[ 16 ];
+            race_boat_draw_matrix( boat.data( ), xf.data( ), m );
+            bad = std::memcmp( m, g + 30, 64 ) == 0 ? 0 : 2;
+        }
+        if ( bad && ++failed <= 6 )
+            LOG_ERROR( "boat draw vector %d differs from retail: %d (1 instance: ours %d retail %d, 2 matrix)", static_cast< int >( v ), bad, pick,
+                       static_cast< int >( g[ 29 ] ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "race_boat_draw_instance / race_boat_draw_matrix match retail's VuBoatEntity draw 0x41EAE0: %d vectors, %d instance draws "
+                     "(matrix bit for bit), the rest drawing none", static_cast< int >( g_golden_boat_draw_count ), drawn );
+    else
+        LOG_ERROR( "boat draw FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_draw_count ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_boat_draw( ) && ok;
     ok = verify_race_begin( ) && ok;
     ok = verify_boat_post_load( ) && ok;
     ok = verify_boat_game_init( ) && ok;
