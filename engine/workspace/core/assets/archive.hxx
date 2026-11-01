@@ -94,7 +94,7 @@ public:
             LOG_WARNING( "pack listed %u assets and the directory has %u", listed, static_cast< unsigned >( m_entries.size( ) ) );
 
         m_path = path;
-        LOG_SUCCESS( "pack %u assets", static_cast< unsigned >( m_entries.size( ) ) );
+        LOG_VERBOSE( "pack %u assets", static_cast< unsigned >( m_entries.size( ) ) );
         return true;
     }
 
@@ -148,7 +148,7 @@ public:
             return false;
         }
 
-        LOG_SUCCESS( "asset %s  %u bytes", name, static_cast< unsigned >( dest_len ) );
+        LOG_VERBOSE( "asset %s  %u bytes", name, static_cast< unsigned >( dest_len ) );
         return true;
     }
 

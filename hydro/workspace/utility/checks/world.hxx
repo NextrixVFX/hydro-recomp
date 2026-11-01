@@ -591,9 +591,183 @@ inline bool verify_animated_model_draw( )
     return failed == 0;
 }
 
+// The digests case_static_scene_load takes of retail's VuGfxStaticScene (FNV-1a 32 over little-endian words and
+// NUL-ended strings), built here from hydro's scene_t in the same order.
+struct scene_digest_t
+{
+    std::uint32_t h = 0x811C9DC5u;
+    void bytes( const void* data, std::size_t count )
+    {
+        const std::uint8_t* p = static_cast< const std::uint8_t* >( data );
+        for ( std::size_t k = 0; k < count; ++k )
+            h = ( h ^ p[ k ] ) * 0x01000193u;
+    }
+    void word( std::uint32_t w ) { bytes( &w, 4 ); }
+    void floats( const float* f, int count ) { bytes( f, 4 * static_cast< std::size_t >( count ) ); }
+    void text( const std::string& s ) { bytes( s.c_str( ), s.size( ) + 1 ); }
+};
+
+// Base.apf next to the exe or up to eight folders above it (c_world::pack_path's walk).
+inline std::string world_check_pack( )
+{
+#if defined( _WIN32 )
+    char module_path[ MAX_PATH ]{};
+    GetModuleFileNameA( nullptr, module_path, MAX_PATH );
+    std::string directory = module_path;
+    for ( int step = 0; step < 9; ++step )
+    {
+        const auto slash = directory.find_last_of( "\\/" );
+        if ( slash == std::string::npos )
+            break;
+        directory.resize( slash );
+        for ( const char* leaf : { "\\HydroThunderUWP\\Base.apf", "\\Base.apf" } )
+            if ( GetFileAttributesA( ( directory + leaf ).c_str( ) ) != INVALID_FILE_ATTRIBUTES )
+                return directory + leaf;
+    }
+#endif
+    return {};
+}
+
+// scene_load_static (hydro assets/scene.hxx) against retail's VuGfxStaticScene load 0x560C70 (oracle case
+// static_scene_load: VuStaticModelAsset's load 0x542C30 run on real blobs). Each blob is read from Base.apf here;
+// compared: the nine totals, the scene aabb (min / max x y z), and digests of the shaders (index, flag, the six
+// bytes, mode, declaration, the three material tables), the D3D11 stages retail created (its stage cache: a key
+// already made is not made again), the meshes + parts, the chunks + their buffer bytes, and the node tree (name,
+// matrix, mesh, children, aabb). One failure per asset.
+inline bool verify_static_scene_load( )
+{
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) )
+    {
+        LOG_ERROR( "verify_static_scene_load: Base.apf not found" );
+        return false;
+    }
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_static_scenes_count; ++k )
+    {
+        const golden_static_scene_t& want = g_golden_static_scenes[ k ];
+        std::vector< std::uint8_t > blob;
+        scene_t scene;
+        const std::string name = std::string( "VuStaticModelAsset/" ) + want.m_asset;
+        if ( !archive.read( name.c_str( ), blob ) || !scene_load_static( blob.data( ), blob.size( ), scene ) )
+        {
+            LOG_ERROR( "static scene '%s': scene_load_static failed", want.m_asset );
+            ++failed;
+            continue;
+        }
+        const std::uint32_t totals[ 9 ] = { scene.mesh_count, scene.part_count, scene.vertex_count, scene.triangle_count,
+            scene.shader_count, scene.node_total, scene.instance_total, scene.vertex_total, scene.triangle_total };
+        std::uint32_t aabb[ 6 ];
+        std::memcpy( aabb, scene.aabb, 12 );
+        std::memcpy( aabb + 3, scene.aabb + 4, 12 );
+        scene_digest_t shaders, stages, meshes, chunks, tree;
+        std::vector< std::uint32_t > made;
+        for ( const scene_shader_t& s : scene.shaders )
+        {
+            shaders.word( s.index );
+            shaders.word( s.flag );
+            shaders.bytes( s.bytes, 6 );
+            shaders.word( s.mode );
+            shaders.bytes( s.elements.data( ), 16 * s.elements.size( ) );
+            for ( const scene_table_t& t : s.tables )
+            {
+                shaders.word( static_cast< std::uint32_t >( t.constants.size( ) ) );
+                for ( const scene_constant_t& c : t.constants )
+                {
+                    shaders.text( c.name );
+                    shaders.word( c.type );
+                    for ( std::uint32_t w : c.value )
+                        shaders.word( w );
+                }
+                shaders.word( static_cast< std::uint32_t >( t.textures.size( ) ) );
+                for ( const scene_texture_t& x : t.textures )
+                {
+                    shaders.text( x.name );
+                    shaders.text( x.slot );
+                    shaders.word( x.value );
+                    shaders.text( x.asset );
+                }
+            }
+            const scene_stage_t* both[ 2 ] = { &s.program.vertex, &s.program.pixel };
+            for ( std::uint32_t type = 0; type < 2; ++type )
+            {
+                const scene_stage_t& st = *both[ type ];
+                if ( std::find( made.begin( ), made.end( ), st.key ) != made.end( ) )
+                    continue;
+                made.push_back( st.key );
+                scene_digest_t code;
+                code.bytes( blob.data( ) + st.bytecode.offset, st.bytecode.size );
+                stages.word( type );
+                stages.word( st.bytecode.size );
+                stages.word( code.h );
+                stages.word( st.constants );
+            }
+        }
+        for ( const scene_mesh_t& m : scene.meshes )
+        {
+            meshes.text( m.name );
+            meshes.word( static_cast< std::uint32_t >( m.parts.size( ) ) );
+            meshes.floats( m.aabb, 8 );
+            for ( const scene_part_t& p : m.parts )
+            {
+                for ( std::uint32_t w : { p.chunk, p.shader, p.first_vertex, p.last_vertex, p.vertices, p.first_index, p.triangles } )
+                    meshes.word( w );
+                meshes.floats( p.aabb, 8 );
+            }
+        }
+        for ( const scene_chunk_t& c : scene.chunks )
+        {
+            chunks.word( c.stride );
+            chunks.word( c.vertices.size );
+            chunks.word( c.indices );
+            chunks.bytes( blob.data( ) + c.vertices.offset, c.vertices.size );
+            chunks.bytes( blob.data( ) + c.index_bytes.offset, c.index_bytes.size );
+        }
+        for ( const scene_node_t& n : scene.nodes )
+        {
+            tree.text( n.name );
+            tree.floats( n.matrix, 16 );
+            tree.word( n.mesh >= 0 ? static_cast< std::uint32_t >( n.mesh ) : 0xFFFFFFFFu );
+            tree.word( static_cast< std::uint32_t >( n.children.size( ) ) );
+            tree.floats( n.aabb, 3 );
+            tree.floats( n.aabb + 4, 3 );
+        }
+        const int counts[ 4 ] = { static_cast< int >( scene.shaders.size( ) ), static_cast< int >( scene.meshes.size( ) ),
+            static_cast< int >( scene.chunks.size( ) ), static_cast< int >( made.size( ) ) };
+        const char* what = nullptr;
+        if ( std::memcmp( totals, want.m_totals, sizeof( totals ) ) != 0 )
+            what = "totals";
+        else if ( std::memcmp( counts, want.m_counts, sizeof( counts ) ) != 0 )
+            what = "counts";
+        else if ( std::memcmp( aabb, want.m_aabb, sizeof( aabb ) ) != 0 )
+            what = "scene aabb";
+        else if ( shaders.h != want.m_shaders )
+            what = "shaders";
+        else if ( stages.h != want.m_stages )
+            what = "stages";
+        else if ( meshes.h != want.m_meshes )
+            what = "meshes";
+        else if ( chunks.h != want.m_chunks )
+            what = "chunks";
+        else if ( tree.h != want.m_tree )
+            what = "node tree";
+        if ( what != nullptr && ++failed <= 8 )
+            LOG_ERROR( "static scene '%s': %s differ from retail", want.m_asset, what );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "scene_load_static matches VuGfxStaticScene's load (0x542C30 -> 0x560C70 / 0x5C1560 / 0x5C24D0 / 0x5610F0) "
+                     "on %d real VuStaticModelAssets: totals, scene aabb, shaders, stages, meshes, chunks, node tree",
+            static_cast< int >( g_golden_static_scenes_count ) );
+    else
+        LOG_ERROR( "scene_load_static FAILED on %d of %d assets", failed, static_cast< int >( g_golden_static_scenes_count ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_static_scene_load( ) && ok;
     ok = verify_animated_model_draw( ) && ok;
     ok = verify_script_graph( ) && ok;
     ok = verify_prop_draw_matrix( ) && ok;

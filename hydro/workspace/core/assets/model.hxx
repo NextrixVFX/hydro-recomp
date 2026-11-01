@@ -2,6 +2,7 @@
 
 #include <impl/engine/engine.hxx>
 #include <workspace/utility/math.hxx>
+#include <workspace/core/assets/scene.hxx>
 
 #include <cmath>
 #include <cstdint>
