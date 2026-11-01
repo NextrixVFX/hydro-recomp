@@ -2719,6 +2719,49 @@ inline bool verify_fleet_small( )
     LOG_ERROR( "fleet_small FAILED %d of %u vectors", failed, nv );
     return false;
 }
+// 0x4ABB40 / 0x4ABB10 / the atexit stubs 0x4AA960 / 0x403250 against retail (oracle case boat_small).
+inline bool verify_boat_small( )
+{
+    const unsigned* g = g_golden_boat_small_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++;
+        std::uint8_t data[ 0x100 ];
+        std::memcpy( data, g, 0x100 ); g += 0x40;
+        const unsigned off = *g++, n = *g++, seed = *g++, ret = *g++;
+        bool same = true;
+        if ( fn == 1 )
+            same = boat_fnv_range( data + off, n, seed ) == ret;
+        else if ( fn == 2 )
+        {
+            std::uint8_t dst[ 0x80 ];
+            std::memset( dst, 0xCD, sizeof( dst ) );
+            boat_stream_t st;
+            st.base = data;
+            st.position = off;
+            boat_stream_read( st, dst, n );
+            same = std::memcmp( dst, g, 0x80 ) == 0 && st.position == g[ 0x20 ];
+            g += 0x21;
+        }
+        else
+        {
+            std::uint32_t global = 0x12345678u;
+            boat_atexit_clear( global );
+            same = global == ret;
+        }
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "boat_small vector %u (function %u) differs", v, fn );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "0x4ABB40 / 0x4ABB10 / atexit 0x4AA960 / 0x403250 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "boat_small FAILED %d of %u vectors", failed, nv );
+    return false;
+}
 // The contact-added callback 0x574E90 -> 0x5751F0 -> 0x519720 against retail (oracle case contact_added): the manifold
 // point after (every word, bit for bit), the return, and each listener / callback call's record (but its stale-stack
 // words) with the case's scripted write-backs replayed.
@@ -3089,6 +3132,7 @@ inline bool verify_race_all( )
     ok = verify_boat_set_world( ) && ok;
     ok = verify_driver_dtors( ) && ok;
     ok = verify_fleet_small( ) && ok;
+    ok = verify_boat_small( ) && ok;
     ok = verify_contact_added( ) && ok;
     ok = verify_boat_rtti( ) && ok;
     ok = verify_human_explosion( ) && ok;
