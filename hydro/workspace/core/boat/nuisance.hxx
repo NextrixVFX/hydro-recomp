@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/assets/tree.hxx>
+#include <workspace/core/boat/rtti.hxx>
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/entity/property.hxx>
 
@@ -183,12 +184,11 @@ inline void nuisance_driver_set_target( const vu_words_t& w, std::uint32_t drive
 }
 
 // 0x41B4B0(off_73621C) / 0x430020's inline walk: the driver's vt+4 type
-// chain (+4 the parent) holds VuAiNuisanceDriver's. No class derives from
-// VuAiNuisanceDriver (RTTI), so that is its own vtable 0x737C4C - the
-// chain walk itself is not recreated (the case runs every driver vtable).
+// chain (+4 the parent) holds VuAiNuisanceDriver's descriptor 0x73621C
+// (boat rtti.hxx).
 inline bool nuisance_driver_is( std::uint32_t vtable )
 {
-    return vtable == 0x737C4Cu;
+    return boat_rtti_is( vtable, 0x73621Cu );
 }
 
 // The plugs (thiscall(this, VuRetVal* out, VuParams const&), retn 8; *out =

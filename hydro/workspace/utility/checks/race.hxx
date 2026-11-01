@@ -2371,6 +2371,67 @@ inline bool verify_contact_added( )
     return false;
 }
 
+// The boat classes' VuRTTI (boat rtti.hxx) against retail (oracle case boat_rtti): every descriptor's parent and name,
+// every class's slot 1 / descriptor / chain, and 0x41B4B0 for every class against every descriptor plus 0 / a stray word.
+inline bool verify_boat_rtti( )
+{
+    const unsigned* g = g_golden_boat_rtti_words;
+    int failed = 0;
+    const unsigned nn = *g++;
+    for ( unsigned k = 0; k < nn; ++k )
+    {
+        const unsigned d = *g++, parent = *g++, n = *g++;
+        const std::string name( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        const boat_rtti_t* mine = nullptr;
+        for ( const boat_rtti_t& r : g_boat_rtti )
+            if ( r.descriptor == d )
+                mine = &r;
+        if ( ( !mine || mine->parent != parent || name != mine->name ) && ++failed <= 8 )
+            LOG_ERROR( "boat_rtti descriptor 0x%X (%s): parent 0x%X (retail 0x%X)", d, name.c_str( ), mine ? mine->parent : 0u, parent );
+    }
+    if ( nn != sizeof( g_boat_rtti ) / sizeof( g_boat_rtti[ 0 ] ) && ++failed <= 8 )
+        LOG_ERROR( "boat_rtti: %u descriptors met (the table has %zu)", nn, sizeof( g_boat_rtti ) / sizeof( g_boat_rtti[ 0 ] ) );
+    const unsigned nc = *g++;
+    std::vector< unsigned > vtables;
+    for ( unsigned k = 0; k < nc; ++k )
+    {
+        const unsigned vt = *g++, get = *g++, d = *g++, nch = *g++;
+        std::vector< unsigned > chain( g, g + nch );
+        g += nch;
+        vtables.push_back( vt );
+        const boat_rtti_class_t* mine = nullptr;
+        for ( const boat_rtti_class_t& c : g_boat_rtti_classes )
+            if ( c.vtable == vt )
+                mine = &c;
+        std::vector< unsigned > walk;
+        for ( std::uint32_t x = boat_rtti_of( vt ); x; x = boat_rtti_parent( x ) )
+            walk.push_back( x );
+        if ( ( !mine || mine->get_type != get || mine->descriptor != d || walk != chain ) && ++failed <= 8 )
+            LOG_ERROR( "boat_rtti class 0x%X: getType 0x%X (retail 0x%X), descriptor 0x%X (0x%X)", vt, mine ? mine->get_type : 0u, get,
+                       mine ? mine->descriptor : 0u, d );
+    }
+    const unsigned nw = *g++;
+    std::vector< unsigned > wanted( g, g + nw );
+    g += nw;
+    unsigned pairs = 0;
+    for ( unsigned vt : vtables )
+        for ( unsigned w : wanted )
+        {
+            const unsigned r = *g++;
+            ++pairs;
+            if ( ( boat_rtti_is( vt, w ) ? 1u : 0u ) != r && ++failed <= 8 )
+                LOG_ERROR( "boat_rtti 0x41B4B0(0x%X, 0x%X): %u (retail %u)", vt, w, boat_rtti_is( vt, w ) ? 1u : 0u, r );
+        }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "The boat classes' getType slots and 0x41B4B0 match retail: %u descriptors, %u classes, %u pairs", nn, nc, pairs );
+        return true;
+    }
+    LOG_ERROR( "boat_rtti FAILED %d", failed );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -2398,5 +2459,6 @@ inline bool verify_race_all( )
     ok = verify_boat_manager_game( ) && ok;
     ok = verify_nuisance_start( ) && ok;
     ok = verify_contact_added( ) && ok;
+    ok = verify_boat_rtti( ) && ok;
     return ok;
 }
