@@ -95,6 +95,9 @@ struct entity_world_t
     std::function< std::shared_ptr< void >( const std::string& cls ) > m_state_for;
     std::function< void( entity_t& entity, const value_t& properties ) > m_properties_load;
     std::function< void( entity_t& entity ) > m_properties_mark;
+    // The entity's own vt+8 postLoad (a normal load, 0x5009D0's last call) / vt+0xC (a template override, 0x5015D0's), on
+    // the entity's whole data. Null or a class it does not know: a hook.
+    std::function< void( entity_t& entity, const value_t& data, bool override ) > m_post_load;
 };
 
 // 0x500690, the child order (std::sort's comparator in 0x501810): a child with
@@ -276,7 +279,9 @@ inline void entity_load_override( entity_t& entity, const value_t& data, const e
     if ( world.m_properties_load )
         world.m_properties_load( entity, member( data, "Properties" ) );
     entity_load_components( entity, member( data, "Components" ), world, true );
-    // The entity's vt+0xC follows - a hook.
+    // The entity's vt+0xC follows.
+    if ( world.m_post_load )
+        world.m_post_load( entity, data, true );
 }
 
 // 0x55AFE0: a project root's name from its file path - the path normalised by
@@ -338,5 +343,7 @@ inline void entity_load( entity_t& entity, const value_t* data, const entity_wor
     if ( world.m_properties_load )
         world.m_properties_load( entity, member( *data, "Properties" ) );
     entity_load_components( entity, member( *data, "Components" ), world, false );
-    // The entity's vt+8 postLoad follows - a hook.
+    // The entity's vt+8 postLoad follows.
+    if ( world.m_post_load )
+        world.m_post_load( entity, *data, false );
 }

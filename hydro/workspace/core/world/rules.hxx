@@ -449,6 +449,10 @@ struct race_rules_t
     std::vector< std::uint8_t* > humans;
     race_rules_game_t* game = nullptr;
     bool sorted = true;              // false once race_rules_places refused (more than 32 boats)
+    // VuTimeTrialGame's Game exit 0x490750 reads these: TrackDB's document (g_vugameutil 0x758FF8 +0x10's +0x58) and the
+    // first human's boat name (its +0x160 VuString).
+    const value_t* track_db = nullptr;
+    std::string human_boat;
 };
 
 // 0x48A7F0 / 0x48A860: every game boat's +0x308 += 1 / -= 1 (the drivers'
@@ -1018,6 +1022,132 @@ inline void race_rules_construct( race_rules_t& r )
     r.fsm.add_transition( "PreGame", "Game", "StartLightsOut" );
     r.fsm.add_transition( "Game", "PostGame", "HumanFinished" );
     r.fsm.add_transition( "Game", "PostGame", "EveryoneFinished" );
+    r.fsm.add_transition( "", "Exit", "Exit" );
+}
+
+// ---- VuTimeTrialGame's machine (ctor 0x48ED30; world batch 27, case timetrial_game_fsm) --------------------------
+//
+// The table is the ctor's (game_mode_defs, case game_ctors): PreGame / Game / PostGame / Exit, PreGame -> Game
+// "StartLightsOut", Game -> PostGame "Finished", "" -> Exit "Exit". The handlers, read whole (thiscall game):
+//   OnStartLightsOut 0x490540: "StartLightsOut" +0x1C = 1.
+//   PreGame  enter 0x490570: every game boat's +0x308 += 1, the HUD +0x72C's gameInitialize (when its root's +0x14 bit 2
+//            is clear: repository vt+0x18, 0x500B10, 0x501260 "OnProjectInitialized"); exit 0x4905E0: +0x308 -= 1 and
+//            its release (when set: 0x500B80, repository vt+0x1C); tick 0x490630 the HUD's tick (root a VuHUDEntity -
+//            RTTI 0x7362AC - vt+0x30(dt)); draw 0x490690 (vt+0x34(1.0): the UI's, not run here - as the race's).
+//   Game     enter 0x4906F0 / tick 0x4908B0 / draw 0x490950 on +0x730; the tick: 0x4831D0(dt) (the clocks - no places),
+//            then with a human (boat manager g 0x758FB8 +0x28 != 0) "Finished" = the first human's +0x32F, then the
+//            HUD tick. Exit 0x490750: the HUD release, then the first human's place +0x4CC (the list's [0], its count
+//            NOT tested): TrackDB ["VuDBAsset"] (0x4FBDF0) -> [the game's track +0x68] (0x4F22B0 find, a map only) ->
+//            ["TimeTrial"] -> [the boat's name +0x160] = the reference times; +0x4CC = 0, then while +0x4CC < the
+//            array's count (0x4FBC40: an array only, else 0): element +0x4CC (an array in range, else the null
+//            container) as a float (tag 1 cvtdq2ps, 2 the float, 7 fild qword / fstp, else 0); stop when it is >= the
+//            human's +0x4B4 (comiss / jae: an unordered compare goes on), else +0x4CC += 1.
+//   PostGame enter 0x4909B0 on +0x734: the HUD init, "OnSetAllowPause" {bool false}; with a human: the progress manager
+//            g 0x758FD8 vt+0x38 (track +0x68, boat +0x160, 0, +0x4CC, +0x4B4, +0x4B8 - its save: a platform hook), unless
+//            +0x334 the leaderboard 0x4B0650 (track + "TimeTrial", -(int)(+0x4B4 x 1000.0) as int64 - fld / fistp,
+//            neg, cdq), and when +0x4CC > 0, +0x328 > 0.0 and +0x32D clear the voice-over g 0x758FEC vt+0x20 (human,
+//            "DidNotUseBoost") - no vt+0x1C line. Exit 0x490BD0: the HUD release. Tick 0x490C00: "Exit" = the time in
+//            the state +0x71C >= 4.0 (no clocks), then the HUD tick; draw 0x486720 (the UI's).
+// The platform calls reach r.hooks.platform as text: "progress38 <track> <place> <4B4 hex> <4B8 hex>", "leaderboard
+// <name> <value>", "vo20 <line>". Slot 5 0x48F310 = race_rules_start, slot 7 0x48F350 = race_rules_tick (the same
+// instructions as VuRaceGame's 0x489A40 but the name test: 0x404AC0 over min(size, 4) bytes of "Exit", then the
+// sizes - the same answer).
+inline float timetrial_value_float( const value_t& v )
+{
+    if ( v.tag == 1 )
+        return static_cast< float >( v.integer );
+    if ( v.tag == 2 )
+        return v.real;
+    if ( v.tag == 7 )
+        return static_cast< float >( v.int64 );
+    return 0.0f;
+}
+
+inline void timetrial_rules_place( race_rules_t& r )
+{
+    if ( r.humans.empty( ) )
+    {
+        if ( r.unrecreated )
+            r.unrecreated( 0x490750u, "VuTimeTrialGame Game exit with no human (retail reads the list's [0] unchecked) - UNKNOWN" );
+        return;
+    }
+    std::uint8_t* h = r.humans[ 0 ];
+    static const value_t null{ };
+    const value_t& db = r.track_db ? member( *r.track_db, "VuDBAsset" ) : null;
+    const value_t* t = db.tag == 6 ? find( db, r.track.c_str( ) ) : nullptr;
+    const value_t& mode = member( t ? *t : null, "TimeTrial" );
+    const value_t* b = mode.tag == 6 ? find( mode, r.human_boat.c_str( ) ) : nullptr;
+    const value_t& times = b ? *b : null;
+    rules_put_i32( h, 0x4CC, 0 );
+    const std::int32_t count = times.tag == 5 ? static_cast< std::int32_t >( times.list.size( ) ) : 0;
+    const float clock = rules_f( h, 0x4B4 );
+    while ( rules_i32( h, 0x4CC ) < count )
+    {
+        const std::int32_t k = rules_i32( h, 0x4CC );
+        const value_t& e = times.tag == 5 && k >= 0 && k < count ? times.list[ static_cast< std::size_t >( k ) ] : null;
+        if ( _mm_comige_ss( _mm_set_ss( timetrial_value_float( e ) ), _mm_set_ss( clock ) ) )
+            break;
+        rules_put_i32( h, 0x4CC, k + 1 );
+    }
+}
+
+inline void timetrial_rules_post_results( race_rules_t& r )
+{
+    if ( r.humans.empty( ) )
+        return;
+    const std::uint8_t* h = r.humans[ 0 ];
+    const std::int32_t place = rules_i32( h, 0x4CC );
+    char text[ 160 ];
+    std::snprintf( text, sizeof( text ), "progress38 %s %d %08X %08X", r.track.c_str( ), place, rules_i32( h, 0x4B4 ), rules_i32( h, 0x4B8 ) );
+    race_rules_platform( r, text );
+    if ( !h[ 0x334 ] )
+    {
+        const std::int32_t ms = _mm_cvtss_si32( _mm_set_ss( rules_f( h, 0x4B4 ) * 1000.0f ) );
+        const std::int64_t value = static_cast< std::int32_t >( 0u - static_cast< std::uint32_t >( ms ) );
+        std::snprintf( text, sizeof( text ), "leaderboard %sTimeTrial %lld", r.track.c_str( ), static_cast< long long >( value ) );
+        race_rules_platform( r, text );
+    }
+    if ( place > 0 && _mm_comigt_ss( _mm_set_ss( rules_f( h, 0x328 ) ), _mm_set_ss( 0.0f ) ) && !h[ 0x32D ] )
+        race_rules_platform( r, "vo20 DidNotUseBoost" );
+}
+
+inline void timetrial_rules_construct( race_rules_t& r )
+{
+    vugame_fsms_construct( r );
+    r.fsm = c_fsm{ };
+    r.buoys = 0;
+    fsm_state_t& pre = r.fsm.add_state( "PreGame" );
+    pre.m_enter = [ &r ] { race_rules_hold( r, 1 ); race_rules_hud( r, 0, race_hud_verb_t::initialize ); };
+    pre.m_exit = [ &r ] { race_rules_hold( r, -1 ); race_rules_hud( r, 0, race_hud_verb_t::release ); };
+    pre.m_tick = [ &r ]( float dt ) { race_rules_hud( r, 0, race_hud_verb_t::tick, dt ); };
+    pre.m_address[ 0 ] = 0x490570u, pre.m_address[ 1 ] = 0x4905E0u, pre.m_address[ 2 ] = 0x490630u, pre.m_address[ 3 ] = 0x490690u;
+    fsm_state_t& game = r.fsm.add_state( "Game" );
+    game.m_enter = [ &r ] { race_rules_hud( r, 1, race_hud_verb_t::initialize ); };
+    game.m_exit = [ &r ] { race_rules_hud( r, 1, race_hud_verb_t::release ); timetrial_rules_place( r ); };
+    game.m_tick = [ &r ]( float dt ) {
+        if ( r.boats )
+            race_rules_clocks( *r.boats, dt );
+        if ( !r.humans.empty( ) )
+            r.fsm.set_condition( "Finished", r.humans[ 0 ][ 0x32F ] != 0 );
+        race_rules_hud( r, 1, race_hud_verb_t::tick, dt );
+    };
+    game.m_address[ 0 ] = 0x4906F0u, game.m_address[ 1 ] = 0x490750u, game.m_address[ 2 ] = 0x4908B0u, game.m_address[ 3 ] = 0x490950u;
+    fsm_state_t& post = r.fsm.add_state( "PostGame" );
+    post.m_enter = [ &r ] {
+        race_rules_hud( r, 2, race_hud_verb_t::initialize );
+        if ( r.hooks.broadcast )
+            r.hooks.broadcast( "OnSetAllowPause", false );
+        timetrial_rules_post_results( r );
+    };
+    post.m_exit = [ &r ] { race_rules_hud( r, 2, race_hud_verb_t::release ); };
+    post.m_tick = [ &r ]( float dt ) {
+        r.fsm.set_condition( "Exit", r.fsm.m_time >= 4.0f );
+        race_rules_hud( r, 2, race_hud_verb_t::tick, dt );
+    };
+    post.m_address[ 0 ] = 0x4909B0u, post.m_address[ 1 ] = 0x490BD0u, post.m_address[ 2 ] = 0x490C00u, post.m_address[ 3 ] = 0x486720u;
+    r.fsm.add_state( "Exit" );
+    r.fsm.add_transition( "PreGame", "Game", "StartLightsOut" );
+    r.fsm.add_transition( "Game", "PostGame", "Finished" );
     r.fsm.add_transition( "", "Exit", "Exit" );
 }
 

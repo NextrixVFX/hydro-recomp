@@ -1259,6 +1259,32 @@ inline bool race_event_dispatch( race_session_t& s, const std::string& entity, c
             LOG_INFO( "race: event %s . %s (sync %d)", entity.c_str( ), plug.c_str( ), s.dynamics ? s.dynamics->syncs : -1 );
             return true;
         }
+    // VuControlEntity's inputs (ctor 0x5CCBA0): "Activate" 0x5CD7A0 / "Deactivate" 0x5CD890 (VuRetVal void) and the method
+    // "OnManualTick" 0x5CD710 on the event's VuParams (world/keyframe.hxx).
+    if ( plug == "Activate" || plug == "Deactivate" || plug == "OnManualTick" )
+        for ( const auto& cp : s.controls )
+        {
+            std::string path;
+            for ( const entity_t* e = cp->entity; e && e->m_parent; e = e->m_parent )
+                path = path.empty( ) ? e->m_name : e->m_name + "/" + path;
+            if ( path != entity )
+                continue;
+            const control_hooks_t h = race_session_control_hooks( *cp );
+            if ( plug == "Activate" )
+                control_activate( *cp->c, h );
+            else if ( plug == "Deactivate" )
+                control_deactivate( *cp->c, h );
+            else
+            {
+                static const std::uint8_t empty[ 0x84 ] = { };
+                const std::uint8_t* p = params ? params : empty;
+                std::int32_t size;
+                std::memcpy( &size, p + 0x80, 4 );
+                control_manual_tick( *cp->c, p, size, h );
+            }
+            LOG_INFO( "race: event %s . %s (control; sync %d)", entity.c_str( ), plug.c_str( ), s.dynamics ? s.dynamics->syncs : -1 );
+            return true;
+        }
     // VuFloatingMineEntity's "Detonate" (0x439020's plug; thunk 0x4390BE -> vt+0x44 0x438DF0): +0x215 = 1, VuRetVal 0.
     if ( plug == "Detonate" )
         for ( const auto& dp : s.dyn_props )
@@ -1402,6 +1428,11 @@ inline void race_session_game_mode( void* user, float dt )
                   s.dynamics ? s.dynamics->syncs : -1 );
         // VuRaceGame slot 15 0x48B180 (core/ui split.hxx ui_race_checkpoint): the boat's driver slot 12 (human), lap +0x4AC,
         // race time +0x4B4; the checkpoint's +0x8A finish byte; the game's +0x4C laps; the +0x67C machine (rules.hxx).
+        if ( s.start.timetrial )
+        {
+            race_unwired( s, "VuTimeTrialGame slot 15 0x490D70 (its checkpoint split) - not read, not run (UNKNOWN)" );
+            return;
+        }
         const race_rules_boat_t& rb = s.rules_boats[ static_cast< std::size_t >( boat ) ];
         ui_race_split_boat_t sb;
         sb.m_human = rb.human;

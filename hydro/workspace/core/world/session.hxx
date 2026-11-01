@@ -26,6 +26,7 @@
 #include <workspace/core/world/rules.hxx>
 #include <workspace/core/world/start.hxx>
 #include <workspace/core/world/tick.hxx>
+#include <workspace/core/world/watchers.hxx>
 #include <workspace/utility/logger.hxx>
 
 #include <cstdint>
@@ -270,6 +271,22 @@ struct race_session_t
     };
     std::vector< std::unique_ptr< key_live_t > > key_motions;
     int key_unrecreated = 0;
+    // The level's VuControlEntity (world/keyframe.hxx), live from their slot 6 0x5CD490; the target's VuControlComponent
+    // (race.hxx control_component_of) and its owner, and the owner's layout box 0x5D9DD0 writes (nothing reads it here).
+    struct control_live_t
+    {
+        entity_t* entity = nullptr;
+        control_entity_t* c = nullptr;
+        entity_t* target_entity = nullptr;
+        control_component_t* comp = nullptr;
+        water_layout_box_t layout;
+        race_session_t* session = nullptr;
+        int changes = 0;   // dev count (not retail): the component's slot 0 calls
+    };
+    std::vector< std::unique_ptr< control_live_t > > controls;
+    int control_unrecreated = 0;
+    // The race project's entity tree (c_world's; the gameInitialize walk's and the session end's 0x500B80).
+    entity_t* tree = nullptr;
     int breaks = 0;   // dev count (not retail)
     // VuExplosionManagerImpl g 0x759034's listeners (+4 / +8; world/mine.hxx): the human drivers' +0x80 parts, added by
     // their slot 6 0x40F210 (boat human.hxx human_game_initialize).
@@ -1050,6 +1067,92 @@ inline void race_session_key_motion( race_session_t& s, entity_t& e )
     key_motion_game_init( *kp->k, kids, linked, race_session_key_hooks( *kp ) );
 }
 
+// VuControlEntity's hooks (world/keyframe.hxx): the outputs through the world's graph; the tick manager g 0x759008's vt+0x20
+// ({0x7529F8, e, 0x5CD9F0}, "Motion") / vt+0x28 (slot 10 0x4F7590: every phase's handlers of this owner) on the session's
+// tick manager; vt+0x3C = slot 15 0x4F6EC0 (fld [ecx+0x28]: this frame's capped step).
+inline void race_session_control_tick( void* user, float dt );
+inline control_hooks_t race_session_control_hooks( race_session_t::control_live_t& k )
+{
+    control_hooks_t h;
+    h.user = &k;
+    h.fire = []( void* u, control_entity_t&, const char* plug ) {
+        auto& x = *static_cast< race_session_t::control_live_t* >( u );
+        if ( x.session->world.fire )
+            x.session->world.fire( *x.entity, plug );
+    };
+    h.tick_register = []( void* u, control_entity_t&, bool on ) {
+        auto& x = *static_cast< race_session_t::control_live_t* >( u );
+        if ( on )
+            tick_register( x.session->ticks, { &x, race_session_control_tick, &x }, "Motion" );
+        else
+            tick_unregister_all( x.session->ticks, &x );
+    };
+    h.real_dt = []( void* u ) { return static_cast< race_session_t::control_live_t* >( u )->session->ticks.dt; };
+    h.unrecreated = &k.session->control_unrecreated;
+    return h;
+}
+
+// The "Motion" tick 0x5CD9F0.
+inline void race_session_control_tick( void* user, float dt )
+{
+    auto& k = *static_cast< race_session_t::control_live_t* >( user );
+    const int before = k.session->control_unrecreated;
+    const bool was = k.c->active != 0;
+    control_tick( *k.c, dt, race_session_control_hooks( k ) );
+    if ( was && !k.c->active && k.comp )
+        LOG_INFO( "race: control '%s' deactivated after %d changes (clock %.3f of %.3f): Max Height %.3f", k.entity->m_name.c_str( ), k.changes,
+                  control_f( k.c->time ), control_f( k.c->duration ), control_f( k.comp->records[ 2 ] ) );
+    if ( k.session->control_unrecreated != before )
+        race_unwired( *k.session, "a VuControlEntity reached a path not recreated (a keyframe short of the records / no key below the clock / "
+                                  "Deactivate without a target) - UNKNOWN" );
+}
+
+// VuControlEntity's slot 6 0x5CD490 (control_game_init): the "Entity" ref's entity's VuControlComponent (race.hxx
+// control_component_of, bound at the post-load). Its interface (the owner's +0x5C VuControlComponentIF): slot 0 for a
+// VuDirectionalWaveEntity = 0x5D9D90 (watchers.hxx water_directional_control: records 0..4 +8 to +0x6C .. +0x7C, then
+// 0x5D9DD0 on VuWater's wave); slots 1 / 2 the nullsub 0x401560 (begin / end: nothing). Any other owner's slot 0 is not
+// read (UNKNOWN, logged; control_component_of binds none for it).
+inline void race_session_control( race_session_t& s, entity_t& e )
+{
+    auto k = std::make_unique< race_session_t::control_live_t >( );
+    k->entity = &e;
+    k->c = &static_cast< control_entity_state_t* >( e.m_state.get( ) )->value;
+    k->session = &s;
+    entity_t* t = control_ref_target( e );
+    bool unknown = false;
+    if ( t )
+        k->comp = control_component_of( *t, unknown );
+    if ( unknown )
+        race_unwired( s, "a VuControlEntity's target " + t->m_type + " - its VuControlComponent's records / IF slot 0 not read (UNKNOWN, bound to none)" );
+    if ( k->comp )
+    {
+        k->target_entity = t;
+        k->comp->user = k.get( );
+        k->comp->begin = nullptr;   // 0x401560
+        k->comp->end = nullptr;     // 0x401560
+        k->comp->changed = []( void* u, control_component_t& c ) {
+            auto& x = *static_cast< race_session_t::control_live_t* >( u );
+            race_session_t& rs = *x.session;
+            ++x.changes;
+            water_entity_state_t* ws = static_cast< water_entity_state_t* >( x.target_entity->m_state.get( ) );
+            const transform_component_t* tt = entity_transform( *x.target_entity );
+            if ( !rs.world.water || !ws || !tt )
+            {
+                race_unwired( rs, "a VuControlEntity's change on a VuDirectionalWaveEntity with no VuWater / state / transform - 0x5D9D90 not run" );
+                return;
+            }
+            const water_built_t::entity_ref_t* r = water_entity_of( *rs.world.water, *x.target_entity );
+            water_directional_control( *rs.world.water, *ws, r ? r->wave : -1, *tt, c.records.data( ), x.layout );
+            if ( x.changes == 1 )
+                LOG_INFO( "race: control '%s' drives '%s' (wave %d): Max Height %.3f", x.entity->m_name.c_str( ), x.target_entity->m_name.c_str( ),
+                          r ? r->wave : -1, control_f( c.records[ 2 ] ) );
+        };
+    }
+    race_session_t::control_live_t* kp = k.get( );
+    s.controls.push_back( std::move( k ) );
+    control_game_init( *kp->c, t != nullptr, kp->comp, race_session_control_hooks( *kp ) );
+}
+
 // VuBreakablePropEntity's Decision tick 0x434A20 (dt), read whole (world/breakable.hxx's head): the breakable
 // component's 0x543640(dt) - its debris fade timer (+0xE8, state +0xE4 1 -> 2 below 0, the debris draw removed): the
 // component's own properties and debris are the renderer's (0x51E790 / 0x5436B0 not recreated), so only the state is
@@ -1362,6 +1465,14 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
             race_session_key_motion( s, e );
             return;
         }
+        if ( e.m_type == "VuControlEntity" && e.m_state )
+        {
+            race_session_control( s, e );
+            return;
+        }
+        // VuControlKeyframeEntity's slot 6 is VuEntity's (its vtable 0x7528AC +0x18 = 0x401560, a bare ret).
+        if ( e.m_type == "VuControlKeyframeEntity" )
+            return;
         // VuAudioEmitterEntity's slot 6 0x5F3B30 (world/sound.hxx audio_emitter_game_init: plays when Initially Active).
         if ( e.m_type == "VuAudioEmitterEntity" && e.m_state )
         {
@@ -1816,8 +1927,55 @@ inline bool race_session_game_data( const std::string& mode, const std::string& 
 // 0x50FAF0 (bodies.hxx rigid_body_destroy) on every level body and boat body (the boats' via VuBoatEntity's dtor
 // 0x41CB10 - the boat lane's - stated, not run; the body dtor itself is run on them). VuRigidBodyComponent's dtor
 // 0x543FC0 frees two VuStrings and deletes its property list: ours are std::string / C++ objects (RAII - the library's
-// frees, no retail-visible word). The rest of 0x4B97E0 (0x4D3100, the game's deleting dtor vt+0xC, 0x500B80 on the
-// project, vt+0x1C) is not read. Ours: the caller decides WHEN (a replaced session, or the --end-race test driver).
+// frees, no retail-visible word). The rest of 0x4B97E0, read (batch 27): the current action-mode state's exit delegate,
+// 0x4D3100 on g_vugameutil (not recreated), 0x482D50, the game's deleting dtor vt+0xC(1), then 0x500B80 on the project
+// root (race_session_game_release) and the repository's vt+0x1C, then the project asset's release (the render device's
+// flush vt+0x30 / +0xD0 around it - the renderer's) whose last reference deletes it - the entities and their bodies
+// (below); the same for +0x38's asset. Ours: the caller decides WHEN (a replaced session, or the --end-race test driver).
+// VuEntity's gameRelease 0x500B80 on the project's root (0x4B97E0 after VuGame's release 0x482D50 and the game's deleting
+// dtor, when the root's +0x14 bit 2 - gameInitialize'd - is set; then the repository vt+0x1C and the project asset's
+// release, which destroys the entities): per entity with bit 2 set - each component's vt+0x28 (+0x48 list), the
+// children in +0x38 order (recursively), its own slot 7 (vt+0x1C), the repository g 0x759080 vt+0x24 unless +0x14 & 8
+// (a hook), +0x14 &= ~4. Slot 7 recreated here: VuControlEntity 0x5CD660 (keyframe.hxx control_game_release) and
+// VuKeyframeMotionEntity 0x5CEA40 (keymotion.hxx key_motion_game_release); every other class's slot 7 and every
+// component's vt+0x28 are not run (counted, logged).
+inline void race_session_game_release( race_session_t& s )
+{
+    if ( !s.tree )
+        return;
+    std::map< std::string, int > unknown;
+    int components = 0, released = 0;
+    const auto walk = [ & ]( const auto& self, entity_t& e ) -> void {
+        components += static_cast< int >( e.m_components.size( ) );
+        for ( auto& c : e.m_children )
+            self( self, *c );
+        if ( e.m_type == "VuControlEntity" )
+            for ( const auto& k : s.controls )
+                if ( k->entity == &e )
+                {
+                    control_game_release( *k->c, race_session_control_hooks( *k ) );
+                    ++released;
+                    return;
+                }
+        if ( e.m_type == "VuKeyframeMotionEntity" )
+            for ( const auto& k : s.key_motions )
+                if ( k->entity == &e )
+                {
+                    key_motion_game_release( *k->k, race_session_key_hooks( *k ) );
+                    ++released;
+                    return;
+                }
+        ++unknown[ e.m_type.empty( ) ? std::string( "(UNKNOWN node)" ) : e.m_type ];
+    };
+    walk( walk, *s.tree );
+    std::string by;
+    for ( const auto& u : unknown )
+        by += ( by.empty( ) ? "" : ", " ) + u.first + " x" + std::to_string( u.second );
+    LOG_INFO( "race: the project's gameRelease 0x500B80 - %d slot 7s run (VuControlEntity / VuKeyframeMotionEntity)", released );
+    race_unwired( s, "the project's gameRelease 0x500B80: slot 7 not recreated for " + by + "; " + std::to_string( components ) +
+                     " components' vt+0x28 not run; the repository vt+0x24 / +0x1C (hooks)" );
+}
+
 inline void race_session_end( race_session_t& s )
 {
     if ( !s.active )
@@ -1849,6 +2007,7 @@ inline void race_session_end( race_session_t& s )
                                w == "lens24" ? "lens water vt+0x24" : w == "listener" ? "0x539020 on g 0x75906C" : "0x4D2010" ) + ") - not recreated" );
     };
     vugame_release( s.rules, flags, h );
+    race_session_game_release( s );
     int bodies = 0;
     for ( const auto& lb : s.level_bodies )
     {
@@ -1900,6 +2059,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     }
     s.mode = mode;
     s.track = track;
+    s.tree = &tree;
 
     // VuGame's boat load 0x481CE0 + each boat's postLoad 0x41CFF0.
     value_t& util = s.util;
@@ -2114,7 +2274,24 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     // VuRaceGame's own part (world/rules.hxx): the ctor 0x489030's state machine, built here (after the base fields above -
     // the ctor ran before the boat load); its first state's enter is slot 5 0x4896A0's "state enter" step below, and its
     // tick the game's slot 7, reached from VuGame's tick 0x482F10 in the Decision phase (race_session_game_mode).
-    race_rules_construct( s.rules );
+    // GameType "TimeTrial": VuTimeTrialGame's machine (rules.hxx timetrial_rules_construct, case timetrial_game_fsm), its
+    // slots 13 / 5 in race_begin (start.hxx), its Game exit's TrackDB and the human's boat class (+0x160).
+    s.start.timetrial = mode == "TimeTrial";
+    if ( s.start.timetrial )
+    {
+        timetrial_rules_construct( s.rules );
+        s.rules.track_db = db.track_db;
+        for ( std::size_t k = 0; k < s.start_boats.size( ); ++k )
+            if ( s.start_boats[ k ].cls.slot[ 0 ] )
+            {
+                const auto it = s.boats[ k ]->io.boat_strings.find( 0x160 );
+                s.rules.human_boat = it == s.boats[ k ]->io.boat_strings.end( ) ? std::string( ) : it->second;
+                break;
+            }
+        LOG_INFO( "race: VuTimeTrialGame - the human's +0x160 '%s' keys TrackDB [%s][TimeTrial]", s.rules.human_boat.c_str( ), s.game.track.c_str( ) );
+    }
+    else
+        race_rules_construct( s.rules );
     s.rules.hooks.hud = [ &s ]( int project, race_hud_verb_t verb, float dt )
     {
         if ( s.world.hud )
@@ -2149,6 +2326,11 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     // null container, type 0).
     s.rules.screen_hooks.game_results_tick = [ &s ]( float dt )
     {
+        if ( s.start.timetrial )
+        {
+            race_unwired( s, "VuTimeTrialGame slot 12 0x48F560 (its results writer, ~3.8 KB) - not recreated, not run (UNKNOWN)" );
+            return;
+        }
         std::vector< race_results_entry_t > entries( s.rules_boats.size( ) );
         for ( std::size_t k = 0; k < entries.size( ); ++k )
         {

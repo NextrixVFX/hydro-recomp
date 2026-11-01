@@ -241,6 +241,166 @@ inline bool verify_race_game_fsm( )
     return failed == 0;
 }
 
+// timetrial_rules_construct + race_rules_start / race_rules_tick / race_rules_on_start_lights_out (core/world rules.hxx)
+// against VuTimeTrialGame's ctor 0x48ED30 run whole, then retail's slot 5 0x48F310, slot 7 0x48F350 and 0x490540 frame
+// by frame (oracle case timetrial_game_fsm; the human's TrackDB times a drawn document read by retail's reader, here by
+// c_reader). Per frame: slot 7's result, current / previous / time, every condition's value and pulse, every boat's
+// +0x308 / +0x4B0 / +0x4B4 / +0x4CC and the calls (HUD verbs, the broadcast, the platform text) - one failure per
+// differing frame; the start's calls once per vector.
+inline bool verify_timetrial_game_fsm( )
+{
+    int failed = 0, frames = 0, calls = 0, unrecreated = 0;
+    const auto fail = [ & ]( const std::string& what ) {
+        if ( ++failed <= 10 )
+            LOG_ERROR( "timetrial game fsm: %s", what.c_str( ) );
+    };
+    const unsigned* w = g_golden_ttf_words;
+    std::size_t s = 0;
+    const auto next = [ & ] { return *w++; };
+    const auto text = [ & ] { return std::string( g_golden_ttf_text[ s++ ] ); };
+    char line[ 256 ];
+    const unsigned nv = next( );
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const int nb = static_cast< int >( next( ) );
+        const bool human = next( ) != 0;
+        int present[ 3 ], live[ 3 ], hud[ 3 ];
+        for ( int& x : present ) x = static_cast< int >( next( ) );
+        for ( int& x : live ) x = static_cast< int >( next( ) );
+        for ( int& x : hud ) x = static_cast< int >( next( ) );
+        race_rules_t r;
+        timetrial_rules_construct( r );
+        std::vector< std::vector< std::uint8_t > > images( static_cast< std::size_t >( nb ), std::vector< std::uint8_t >( 0x600, 0 ) );
+        std::vector< race_rules_boat_t > boats( images.size( ) );
+        race_rules_game_t game;
+        for ( std::size_t k = 0; k < images.size( ); ++k )
+        {
+            std::uint8_t* m = images[ k ].data( );
+            const std::int32_t lap = static_cast< std::int32_t >( next( ) );
+            const unsigned lapclock = next( ), clock = next( ), best = next( ), left = next( ), quit = next( ), boost = next( ), used = next( );
+            const std::int32_t hold = static_cast< std::int32_t >( next( ) ), place = static_cast< std::int32_t >( next( ) );
+            rules_put_i32( m, 0x308, hold );
+            std::memcpy( m + 0x328, &boost, 4 );
+            m[ 0x32D ] = static_cast< std::uint8_t >( used );
+            m[ 0x334 ] = static_cast< std::uint8_t >( quit );
+            rules_put_i32( m, 0x4AC, lap );
+            std::memcpy( m + 0x4B0, &lapclock, 4 );
+            std::memcpy( m + 0x4B4, &clock, 4 );
+            std::memcpy( m + 0x4B8, &best, 4 );
+            std::memcpy( m + 0x4BC, &left, 4 );
+            rules_put_i32( m, 0x4CC, place );
+            boats[ k ].boat = m;
+            game.order.push_back( static_cast< int >( k ) );
+        }
+        r.boats = &boats;
+        r.game = &game;
+        if ( human )
+            r.humans.push_back( images[ 0 ].data( ) );
+        r.track = text( );
+        r.human_boat = text( );
+        const std::string hex = text( );
+        std::vector< std::uint8_t > bytes;
+        for ( std::size_t k = 0; k + 1 < hex.size( ); k += 2 )
+            bytes.push_back( static_cast< std::uint8_t >( std::stoul( hex.substr( k, 2 ), nullptr, 16 ) ) );
+        const value_t db = c_reader( bytes ).parse( );
+        r.track_db = &db;
+        r.unrecreated = [ & ]( std::uint32_t, const char* ) { ++unrecreated; };
+        std::vector< std::string > got;
+        r.hooks.hud = [ & ]( int p, race_hud_verb_t verb, float dt ) {
+            if ( !present[ p ] )
+                return;
+            if ( verb == race_hud_verb_t::initialize && !live[ p ] )
+            {
+                live[ p ] = 1;
+                got.push_back( "init " + std::to_string( p ) );
+            }
+            else if ( verb == race_hud_verb_t::release && live[ p ] )
+            {
+                live[ p ] = 0;
+                got.push_back( "release " + std::to_string( p ) );
+            }
+            else if ( verb == race_hud_verb_t::tick && hud[ p ] )
+            {
+                unsigned b;
+                std::memcpy( &b, &dt, 4 );
+                std::snprintf( line, sizeof( line ), "tick %d %08X", p, b );
+                got.push_back( line );
+            }
+        };
+        r.hooks.broadcast = [ & ]( const char* name, bool value ) { got.push_back( std::string( "broadcast " ) + name + ( value ? " 1" : " 0" ) ); };
+        r.hooks.platform = [ & ]( const std::string& call ) { got.push_back( call ); };
+        const auto same_calls = [ & ]( unsigned count ) {
+            bool same = got.size( ) == count;
+            for ( unsigned c = 0; c < count; ++c )
+                same = text( ) == ( c < got.size( ) ? got[ c ] : std::string( ) ) && same;
+            return same;
+        };
+        r.fsm.m_current = 0;
+        race_rules_start( r );
+        const unsigned start = next( );
+        calls += static_cast< int >( start );
+        if ( !same_calls( start ) )
+            fail( "vector " + std::to_string( v ) + ": the start's calls differ" );
+        const unsigned nf = next( );
+        for ( unsigned f = 0; f < nf; ++f )
+        {
+            got.clear( );
+            const unsigned lights = next( ), finish = next( ), dtw = next( ), want_ret = next( );
+            const int want_cur = static_cast< int >( next( ) ), want_prev = static_cast< int >( next( ) );
+            const unsigned want_time = next( ), nc = next( );
+            if ( lights )
+                race_rules_on_start_lights_out( r );
+            for ( std::size_t k = 0; k < images.size( ); ++k )
+                if ( finish & ( 1u << k ) )
+                    images[ k ][ 0x32F ] = 1;
+            float dt;
+            std::memcpy( &dt, &dtw, 4 );
+            const bool ret = race_rules_tick( r, dt );
+            unsigned time;
+            std::memcpy( &time, &r.fsm.m_time, 4 );
+            bool same = static_cast< unsigned >( ret ) == want_ret && r.fsm.m_current == want_cur && r.fsm.m_previous == want_prev && time == want_time &&
+                        r.fsm.m_conditions.size( ) == nc;
+            for ( unsigned c = 0; c < nc; ++c )
+            {
+                const unsigned value = next( ), pulse = next( );
+                same = same && c < r.fsm.m_conditions.size( ) && r.fsm.m_conditions[ c ].m_value == value && r.fsm.m_conditions[ c ].m_pulse == pulse;
+            }
+            for ( std::size_t k = 0; k < images.size( ); ++k )
+            {
+                const std::uint8_t* m = images[ k ].data( );
+                unsigned row[ 4 ];
+                std::memcpy( &row[ 0 ], m + 0x308, 4 );
+                std::memcpy( &row[ 1 ], m + 0x4B0, 4 );
+                std::memcpy( &row[ 2 ], m + 0x4B4, 4 );
+                std::memcpy( &row[ 3 ], m + 0x4CC, 4 );
+                for ( unsigned x : row )
+                    same = next( ) == x && same;
+            }
+            const unsigned nc2 = next( );
+            const std::size_t first = s;
+            const bool calls_same = same_calls( nc2 );
+            ++frames;
+            calls += static_cast< int >( nc2 );
+            if ( !same || !calls_same )
+            {
+                std::snprintf( line, sizeof( line ), "vector %u frame %u: ret %d state %d prev %d time 0x%08X calls %d%s, retail %u %d %d 0x%08X %u%s", v, f,
+                               static_cast< int >( ret ), r.fsm.m_current, r.fsm.m_previous, time, static_cast< int >( got.size( ) ),
+                               got.empty( ) ? "" : ( " first '" + got[ 0 ] + "'" ).c_str( ), want_ret, want_cur, want_prev, want_time, nc2,
+                               nc2 ? ( std::string( " first '" ) + g_golden_ttf_text[ first ] + "'" ).c_str( ) : "" );
+                fail( line );
+            }
+        }
+    }
+    if ( unrecreated )
+        fail( std::to_string( unrecreated ) + " paths not recreated reached" );
+    if ( failed == 0 )
+        LOG_SUCCESS( "timetrial_rules (VuTimeTrialGame) match retail's ctor 0x48ED30 + slot 5 0x48F310 / slot 7 0x48F350 / 0x490540 and the 12 "
+                     "handlers: %u vectors, %d frames, %d calls", nv, frames, calls );
+    else
+        LOG_ERROR( "timetrial game fsm FAILED %d checks", failed );
+    return failed == 0;
+}
+
 // checkpoint_buoy_contact (core/world rules.hxx) against VuCheckpointBuoyEntity's
 // contact callback 0x4350B0 run real (oracle case buoy_hit; the base 0x437F40
 // and the broadcast 0x505690 intercepted): per contact whether the base ran
