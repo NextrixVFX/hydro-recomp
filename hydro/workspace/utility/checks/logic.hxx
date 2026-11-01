@@ -6,6 +6,7 @@
 // typed one). Compared: the VuRetVal words (a type-4 value by text), the fires (name, params size and bytes), the answers
 // consumed, the state words / text after, the VuRand after. The "*ctor" rows: logic_construct's words against the ctor's.
 
+#include <workspace/core/assets/reader.hxx>
 #include <workspace/core/world/logic.hxx>
 
 #include <string>
@@ -173,5 +174,126 @@ inline bool verify_logic_plugs( )
                      "%d fired plugs (%d output fires) and %d ctor images", plugs, fires, ctors );
     else
         LOG_ERROR( "logic_plugs FAILED %d", bad );
+    return bad == 0;
+}
+
+// The game-tier filters (case logic_game): the environment as retail had it - the document parsed by c_reader (= 0x55B560)
+// as gameutil +0x50, the SKU string, the repository's table (a missing hash answers the first entity, as the case's stub
+// did) and the entity / driver words. Compared: the VuRetVal type (the value word is the handler's stale stack), the
+// hashes the repository was asked for, the fires (name, params size and bytes), the text after; nothing unrecreated.
+struct logic_game_check_t
+{
+    std::vector< std::uint32_t > hashes, entities, asked;
+    std::vector< std::pair< std::uint32_t, std::uint32_t > > words;
+    std::vector< std::string > fired;
+    std::vector< ui_params_t > params;
+};
+
+inline bool verify_logic_game( )
+{
+    logic_check_t c{ g_golden_lgg_words };
+    const unsigned n = c.next( );
+    int bad = 0, fires = 0, reported = 0, unrecreated = 0;
+    for ( unsigned i = 0; i < n; ++i )
+    {
+        const int bad_before = bad;
+        const std::string cls = c.str( );
+        const std::string plug = c.str( );
+        logic_entity_t e = logic_construct( logic_vtable_of( cls.c_str( ) ) );
+        if ( c.next( ) )
+            e.text = c.str( );
+        value_t doc{ };
+        const bool has_doc = c.next( ) != 0u;
+        if ( has_doc )
+        {
+            const std::string raw = c.str( );
+            doc = c_reader( std::vector< std::uint8_t >( raw.begin( ), raw.end( ) ) ).parse( );
+        }
+        std::string sku;
+        const bool has_sku = c.next( ) != 0u;
+        if ( has_sku )
+            sku = c.str( );
+        logic_game_check_t L;
+        const unsigned ne = c.next( );
+        for ( unsigned k = 0; k < ne; ++k )
+        {
+            const std::uint32_t hash = c.next( ), entity = c.next( ), vtable = c.next( ), driver = c.next( ), dvt = c.next( );
+            L.hashes.push_back( hash );
+            L.entities.push_back( entity );
+            L.words.push_back( { entity, vtable } );
+            L.words.push_back( { entity + 0x220u, driver } );
+            L.words.push_back( { driver, dvt } );
+        }
+        ui_params_t in{ };
+        in.m_size = static_cast< int >( c.next( ) );
+        std::memcpy( in.m_bytes, c.s, 128 );
+        c.s += 32;
+        const unsigned rt = c.next( );
+        c.next( );
+        logic_game_t g;
+        g.game_data = has_doc ? &doc : nullptr;
+        g.sku = has_sku ? &sku : nullptr;
+        g.user = &L;
+        g.unrecreated = &unrecreated;
+        g.find = []( void* u, std::uint32_t hash ) -> std::uint32_t {
+            logic_game_check_t& l = *static_cast< logic_game_check_t* >( u );
+            l.asked.push_back( hash );
+            for ( std::size_t k = 0; k < l.hashes.size( ); ++k )
+                if ( l.hashes[ k ] == hash )
+                    return l.entities[ k ];
+            return l.entities.empty( ) ? 0u : l.entities[ 0 ];
+        };
+        g.word = []( void* u, std::uint32_t address ) -> std::uint32_t {
+            for ( const auto& w : static_cast< logic_game_check_t* >( u )->words )
+                if ( w.first == address )
+                    return w.second;
+            return 0u;
+        };
+        logic_hooks_t h;
+        h.user = &L;
+        h.game = &g;
+        h.fire = []( void* u, logic_entity_t&, const char* name, const ui_params_t& p ) -> logic_retval_t {
+            logic_game_check_t& l = *static_cast< logic_game_check_t* >( u );
+            l.fired.push_back( name );
+            l.params.push_back( p );
+            return logic_retval_t{ };
+        };
+        logic_retval_t out{ 0xA5A5A5A5u, 0xA5A5A5A5u, nullptr };
+        bad += !logic_dispatch( e, plug.c_str( ), out, in, h );
+        bad += out.type != rt;
+        const unsigned na = c.next( );
+        bad += L.asked.size( ) != na;
+        for ( unsigned k = 0; k < na; ++k )
+        {
+            const unsigned want = c.next( );
+            bad += k < L.asked.size( ) && L.asked[ k ] != want;
+        }
+        const unsigned nf = c.next( );
+        bad += L.fired.size( ) != nf;
+        for ( unsigned k = 0; k < nf; ++k )
+        {
+            const std::string name = c.str( );
+            const unsigned size = c.next( );
+            const std::string bytes = c.str( );
+            if ( k < L.fired.size( ) )
+            {
+                bad += L.fired[ k ] != name;
+                bad += static_cast< unsigned >( L.params[ k ].m_size ) != size;
+                bad += bytes.size( ) > 128 || std::memcmp( bytes.data( ), L.params[ k ].m_bytes, bytes.size( ) ) != 0;
+            }
+            ++fires;
+        }
+        if ( c.next( ) )
+            bad += e.text != c.str( );
+        if ( bad != bad_before && reported++ < 12 )
+            LOG_ERROR( "logic_game: %s vector %u: bad %d (fires %u want %u)", cls.c_str( ), i, bad - bad_before,
+                       static_cast< unsigned >( L.fired.size( ) ), nf );
+    }
+    bad += unrecreated;
+    if ( bad == 0 )
+        LOG_SUCCESS( "world/logic.hxx matches VuIsTegraEntity 0x42DAA0 / VuIsSkuEntity 0x42CFF0 / VuHumanFilterEntity 0x42D370 on %u fired "
+                     "plugs (%d output fires; documents, SKUs, repository tables and driver kinds as retail had them)", n, fires );
+    else
+        LOG_ERROR( "logic_game FAILED %d (%d unrecreated paths reached)", bad, unrecreated );
     return bad == 0;
 }
