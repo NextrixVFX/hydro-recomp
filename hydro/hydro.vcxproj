@@ -134,6 +134,7 @@
     <ClInclude Include="workspace\core\boat\parts.hxx" />
     <ClInclude Include="workspace\core\boat\pilots.hxx" />
     <ClInclude Include="workspace\core\boat\powerup.hxx" />
+    <ClInclude Include="workspace\core\boat\rays.hxx" />
     <ClInclude Include="workspace\core\boat\respawn.hxx" />
     <ClInclude Include="workspace\core\boat\rtti.hxx" />
     <ClInclude Include="workspace\core\boat\sections.hxx" />
@@ -215,6 +216,7 @@
     <ClInclude Include="workspace\utility\checks\menu.hxx" />
     <ClInclude Include="workspace\utility\checks\pfx.hxx" />
     <ClInclude Include="workspace\utility\checks\race.hxx" />
+    <ClInclude Include="workspace\utility\checks\rays.hxx" />
     <ClInclude Include="workspace\utility\checks\ui.hxx" />
     <ClInclude Include="workspace\utility\checks\wake.hxx" />
     <ClInclude Include="workspace\utility\checks\watchers.hxx" />

@@ -160,6 +160,11 @@ inline bool boat_thunk_build( boat_thunk_t& t, const boat_thunk_in_t& in )
         t.records.assign( 8 * in.engine->records, 0 );
         t.started = true;
     }
+    // The solver's mesh pointer is the one self-reference that outlives a build (every context below is rebuilt
+    // here): re-pointed each step so a boat_thunk_t moved between steps (a relocating container, a move) still
+    // walks its own mesh.
+    if ( t.solver.mesh )
+        t.solver.mesh = &t.mesh;
     if ( in.engine->records < in.engine->drives.size( ) )
     {
         t.why = "the engine's +0xF8 records are fewer than its Drives (0x414760 would write past them - UNKNOWN)";
