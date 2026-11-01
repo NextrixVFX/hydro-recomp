@@ -210,7 +210,31 @@ struct ui_font_draw_env_t
     float m_top = 1.0f;
     std::uint32_t m_material[ 2 ] = { };
     std::uint32_t m_material_key[ 2 ] = { };
+    // The texture draw's: **(VuGfxUtil +4) +0x14 (the material handed to the sort) and its +0x6C8.
+    std::uint32_t m_texture_material = 0;
+    std::uint32_t m_texture_material_key = 0;
 };
+
+constexpr std::uint32_t k_ui_texture_callback = 0x507430u;  // the texture record's draw at submit (GPU side)
+constexpr int k_ui_texture_record = 104;
+
+// 0x507360 (VuGfxUtil; depth in xmm1; texture, colour*, rect A*, rect B*, a
+// 5th arg never read): the 104-byte record - +0 the texture, +4 the matrix
+// stack's top (all 64 bytes: 0x4BC130 / 0x4BC2E0, the deque's back), +0x44 the
+// colour, +0x48 rect B, +0x58 rect A (the callback 0x507430 reads both as x, y,
+// w, h) - then the command (type 17, the material, 0, 0x507430, depth). No
+// test of the texture or the rects.
+inline void ui_texture_draw( ui_gfx_sort_t& sort, const ui_font_draw_env_t& env, std::uint32_t texture, std::uint32_t colour,
+                             const float a[ 4 ], const float b[ 4 ], float depth )
+{
+    std::uint8_t* r = sort.allocate( k_ui_texture_record );
+    std::memcpy( r + 0, &texture, 4 );
+    std::memcpy( r + 4, env.m_matrix, 64 );
+    std::memcpy( r + 0x44, &colour, 4 );
+    std::memcpy( r + 0x48, b, 16 );
+    std::memcpy( r + 0x58, a, 16 );
+    sort.submit( 17, env.m_texture_material, env.m_texture_material_key, 0, 0, k_ui_texture_callback, depth );
+}
 
 constexpr std::uint32_t k_ui_font_callback = 0x5375E0u;   // the record's draw at submit (GPU side)
 constexpr int k_ui_font_record = 121;                      // the record's fixed bytes (+120 the text, NUL-terminated)

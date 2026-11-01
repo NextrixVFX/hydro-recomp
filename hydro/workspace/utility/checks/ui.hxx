@@ -1311,9 +1311,65 @@ inline bool verify_ui_wiring( )
     return failed == 0;
 }
 
+// ui_texture_draw against retail's texture draw 0x507360 (oracle case
+// texture_draw): one sort through every vector in order - the commands' words
+// and the 104-byte records byte for byte.
+inline bool verify_ui_texture_draw( )
+{
+    ui_gfx_sort_t sort;
+    sort.m_buffers[ 0 ].m_capacity = 0x300000;
+    sort.m_buffers[ 1 ].m_used = 0x35;
+    sort.m_buffers[ 1 ].m_capacity = 0x100000;
+    for ( auto& b : sort.m_buffers )
+        b.m_memory.resize( static_cast< std::size_t >( b.m_capacity ) );
+    int failed = 0, commands = 0;
+    for ( std::size_t k = 0; k < g_golden_tex_vectors_count; ++k )
+    {
+        const golden_tex_vector_t& v = g_golden_tex_vectors[ k ];
+        const golden_txt_env_t& e = g_golden_txt_envs[ v.m_env ];
+        ui_font_draw_env_t env;
+        const std::vector< std::uint8_t > matrix = ui_unhex( v.m_matrix );
+        std::memcpy( env.m_matrix, matrix.data( ), 64 );
+        env.m_texture_material = g_golden_tex_material;
+        env.m_texture_material_key = g_golden_tex_material_key;
+        float a[ 4 ], b[ 4 ], depth;
+        std::memcpy( a, v.m_a, 16 );
+        std::memcpy( b, v.m_b, 16 );
+        std::memcpy( &depth, &v.m_depth, 4 );
+        sort.m_index = e.m_index;
+        sort.m_key_lo = e.m_key_lo;
+        sort.m_key_hi = e.m_key_hi;
+        std::vector< ui_gfx_command_t >& list = sort.m_commands[ e.m_index ];
+        const std::size_t before = list.size( );
+        ui_texture_draw( sort, env, v.m_texture, v.m_colour, a, b, depth );
+        bool same = list.size( ) - before == static_cast< std::size_t >( v.m_commands );
+        for ( int c = 0; same && c < v.m_commands; ++c )
+        {
+            const golden_txt_command_t& want = g_golden_tex_commands[ v.m_first + c ];
+            const ui_gfx_command_t& have = list[ before + static_cast< std::size_t >( c ) ];
+            const std::vector< std::uint8_t > record = ui_unhex( want.m_record );
+            const auto& memory = sort.m_buffers[ e.m_index ].m_memory;
+            same = std::memcmp( have.m_words, want.m_words, sizeof( have.m_words ) ) == 0 && have.m_words[ 3 ] + record.size( ) <= memory.size( ) &&
+                   std::memcmp( memory.data( ) + have.m_words[ 3 ], record.data( ), record.size( ) ) == 0;
+            ++commands;
+        }
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui texture draw: vector %d gave %d commands, retail %d - or a word / record byte differs", static_cast< int >( k ),
+                static_cast< int >( list.size( ) - before ), v.m_commands );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_texture_draw matches retail's texture draw 0x507360 (VuGfxSort 0x426B80 / 0x429010) on %d vectors: %d commands and "
+                     "104-byte records byte for byte",
+            static_cast< int >( g_golden_tex_vectors_count ), commands );
+    else
+        LOG_ERROR( "the UI texture draw FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_texture_draw( ) && ok;
     ok = verify_ui_wiring( ) && ok;
     ok = verify_ui_text_draw( ) && ok;    ok = verify_ui_fade( ) && ok;
     ok = verify_ui_hud_speedometer( ) && ok;
