@@ -1,9 +1,12 @@
 #pragma once
 
+#include <workspace/core/ui/bind.hxx>
+#include <workspace/core/ui/board.hxx>
 #include <workspace/core/ui/chooser.hxx>
 #include <workspace/core/ui/results.hxx>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -327,10 +330,428 @@ inline bool verify_ui_subtitles_combo( )
     return failed == 0;
 }
 
+// verify_ui_screen_game_init (batch 21): c_ui_binding::project_initialize /
+// project_release on OUR loaded Screens projects (the scripted world, as
+// verify_ui_frames) against retail's 0x500B10 + 0x501260 / 0x500B80 (oracle case
+// screen_game_init): the repository adds / removes and every non-nullsub slot 6 /
+// 7 entered (owner, address) in order, the OnProjectInitialized handlers entered,
+// then the touch device's entries (owner, priority) and +0x1C, the subtitles
+// combos' choices / +0x2A4 / +0x2A8 and every entity's flags & 4 after each
+// phase; and each VuUserNextUIAction's Trigger input through the binding's graph
+// (c_ui_wiring::input): the broadcasts and the VuRetVal. Retail stubbed the screen's
+// 0x629A70 / 0x629B00 (case ui_frames runs them): OUR enter / exit run, so the
+// graph's own traces in the init / release phases are not compared (only the
+// kinds above; the events only 0x5EFA60).
+inline bool verify_ui_screen_game_init( )
+{
+    const ui_loaded_t& base = ui_loaded( );
+    std::vector< std::string > names( g_golden_entity_templates, g_golden_entity_templates + g_golden_entity_templates_count );
+    static const entity_registry_t registry = build_entity_registry( names );
+    const std::map< std::string, value_t >* templates = &base.templates;
+    const entity_world_t world = ui_scripted_world( registry, [ templates ]( const std::string& name ) -> const value_t*
+    {
+        const auto found = templates->find( "VuTemplateAsset/" + name );
+        return found == templates->end( ) ? nullptr : &found->second;
+    } );
+    int failed = 0, phases = 0, logs = 0, slots = 0, triggers = 0;
+    const auto bad = [ &failed ]( const char* project, int phase, const char* what )
+    {
+        if ( ++failed <= 8 )
+            LOG_ERROR( "ui screen game init: %s phase %d: %s differs from retail's", project, phase, what );
+    };
+    for ( std::size_t w = 0; w < g_golden_sgi_projects_count; ++w )
+    {
+        const golden_sgi_project_t& gp = g_golden_sgi_projects[ w ];
+        const golden_ui_project_t* project = nullptr;
+        for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+            if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, gp.m_asset ) == 0 )
+                project = &g_golden_ui_projects[ p ];
+        if ( !project )
+        {
+            bad( gp.m_asset, -1, "the project's presence in the loaded set" );
+            continue;
+        }
+        const unsigned char* raw = reinterpret_cast< const unsigned char* >( project->m_words );
+        const value_t document = c_reader( std::vector< std::uint8_t >( raw, raw + project->m_bytes ) ).parse( );
+        const std::unique_ptr< entity_t > root = entity_load_project( member( document, "VuProject" ), project->m_path, world );
+        if ( !root )
+        {
+            bad( gp.m_asset, -1, "the load" );
+            continue;
+        }
+        ui_touch_device_t device;
+        ui_settings_t settings;
+        settings.m_subtitles = gp.m_subtitles != 0;
+        ui_bind_hooks_t hooks;
+        hooks.m_touch_device = &device;
+        hooks.m_settings = &settings;
+        c_ui_binding bind( *root, hooks );
+        if ( static_cast< int >( bind.m_bound.size( ) ) != gp.m_count )
+        {
+            bad( gp.m_asset, -1, "the entity count" );
+            continue;
+        }
+        // the case's Focus Priority pokes "index,value;" into OUR loaded values
+        for ( const char* at = gp.m_pokes; *at; )
+        {
+            char* end = nullptr;
+            const int index = static_cast< int >( std::strtol( at, &end, 10 ) );
+            if ( !end || *end != ',' )
+                break;
+            const int value = static_cast< int >( std::strtol( end + 1, &end, 10 ) );
+            if ( !end || *end != ';' )
+                break;
+            at = end + 1;
+            if ( const ui_slot_t* s = ui_bind_slot( *bind.m_bound[ static_cast< std::size_t >( index ) ]->m_entity, "Focus Priority" ) )
+                const_cast< ui_slot_t* >( s )->m_bits[ 0 ] = static_cast< std::uint32_t >( value );
+            else
+                bad( gp.m_asset, -1, "a poked Focus Priority's presence" );
+        }
+        const auto owner_of = [ &bind ]( const void* callback )
+        {
+            for ( const auto& b : bind.m_bound )
+                if ( ( b->m_button && b->m_button.get( ) == callback ) || ( b->m_combo && b->m_combo.get( ) == callback ) )
+                    return b->m_index;
+            return -1;
+        };
+        const auto state = [ & ]
+        {
+            char word[ 64 ];
+            std::string t = "E";
+            for ( const auto& c : device.m_callbacks )
+            {
+                std::snprintf( word, sizeof word, "%d,0,%u;", owner_of( c.first ), c.second );
+                t += word;
+            }
+            std::snprintf( word, sizeof word, "|P%u|C", device.m_priority );
+            t += word;
+            for ( const auto& b : bind.m_bound )
+                if ( b->m_combo )
+                {
+                    std::uint32_t bits;
+                    std::memcpy( &bits, &b->m_combo->m_shown, 4 );
+                    std::snprintf( word, sizeof word, "%d,%d,0x%08X,", b->m_index, b->m_combo->m_current, bits );
+                    t += word;
+                    for ( const auto& c : b->m_combo->m_choice_texts )
+                        t += c.first + ":" + std::to_string( c.second ) + "/";
+                    t += ";";
+                }
+            t += "|F";
+            for ( const auto& b : bind.m_bound )
+                t += ( b->m_entity->m_flags & 4u ) ? "1" : "0";
+            return t;
+        };
+        // the trace from `first` as retail's log lines (init / release: repository, slots, 0x5EFA60; trigger: broadcasts)
+        const auto lines = [ &bind ]( std::size_t first, bool trigger )
+        {
+            std::vector< std::string > out;
+            char line[ 96 ];
+            for ( std::size_t k = first; k < bind.m_trace.size( ); ++k )
+            {
+                const ui_trace_t& t = bind.m_trace[ k ];
+                line[ 0 ] = 0;
+                if ( trigger )
+                {
+                    if ( t.m_kind == ui_trace_kind_t::broadcast )
+                        std::snprintf( line, sizeof line, "broadcast|0x%08X|%d", t.m_word, t.m_params.m_size );
+                }
+                else if ( t.m_kind == ui_trace_kind_t::hook && ( t.m_name == "repository_add" || t.m_name == "repository_remove" ) )
+                    std::snprintf( line, sizeof line, "%s|%d", t.m_name == "repository_add" ? "repo_add" : "repo_remove", t.m_index );
+                else if ( t.m_kind == ui_trace_kind_t::game )
+                    std::snprintf( line, sizeof line, "slot|%d|0x%06X", t.m_index, t.m_word );
+                else if ( t.m_kind == ui_trace_kind_t::event && t.m_word == 0x5EFA60u )
+                    std::snprintf( line, sizeof line, "event|%d|0x%06X", t.m_index, t.m_word );
+                if ( line[ 0 ] )
+                    out.push_back( line );
+            }
+            return out;
+        };
+        const auto same_log = [ & ]( const std::vector< std::string >& have, int first, int count )
+        {
+            if ( static_cast< int >( have.size( ) ) != count )
+                return false;
+            for ( int q = 0; q < count; ++q )
+            {
+                if ( have[ static_cast< std::size_t >( q ) ] != g_golden_sgi_logs[ first + q ] )
+                    return false;
+                ++logs;
+                slots += have[ static_cast< std::size_t >( q ) ].compare( 0, 5, "slot|" ) == 0 ? 1 : 0;
+            }
+            return true;
+        };
+        std::size_t mark = bind.m_trace.size( );
+        bind.project_initialize( );
+        // retail's phases 0 (0x500B10) and 1 (0x501260) as one: OUR project_initialize runs both
+        int first = -1, count = 0;
+        const golden_sgi_phase_t* after = nullptr;
+        for ( int p = 0; p < gp.m_phases; ++p )
+        {
+            const golden_sgi_phase_t& ph = g_golden_sgi_phases[ gp.m_first + p ];
+            if ( ph.m_phase > 1 )
+                continue;
+            first = first < 0 ? ph.m_first_log : first;
+            count += ph.m_logs;
+            after = &ph;   // phase 1's state (0x501260 last)
+            ++phases;
+        }
+        if ( !same_log( lines( mark, false ), first, count ) )
+            bad( gp.m_asset, 0, "the gameInitialize / OnProjectInitialized log" );
+        if ( !after || state( ) != after->m_state )
+            bad( gp.m_asset, 1, "the state after gameInitialize" );
+        for ( int p = 0; p < gp.m_phases; ++p )
+        {
+            const golden_sgi_phase_t& ph = g_golden_sgi_phases[ gp.m_first + p ];
+            if ( ph.m_phase == 2 )
+            {
+                entity_t& e = *bind.m_bound[ static_cast< std::size_t >( ph.m_entity ) ]->m_entity;
+                script_link_t link;
+                link.m_entity = &e;
+                const script_component_t* sc = script_of( e );
+                for ( std::size_t k = 0; sc && k < sc->m_plugs.size( ); ++k )
+                    if ( std::strcmp( sc->m_plugs[ k ].m_row->m_name, "Trigger" ) == 0 )
+                        link.m_plug = static_cast< int >( k );
+                mark = bind.m_trace.size( );
+                const ui_ret_t ret = link.m_plug >= 0 ? bind.m_wiring.input( link, ui_params_t( ) ) : ui_ret_t( );
+                ++triggers;
+                ++phases;
+                if ( ( link.m_plug >= 0 ? 1 : 0 ) != ph.m_found || !same_log( lines( mark, true ), ph.m_first_log, ph.m_logs ) || ret.m_words[ 0 ] != ph.m_ret[ 0 ] )
+                    bad( gp.m_asset, p, "a VuUserNextUIAction Trigger's broadcasts / VuRetVal" );
+            }
+            else if ( ph.m_phase == 3 )
+            {
+                mark = bind.m_trace.size( );
+                bind.project_release( );
+                ++phases;
+                if ( !same_log( lines( mark, false ), ph.m_first_log, ph.m_logs ) )
+                    bad( gp.m_asset, p, "the gameRelease log" );
+                if ( state( ) != ph.m_state )
+                    bad( gp.m_asset, p, "the state after gameRelease" );
+            }
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_binding project_initialize / project_release (+ VuUserNextUIAction's Trigger) match retail's 0x500B10 / 0x501260 / "
+                     "0x500B80 (button 0x4426E0 + 0x53FAE0, subtitles 0x46D7A0, 0x4253D0; 0x470E50) on %d Screens projects: %d phases, %d log "
+                     "lines in order (%d slot 6 / 7 entries), %d triggers, the touch device / combos / flags after each",
+            static_cast< int >( g_golden_sgi_projects_count ), phases, logs, slots, triggers );
+    else
+        LOG_ERROR( "the UI screens' gameInitialize / gameRelease FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
+// verify_ui_mini_board (batch 21): c_ui_mini_board (core/ui board.hxx) against retail's
+// VuUIMiniLeaderboardEntity slot 6 0x47DAB0, Decision 0x47E170, draw 0x47DB40 (Read
+// 0x47E560 / Show 0x47E600 / NotConnected 0x47EA20) and slot 7 0x47DB10 through one script
+// per authored instance (oracle case mini_board). The fields from OUR loaded entity
+// (ui_mini_board_of; compared with retail's bytes first), the three fonts' params 0..40
+// from OUR load over FontDB (41..59 retail's - UNKNOWN); the leaderboard manager (status,
+// rows), the tick manager's delta, VuStringDB slot 6 and the font answers are the case's
+// (inputs); the game-data root = OUR reader on the step's VUJB. Per step: the hook log in
+// order, the commands and records byte for byte (one sort per buffer), the FSM after.
+inline bool verify_ui_mini_board( )
+{
+    ui_gfx_sort_t sort;
+    ui_lv_sort( sort );
+    int failed = 0, steps = 0, commands = 0, logs = 0, fields = 0;
+    const auto fsm_text = []( const c_ui_mini_board& b )
+    {
+        char word[ 48 ];
+        std::snprintf( word, sizeof word, "%d,%d,%d|", b.m_fsm.m_current, b.m_fsm.m_previous, b.m_fsm.m_next );
+        std::string t = word;
+        for ( const fsm_condition_t& c : b.m_fsm.m_conditions )
+        {
+            std::snprintf( word, sizeof word, "%d,%d;", c.m_value, c.m_pulse );
+            t += word;
+        }
+        std::snprintf( word, sizeof word, "|0x%08X|", ui_lv_bits( b.m_fsm.m_time ) );
+        return t + word + b.m_key;
+    };
+    for ( std::size_t k = 0; k < g_golden_mb_entities_count; ++k )
+    {
+        const golden_mb_entity_t& ge = g_golden_mb_entities[ k ];
+        const entity_t* e = ui_lv_entity( ge.m_project, ge.m_index );
+        const std::vector< std::uint8_t > raw = ui_unhex( ge.m_fields );
+        bool same = e && e->m_ctor && e->m_ctor->m_vtable == k_ui_mini_board_vtable && raw.size( ) == 0x190;
+        ui_mini_board_t f;
+        ui_mini_board_draw_t d;
+        if ( same )
+        {
+            f = ui_mini_board_of( *e );
+            const auto against = [ & ]( const void* ours, int offset, std::size_t bytes )
+            {
+                if ( std::memcmp( ours, raw.data( ) + ( offset - 0x60 ), bytes ) != 0 )
+                    same = false;
+                ++fields;
+            };
+            against( f.m_scale, 0x64, 8 );
+            against( f.m_pos, 0x6C, 8 );
+            against( &f.m_rows, 0x74, 4 );
+            against( f.m_row, 0x78, 16 );
+            against( &f.m_spacing, 0x88, 4 );
+            against( &f.m_name_x, 0x8C, 4 );
+            against( &f.m_score_x, 0x90, 4 );
+            against( f.m_info, 0x15C, 16 );
+            against( &f.m_h_align, 0x1D0, 4 );
+            against( &f.m_v_align, 0x1D4, 4 );
+            against( &f.m_no_clip, 0x1D8, 1 );
+            against( &f.m_single_line, 0x1D9, 1 );
+            against( &f.m_wordbreak, 0x1DA, 1 );
+            against( &f.m_anchor, 0x1DC, 16 );
+            same = same && ui_lv_bits( f.m_depth ) == ge.m_depth;
+            const char* const font_names[ 3 ] = { "NameFont", "ScoreFont", "InfoFont" };
+            for ( int c = 0; same && c < 3; ++c )
+            {
+                const golden_rr_font_t& gf = g_golden_mb_font_rows[ ge.m_first_font + c ];
+                const ui_slot_t* name = ui_property_value( *e, font_names[ c ] );
+                const std::vector< std::uint8_t > want = ui_unhex( gf.m_params );
+                same = name && name->m_text == gf.m_name && want.size( ) == 60;
+                if ( !same )
+                    break;
+                std::uint8_t* params = d.m_fonts[ c ].m_params;
+                std::memcpy( params, want.data( ), 60 );   // 41..59: retail's (UNKNOWN)
+                std::memset( params, 0, 41 );
+                std::string asset;
+                ui_font_params( ui_font_db( 0 ), name->m_text, params, asset );
+                same = std::memcmp( params, want.data( ), 41 ) == 0;
+                d.m_fonts[ c ].m_font = g_golden_mb_fonts[ 0 ];   // the case gives every block TxtWorld's font asset
+                ++fields;
+            }
+        }
+        std::vector< std::string > log;
+        ui_mini_board_hooks_t hooks;
+        std::string set;
+        int status = 0;
+        value_t root;
+        const auto rows_of = [ & ]( int k_row, std::string& name, std::int32_t& score )
+        {
+            for ( std::size_t r = 0; r < g_golden_mb_rows_count; ++r )
+                if ( set == g_golden_mb_rows[ r ].m_set && g_golden_mb_rows[ r ].m_k == k_row )
+                {
+                    name = g_golden_mb_rows[ r ].m_name;
+                    score = g_golden_mb_rows[ r ].m_score;
+                }
+        };
+        const auto row_count = [ & ]
+        {
+            int n = 0;
+            for ( std::size_t r = 0; r < g_golden_mb_rows_count; ++r )
+                n += set == g_golden_mb_rows[ r ].m_set ? 1 : 0;
+            return n;
+        };
+        hooks.m_read = [ & ]( const std::string& key, int a, int b ) { log.push_back( "read|" + key + "|" + std::to_string( a ) + "|" + std::to_string( b ) ); };
+        hooks.m_status = [ & ] { log.push_back( "status" ); return status; };
+        hooks.m_count = [ & ] { log.push_back( "count" ); return row_count( ); };
+        hooks.m_row = [ & ]( int k_row, std::string& name, std::int32_t& score )
+        {
+            log.push_back( "row|" + std::to_string( k_row ) );
+            rows_of( k_row, name, score );
+        };
+        hooks.m_tick_register = [ & ]( bool on ) { log.push_back( on ? "register|Decision" : "unregister|Decision" ); };
+        hooks.m_delta = [ ] { return ui_lv_float( g_golden_mb_delta ); };
+        hooks.m_root = &root;
+        d.m_string = [ & ]( const std::string& id ) { log.push_back( "string|" + id ); return id + "~"; };
+        c_ui_mini_board board( f, hooks );
+        same = same && fsm_text( board ) == ge.m_initial;
+        if ( !same )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "ui mini board: %s entity %d: OUR loaded fields / fonts / FSM differ from retail's", ge.m_project, ge.m_index );
+            continue;
+        }
+        for ( int s = 0; s < ge.m_steps; ++s )
+        {
+            const golden_mb_step_t& st = g_golden_mb_steps[ ge.m_first + s ];
+            const golden_txt_env_t& te = g_golden_txt_envs[ st.m_env ];
+            ui_font_draw_env_t env;
+            const std::vector< std::uint8_t > matrix = ui_unhex( st.m_matrix );
+            std::memcpy( env.m_matrix, matrix.data( ), 64 );
+            std::memcpy( &env.m_top, &te.m_top, 4 );
+            for ( int m = 0; m < 2; ++m )
+            {
+                env.m_material[ m ] = 0x5D001000u + 0x800u * static_cast< std::uint32_t >( m );   // TxtWorld's font materials
+                env.m_material_key[ m ] = g_golden_txt_material_keys[ m ];
+            }
+            std::memcpy( &d.m_crop.m_matrix[ 0 ], &te.m_crop[ 0 ], 4 );
+            std::memcpy( &d.m_crop.m_matrix[ 5 ], &te.m_crop[ 1 ], 4 );
+            std::memcpy( &d.m_crop.m_matrix[ 12 ], &te.m_crop[ 2 ], 4 );
+            std::memcpy( &d.m_crop.m_matrix[ 13 ], &te.m_crop[ 3 ], 4 );
+            d.m_db.m_present = true;   // the case always serves VuStringDB
+            d.m_db.m_slot12 = te.m_sdb_answer != 0;
+            d.m_sort = &sort;
+            d.m_env = &env;
+            sort.m_index = te.m_index;
+            sort.m_key_lo = te.m_key_lo;
+            sort.m_key_hi = te.m_key_hi;
+            std::vector< ui_gfx_command_t >& list = sort.m_commands[ te.m_index ];
+            const std::size_t before = list.size( );
+            log.clear( );
+            switch ( st.m_op )
+            {
+            case 0:
+            {
+                const std::vector< std::uint8_t > blob = ui_unhex( st.m_blob );
+                root = c_reader( blob ).parse( );
+                break;
+            }
+            case 1:
+                set = st.m_name;
+                break;
+            case 2:
+                status = st.m_int;
+                break;
+            case 3:
+                board.draw( d );
+                break;
+            case 4:
+                board.initialize( );
+                break;
+            case 5:
+                board.decision( );
+                break;
+            default:
+                board.release( );
+                break;
+            }
+            bool ok = list.size( ) - before == static_cast< std::size_t >( st.m_commands ) && static_cast< int >( log.size( ) ) == st.m_logs;
+            for ( int q = 0; ok && q < st.m_logs; ++q )
+            {
+                ok = log[ static_cast< std::size_t >( q ) ] == g_golden_mb_logs[ st.m_first_log + q ];
+                ++logs;
+            }
+            for ( int c = 0; ok && c < st.m_commands; ++c )
+            {
+                const golden_txt_command_t& want = g_golden_mb_commands[ st.m_first + c ];
+                const ui_gfx_command_t& h = list[ before + static_cast< std::size_t >( c ) ];
+                const std::vector< std::uint8_t > record = ui_unhex( want.m_record );
+                const auto& memory = sort.m_buffers[ te.m_index ].m_memory;
+                ok = std::memcmp( h.m_words, want.m_words, sizeof( h.m_words ) ) == 0 && h.m_words[ 3 ] + record.size( ) <= memory.size( ) &&
+                     std::memcmp( memory.data( ) + h.m_words[ 3 ], record.data( ), record.size( ) ) == 0;
+                ++commands;
+            }
+            ok = ok && fsm_text( board ) == st.m_fsm;
+            ++steps;
+            if ( !ok && ++failed <= 8 )
+                LOG_ERROR( "ui mini board: %s entity %d step %d (op %d): %d commands (retail %d), %d log lines (retail %d) - or a word / record / "
+                           "line / the FSM differs", ge.m_project, ge.m_index, s, st.m_op, static_cast< int >( list.size( ) - before ), st.m_commands,
+                           static_cast< int >( log.size( ) ), st.m_logs );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_mini_board initialize / decision / draw / release match retail's VuUIMiniLeaderboardEntity 0x47DAB0 / 0x47E170 / "
+                     "0x47DB40 (0x47E560 / 0x47E600 / 0x47EA20, 0x47E090, the key 0x47E2B0) / 0x47DB10 on %d entities (%d of OUR loaded fields / "
+                     "fonts): %d steps, %d commands byte for byte, %d hook calls in order, the FSM after each",
+            static_cast< int >( g_golden_mb_entities_count ), fields, steps, commands, logs );
+    else
+        LOG_ERROR( "the UI mini leaderboard FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_results_all( )
 {
     bool ok = true;
     ok = verify_ui_race_results( ) && ok;
     ok = verify_ui_subtitles_combo( ) && ok;
+    ok = verify_ui_screen_game_init( ) && ok;
+    ok = verify_ui_mini_board( ) && ok;
     return ok;
 }

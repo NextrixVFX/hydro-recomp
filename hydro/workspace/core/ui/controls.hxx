@@ -159,6 +159,19 @@ inline void ui_touch_remove( ui_touch_device_t& d, const void* callback )
         d.m_priority = c.second > d.m_priority ? c.second : d.m_priority;
 }
 
+// 0x53FAE0 (thiscall device, callback, priority; ret 8 - disassembled, batch 21):
+// EVERY entry holding the callback takes the priority, then +0x1C = the largest
+// (unsigned, cmova) priority in the list, 0 for an empty list.
+inline void ui_touch_set_priority( ui_touch_device_t& d, const void* callback, std::uint32_t priority )
+{
+    for ( auto& c : d.m_callbacks )
+        if ( c.first == callback )
+            c.second = priority;
+    d.m_priority = 0;
+    for ( const auto& c : d.m_callbacks )
+        d.m_priority = c.second > d.m_priority ? c.second : d.m_priority;
+}
+
 // The touch callbacks map a device point through VuUIImpl +0x4C (0x81A144, the
 // INVERSE crop matrix: m0 m1 m4 m5 m12 m13) - x' = y m4 + x m0 + m12,
 // y' = x m1 + y m5 + m13 (the sums' order as the down 0x425400; the move
