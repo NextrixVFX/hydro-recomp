@@ -2639,9 +2639,77 @@ inline bool verify_race_hull_wake( )
     return failed == 0;
 }
 
+// The gfx-settings blend (world/blend.hxx gfx_blend: 0x52F690 with 0x52F7E0 / 0x52FFE0 / 0x530450 and the zone weights
+// 0x5D2380 / 0x5D2850) against retail's 0x52F690 (case gfx_blend): per vector the blender's record, 0..4 zones (their
+// kind from the vtable, transform rows / origin / scale, Always Active, times, timer, inner radii, record) and the
+// position; compared: the 22 words written.
+inline bool verify_gfx_blend( )
+{
+    const unsigned* s = g_golden_gfx_blend_words;
+    int failed = 0, words = 0, blended = 0;
+    for ( std::size_t v = 0; v < g_golden_gfx_blend_count; ++v )
+    {
+        gfx_blender_t b;
+        std::memcpy( b.record, s, 88 );
+        s += 22;
+        float position[ 4 ];
+        std::memcpy( position, s, 16 );
+        s += 4;
+        const unsigned n = *s++;
+        std::vector< gfx_zone_t > zones( n );
+        std::vector< transform_component_t > transforms( n );
+        for ( unsigned k = 0; k < n; ++k )
+        {
+            gfx_zone_t& z = zones[ k ];
+            transform_component_t& t = transforms[ k ];
+            transform_construct( t );
+            z.kind = s[ 0 ] == 0x752F4Cu ? gfx_zone_kind_t::elliptical : gfx_zone_kind_t::rectangular;
+            std::memcpy( t.world, s + 1, 32 );
+            std::memcpy( t.world + 12, s + 9, 12 );
+            std::memcpy( t.scale, s + 12, 8 );
+            z.transform = &t;
+            z.always_active = static_cast< std::uint8_t >( s[ 14 ] );
+            z.ramp_up = gfx_f( s[ 15 ] );
+            z.duration = gfx_f( s[ 16 ] );
+            z.ramp_down = gfx_f( s[ 17 ] );
+            z.timer = gfx_f( s[ 18 ] );
+            z.inner[ 0 ] = gfx_f( s[ 19 ] );
+            z.inner[ 1 ] = gfx_f( s[ 20 ] );
+            std::memcpy( z.record, s + 21, 88 );
+            s += 43;
+            b.zones.push_back( &z );
+        }
+        std::uint32_t out[ 22 ];
+        gfx_blend( b, position, out );
+        bool same_as_base = true;
+        for ( int k = 0; k < 22; ++k )
+        {
+            ++words;
+            same_as_base = same_as_base && s[ k ] == b.record[ k ];
+            if ( out[ k ] != s[ k ] && ++failed <= 8 )
+                LOG_ERROR( "gfx blend vector %d word %d: ours 0x%08X retail 0x%08X", static_cast< int >( v ), k, out[ k ], s[ k ] );
+        }
+        blended += same_as_base ? 0 : 1;
+        s += 22;
+    }
+    if ( s != g_golden_gfx_blend_words + g_golden_gfx_blend_size )
+    {
+        LOG_ERROR( "gfx blend: the golden stream was not consumed exactly" );
+        ++failed;
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "The gfx-settings blend 0x52F690 (0x52F7E0 / 0x52FFE0 / 0x530450, weights 0x5D2380 / 0x5D2850) matches retail: %d vectors "
+                     "(%d with a zone blended in), %d words bit for bit",
+                     static_cast< int >( g_golden_gfx_blend_count ), blended, words );
+    else
+        LOG_ERROR( "gfx blend FAILED %d of %d words", failed, words );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_gfx_blend( ) && ok;
     ok = verify_race_hull_wake( ) && ok;
     ok = verify_prop_rigid_bodies( ) && ok;
     ok = verify_water_surface_under( ) && ok;
