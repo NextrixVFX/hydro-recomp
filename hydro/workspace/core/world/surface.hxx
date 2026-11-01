@@ -5,6 +5,7 @@
 #include <workspace/core/entity/values.hxx>
 #include <workspace/core/world/transform.hxx>
 #include <workspace/core/world/tree.hxx>
+#include <workspace/core/world/field.hxx>
 
 #include <cmath>
 #include <cstdint>
@@ -670,7 +671,34 @@ struct water_built_t
     // Destructions whose class dtor is not recreated (every kind but the
     // point wave's 0x5A3310), or whose +8 chain was non-empty: UNKNOWN effects.
     int unread_dtors = 0;
+    // Per rectangular / circular ocean wave: its field (world/field.hxx) - the
+    // arrays the ctor 0x59CB10 -> 0x59CCB0 builds and the tick 0x59CC00
+    // rebuilds; `wave` is its index in `waves`.
+    struct ocean_t
+    {
+        int wave = -1;
+        ocean_params_t params{};
+        ocean_field_t field{};
+    };
+    std::vector< ocean_t > oceans;
 };
+
+// The field of ocean wave `wave`, or null (not an ocean wave / not built).
+inline water_built_t::ocean_t* water_ocean_of( water_built_t& b, int wave )
+{
+    for ( water_built_t::ocean_t& o : b.oceans )
+        if ( o.wave == wave )
+            return &o;
+    return nullptr;
+}
+
+inline const water_built_t::ocean_t* water_ocean_of( const water_built_t& b, int wave )
+{
+    for ( const water_built_t::ocean_t& o : b.oceans )
+        if ( o.wave == wave )
+            return &o;
+    return nullptr;
+}
 
 // Each wave class's vtable, read from the image (word +0 after its ctor; the
 // slot 2 each holds is in water_built_tick).
@@ -728,8 +756,21 @@ inline void water_build_entity( water_built_t& b, water_kind_t kind, const water
             add_wave( ramp_wave_create( in ), kind );
         break;
     }
-    case water_kind_rectangular: add_wave( from_image( rectangular_ocean_create( in.source( ) ) ), kind ); break;
-    case water_kind_circular: add_wave( from_image( circular_ocean_create( in.source( ) ) ), kind ); break;
+    case water_kind_rectangular:
+    case water_kind_circular:
+    {
+        add_wave( from_image( kind == water_kind_rectangular ? rectangular_ocean_create( in.source( ) ) : circular_ocean_create( in.source( ) ) ),
+            kind );
+        // the ctor's 0x59CCB0 field half, at the ctor's time (+0x88, 0.0)
+        water_built_t::ocean_t o{};
+        o.wave = static_cast< int >( b.waves.size( ) ) - 1;
+        o.params = ocean_params_of( b.waves.back( ).word );
+        double time;
+        std::memcpy( &time, &b.waves.back( ).word[ 0x88 / 4 ], 8 );
+        ocean_field_update( o.field, o.params, time );
+        b.oceans.push_back( std::move( o ) );
+        break;
+    }
     case water_kind_banked: add_wave( from_image( banked_turn_create( in.source( ) ) ), kind ); break;
     case water_kind_whirlpool: add_wave( from_image( whirlpool_create( in.source( ) ) ), kind ); break;
     case water_kind_directional: add_wave( from_image( directional_create( in.source( ) ) ), kind ); break;
@@ -834,9 +875,11 @@ struct water_built_hooks_t
     // "OnExpired" plug (VuScriptComponent_findPlug 0x504770, the plug's slot 2)
     // are the caller's.
     void ( *expire )( void* user, water_built_t& b, int wave ) = nullptr;
-    // An ocean wave's field rebuild inside 0x59CC00: EvolveField 0x59D4D0,
-    // VuWaterMap_BuildBezierPatches 0x608BB0, 0x59D640, BuildBezierPatches
-    // 0x59D6C0 - NOT RECREATED (the ocean field), a hook.
+    // An ocean wave's field rebuild inside 0x59CC00 (EvolveField 0x59D4D0,
+    // 0x608BB0, 0x59D640, BuildBezierPatches 0x59D6C0) is now RECREATED on the
+    // wave's b.oceans field (world/field.hxx); this hook is reached only for an
+    // ocean wave with no field (none is made that way here); with a field it is
+    // only TOLD, after the rebuild.
     void ( *rebuild )( void* user, int wave ) = nullptr;
     // 0x595610 on water +0x1C: the render thread's kick, a hook.
     void ( *render )( void* user ) = nullptr;
@@ -929,6 +972,8 @@ inline int water_built_tick( water_built_t& b, float dt, const water_built_hooks
         const water_built_hooks_t* hooks;
         int wave;
         int missing;
+        water_built_t::ocean_t* ocean;
+        const ocean_clock_t* clock;
     };
     const int unread_before = b.unread_dtors;
     int missing = 0;
@@ -964,13 +1009,16 @@ inline int water_built_tick( water_built_t& b, float dt, const water_built_hooks
             c.previous = static_cast< int >( v.word[ 0xA8 / 4 ] );
             std::memcpy( &c.buffer_time[ 0 ], &v.word[ 0xB0 / 4 ], 8 );
             std::memcpy( &c.buffer_time[ 1 ], &v.word[ 0xC0 / 4 ], 8 );
-            ocean_call_t call{ &hooks, wave, 0 };
+            ocean_call_t call{ &hooks, wave, 0, water_ocean_of( b, wave ), &c };
             alive = ocean_tick( c, static_cast< int >( v.word[ 1 ] ), scaled,
                 []( void* u ) {
                     ocean_call_t& o = *static_cast< ocean_call_t* >( u );
+                    const bool built = o.ocean && o.ocean->field.n != 0;
+                    if ( built )
+                        ocean_field_rebuild( o.ocean->field, o.ocean->params, o.clock->time, o.clock->current );
                     if ( o.hooks->rebuild )
-                        o.hooks->rebuild( o.hooks->user, o.wave );
-                    else
+                        o.hooks->rebuild( o.hooks->user, o.wave );   // told (after the rebuild when built)
+                    else if ( !built )
                         ++o.missing;
                 },
                 &call );
