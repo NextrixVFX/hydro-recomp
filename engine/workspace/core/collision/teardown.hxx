@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <initializer_list>
 
 // The race's Bullet destructors that tear down btAlignedObjectArrays and
 // btDbvt trees, recreated from retail's disassembly (boat batch 18). They work
@@ -58,7 +59,8 @@ inline void bt_array_clear( const bt_mem_t& m, std::uint32_t array )
 }
 
 // The scalar deleting destructors that call an inner destructor (0x56D290,
-// 0x5B53E0, 0x54C0C0, 0x56DD30: thiscall; flags; retn 4): the inner one, then
+// 0x5B53E0, 0x54C0C0, 0x56DD30, 0x56FB80, 0x624580, 0x6000F0, 0x56CCD0: thiscall;
+// flags; retn 4): the inner one, then
 // operator delete( this ) when flags & 1; eax = this.
 inline std::uint32_t bt_deleting( const bt_mem_t& m, std::uint32_t self, std::uint32_t flags, void ( *inner )( const bt_mem_t&, std::uint32_t ) )
 {
@@ -195,4 +197,114 @@ inline void bt_dbvt_broadphase_destroy( const bt_mem_t& m, std::uint32_t self )
     for ( int k = 1; k >= 0; --k )
         bt_dbvt_destroy( m, self + 4 + 0x28u * static_cast< std::uint32_t >( k ) );
     m.wr( m.user, self, 0x74F880u );
+}
+
+// btSequentialImpulseConstraintSolver::~btSequentialImpulseConstraintSolver
+// 0x56FBB0: [this] = 0x74F8EC; the six arrays from the last member to the
+// first - +0x68, +0x54, +0x40, +0x2C, +0x18, +4; [this] = btConstraintSolver's
+// 0x74F938.
+inline void bt_sequential_solver_destroy( const bt_mem_t& m, std::uint32_t self )
+{
+    m.wr( m.user, self, 0x74F8ECu );
+    for ( std::uint32_t at : { 0x68u, 0x54u, 0x40u, 0x2Cu, 0x18u, 4u } )
+        bt_array_clear( m, self + at );
+    m.wr( m.user, self, 0x74F938u );
+}
+
+// btSimulationIslandManager::~btSimulationIslandManager 0x6245B0: [this] =
+// 0x758330; m_islandmanifold (+0x2C), m_islandBodies (+0x18), then the
+// btUnionFind's m_elements (+4) cleared. No base vtable store follows.
+inline void bt_island_manager_destroy( const bt_mem_t& m, std::uint32_t self )
+{
+    m.wr( m.user, self, 0x758330u );
+    bt_array_clear( m, self + 0x2C );
+    bt_array_clear( m, self + 0x18 );
+    bt_array_clear( m, self + 4 );
+}
+
+// A member Bullet owns and destroys in place: its vt+0( 0 ) (the scalar
+// deleting dtor without the delete: a hook), then btAlignedFree when the
+// pointer is still set - NO null test before the virtual call, as retail.
+inline void bt_owned_destroy( const bt_mem_t& m, std::uint32_t self, std::uint32_t at )
+{
+    const std::uint32_t zero = 0;
+    m.vcall( m.user, m.rd( m.user, self + at ), 0, &zero, 1 );
+    const std::uint32_t p = m.rd( m.user, self + at );
+    if ( p != 0 )
+        bt_aligned_free( m, p );
+}
+
+// btDiscreteDynamicsWorld::~btDiscreteDynamicsWorld 0x600120: [this] =
+// 0x757A94; m_ownsIslandManager (+0xF4) -> the island manager (+0xB0)
+// destroyed in place; m_ownsConstraintSolver (+0xF5) -> the solver (+0xAC);
+// the arrays +0xF8, +0xC8, +0xB4; [this] = btDynamicsWorld's 0x757B44; then
+// btCollisionWorld's 0x54C0F0.
+inline void bt_dynamics_world_destroy( const bt_mem_t& m, std::uint32_t self )
+{
+    m.wr( m.user, self, 0x757A94u );
+    if ( m.rd8( m.user, self + 0xF4 ) != 0 )
+        bt_owned_destroy( m, self, 0xB0 );
+    if ( m.rd8( m.user, self + 0xF5 ) != 0 )
+        bt_owned_destroy( m, self, 0xAC );
+    bt_array_clear( m, self + 0xF8 );
+    bt_array_clear( m, self + 0xC8 );
+    bt_array_clear( m, self + 0xB4 );
+    m.wr( m.user, self, 0x757B44u );
+    bt_collision_world_destroy( m, self );
+}
+
+// btStackAlloc::destroy inlined: with usedsize (+8) 0, data (+0) freed unless
+// ischild (+0x10, a byte) or null, then data = 0, usedsize = 0.
+inline void bt_stack_alloc_destroy( const bt_mem_t& m, std::uint32_t alloc )
+{
+    if ( m.rd( m.user, alloc + 8 ) != 0 )
+        return;
+    if ( m.rd8( m.user, alloc + 0x10 ) == 0 )
+    {
+        const std::uint32_t data = m.rd( m.user, alloc );
+        if ( data != 0 )
+            bt_aligned_free( m, data );
+    }
+    m.wr( m.user, alloc, 0 );
+    m.wr( m.user, alloc + 8, 0 );
+}
+
+// btDefaultCollisionConfiguration::~btDefaultCollisionConfiguration 0x56CD00:
+// [this] = 0x74F668; m_ownsStackAllocator (+0xC): the stack allocator (+8)
+// destroy()ed twice (its destroy, then its dtor's), then freed when set;
+// m_ownsCollisionAlgorithmPool (+0x1C) / m_ownsPersistentManifoldPool (+0x14):
+// the pool (+0x18 / +0x10)'s block (+0x10) freed when set, then the pool;
+// the create functions destroyed in place in retail's order +0x28, +0x2C,
+// +0x30, +0x34, +0x38, +0x3C, +0x40, +0x48, +0x4C, +0x44, +0x54, +0x50; the
+// simplex solver (+0x20) freed when set (no dtor call); the penetration
+// depth solver (+0x24) destroyed in place; [this] = 0x74F684.
+inline void bt_collision_configuration_destroy( const bt_mem_t& m, std::uint32_t self )
+{
+    m.wr( m.user, self, 0x74F668u );
+    if ( m.rd8( m.user, self + 0xC ) != 0 )
+    {
+        bt_stack_alloc_destroy( m, m.rd( m.user, self + 8 ) );
+        bt_stack_alloc_destroy( m, m.rd( m.user, self + 8 ) );
+        const std::uint32_t p = m.rd( m.user, self + 8 );
+        if ( p != 0 )
+            bt_aligned_free( m, p );
+    }
+    for ( std::uint32_t own : { 0x1Cu, 0x14u } )
+    {
+        if ( m.rd8( m.user, self + own ) == 0 )
+            continue;
+        const std::uint32_t block = m.rd( m.user, m.rd( m.user, self + own - 4 ) + 0x10 );
+        if ( block != 0 )
+            bt_aligned_free( m, block );
+        const std::uint32_t pool = m.rd( m.user, self + own - 4 );
+        if ( pool != 0 )
+            bt_aligned_free( m, pool );
+    }
+    for ( std::uint32_t at : { 0x28u, 0x2Cu, 0x30u, 0x34u, 0x38u, 0x3Cu, 0x40u, 0x48u, 0x4Cu, 0x44u, 0x54u, 0x50u } )
+        bt_owned_destroy( m, self, at );
+    const std::uint32_t simplex = m.rd( m.user, self + 0x20 );
+    if ( simplex != 0 )
+        bt_aligned_free( m, simplex );
+    bt_owned_destroy( m, self, 0x24 );
+    m.wr( m.user, self, 0x74F684u );
 }

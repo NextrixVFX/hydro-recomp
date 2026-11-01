@@ -1537,8 +1537,8 @@ inline bool verify_destroyed_event( )
     return false;
 }
 // verify_bt_teardown (boat batch 18): engine collision/teardown.hxx against
-// cases/boat.py bt_teardown - the four scalar deleting dtors 0x56D290 /
-// 0x5B53E0 / 0x54C0C0 / 0x56DD30 run whole on fake objects in one arena: the
+// cases/boat.py bt_teardown - the eight scalar deleting dtors 0x56D290 /
+// 0x5B53E0 / 0x54C0C0 / 0x56DD30 / 0x56FB80 / 0x624580 / 0x6000F0 / 0x56CCD0 run whole on fake objects in one arena: the
 // arena after, gNumAlignedFree, the frees, the deletes, the virtual calls.
 inline bool verify_bt_teardown( )
 {
@@ -1629,8 +1629,10 @@ inline bool verify_bt_teardown( )
                 a.vbad = c[ 3 + k ] != args[ k ];
             return c[ 3 + c[ 2 ] ];
         };
-        void ( *inner )( const bt_mem_t&, std::uint32_t ) = kind == 1 ? bt_dispatcher_destroy : kind == 2 ? bt_convex_polyhedron_destroy
-                                                           : kind == 3 ? bt_collision_world_destroy : bt_dbvt_broadphase_destroy;
+        void ( *const inners[ 8 ] )( const bt_mem_t&, std::uint32_t ) = { bt_dispatcher_destroy, bt_convex_polyhedron_destroy, bt_collision_world_destroy,
+            bt_dbvt_broadphase_destroy, bt_sequential_solver_destroy, bt_island_manager_destroy, bt_dynamics_world_destroy,
+            bt_collision_configuration_destroy };
+        void ( *inner )( const bt_mem_t&, std::uint32_t ) = inners[ ( kind - 1 ) & 7 ];
         const std::uint32_t r = bt_deleting( m, self, flags, inner );
         frees += static_cast< int >( nf );
         calls += static_cast< int >( x.nv );
@@ -1642,7 +1644,7 @@ inline bool verify_bt_teardown( )
     }
     if ( failed == 0 )
     {
-        LOG_SUCCESS( "the Bullet teardown dtors 0x56D290 / 0x5B53E0 / 0x54C0C0 / 0x56DD30 (collision/teardown.hxx) match retail: %u calls, "
+        LOG_SUCCESS( "the eight Bullet teardown dtors (0x56D290 .. 0x56CCD0, collision/teardown.hxx) match retail: %u calls, "
                      "%d frees, %d virtual calls", n, frees, calls );
         return true;
     }
