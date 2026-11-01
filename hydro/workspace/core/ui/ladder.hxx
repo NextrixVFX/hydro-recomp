@@ -329,6 +329,86 @@ inline bool ui_leaderboard_draw( const ui_leaderboard_t& f, const ui_combo_block
     return known;
 }
 
+// The Vu2dLayoutComponent's draw 0x47A910 (bool; ret 4), disassembled (tools
+// tmp/b23/d_47A910.txt). When the bool is set (the layout view), all at the Screen
+// Scale and Depth x 0.005 + 0.5:
+//  1. from Position (y + ComboBoxSpacing per record) each combo record's block: the
+//     ValueText rect at (x + ValueTextX, ValueTextY + y) as a rect draw 0x507A00 in
+//     the value params' own colour (block +0xDC), then LeftArrowTexture (+0x1C8 ->
+//     +0x4C -> +0x58) at (LeftArrowPositionX + x, LeftArrowPositionY + y) at its own
+//     size (0x507360, white, uv 0 0 1 1; nothing without the texture);
+//  2. TouchLeft, TouchRight and InfoRect at Position as white rect draws;
+//  3. the two ButtonTouch rects (y + ButtonSpacing) - 0x507A00 inlined (the same
+//     84-byte record and command) - white.
+// Then always the RowCount sample rows at Show's layout (ui_leaderboard_show: the
+// rect is the point with itself; flags 0x30 / 0x30 / 0x31; the fonts the inline
+// 0x626B80) with the literal texts "Rank" / "Name" / "Score", and then the draw
+// member 0x47A360 (alpha 1.0).
+inline bool ui_leaderboard_layout_draw( const ui_leaderboard_t& f, const ui_combo_block_t& block, ui_leaderboard_state_t& s,
+                                        const ui_leaderboard_draw_t& d, bool layout )
+{
+    bool known = true;
+    if ( layout )
+    {
+        const float x = f.m_pos[ 0 ];
+        float y = f.m_pos[ 1 ];
+        std::uint32_t own;
+        std::memcpy( &own, block.m_value_params + 12, 4 );
+        for ( int k = 0; k < 2; ++k )
+        {
+            const float ix = 1.0f / f.m_scale[ 0 ];   // 0x6F76B8
+            const float iy = 1.0f / f.m_scale[ 1 ];
+            const float depth = f.m_depth * 0.005f + 0.5f;   // 0x6F75C4, 0x6F765C
+            const float rect[ 4 ] = { ix * ( x + block.m_value_rect[ 0 ] ), iy * ( block.m_value_rect[ 1 ] + y ), ix * block.m_value_rect[ 2 ],
+                                      iy * block.m_value_rect[ 3 ] };
+            ui_rect_draw( *d.m_sort, *d.m_env, own, rect, depth );
+            const float at[ 2 ] = { block.m_left[ 0 ] + x, block.m_left[ 1 ] + y };
+            ui_combo_texture_draw( *d.m_sort, *d.m_env, d.m_combo.m_texture ? d.m_combo.m_texture( ui_combo_left ) : nullptr, at, f.m_scale,
+                                   0xFFFFFFFFu, depth );
+            y = f.m_combo_spacing + y;
+        }
+        const auto white = [ & ]( const float r[ 4 ], float px, float py )
+        {
+            const float ix = 1.0f / f.m_scale[ 0 ];
+            const float iy = 1.0f / f.m_scale[ 1 ];
+            const float rect[ 4 ] = { ix * ( r[ 0 ] + px ), iy * ( r[ 1 ] + py ), ix * r[ 2 ], iy * r[ 3 ] };
+            ui_rect_draw( *d.m_sort, *d.m_env, 0xFFFFFFFFu, rect, f.m_depth * 0.005f + 0.5f );
+        };
+        white( f.m_left, f.m_pos[ 0 ], f.m_pos[ 1 ] );
+        white( f.m_right, f.m_pos[ 0 ], f.m_pos[ 1 ] );
+        white( f.m_info, f.m_pos[ 0 ], f.m_pos[ 1 ] );
+        {
+            const float bx = f.m_button_touch[ 0 ] + f.m_pos[ 0 ];
+            float by = f.m_button_touch[ 1 ] + f.m_pos[ 1 ];
+            for ( int k = 0; k < 2; ++k )
+            {
+                const float ix = 1.0f / f.m_scale[ 0 ];
+                const float iy = 1.0f / f.m_scale[ 1 ];
+                const float rect[ 4 ] = { ix * bx, iy * by, ix * f.m_button_touch[ 2 ], iy * f.m_button_touch[ 3 ] };
+                ui_rect_draw( *d.m_sort, *d.m_env, 0xFFFFFFFFu, rect, f.m_depth * 0.005f + 0.5f );
+                by = by + f.m_button_spacing;
+            }
+        }
+    }
+    {
+        const float x = f.m_pos[ 0 ] + f.m_row[ 0 ];
+        float y = f.m_pos[ 1 ] + ( f.m_row[ 3 ] * 0.5f + f.m_row[ 1 ] );
+        for ( std::int32_t k = 0; k < f.m_rows; ++k )
+        {
+            const float w = x - x;   // maxss( x, x ) - minss( x, x )
+            const float h = y - y;
+            const float rank_rect[ 4 ] = { f.m_rank_x + x, y, w, h };
+            known = ui_leaderboard_text( f, d, d.m_fonts[ ui_lb_rank ], rank_rect, 0x30u, "Rank", 0.0f ) && known;
+            const float name_rect[ 4 ] = { f.m_name_x + x, y, w, h };
+            known = ui_leaderboard_text( f, d, d.m_fonts[ ui_lb_name ], name_rect, 0x30u, "Name", 0.0f ) && known;
+            const float score_rect[ 4 ] = { f.m_score_x + x, y, w, h };
+            known = ui_leaderboard_text( f, d, d.m_fonts[ ui_lb_score ], score_rect, 0x31u, "Score", 0.0f ) && known;
+            y = f.m_spacing + y;
+        }
+    }
+    return ui_leaderboard_draw( f, block, s, d ) && known;
+}
+
 // The platform's leaderboard manager g 0x758FA8 (HOOKS: an online service) and the
 // engine services the per-frame half reaches.
 struct ui_leaderboard_hooks_t

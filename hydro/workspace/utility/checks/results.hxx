@@ -1076,7 +1076,7 @@ inline bool verify_ui_leaderboard_draw( )
                 LOG_ERROR( "ui leaderboard draw: %s entity %d: OUR loaded fields / block / fonts / ctor records differ from retail's", ge.m_project, ge.m_index );
             continue;
         }
-        for ( int r = 0; r < ge.m_runs; ++r )
+        for ( int r = 0; r < ge.m_runs + ge.m_layouts; ++r )   // batch 24: then the layout draw 0x47A910 runs
         {
             const golden_lb_run_t& run = g_golden_lb_runs[ ge.m_first + r ];
             const golden_txt_env_t& te = g_golden_txt_envs[ run.m_env ];
@@ -1160,7 +1160,7 @@ inline bool verify_ui_leaderboard_draw( )
             sort.m_key_hi = te.m_key_hi;
             std::vector< ui_gfx_command_t >& list = sort.m_commands[ te.m_index ];
             const std::size_t before = list.size( );
-            const bool known = ui_leaderboard_draw( f, b, s, d );
+            const bool known = run.m_layout < 0 ? ui_leaderboard_draw( f, b, s, d ) : ui_leaderboard_layout_draw( f, b, s, d, run.m_layout != 0 );
             bool ok = known && list.size( ) - before == static_cast< std::size_t >( run.m_commands ) && static_cast< int >( log.size( ) ) == run.m_logs;
             for ( int q = 0; ok && q < run.m_logs; ++q )
             {
@@ -1187,7 +1187,7 @@ inline bool verify_ui_leaderboard_draw( )
         }
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "ui_leaderboard_draw matches retail's VuUILeaderboardEntity draw 0x47A360 (0x4578D0, 0x507360 / the solid rect, 0x47B570, "
+        LOG_SUCCESS( "ui_leaderboard_draw / ui_leaderboard_layout_draw match retail's VuUILeaderboardEntity draw 0x47A360 / layout draw 0x47A910 (0x4578D0, 0x507360 / the solid rect, 0x47B570, "
                      "Read 0x47BEF0 / Show 0x47BF90 / NotConnected 0x47C720) on %d entities (%d of OUR loaded fields / block / fonts, %d ctor "
                      "0x477FD0 choices from OUR builder): %d runs, %d commands byte for byte, %d hook calls in order",
             static_cast< int >( g_golden_lb_entities_count ), fields, choices, runs, commands, logs );
