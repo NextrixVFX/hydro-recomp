@@ -9,11 +9,14 @@
 #include <workspace/core/boat/powerup.hxx>
 #include <workspace/core/boat/meshes.hxx>
 #include <workspace/core/boat/surface.hxx>
+#include <workspace/core/boat/nuisance.hxx>
 
 #include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <map>
+#include <string>
 #include <vector>
 
 // The boat area's race-time checks (the camera, the respawn, the animation tick, the drivers): included by
@@ -2111,6 +2114,148 @@ inline bool verify_boat_manager_game( )
     return false;
 }
 
+// The document as the case serialises it: s<len>:<text>, o<n>{<len>:<key><value>...}, t<tag>.
+inline std::string nuisance_serial( const value_t& v )
+{
+    if ( v.tag == 4 )
+        return "s" + std::to_string( v.text.size( ) ) + ":" + v.text;
+    if ( v.tag == 6 )
+    {
+        std::string out = "o" + std::to_string( v.object.size( ) ) + "{";
+        for ( const auto& m : v.object )
+            out += std::to_string( m.first.size( ) ) + ":" + m.first + nuisance_serial( m.second );
+        return out + "}";
+    }
+    return "t" + std::to_string( v.tag );
+}
+
+// VuAiNuisanceDriverStartEntity's slots 6 0x42FDC0 / 7 0x42FF80 and its plugs DriverTarget 0x42FF90 / DriverDisable
+// 0x430020 against retail (oracle case nuisance_start): the document handed to the child's load, the child's name, the
+// hook order and arguments, and - after a plug - every weak-reference link word, +0x81 and the VuRetVal word.
+inline bool verify_nuisance_start( )
+{
+    const unsigned* g = g_golden_nuisance_start_words;
+    auto text = [ & ]( ) {
+        const unsigned n = *g++;
+        std::string s( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        return s;
+    };
+    const std::uint32_t tgt = 0x900, child = 0x400, old = 0x940, r0 = 0x980, r1 = 0x9C0, r2 = 0xA00, drv = 0x2200, ref = drv + 0xE4;
+    auto sym = [ & ]( std::uint32_t x ) -> unsigned {
+        if ( x == 0 ) return 0;
+        if ( x == tgt ) return 1;
+        if ( x == child ) return 2;
+        if ( x == old ) return 3;
+        if ( x == r0 ) return 4;
+        if ( x == r1 ) return 5;
+        if ( x == r2 ) return 6;
+        if ( x == ref ) return 7;
+        return 0x100 + ( x & 0xFF );
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++, has_child = *g++, b80 = *g++, b81 = *g++, kind = *g++, state = *g++, has_r2 = *g++, ptype = *g++,
+                       size = *g++, hash = *g++, key = *g++, answer = *g++;
+        const std::string name = text( ), boat = text( );
+        unsigned after[ 13 ];
+        for ( unsigned& a : after )
+            a = *g++;
+        const std::string child_name = text( );
+        std::vector< std::vector< unsigned > > glog( *g++ );
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        std::map< std::uint32_t, std::uint32_t > mem;
+        vu_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0u : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        mem[ child + 0x220 ] = drv;
+        mem[ drv ] = kind;
+        if ( state == 1 )
+        {
+            mem[ old + 8 ] = ref;
+            mem[ ref + 8 ] = r1; mem[ ref + 0xC ] = old;
+            mem[ r1 + 4 ] = ref; mem[ r1 + 0xC ] = old;
+        }
+        else if ( state == 2 || state == 3 )
+        {
+            mem[ old + 8 ] = r0;
+            mem[ r0 + 8 ] = ref; mem[ r0 + 0xC ] = old;
+            mem[ ref + 4 ] = r0; mem[ ref + 8 ] = state == 2 ? r1 : 0; mem[ ref + 0xC ] = old;
+            if ( state == 2 )
+            {
+                mem[ r1 + 4 ] = ref; mem[ r1 + 0xC ] = old;
+            }
+        }
+        if ( has_r2 )
+        {
+            mem[ tgt + 8 ] = r2;
+            mem[ r2 + 0xC ] = tgt;
+        }
+        std::uint8_t params[ 0x84 ] = {};
+        std::memcpy( params, &ptype, 4 );
+        std::memcpy( params + 4, &hash, 4 );
+        std::memcpy( params + 0x80, &size, 4 );
+        const std::uint32_t answers[ 4 ] = { 0, tgt, child, old };
+        std::vector< std::vector< unsigned > > log;
+        auto find = [ & ]( std::uint32_t h ) -> std::uint32_t {
+            log.push_back( { 6u, h } );
+            return h == key && answer < 4 ? answers[ answer ] : 0u;
+        };
+        nuisance_start_t s;
+        s.boat = boat;
+        s.active = static_cast< std::uint8_t >( b80 );
+        s.disabled = static_cast< std::uint8_t >( b81 );
+        std::uint32_t ret = 0xCDCDCDCDu;
+        std::string named;
+        nuisance_start_hooks_t h;
+        h.name_child = [ & ]( const std::string& n ) { named = n; };
+        h.load_child = [ & ]( const value_t& doc ) {
+            const std::string serial = nuisance_serial( doc );
+            std::vector< unsigned > e = { 1u, 1u, static_cast< unsigned >( serial.size( ) ) };
+            for ( std::size_t k = 0; k < serial.size( ); k += 4 )
+            {
+                unsigned word = 0;
+                std::memcpy( &word, serial.data( ) + k, std::min< std::size_t >( 4, serial.size( ) - k ) );
+                e.push_back( word );
+            }
+            log.push_back( e );
+        };
+        h.hash_child = [ & ]( std::uint32_t seed ) { log.push_back( { 2u, 1u, seed } ); };
+        h.place_child = [ & ]( bool notify ) { log.push_back( { 3u, 1u, 1u, notify ? 1u : 0u } ); };
+        h.add_child = [ & ]( ) { log.push_back( { 4u, 1u } ); };
+        h.remove_child = [ & ]( ) { log.push_back( { 5u, 1u } ); };
+        const std::uint32_t c = has_child ? child : 0u;
+        if ( fn == 6 )
+            nuisance_start_game_initialize( name, s, h );
+        else if ( fn == 7 )
+            nuisance_start_game_release( h );
+        else if ( fn == 1 )
+            ret = nuisance_start_driver_target( s, c, params, find, w );
+        else
+            ret = nuisance_start_driver_disable( s, c, params, find, w );
+        const unsigned mine[ 13 ] = { sym( w.get( ref + 4 ) ), sym( w.get( ref + 8 ) ), sym( w.get( ref + 0xC ) ), sym( w.get( tgt + 8 ) ),
+                                      sym( w.get( old + 8 ) ), sym( w.get( r0 + 4 ) ), sym( w.get( r0 + 8 ) ), sym( w.get( r1 + 4 ) ),
+                                      sym( w.get( r1 + 8 ) ), sym( w.get( r2 + 4 ) ), sym( w.get( r2 + 8 ) ), s.disabled, ret };
+        const bool same = log == glog && std::equal( mine, mine + 13, after ) && ( fn != 6 || named == child_name );
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "nuisance_start vector %u (function %u): %zu calls (%zu), +0xF0 %u (retail %u), +0x81 %u (%u), name \"%s\" (\"%s\")", v, fn,
+                       log.size( ), glog.size( ), mine[ 2 ], after[ 2 ], mine[ 11 ], after[ 11 ], named.c_str( ), child_name.c_str( ) );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuAiNuisanceDriverStartEntity slots 6 0x42FDC0 / 7 0x42FF80, DriverTarget 0x42FF90 / DriverDisable 0x430020 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "nuisance_start FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -2136,5 +2281,6 @@ inline bool verify_race_all( )
     ok = verify_surface_table( ) && ok;
     ok = verify_hidden_package( ) && ok;
     ok = verify_boat_manager_game( ) && ok;
+    ok = verify_nuisance_start( ) && ok;
     return ok;
 }
