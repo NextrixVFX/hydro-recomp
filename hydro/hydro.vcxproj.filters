@@ -267,6 +267,9 @@
     <ClInclude Include="workspace\core\ui\map.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\ui\message.hxx">
+      <Filter>workspace\core\ui</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\ui\navigate.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
