@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -134,11 +135,154 @@ inline void ui_hud_onscreen_draw( ui_gfx_sort_t& sort, const ui_font_draw_env_t&
 // 0x4253D0 removes it through 0x53FA60. The device's other writers of +0x1C
 // and its dispatch of the callbacks (down / up / move) are NOT read: the
 // caller delivers the callbacks; the touch count / points are HOOKS.
+//
+// Batch 24: the device's dispatch, disassembled - VuMetroTouch (vtable 0x74D4E8,
+// ctor 0x5392C0: +0x20 the touches array, 12-byte { id, x, y } entries, +0x24 the
+// count, +0x28 the capacity 8). OUR dispatch target per callback is m_handlers
+// (retail calls the callback's own vtable: slot 0 down (const VuVector2&), slot 1
+// up (const VuVector2&), slot 2 move ()); a callback without a handler is
+// counted in m_unhandled.
+struct ui_touch_handler_t
+{
+    std::function< void( const float point[ 2 ] ) > m_down;   // vt+0
+    std::function< void( const float point[ 2 ] ) > m_up;     // vt+4
+    std::function< void( ) > m_move;                          // vt+8
+};
+
+struct ui_touch_entry_t
+{
+    std::uint32_t m_id = 0;
+    float m_point[ 2 ] = { 0.0f, 0.0f };
+};
+
 struct ui_touch_device_t
 {
     std::vector< std::pair< const void*, std::uint32_t > > m_callbacks;   // +4..+0xC
     std::uint32_t m_priority = 0;                                         // +0x1C
+    // batch 24 (additive): the second callback list +0x10..+0x18 (dispatched with no
+    // priority test; its filler - 0x4C6AB0's two 0x53FC00 pushes - is NOT read: data
+    // here), the touches (+0x20 storage, +0x24 count; entries past the count keep
+    // their old bytes - m_touches holds every entry ever written), the handlers.
+    std::vector< std::pair< const void*, std::uint32_t > > m_low_level;
+    std::vector< ui_touch_entry_t > m_touches;
+    std::int32_t m_count = 0;
+    std::map< const void*, ui_touch_handler_t > m_handlers;
+    int m_unhandled = 0;
 };
+
+// One callback's slot k (0 down / 1 up / 2 move) through OUR handlers.
+inline void ui_touch_call( ui_touch_device_t& d, const void* callback, int slot, const float point[ 2 ] )
+{
+    const auto it = d.m_handlers.find( callback );
+    if ( it == d.m_handlers.end( ) )
+    {
+        ++d.m_unhandled;
+        return;
+    }
+    const ui_touch_handler_t& h = it->second;
+    if ( slot == 0 && h.m_down )
+        h.m_down( point );
+    else if ( slot == 1 && h.m_up )
+        h.m_up( point );
+    else if ( slot == 2 && h.m_move )
+        h.m_move( );
+    else
+        ++d.m_unhandled;
+}
+
+// The callbacks of both lists for slot k: the first list's entries whose priority
+// equals +0x1C (re-read per entry), then every entry of the second list. The
+// vectors' ends are re-read per step (a handler may add / remove).
+inline void ui_touch_broadcast( ui_touch_device_t& d, int slot, const float point[ 2 ] )
+{
+    for ( std::size_t k = 0; k < d.m_callbacks.size( ); ++k )
+        if ( d.m_callbacks[ k ].second == d.m_priority )
+            ui_touch_call( d, d.m_callbacks[ k ].first, slot, point );
+    for ( std::size_t k = 0; k < d.m_low_level.size( ); ++k )
+        ui_touch_call( d, d.m_low_level[ k ].first, slot, point );
+}
+
+// 0x5393E0 (VuMetroTouch's touch down; thiscall id, the point in xmm2 / xmm3 - the
+// platform's pointer-pressed handler 0x4DAFD0 calls it): the entry holding the id
+// (the first, from the front), else a new last entry (0x5395A0 resize to count + 1);
+// it takes { id, x, y }; then slot 0 with the point to the callbacks.
+inline void ui_touch_dispatch_down( ui_touch_device_t& d, std::uint32_t id, float x, float y )
+{
+    std::int32_t at = -1;
+    for ( std::int32_t k = 0; k < d.m_count; ++k )
+        if ( d.m_touches[ static_cast< std::size_t >( k ) ].m_id == id )
+        {
+            at = k;
+            break;
+        }
+    if ( at < 0 )
+    {
+        at = d.m_count++;
+        if ( d.m_touches.size( ) < static_cast< std::size_t >( d.m_count ) )
+            d.m_touches.resize( static_cast< std::size_t >( d.m_count ) );
+    }
+    ui_touch_entry_t& e = d.m_touches[ static_cast< std::size_t >( at ) ];
+    e.m_id = id;
+    e.m_point[ 0 ] = x;
+    e.m_point[ 1 ] = y;
+    const float point[ 2 ] = { x, y };
+    ui_touch_broadcast( d, 0, point );
+}
+
+// 0x5394A0 (touch up; thiscall id, the point in xmm2 / xmm3 - from the platform's
+// 0x4DB280 / 0x4DB3B0): the entry holding the id swapped with the last one unless
+// it is the last, the count - 1 (nothing when the id is absent); then slot 1 with
+// the point.
+inline void ui_touch_dispatch_up( ui_touch_device_t& d, std::uint32_t id, float x, float y )
+{
+    for ( std::int32_t k = 0; k < d.m_count; ++k )
+        if ( d.m_touches[ static_cast< std::size_t >( k ) ].m_id == id )
+        {
+            if ( k + 1 < d.m_count )
+                std::swap( d.m_touches[ static_cast< std::size_t >( k ) ], d.m_touches[ static_cast< std::size_t >( d.m_count - 1 ) ] );
+            --d.m_count;
+            break;
+        }
+    const float point[ 2 ] = { x, y };
+    ui_touch_broadcast( d, 1, point );
+}
+
+// 0x53FB40 (VuTouch's move dispatch): slot 2 to the callbacks.
+inline void ui_touch_dispatch_move( ui_touch_device_t& d )
+{
+    const float none[ 2 ] = { 0.0f, 0.0f };
+    ui_touch_broadcast( d, 2, none );
+}
+
+// The engine half of the platform's pointer-moved handler 0x4DB100 (the point is
+// the platform's: Position / the window bounds - a HOOK): the entry holding the id
+// (from the front) takes the point and 0x53FB40 runs; an absent id: nothing.
+inline void ui_touch_dispatch_moved( ui_touch_device_t& d, std::uint32_t id, float x, float y )
+{
+    for ( std::int32_t k = 0; k < d.m_count; ++k )
+        if ( d.m_touches[ static_cast< std::size_t >( k ) ].m_id == id )
+        {
+            d.m_touches[ static_cast< std::size_t >( k ) ].m_point[ 0 ] = x;
+            d.m_touches[ static_cast< std::size_t >( k ) ].m_point[ 1 ] = y;
+            ui_touch_dispatch_move( d );
+            return;
+        }
+}
+
+// Slot 6 0x539210 (priority): 0 when the priority is below +0x1C (unsigned), else
+// the touch count.
+inline std::int32_t ui_touch_count( const ui_touch_device_t& d, std::uint32_t priority ) { return priority < d.m_priority ? 0 : d.m_count; }
+
+// Slot 7 0x539230 (index, out): the entry's point, NO bounds test (retail reads the
+// storage past the count - kept here - or past it: false = indeterminate).
+inline bool ui_touch_point( const ui_touch_device_t& d, std::uint32_t index, float out[ 2 ] )
+{
+    if ( index >= d.m_touches.size( ) )
+        return false;
+    out[ 0 ] = d.m_touches[ index ].m_point[ 0 ];
+    out[ 1 ] = d.m_touches[ index ].m_point[ 1 ];
+    return true;
+}
 
 // 0x53FB90 (thiscall device + 4, const pair&): push_back.
 inline void ui_touch_add( ui_touch_device_t& d, const void* callback, std::uint32_t priority ) { d.m_callbacks.push_back( { callback, priority } ); }

@@ -1130,6 +1130,7 @@ private:
                     ui_touch_add( *m_hooks.m_touch_device, bp->m_ladder.get( ), 0u );
                 else
                     ui_touch_remove( *m_hooks.m_touch_device, bp->m_ladder.get( ) );
+                touch_handlers( bp->m_ladder.get( ), on );   // batch 24: the device's dispatch reaches it
             };
             h.m_delta = [ this ] { return m_hooks.m_delta ? m_hooks.m_delta( ) : 0.0f; };
             h.m_sound = [ this ]( const char* name ) { trace( ui_trace_kind_t::sound, -1, name, 0u, ui_params_t( ), true ); };
@@ -1397,6 +1398,43 @@ private:
     //   (chooser.hxx initialize_settings) / the shared slot 7 0x4253D0.
     // Retail reads g 0x759070 / g 0x758FE0 without a null test: without
     // m_touch_device / m_settings the row is entered as UNKNOWN (and counted).
+    // Batch 24: the touch device's dispatch (controls.hxx ui_touch_dispatch_*) reaches a
+    // registered combo / leaderboard through these handlers - its callback vtable (combo
+    // 0x73DF24: 0x474F80 / 0x475080 / 0x475090; leaderboard 0x73F2B4: 0x479D30 / 0x479E30 /
+    // 0x479E40). The move reads the device's touch 0 (slot 7 0x539230: ui_touch_point -
+    // never written = indeterminate in retail: counted in m_config_faults, nothing run).
+    template < typename T >
+    void touch_handlers( const T* object, bool on )
+    {
+        if ( !m_hooks.m_touch_device )
+            return;
+        ui_touch_device_t& device = *m_hooks.m_touch_device;
+        if ( !on )
+        {
+            device.m_handlers.erase( object );
+            return;
+        }
+        T* o = const_cast< T* >( object );
+        ui_touch_handler_t h;
+        h.m_down = [ this, o ]( const float p[ 2 ] ) { o->touch_down( touch_inverse( ), p ); };
+        h.m_up = [ o ]( const float* ) { o->touch_up( ); };
+        h.m_move = [ this, o, &device ]
+        {
+            float p[ 2 ];
+            if ( ui_touch_point( device, 0u, p ) )
+                o->touch_move( touch_inverse( ), p );
+            else
+                ++m_config_faults;
+        };
+        device.m_handlers[ object ] = h;
+    }
+
+    const float* touch_inverse( ) const
+    {
+        static const float k_identity[ 16 ] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+        return m_hooks.m_inverse ? m_hooks.m_inverse : k_identity;
+    }
+
     void game_slot( entity_t& e, std::uint32_t vt, bool init )
     {
         const ui_game_slot_t* row = nullptr;
@@ -1472,6 +1510,8 @@ private:
             b->m_combo->initialize_settings( *m_hooks.m_touch_device, *m_hooks.m_settings, *m_hooks.m_settings_platform );
         else
             b->m_combo->release( *m_hooks.m_touch_device );
+        if ( b && b->m_combo && ui_is_settings_combo_vtable( vt ) )
+            touch_handlers( b->m_combo.get( ), init );
     }
 
     void game_release( entity_t& e )

@@ -495,6 +495,106 @@ inline bool verify_ui_settings_combos( )
     return failed == 0;
 }
 
+// verify_ui_touch_dispatch (batch 24): controls.hxx's touch device - ui_touch_dispatch_
+// down / up / move, ui_touch_count, ui_touch_point with ui_touch_add / set_priority /
+// remove - against retail's VuMetroTouch 0x5393E0 / 0x5394A0, VuTouch 0x53FB40, slots
+// 6 0x539210 / 7 0x539230, 0x53FB90 / 0x53FAE0 / 0x53FA60 (oracle case touch_dispatch)
+// on one script: the callbacks' slot calls in order (callback, slot, the point bits),
+// the first list, +0x1C, the count, the touches' first 8 entries, the answers.
+inline bool verify_ui_touch_dispatch( )
+{
+    ui_touch_device_t d;
+    std::vector< int > tokens( static_cast< std::size_t >( g_golden_tdc_callbacks ) );
+    const auto cb = [ &tokens ]( int k ) -> const void* { return &tokens[ static_cast< std::size_t >( k ) ]; };
+    const auto index_of = [ & ]( const void* p )
+    {
+        for ( int k = 0; k < g_golden_tdc_callbacks; ++k )
+            if ( cb( k ) == p )
+                return k;
+        return -1;
+    };
+    std::vector< std::string > log;
+    char line[ 96 ];
+    for ( int k = 0; k < g_golden_tdc_callbacks; ++k )
+    {
+        ui_touch_handler_t h;
+        const auto point_call = [ &log, &line, k ]( int slot, const float p[ 2 ] )
+        {
+            std::uint32_t x, y;
+            std::memcpy( &x, &p[ 0 ], 4 );
+            std::memcpy( &y, &p[ 1 ], 4 );
+            std::snprintf( line, sizeof line, "cb|%d|%d|0x%08X|0x%08X", k, slot, x, y );
+            log.push_back( line );
+        };
+        h.m_down = [ point_call ]( const float p[ 2 ] ) { point_call( 0, p ); };
+        h.m_up = [ point_call ]( const float p[ 2 ] ) { point_call( 1, p ); };
+        h.m_move = [ &log, k ] { log.push_back( "cb|" + std::to_string( k ) + "|2" ); };
+        d.m_handlers[ cb( k ) ] = h;
+    }
+    for ( std::size_t k = 0; k < g_golden_tdc_low_count; ++k )
+        d.m_low_level.push_back( { cb( g_golden_tdc_low[ k ].m_callback ), g_golden_tdc_low[ k ].m_priority } );
+    int failed = 0, logs = 0;
+    for ( std::size_t s = 0; s < g_golden_tdc_steps_count; ++s )
+    {
+        const golden_tdc_step_t& st = g_golden_tdc_steps[ s ];
+        log.clear( );
+        std::uint32_t answer[ 2 ] = { 0u, 0u };
+        int answers = 0;
+        bool known = true;
+        const float x = ui_lv_float( st.m_point[ 0 ] ), y = ui_lv_float( st.m_point[ 1 ] );
+        switch ( st.m_op )
+        {
+        case 0: ui_touch_add( d, cb( st.m_a ), static_cast< std::uint32_t >( st.m_b ) ); break;
+        case 1: ui_touch_set_priority( d, cb( st.m_a ), static_cast< std::uint32_t >( st.m_b ) ); break;
+        case 2: ui_touch_remove( d, cb( st.m_a ) ); break;
+        case 3: ui_touch_dispatch_down( d, static_cast< std::uint32_t >( st.m_a ), x, y ); break;
+        case 4: ui_touch_dispatch_up( d, static_cast< std::uint32_t >( st.m_a ), x, y ); break;
+        case 5: ui_touch_dispatch_move( d ); break;
+        case 6:
+            answer[ 0 ] = static_cast< std::uint32_t >( ui_touch_count( d, static_cast< std::uint32_t >( st.m_a ) ) );
+            answers = 1;
+            break;
+        default:
+        {
+            float p[ 2 ];
+            known = ui_touch_point( d, static_cast< std::uint32_t >( st.m_a ), p );
+            std::memcpy( answer, p, 8 );
+            answers = 2;
+            break;
+        }
+        }
+        // the array's first 8 entries as retail's bytes (entries never written: the case's zeroed storage)
+        std::vector< std::uint8_t > array( 12 * 8, 0u );
+        for ( std::size_t k = 0; k < d.m_touches.size( ) && k < 8; ++k )
+        {
+            std::memcpy( array.data( ) + 12 * k, &d.m_touches[ k ].m_id, 4 );
+            std::memcpy( array.data( ) + 12 * k + 4, d.m_touches[ k ].m_point, 8 );
+        }
+        bool ok = known && d.m_unhandled == 0 && array == ui_unhex( st.m_array ) && d.m_priority == st.m_priority && d.m_count == st.m_count &&
+                  answers == st.m_answers && ( answers < 1 || answer[ 0 ] == st.m_answer[ 0 ] ) && ( answers < 2 || answer[ 1 ] == st.m_answer[ 1 ] );
+        ok = ok && static_cast< int >( d.m_callbacks.size( ) ) == st.m_pairs;
+        for ( int k = 0; ok && k < st.m_pairs; ++k )
+            ok = index_of( d.m_callbacks[ static_cast< std::size_t >( k ) ].first ) == g_golden_tdc_pairs[ st.m_first_pair + k ].m_callback &&
+                 d.m_callbacks[ static_cast< std::size_t >( k ) ].second == g_golden_tdc_pairs[ st.m_first_pair + k ].m_priority;
+        ok = ok && static_cast< int >( log.size( ) ) == st.m_logs;
+        for ( int k = 0; ok && k < st.m_logs; ++k )
+        {
+            ok = log[ static_cast< std::size_t >( k ) ] == g_golden_tdc_logs[ st.m_first_log + k ];
+            ++logs;
+        }
+        if ( !ok && ++failed <= 8 )
+            LOG_ERROR( "ui touch dispatch: step %d (op %d) differs from retail's (log %d, retail %d)", static_cast< int >( s ), st.m_op,
+                static_cast< int >( log.size( ) ), st.m_logs );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_touch_dispatch_down / up / move, ui_touch_count / ui_touch_point (+ add / priority / remove) match retail's VuMetroTouch "
+                     "0x5393E0 / 0x5394A0, 0x53FB40, slots 6 0x539210 / 7 0x539230 on %d steps: %d callback calls in order, the lists / touches after each",
+            static_cast< int >( g_golden_tdc_steps_count ), logs );
+    else
+        LOG_ERROR( "the UI touch dispatch FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 // verify_ui_screen_game_init (batch 21): c_ui_binding::project_initialize /
 // project_release on OUR loaded Screens projects (the scripted world, as
 // verify_ui_frames) against retail's 0x500B10 + 0x501260 / 0x500B80 (oracle case
@@ -1336,6 +1436,7 @@ inline bool verify_ui_results_all( )
     ok = verify_ui_race_results( ) && ok;
     ok = verify_ui_subtitles_combo( ) && ok;
     ok = verify_ui_settings_combos( ) && ok;
+    ok = verify_ui_touch_dispatch( ) && ok;
     ok = verify_ui_screen_game_init( ) && ok;
     ok = verify_ui_mini_board( ) && ok;
     return ok;
