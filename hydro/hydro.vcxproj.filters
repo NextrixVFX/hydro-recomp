@@ -258,6 +258,9 @@
     <ClInclude Include="workspace\core\world\race.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\world\session.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\world\spray.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
