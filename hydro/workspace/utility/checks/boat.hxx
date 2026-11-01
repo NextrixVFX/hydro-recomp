@@ -3,6 +3,7 @@
 #include <workspace/core/collision/box.hxx>
 #include <workspace/core/collision/cylinder.hxx>
 #include <workspace/core/collision/sphere.hxx>
+#include <workspace/core/boat/ai.hxx>
 #include <workspace/core/boat/driver.hxx>
 #include <workspace/core/boat/load.hxx>
 #include <workspace/core/boat/sections.hxx>
@@ -1373,6 +1374,77 @@ inline bool verify_boat_decision( )
     return failed == 0;
 }
 
+// The blocks of an AI-closure vector: `count` blocks of `sizes`, before then
+// after, from the golden words at `s` (advanced past them).
+struct ai_blocks_t
+{
+    std::vector< std::uint8_t > b[ 4 ];
+    const std::uint8_t* want[ 4 ] = { };
+};
+
+inline ai_blocks_t ai_read_blocks( const unsigned*& s, const int* sizes, int count )
+{
+    ai_blocks_t r;
+    for ( int k = 0; k < count; ++k )
+    {
+        r.b[ k ].assign( reinterpret_cast< const std::uint8_t* >( s ), reinterpret_cast< const std::uint8_t* >( s ) + sizes[ k ] );
+        s += sizes[ k ] / 4;
+    }
+    for ( int k = 0; k < count; ++k )
+    {
+        r.want[ k ] = reinterpret_cast< const std::uint8_t* >( s );
+        s += sizes[ k ] / 4;
+    }
+    return r;
+}
+
+// The first differing byte (block x 0x1000 + byte), or -1.
+inline int ai_first_diff( const ai_blocks_t& r, const int* sizes, int count )
+{
+    for ( int k = 0; k < count; ++k )
+        for ( int at = 0; at < sizes[ k ]; ++at )
+            if ( r.b[ k ][ at ] != r.want[ k ][ at ] )
+                return 0x1000 * k + at;
+    return -1;
+}
+
+// ai_controls (boat/ai.hxx) against retail's 0x40D5A0 (oracle case
+// ai_controls): every byte of the driver, boat and animation blocks after,
+// and the hooks' calls in order.
+inline bool verify_ai_controls( )
+{
+    const int sizes[ 3 ] = { 0xD4, 0x520, 0xDC };
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_ai_controls_count; ++index )
+    {
+        const unsigned* s = g_golden_ai_controls_words + g_golden_ai_controls_offsets[ index ];
+        float dt, steer, throttle;
+        std::memcpy( &dt, s++, 4 );
+        std::memcpy( &steer, s++, 4 );
+        std::memcpy( &throttle, s++, 4 );
+        const std::uint8_t boost = static_cast< std::uint8_t >( *s++ );
+        ai_blocks_t r = ai_read_blocks( s, sizes, 3 );
+        std::vector< unsigned > calls;
+        ai_controls_hooks_t hooks;
+        hooks.user = &calls;
+        hooks.misfire = []( void* u ) { static_cast< std::vector< unsigned >* >( u )->push_back( 1 ); };
+        hooks.voice = []( void* u, const char* line ) { static_cast< std::vector< unsigned >* >( u )->push_back( std::strcmp( line, "NeedPickUpPowerBoost" ) == 0 ? 2u : 99u ); };
+        ai_controls( r.b[ 0 ].data( ), r.b[ 1 ].data( ), r.b[ 2 ].data( ), dt, steer, throttle, boost, hooks );
+        int bad = ai_first_diff( r, sizes, 3 );
+        const unsigned n = *s++;
+        if ( bad < 0 && ( n != calls.size( ) || std::memcmp( s, calls.data( ), 4 * n ) != 0 ) )
+            bad = 0xD000;
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "ai controls vector %d differs from retail at 0x%X (block x 0x1000 + byte; 0xD000 the calls)",
+                       static_cast< int >( index ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuAiDriver's control output 0x40D5A0 matches retail: %d vectors", static_cast< int >( g_golden_ai_controls_count ) );
+    else
+        LOG_ERROR( "ai controls FAILED %d of %d vectors", failed, static_cast< int >( g_golden_ai_controls_count ) );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
@@ -1393,5 +1465,6 @@ inline bool verify_boat_all( )
     ok = verify_boat_engine_audio( ) && ok;
     ok = verify_boat_hull_tick( ) && ok;
     ok = verify_boat_decision( ) && ok;
+    ok = verify_ai_controls( ) && ok;
     return ok;
 }
