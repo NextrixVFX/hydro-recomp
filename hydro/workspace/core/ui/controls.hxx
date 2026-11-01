@@ -9,6 +9,10 @@
 #include <cstring>
 #include <functional>
 #include <string>
+#include <utility>
+#include <vector>
+
+extern "C" void x87_sincos( float x, float* c, float* s );
 
 // The race HUD's touch controls as draw data, transliterated from the
 // disassembly (HUDs/*GameHUD's "#HUD/Controls" template):
@@ -118,6 +122,333 @@ inline void ui_hud_onscreen_draw( ui_gfx_sort_t& sort, const ui_font_draw_env_t&
     if ( !t )
         return;
     ui_hud_control_tail( sort, env, crop, c, *t, alpha, nullptr );
+}
+
+// ---------------------------------------------------------------------------
+// The controls' per-frame code (batch 17, disassembled).
+//
+// VuTouch g 0x759070: its callback list at +4..+0xC (8-byte entries
+// { VuTouchCallback*, priority }) and the current priority +0x1C. The pause /
+// recover buttons' gameInitialize slot 6 0x425390 adds { entity + 0x5C, 0 }
+// through 0x53FB90 (a plain push_back - +0x1C untouched); gameRelease slot 7
+// 0x4253D0 removes it through 0x53FA60. The device's other writers of +0x1C
+// and its dispatch of the callbacks (down / up / move) are NOT read: the
+// caller delivers the callbacks; the touch count / points are HOOKS.
+struct ui_touch_device_t
+{
+    std::vector< std::pair< const void*, std::uint32_t > > m_callbacks;   // +4..+0xC
+    std::uint32_t m_priority = 0;                                         // +0x1C
+};
+
+// 0x53FB90 (thiscall device + 4, const pair&): push_back.
+inline void ui_touch_add( ui_touch_device_t& d, const void* callback, std::uint32_t priority ) { d.m_callbacks.push_back( { callback, priority } ); }
+
+// 0x53FA60 (thiscall device, callback): the first entry holding it erased
+// (nothing when absent), then +0x1C = the largest (unsigned) priority left, 0
+// for an empty list.
+inline void ui_touch_remove( ui_touch_device_t& d, const void* callback )
+{
+    for ( auto it = d.m_callbacks.begin( ); it != d.m_callbacks.end( ); ++it )
+        if ( it->first == callback )
+        {
+            d.m_callbacks.erase( it );
+            break;
+        }
+    d.m_priority = 0;
+    for ( const auto& c : d.m_callbacks )
+        d.m_priority = c.second > d.m_priority ? c.second : d.m_priority;
+}
+
+// The touch callbacks map a device point through VuUIImpl +0x4C (0x81A144, the
+// INVERSE crop matrix: m0 m1 m4 m5 m12 m13) - x' = y m4 + x m0 + m12,
+// y' = x m1 + y m5 + m13 (the sums' order as the down 0x425400; the move
+// 0x4254B0 adds the y terms the other way round - the same bits for a NaN-free
+// point, the only kind the device gives).
+inline void ui_hud_touch_map( const float inverse[ 16 ], const float in[ 2 ], float out[ 2 ] )
+{
+    const float x = in[ 1 ] * inverse[ 4 ] + in[ 0 ] * inverse[ 0 ] + inverse[ 12 ];
+    const float y = in[ 0 ] * inverse[ 1 ] + in[ 1 ] * inverse[ 5 ] + inverse[ 13 ];
+    out[ 0 ] = x;
+    out[ 1 ] = y;
+}
+
+// The inclusive ordered hit test of 0x4255B0 / 0x429E10 (comiss / jb: a NaN
+// misses): x >= left, width + left >= x, y >= top, height + top >= y.
+inline bool ui_hud_touch_hit( const float point[ 2 ], const float rect[ 4 ] )
+{
+    return point[ 0 ] >= rect[ 0 ] && rect[ 2 ] + rect[ 0 ] >= point[ 0 ] && point[ 1 ] >= rect[ 1 ] && rect[ 3 ] + rect[ 1 ] >= point[ 1 ];
+}
+
+// The touch rect: Touch X / Y / Width / Height x (1.0 / Screen Scale) through
+// the anchor transform 0x6282D0 (over the crop matrix 0x81A104).
+inline void ui_hud_touch_rect( const float scale[ 2 ], const float touch[ 4 ], const ui_anchor_t& anchor, const ui_crop_t& crop, float rect[ 4 ] )
+{
+    const float sx = 1.0f / scale[ 0 ];   // 0x6F76B8 = 1.0
+    const float sy = 1.0f / scale[ 1 ];
+    rect[ 0 ] = touch[ 0 ] * sx;
+    rect[ 1 ] = touch[ 1 ] * sy;
+    rect[ 2 ] = touch[ 2 ] * sx;
+    rect[ 3 ] = touch[ 3 ] * sy;
+    ui_anchor_transform( anchor, crop, rect, rect );
+}
+
+// VuHUDButtonEntity's runtime (ctor 0x424A20: +0x64 Screen Scale, +0x7C Touch
+// rect, +0xBC the anchor block; word +0xD4 = 0, byte +0xD6 = 0, +0xE0 = 0 -
+// +0xD8 / +0xDC are not written by the ctor and read only after a down).
+// Recover (ctor 0x425B60): +0xE4 Boing Rate, +0xE8 / +0xEC Boing Scale Min /
+// Max, +0xF0 Boing Duration; +0xF4 the boing scale (ctor 1.0), +0xF8 the boing
+// time (ctor 0) - its slot 13 writes both.
+struct ui_hud_button_t
+{
+    bool m_recover = false;
+    float m_scale[ 2 ] = { 1080.0f, 720.0f };
+    float m_touch[ 4 ] = { 0.0f, 0.0f, 100.0f, 100.0f };
+    ui_anchor_t m_anchor;
+    std::uint8_t m_down = 0;      // +0xD4
+    std::uint8_t m_held = 0;      // +0xD5
+    std::uint8_t m_up = 0;        // +0xD6
+    float m_point[ 2 ] = { 0.0f, 0.0f };   // +0xD8 / +0xDC
+    std::int32_t m_state = 0;     // +0xE0 (1 = pressed: the draw's pressed texture)
+    float m_rate = 4.0f;          // +0xE4
+    float m_scale_min = 0.8f;     // +0xE8
+    float m_scale_max = 1.2f;     // +0xEC
+    float m_duration = 1.0f;      // +0xF0
+    float m_boing = 1.0f;         // +0xF4
+    float m_time = 0.0f;          // +0xF8
+};
+
+// VuTouchCallback (vtable 0x738B80, this = entity + 0x5C). Slot 0 0x425400
+// (down, const VuVector2&): if the entity is visible (slot 15) and not held:
+// +0xD4 = +0xD5 = 1 and the mapped point -> +0xD8.
+inline void ui_hud_button_touch_down( ui_hud_button_t& b, bool visible, const float inverse[ 16 ], const float point[ 2 ] )
+{
+    if ( !visible || b.m_held )
+        return;
+    b.m_down = 1;
+    b.m_held = 1;
+    ui_hud_touch_map( inverse, point, b.m_point );
+}
+
+// Slot 1 0x425490 (up): if visible, +0xD6 = 1.
+inline void ui_hud_button_touch_up( ui_hud_button_t& b, bool visible )
+{
+    if ( visible )
+        b.m_up = 1;
+}
+
+// Slot 2 0x4254B0 (move): the device's touch 0 (slot 7 (0, out) - a HOOK, the
+// point is the input) mapped -> +0xD8, always.
+inline void ui_hud_button_touch_move( ui_hud_button_t& b, const float inverse[ 16 ], const float point[ 2 ] )
+{
+    ui_hud_touch_map( inverse, point, b.m_point );
+}
+
+// The class virtuals 0x4255B0 calls: slot 15 visible, slot 14 the press,
+// slot 13 (dt) the class tick.
+struct ui_hud_button_class_t
+{
+    std::function< bool( ) > m_visible;
+    std::function< void( ) > m_press;
+    std::function< void( float ) > m_tick;
+};
+
+// 0x4255B0 (slot 12, OnUITick through the thunk 0x4077E3; params: dt = the
+// first record when a float, else 0): nothing unless visible; the touch rect;
+// a down inside -> +0xE0 = 1; while pressed: an up -> slot 14 and +0xE0 = 0,
+// the point outside -> +0xE0 = 0; an up clears +0xD5 / +0xD6; +0xD4 = 0;
+// slot 13 (dt).
+inline void ui_hud_button_tick( ui_hud_button_t& b, const ui_crop_t& crop, const ui_params_t& params, const ui_hud_button_class_t& cls )
+{
+    float dt = 0.0f;
+    if ( params.m_size > 0 )
+    {
+        std::uint32_t type;
+        std::memcpy( &type, params.m_bytes, 4 );
+        if ( type == 2 )
+            std::memcpy( &dt, params.m_bytes + 4, 4 );
+    }
+    if ( !cls.m_visible( ) )
+        return;
+    float rect[ 4 ];
+    ui_hud_touch_rect( b.m_scale, b.m_touch, b.m_anchor, crop, rect );
+    if ( b.m_down && ui_hud_touch_hit( b.m_point, rect ) )
+        b.m_state = 1;
+    if ( b.m_state == 1 )
+    {
+        if ( b.m_up )
+        {
+            cls.m_press( );
+            b.m_state = 0;
+        }
+        if ( !ui_hud_touch_hit( b.m_point, rect ) )
+            b.m_state = 0;
+    }
+    if ( b.m_up )
+    {
+        b.m_held = 0;
+        b.m_up = 0;
+    }
+    b.m_down = 0;
+    cls.m_tick( dt );
+}
+
+// The pause button's inputs / outputs: the input manager g 0x759038 slot 9
+// (pad, name) -> down (HOOK), the FMOD event start (getEvent [0x64C348] /
+// start [0x64C354] on g 0x759010 +8 with the name at *0x746D50 - the audio
+// device, a HOOK), the broadcast 0x505690.
+struct ui_hud_pause_hooks_t
+{
+    std::function< bool( int, const char* ) > m_input;
+    std::function< void( const char* ) > m_sound;
+    std::function< void( std::uint32_t, const ui_params_t& ) > m_broadcast;
+};
+inline constexpr const char* k_ui_hud_pause_sound = "Global/UI_and_Menu/main_menu_choose";   // *0x746D50 = 0x6C38DC
+
+// Pause slot 13 0x4261B0 (dt unused): the device's first entry holding this
+// callback (none: nothing); when its priority equals the device's +0x1C and
+// the input manager answers "Pause" (pad 0): the sound, then the broadcast
+// "OnPauseActionGame" with an empty VuParams.
+inline void ui_hud_pause_tick( const ui_touch_device_t& device, const void* callback, const ui_hud_pause_hooks_t& h )
+{
+    for ( const auto& c : device.m_callbacks )
+        if ( c.first == callback )
+        {
+            if ( c.second == device.m_priority && h.m_input && h.m_input( 0, "Pause" ) )
+            {
+                if ( h.m_sound )
+                    h.m_sound( k_ui_hud_pause_sound );
+                h.m_broadcast( fsm_hash( "OnPauseActionGame" ), ui_params_t( ) );
+            }
+            return;
+        }
+}
+
+// Pause slot 14 0x4262A0 (the press): the broadcast "OnPauseActionGame"
+// (empty), then the sound.
+inline void ui_hud_pause_press( const ui_hud_pause_hooks_t& h )
+{
+    h.m_broadcast( fsm_hash( "OnPauseActionGame" ), ui_params_t( ) );
+    if ( h.m_sound )
+        h.m_sound( k_ui_hud_pause_sound );
+}
+
+// The recover button's view of the local boat's driver: g 0x758FB8 (read
+// WITHOUT a null test - retail faults when absent; here: nothing), index +0x58
+// against the count +0x10 (signed), boat +0xC[index] (null: nothing), its
+// driver +0x220: slot 12 (an unread Vu virtual - HOOK answer), +0x8C byte,
+// (+0x5C) +0x388 byte (inputs); the press writes the driver's +0xB8 = 1
+// (an output, the world's).
+struct ui_hud_recover_driver_t
+{
+    bool m_present = false;     // manager present, index in range, boat non-null
+    bool m_slot12 = false;
+    std::uint8_t m_8c = 0;
+    std::uint8_t m_388 = 0;
+};
+
+// Recover slot 13 0x425DC0 (dt): the driver's slot 12 false -> nothing; with
+// both bytes clear: +0xF4 = 1.0, +0xF8 = 0; else t = dt + +0xF8 -> +0xF8,
+// s = fsin( t x Rate x 2pi (0x6F7778) ) (x87, stored as a float), u = (s + 1)
+// x 0.5, a = maxss( 0, (Duration - t) / Duration ), +0xF4 = ((1 - u) x Min +
+// Max x u) x a + (1 - a).
+inline void ui_hud_recover_tick( ui_hud_button_t& b, const ui_hud_recover_driver_t& d, float dt )
+{
+    if ( !d.m_present || !d.m_slot12 )
+        return;
+    if ( !d.m_8c && !d.m_388 )
+    {
+        b.m_boing = 1.0f;
+        b.m_time = 0.0f;
+        return;
+    }
+    const float t = dt + b.m_time;
+    b.m_time = t;
+    const float arg = t * b.m_rate * 6.2831855f;
+    float c, s;
+    x87_sincos( arg, &c, &s );
+    const float ratio = ( b.m_duration - t ) / b.m_duration;
+    const float u = ( s + 1.0f ) * 0.5f;   // 0x6F765C
+    const float a = 0.0f > ratio ? 0.0f : ratio;   // maxss( 0, ratio ): a NaN ratio passes through
+    b.m_boing = ( ( 1.0f - u ) * b.m_scale_min + b.m_scale_max * u ) * a + ( 1.0f - a );
+}
+
+// Recover slot 14 0x425F10 (the press): the driver's slot 12 true -> its +0xB8
+// = 1 (`recover`).
+inline void ui_hud_recover_press( const ui_hud_recover_driver_t& d, const std::function< void( ) >& recover )
+{
+    if ( d.m_present && d.m_slot12 && recover )
+        recover( );
+}
+
+// VuHUDOnScreenControlEntity's runtime (ctor 0x4292F0): +0x60 Screen Scale,
+// +0x78 Touch rect, +0xB8 the anchor block, +0xC8..+0xCB the Enable flags,
+// +0xD4 pressed, +0xD8 Axis Name / Button Name, +0xF0 Axis Direction (axis).
+struct ui_hud_onscreen_t
+{
+    bool m_axis = false;
+    float m_scale[ 2 ] = { 1080.0f, 720.0f };
+    float m_touch[ 4 ] = { 0.0f, 0.0f, 100.0f, 100.0f };
+    ui_anchor_t m_anchor;
+    std::uint8_t m_enable[ 4 ] = { 1, 1, 0, 0 };
+    std::uint8_t m_pressed = 0;   // +0xD4
+    std::string m_name;           // +0xD8
+    std::int32_t m_direction = 1; // +0xF0
+};
+
+// The on-screen controls' inputs / outputs: the control-method manager g
+// 0x758FC0 (+0x18), the touch device's slot 6 count (-1) / slot 7 point
+// (HOOKS), the inverse crop matrix, the input manager's slot 17 (vt+0x44:
+// pad, button name) / slot 18 (vt+0x48: pad, axis name, value) - HOOKS.
+struct ui_hud_onscreen_hooks_t
+{
+    bool m_method_present = false;
+    std::int32_t m_method = 0;
+    std::function< int( ) > m_touch_count;
+    std::function< void( int, float[ 2 ] ) > m_touch_point;
+    const float* m_inverse = nullptr;
+    std::function< void( int, const char* ) > m_button;
+    std::function< void( int, const char*, float ) > m_set_axis;
+};
+
+// OnUITick 0x429E10 (params read, dt unused): hidden under the current method
+// (its Enable flag off: Tilt 2, Touch 3, GamePad 0, Keyboard 1) -> nothing;
+// else +0xD4 = 0, for each touch k < count (re-read each pass): the point
+// mapped through the inverse crop matrix, tested against the touch rect,
+// +0xD4 |= hit; then if pressed: slot 12 = axis 0x42A840 (vt+0x48 (0, name,
+// (float) Direction)) / button 0x42A610 (vt+0x44 (0, name)).
+inline void ui_hud_onscreen_tick( ui_hud_onscreen_t& o, const ui_crop_t& crop, const ui_hud_onscreen_hooks_t& h )
+{
+    if ( h.m_method_present )
+    {
+        static const std::int32_t methods[ 4 ] = { 2, 3, 0, 1 };
+        for ( int k = 0; k < 4; ++k )
+            if ( !o.m_enable[ k ] && h.m_method == methods[ k ] )
+                return;
+    }
+    static const float k_identity[ 16 ] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+    const float* inverse = h.m_inverse ? h.m_inverse : k_identity;
+    o.m_pressed = 0;
+    for ( int k = 0; h.m_touch_count && k < h.m_touch_count( ); ++k )
+    {
+        float device[ 2 ] = { 0.0f, 0.0f };
+        if ( h.m_touch_point )
+            h.m_touch_point( k, device );
+        float point[ 2 ];
+        point[ 0 ] = device[ 0 ] * inverse[ 0 ] + device[ 1 ] * inverse[ 4 ] + inverse[ 12 ];
+        point[ 1 ] = device[ 0 ] * inverse[ 1 ] + device[ 1 ] * inverse[ 5 ] + inverse[ 13 ];
+        float rect[ 4 ];
+        ui_hud_touch_rect( o.m_scale, o.m_touch, o.m_anchor, crop, rect );
+        o.m_pressed |= ui_hud_touch_hit( point, rect ) ? 1 : 0;
+    }
+    if ( !o.m_pressed )
+        return;
+    if ( o.m_axis )
+    {
+        if ( h.m_set_axis )
+            h.m_set_axis( 0, o.m_name.c_str( ), static_cast< float >( o.m_direction ) );
+    }
+    else if ( h.m_button )
+        h.m_button( 0, o.m_name.c_str( ) );
 }
 
 // VuHUDHiddenPackageToastEntity (ctor 0x424360 over the text base 0x627070,
