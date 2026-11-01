@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/world/race.hxx>
+#include <workspace/core/world/start.hxx>
 #include <workspace/core/world/tick.hxx>
 
 // The world area's oracle-backed checks (one file per parallel agent; included by check.hxx after every
@@ -1604,9 +1605,152 @@ inline bool verify_boat_post_load( )
     return failed == 0;
 }
 
+// race_begin + race_place_boats + race_start_fleet + the boat manager
+// (world/start.hxx) against retail's VuGame begin 0x4829A0 run whole with
+// VuRaceGame's slots 13 / 5 (oracle case race_begin) on the running world's
+// track (HydroelectricRace's tree): the grid list's order after retail's
+// 0x43A740 adds, the five boat lists + focus after 0x4AAF60 and after 0x4AB040
+// (boat 1), every recorded call row in order, each boat's transform (the
+// owner +0x08 / delegate +0xC0 pointers and the stale +0x9C / +0xAC words
+// skipped), +0x4AC / +0x4B0 / +0x4CC / +0x4D4 / +0x4D8 / +0x4DC, engine +4,
+// driver +0x78 / +0x7C / +0x80, game +0x44 / +0x48 and the +0x720 order.
+inline bool verify_race_begin( )
+{
+    c_archive archive;
+    std::map< std::string, value_t > templates;
+    const std::unique_ptr< entity_t > tree = race_check_tree( archive, templates, "VuProjectAsset/Games/HydroelectricRace" );
+    track_manager_t tm;
+    if ( !tree || !track_build_from_tree( *tree, tm ) )
+    {
+        LOG_ERROR( "race begin FAILED: HydroelectricRace's track did not build" );
+        return false;
+    }
+    const unsigned* w = g_golden_race_begin_words;
+    const char* const* t = g_golden_race_begin_texts;
+    auto doc = []( unsigned k )
+    {
+        const unsigned char* b = g_golden_race_begin_blobs[ k ];
+        return c_reader( std::vector< std::uint8_t >( b, b + g_golden_race_begin_blob_sizes[ k ] ) ).parse( );
+    };
+    int failed = 0, rows_total = 0, boats_total = 0;
+    for ( std::size_t v = 0; v < g_golden_race_begin_vectors; ++v )
+    {
+        const value_t cdb = doc( w[ 0 ] ), tdb = doc( w[ 1 ] );
+        race_start_game_t game;
+        game.laps = static_cast< std::int32_t >( w[ 2 ] );
+        const unsigned nb = w[ 3 ], ng = w[ 4 ];
+        w += 5;
+        game.difficulty = *t++;
+        game.root_name = *t++;
+        struct img_t { std::vector< std::uint8_t > boat, xf, eng, drv; };
+        std::vector< img_t > imgs( nb );
+        std::vector< race_start_boat_t > boats( nb );
+        for ( unsigned k = 0; k < nb; ++k, w += 5 )
+        {
+            img_t& i = imgs[ k ];
+            i.boat.assign( 0x520, 0 );
+            i.xf.assign( 0xC8, 0 );
+            i.eng.assign( 0x20, 0 );
+            i.drv.assign( 0xD4, 0 );
+            image_put32( i.boat.data( ), 0x470, w[ 1 ] );
+            image_put32( i.eng.data( ), 4, w[ 2 ] );
+            image_put32( i.eng.data( ), 0xC, w[ 3 ] );
+            image_put32( i.drv.data( ), 0x80, 1 );
+            boats[ k ] = { i.boat.data( ), i.xf.data( ), i.eng.data( ), i.drv.data( ), boat_driver_of( w[ 0 ] ), -1, static_cast< int >( w[ 4 ] ) };
+        }
+        race_boat_manager_t m;
+        for ( unsigned j = 0; j < ng; ++j, w += 16 )
+        {
+            race_grid_entry_t e;
+            e.name = *t++;
+            std::memcpy( e.world, w, 64 );
+            race_grid_add( m, e );
+        }
+        int bad = 0;
+        const unsigned order_n = *w++;
+        bad = order_n != m.grid.size( ) ? 1 : 0;
+        for ( unsigned j = 0; j < order_n; ++j, ++t )
+            bad = bad ? bad : ( m.grid[ j ].name == *t ? 0 : 1 );
+        for ( unsigned k = 0; k < nb; ++k )
+            race_boat_manager_add( m, static_cast< int >( k ), boats[ k ].cls );
+        auto lists = [ & ]( int code )
+        {
+            const std::vector< int >* l[ 5 ] = { &m.all, &m.racers, &m.humans, &m.ai, &m.ghosts };
+            for ( auto* list : l )
+            {
+                const unsigned n = *w++;
+                bad = bad ? bad : ( n == list->size( ) ? 0 : code );
+                for ( unsigned j = 0; j < n; ++j, ++t )
+                    bad = bad ? bad : ( j < list->size( ) && "boat" + std::to_string( ( *list )[ j ] ) == *t ? 0 : code );
+            }
+            bad = bad ? bad : ( static_cast< unsigned >( m.focus ) == *w ? 0 : code + 1 );
+            ++w;
+        };
+        lists( 2 );
+        std::vector< std::string > got;
+        race_start_hooks_t hooks;
+        hooks.transform_changed = [ &got ]( int k ) { got.push_back( "transform boat" + std::to_string( k ) ); };
+        hooks.game_initialize = [ &got ]( int k ) { got.push_back( "gameInitialize boat" + std::to_string( k ) ); };
+        hooks.call = [ &got ]( const char* row ) { if ( std::strncmp( row, "GameResults", 11 ) ) got.push_back( row ); };
+        hooks.add_driver = [ &got ]( int k ) { got.push_back( "addDriver aim boat" + std::to_string( k ) + " 0 0" ); };
+        hooks.fleet_start = [ &got ] { got.push_back( "fleet start aim" ); };
+        hooks.fleet_run = [ &got ] { got.push_back( "fleet run aim" ); };
+        race_begin( game, boats, m, tm, tdb, cdb, hooks );
+        const unsigned calls = *w++;
+        bad = bad ? bad : ( calls == got.size( ) ? 0 : 4 );
+        for ( unsigned j = 0; j < calls; ++j, ++t )
+            bad = bad ? bad : ( j < got.size( ) && got[ j ] == *t ? 0 : 5 );
+        rows_total += static_cast< int >( calls );
+        for ( unsigned k = 0; k < nb; ++k )
+        {
+            const img_t& i = imgs[ k ];
+            for ( int at = 0; at < 50; ++at, ++w )
+                if ( at != 2 && at != 48 && at != 39 && at != 43 && !bad && load_word( i.xf.data( ), 4 * at ) != *w )
+                    bad = 0x10000 + 0x100 * static_cast< int >( k ) + 4 * at;   // boat k's transform byte
+            const int offs[ 4 ] = { 0x4AC, 0x4B0, 0x4CC, 0x4D4 };
+            for ( int q = 0; q < 4; ++q, ++w )
+                bad = bad ? bad : ( load_word( i.boat.data( ), offs[ q ] ) == *w ? 0 : 0x200 + offs[ q ] );
+            bad = bad ? bad : ( static_cast< unsigned >( boats[ k ].checkpoint ) == *w ? 0 : 0x4D8 );
+            ++w;
+            for ( int at = 0; at < 16; ++at, ++w )
+                bad = bad ? bad : ( load_word( i.boat.data( ), 0x4DC + 4 * at ) == *w ? 0 : 0x4DC );
+            bad = bad ? bad : ( load_word( i.eng.data( ), 4 ) == *w ? 0 : 0x304 );
+            ++w;
+            bad = bad ? bad : ( load_word( i.drv.data( ), 0x78 ) == *w ? 0 : 0x378 );
+            ++w;
+            bad = bad ? bad : ( static_cast< unsigned >( boats[ k ].sector ) == *w ? 0 : 0x37C );
+            ++w;
+            bad = bad ? bad : ( load_word( i.drv.data( ), 0x80 ) == *w ? 0 : 0x380 );
+            ++w;
+            ++boats_total;
+        }
+        std::uint32_t length;
+        std::memcpy( &length, &game.length, 4 );
+        bad = bad ? bad : ( game.circuit == w[ 0 ] && length == w[ 1 ] ? 0 : 6 );
+        w += 2;
+        const unsigned on = *w++;
+        bad = bad ? bad : ( on == game.order.size( ) ? 0 : 7 );
+        for ( unsigned j = 0; j < on; ++j, ++w )
+            bad = bad ? bad : ( j < game.order.size( ) && static_cast< unsigned >( game.order[ j ] ) == *w ? 0 : 7 );
+        race_boat_manager_remove( m, 1 );
+        lists( 8 );
+        if ( bad && ++failed <= 6 )
+            LOG_ERROR( "race begin vector %d differs from retail: 0x%X (1 grid, 2/3 lists, 4/5 calls, 0x1kkxx transform, "
+                       "0x2xx/0x3xx words, 6 game, 7 order, 8/9 removed)", static_cast< int >( v ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "race_begin / race_place_boats / race_start_fleet / the boat manager match retail's VuGame begin 0x4829A0 (VuRaceGame "
+                     "0x48AF90 / 0x4896A0, 0x4AAF60 / 0x4AB040 / 0x43A740): %d vectors, %d boats, %d call rows",
+                     static_cast< int >( g_golden_race_begin_vectors ), boats_total, rows_total );
+    else
+        LOG_ERROR( "race begin FAILED %d of %d vectors", failed, static_cast< int >( g_golden_race_begin_vectors ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_race_begin( ) && ok;
     ok = verify_boat_post_load( ) && ok;
     ok = verify_boat_game_init( ) && ok;
     ok = verify_game_boat_load( ) && ok;
