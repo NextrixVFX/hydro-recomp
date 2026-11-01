@@ -6,10 +6,12 @@
 #include <workspace/core/boat/fleet.hxx>
 #include <workspace/core/boat/human.hxx>
 #include <workspace/core/boat/manager.hxx>
+#include <workspace/core/boat/pilots.hxx>
 #include <workspace/core/boat/respawn.hxx>
 #include <workspace/core/boat/state.hxx>
 #include <workspace/core/game/input.hxx>
 #include <workspace/core/world/build.hxx>
+#include <workspace/core/world/dynamics.hxx>
 #include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/query.hxx>
 #include <workspace/core/world/session.hxx>
@@ -38,9 +40,7 @@
 //   stand-in): the animation tick 0x40FFF0 (recreated as boat_anim_tick, but
 //   its three controls at anim +0x08 / +0x0C / +0x10 come from the asset
 //   loads 0x410610 gameInitialize hands to the animation system - a hook here
-//   - so its inputs are UNKNOWN and it does not run); slots 17 / 18 0x421980 /
-//   0x421940 (boat_enable / boat_disable need the dynamics world
-//   g_vudynamicsimpl, not instantiated in the race); 0x410FF0, 0x41E240, the
+//   - so its inputs are UNKNOWN and it does not run); 0x410FF0, 0x41E240, the
 //   debris pieces' follow / removal; the driver tick of a UI / nuisance /
 //   ghost driver (none in a Race roster - their ticks are the boat agent's);
 //   the hull's splash pfx 0x52BCD0, the lens-water manager g 0x759048, the
@@ -54,6 +54,11 @@
 //   read_input: Throttle = the right trigger / W, Brake = the left trigger /
 //   S, Steering = the left stick / A-D, Boost = the right shoulder / shift;
 //   Jump and Recover have no binding: 0), the display size.
+//   RUN ON THE RACE'S DYNAMICS WORLD (world/dynamics.hxx, world/session.hxx
+//   race_session_enable): slots 17 / 18 0x421980 / 0x421940 (boat_enable /
+//   boat_disable) - the body into the world, the +0x60 interface onto its step
+//   callbacks; the world's frame is STOPPED while tickThunk 0x41E5E0 has no
+//   context (dynamics.hxx).
 //   NOT WIRED, ANSWERING "NO HIT" (UNKNOWN - flagged, logged once): the
 //   dynamics world's ray test (g_vudynamicsimpl vt+0x6C's collision world
 //   vt+0x18) the camera's collision 0x40B090 and the AI's avoidance 0x40C750
@@ -77,8 +82,12 @@ struct race_drive_t
     boat_decision_t d{};
     boat_decision_hooks_t hooks{};
     // The driver step, by class.
-    bool human = false, ai = false;
+    bool human = false, ai = false, nuisance = false;
     int pilot = -1;   // the fleet pilot of an AI boat
+    // VuAiNuisanceDriver (vtable 0x737C4C): its pilot (boat pilots.hxx) and target views - no target until the
+    // DriverTarget plug (0x42FF90, not wired) sets one.
+    nuisance_pilot_t nuisance_pilot;
+    nuisance_target_t nuisance_target;
     human_pilot_t human_pilot;
     human_decision_driver_t human_driver;
     camera_env_t camera_env;
@@ -231,7 +240,31 @@ inline void race_drive_driver( void* user, float dt )
         fleet_driver_tick( *s.track, s.pilots[ static_cast< std::size_t >( r.pilot ) ], t, transforms.data( ), dt, h );
         return;
     }
-    race_unwired( s, "a driver tick of a class not wired here (UI / nuisance / ghost, or an AI boat with no pilot) - UNKNOWN" );
+    if ( r.nuisance )
+    {
+        // Slot 18 0x40DA90 = nuisance_driver_tick (boat pilots.hxx). Its audio-line hooks (the boat's DB
+        // "AudioLines", FMOD) are reached only with a target: absent here.
+        ai_tick_t t;
+        t.boat = r.d.boat;
+        t.body = r.d.body;
+        t.solver = r.d.solver;
+        t.transform = r.d.transform;
+        t.engine = r.d.engine;
+        t.owner = r.d.boat;
+        t.animation = r.d.animation;
+        nuisance_hooks_t h;
+        h.ai.avoid.user = &s;
+        h.ai.avoid.ray = race_drive_ray;
+        h.ai.avoid.aabb = nullptr;   // reached only after a hit
+        h.ai.controls.user = &s;
+        h.ai.controls.misfire = []( void* u ) { race_unwired( *static_cast< race_session_t* >( u ), "audio: the BoostMisfire sound 0x41E060 (FMOD - platform)" ); };
+        h.ai.controls.voice = []( void* u, const char* ) { race_unwired( *static_cast< race_session_t* >( u ), "the voice-over manager g 0x758FEC vt+0x1C (not wired)" ); };
+        h.user = &s;
+        h.release_target = []( void* u ) { race_unwired( *static_cast< race_session_t* >( u ), "the nuisance driver's weak-reference release 0x40E4D0 (not wired)" ); };
+        nuisance_driver_tick( *s.track, r.nuisance_pilot, t, r.nuisance_target, *s.random, dt, h );
+        return;
+    }
+    race_unwired( s, "a driver tick of a class not wired here (UI / ghost, or an AI boat with no pilot) - UNKNOWN" );
 }
 
 inline void race_drive_camera( void* user, float dt )
@@ -317,6 +350,17 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         // The driver step.
         r->human = d.human;
         r->ai = vtable == 0x737B5Cu;
+        if ( vtable == 0x737C4Cu )
+        {
+            // The ctor 0x40D880's state: no target (+0xF0 0), no target sector (+0xF4 0), an empty plan (+0x84).
+            if ( load_word( driver, 0xF0 ) != 0 || load_word( driver, 0xF4 ) != 0 )
+                LOG_WARNING( "race: %s's nuisance driver has a target / sector word set (not modelled) - its tick is UNKNOWN", b.name.c_str( ) );
+            else
+            {
+                r->nuisance = true;
+                r->nuisance_pilot.driver = driver;
+            }
+        }
         for ( std::size_t p = 0; p < s.pilots.size( ); ++p )
             if ( s.pilots[ p ].boat == static_cast< int >( k ) )
                 r->pilot = static_cast< int >( p );
@@ -369,7 +413,7 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         r->respawn_hooks.water = race_drive_water;
         r->respawn_hooks.transform_children = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the respawn's 0x534C00(0) on the boat's transform (not wired)" ); };
         r->respawn_hooks.instigator = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the trigger manager's 0x536350 (instigator update, not wired)" ); };
-        r->respawn_hooks.enable = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the boat's slot 17 0x421980 (boat_enable: no dynamics world in the race)" ); };
+        r->respawn_hooks.enable = []( void* u ) { race_session_enable( *race_drive_of( u ).session, race_drive_boat( race_drive_of( u ) ), true ); };
         r->respawn_hooks.driver_50 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the driver's vt+0x50 after a respawn (not recreated)" ); };
         r->respawn_hooks.recovered = []( void* u, std::uint32_t ) { race_unwired( *race_drive_of( u ).session, "the OnBoatRecovered broadcast (VuEventManager, not wired)" ); };
         // The Decision tick's hooks.
@@ -384,8 +428,8 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         };
         h.camera_tick = race_drive_camera;
         h.respawn = race_drive_respawn;
-        h.enable = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the boat's slot 17 0x421980 (boat_enable: no dynamics world in the race)" ); };
-        h.disable = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the boat's slot 18 0x421940 (boat_disable: no dynamics world in the race)" ); };
+        h.enable = []( void* u ) { race_session_enable( *race_drive_of( u ).session, race_drive_boat( race_drive_of( u ) ), true ); };
+        h.disable = []( void* u ) { race_session_enable( *race_drive_of( u ).session, race_drive_boat( race_drive_of( u ) ), false ); };
         h.debris_410FF0 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the debris 0x410FF0 (not recreated)" ); };
         h.boat_41E240 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the boat's 0x41E240 (not recreated)" ); };
         h.piece_follow = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the debris pieces' follow 0x5344A0 / 0x50E660 (not recreated)" ); };
@@ -509,8 +553,16 @@ inline void race_drive_decision( race_session_t& s, std::size_t boat, float dt )
 inline void race_drive_build( race_session_t& s, std::size_t boat, float dt )
 {
     race_drive_t& r = *s.drives[ boat ];
-    race_unwired( s, "the Build tick 0x41F330's steps 1 - 6 (gfx settings 0x52F690 -> +0x408, the water colour 0x52ACB0 / 0x535E10, the "
-                     "driver's vt+0x4C, the animation / model instances, the pfx 0x419700, the debris 0x411A50, the draw aabb) - NOT recreated" );
+    race_unwired( s, "the Build tick 0x41F330's step 1 (gfx settings 0x52F690 -> +0x408) and steps 3 - 6 (the driver's vt+0x4C, the "
+                     "animation / model instances, the pfx 0x419700, the debris 0x411A50, the draw aabb) - NOT recreated" );
+    // Step 2: the surface under the position (0x52ACB0) and the colour lerp (world/build.hxx boat_build_water). It
+    // reads the position copied before step 1 and writes only +0x2B4 .. +0x2C4, which step 1 does not touch.
+    {
+        float position[ 4 ];
+        std::memcpy( position, r.d.transform + 0x80, 16 );
+        if ( !boat_build_water( r.d.boat, position, s.world.view ? &s.world.view->water : nullptr ) )
+            race_unwired( s, "the Build tick's step 2 (0x52ACB0 / 0x535E10) with no VuWater, a tree overflow or a map cell outside its map - UNKNOWN, nothing written" );
+    }
     boat_build_audio_hooks_t h;
     h.user = &s;
     h.slot = []( void* u, std::uint8_t*, const std::string& ) {
