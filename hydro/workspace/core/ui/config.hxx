@@ -346,3 +346,32 @@ inline ui_game_config_t ui_game_config( const std::string& next_mode, value_t& r
         out.builder = 0x4C2C50u;
     return out;
 }
+
+// THE EXPORT (for the race start: VuActionGameMode's load 0x4BA060 takes
+// gameutil +80 ["GameData"], VuGame's boat load 0x481CE0 its "Boats"). The
+// GameData the front end's exit 0x4BF9B0 leaves when the next mode is
+// "Action" and the race was chosen with these values - GameConfig.Mode,
+// GameConfig.Track, BoatConfig.PlayerBoats[0].Properties.Boat / .Skin as the
+// screens leave them (VuSetGameModeUIAction writes Mode; the track and boat
+// selectors are NOT recreated yet: the caller passes their values). Exact for
+// ANY front-end state holding those four strings: 0x4BF9B0 erases Results and
+// clears GameData before building, and 0x4BF9B0 / 0x4C0A50 read nothing else
+// from gameutil +80. `env` carries BoatDB / TrackDB, VuRandom's state (drawn:
+// the caller's generator advances exactly as retail's global does) and the two
+// hooks (the string DB's AI names, the signed-in player's name). `result`
+// reports the builder reached; for a mode other than "Race" its builder is
+// UNKNOWN (not recreated) and the container holds only EventType.
+inline value_t ui_front_end_game_data( const std::string& mode, const std::string& track, const std::string& boat, const std::string& skin,
+                                       const ui_game_env_t& env, ui_game_config_t* result = nullptr )
+{
+    value_t root;
+    ui_json_set_string( ui_json_child( ui_json_child( root, "GameConfig" ), "Mode" ), mode.c_str( ) );
+    ui_json_set_string( ui_json_child( ui_json_child( root, "GameConfig" ), "Track" ), track.c_str( ) );
+    value_t& properties = ui_json_child( ui_json_at( ui_json_child( ui_json_child( root, "BoatConfig" ), "PlayerBoats" ), 0 ), "Properties" );
+    ui_json_set_string( ui_json_child( properties, "Boat" ), boat.c_str( ) );
+    ui_json_set_string( ui_json_child( properties, "Skin" ), skin.c_str( ) );
+    const ui_game_config_t r = ui_game_config( "Action", root, env );
+    if ( result )
+        *result = r;
+    return ui_json_find( root, "GameData" );
+}

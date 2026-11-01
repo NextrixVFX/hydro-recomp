@@ -1147,6 +1147,63 @@ inline bool verify_ui_game_data( )
     return failed == 0;
 }
 
+// THE EXPORT ui_front_end_game_data (hydro core/ui/config.hxx) against the
+// GameData retail's exit 0x4BF9B0 left at gameutil +80 (oracle case
+// game_data_race, every exit vector whose next mode is "Action"): only the four
+// strings 0x4BF9B0 / 0x4C0A50 read (GameConfig.Mode / .Track, PlayerBoats[0]
+// .Properties.Boat / .Skin, each a string member's text else "") are taken
+// from the vector's root - stale GameData, Results, other members dropped - and
+// the container it returns must equal retail's root["GameData"] (vujb_dump),
+// VuRandom's state after too.
+inline bool verify_ui_front_end_game_data( )
+{
+    const value_t boat_db = ui_gd_document( 0 );
+    const value_t track_db = ui_gd_document( 1 );
+    const value_t synthetic_db = ui_gd_document( 2 );
+    int failed = 0, checked = 0, races = 0;
+    for ( std::size_t k = 0; k < g_golden_gd_vectors_count; ++k )
+    {
+        const golden_gd_vector_t& v = g_golden_gd_vectors[ k ];
+        if ( v.m_direct || std::strcmp( v.m_next, "Action" ) != 0 )
+            continue;
+        const value_t root = ui_gd_document( v.m_root );
+        static const value_t null{ };
+        const value_t& players = member( member( root, "BoatConfig" ), "PlayerBoats" );
+        const value_t& player = players.tag == 5 && !players.list.empty( ) ? players.list[ 0 ] : null;
+        fleet_random_t rng;
+        const unsigned* words = g_golden_gd_rng + v.m_rng;
+        std::memcpy( &rng.seed, words, 4 );
+        std::memcpy( &rng.last, words + 1, 4 );
+        std::memcpy( rng.table, words + 2, 128 );
+        ui_game_env_t env;
+        env.boat_db = v.m_db == 0 ? &boat_db : &synthetic_db;
+        env.track_db = &track_db;
+        env.random = &rng;
+        env.player_name = "Player One";
+        env.string_db = []( const char* id ) { return std::string( "S" ) + id; };
+        ui_game_config_t r;
+        const value_t game_data = ui_front_end_game_data( ui_json_text( member( member( root, "GameConfig" ), "Mode" ) ),
+                                                          ui_json_text( member( member( root, "GameConfig" ), "Track" ) ),
+                                                          ui_json_text( member( member( player, "Properties" ), "Boat" ) ),
+                                                          ui_json_text( member( member( player, "Properties" ), "Skin" ) ), env, &r );
+        std::string have;
+        vujb_dump( game_data, have );
+        ++checked;
+        races += r.built ? 1 : 0;
+        const bool same = have == v.m_game_data_member && std::memcmp( &rng.seed, words + 34, 4 ) == 0 &&
+                          std::memcmp( &rng.last, words + 35, 4 ) == 0 && std::memcmp( rng.table, words + 36, 128 ) == 0;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui front end game data: vector %d (%s) differs from the GameData retail's 0x4BF9B0 left", static_cast< int >( k ), v.m_label );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_front_end_game_data (mode, track, boat, skin) reproduces the GameData retail's exit 0x4BF9B0 leaves at gameutil +80 "
+                     "on %d front-end states (%d races built; the rest a variant not recreated or no event), VuRandom's state too",
+            checked, races );
+    else
+        LOG_ERROR( "the front end game data export FAILED %d of %d states against retail's", failed, checked );
+    return failed == 0;
+}
+
 // ui_set_game_mode (hydro core/ui/action.hxx) against retail's
 // VuSetGameModeUIAction slot 12 0x472740 through Trigger (oracle case
 // ui_set_game_mode): every authored instance as entity_load_project built it
@@ -2021,6 +2078,7 @@ inline bool verify_ui_all( )
     bool ok = true;
     ok = verify_ui_game_data( ) && ok;
     ok = verify_ui_set_game_mode( ) && ok;
+    ok = verify_ui_front_end_game_data( ) && ok;
     ok = verify_ui_container_draw( ) && ok;
     ok = verify_ui_font_params( ) && ok;
     ok = verify_ui_minimap_draw( ) && ok;
