@@ -1232,13 +1232,15 @@ inline bool verify_water_query96( )
     for ( std::size_t i = 0; i < built.waves.size( ); ++i )
     {
         const water_kind_t k = built.wave_kind[ i ];
-        unread[ i ] = !( k == water_kind_whirlpool || k == water_kind_ramp || k == water_kind_point );
+        unread[ i ] = !( k == water_kind_whirlpool || k == water_kind_ramp || k == water_kind_point || k == water_kind_bump || k == water_kind_banked ||
+                         k == water_kind_directional );
     }
     water_query_stats_t st{};
     const int failed = water_query_vectors( view, g_golden_wq96_words, g_golden_wq96_offsets, g_golden_wq96_count, "query96", st, true, &unread );
     if ( failed == 0 )
-        LOG_SUCCESS( "water_query + the +96 kernels (whirlpool 0x5A1F80 / 0x5A2160, ramp 0x5A2FC0 / 0x5A3160, point 0x5A39B0 / 0x5A3CA0; "
-                     "0x529ED0 / 0x529F70's +96 branches) match retail's 0x528FC0 in the renderer's mode: %d of %d queries compared (%d "
+        LOG_SUCCESS( "water_query + the +96 kernels (whirlpool 0x5A1F80 / 0x5A2160, ramp 0x5A2FC0 / 0x5A3160, point 0x5A39B0 / 0x5A3CA0, "
+                     "bump 0x5A4610 / 0x5A49A0, banked turn 0x5A5AB0 / 0x5A5F10, directional 0x59B860 / 0x59BDE0; 0x529ED0 / 0x529F70's +96 "
+                     "branches) match retail's 0x528FC0 in the renderer's mode: %d of %d queries compared (%d "
                      "vertices, %d with a displacement; %d slot 3 calls, %d tagged), %d skipped (a +96 kernel not recreated)",
             static_cast< int >( g_golden_wq96_count ) - st.skipped, static_cast< int >( g_golden_wq96_count ), st.vertices, st.moved, st.calls,
             st.tagged, st.skipped );

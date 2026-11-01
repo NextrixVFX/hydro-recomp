@@ -1515,3 +1515,189 @@ inline void point_wave_vertex96( const point_wave_t& wave, float x, float y, flo
     const float f = f0 < 1.0f ? f0 : 1.0f;   // minss( 1 - t, 1 )
     foam = ( ( ( wave.inv_amplitude * amount ) * wave.foaminess ) * f ) + foam;
 }
+
+// VuWaterBumpWave @0x5a4610 (tag @0x5a49a0): the base's raised cosine across
+// b times the edge fade along a, written as height plus its in-plane gradient.
+// The fade's derivative term is scaled by fade * lift (retail reuses that
+// stack slot), the cosine's by the fade alone; a's row is negated when a < 0
+// (or NaN). Both x87 fsincos.
+inline void bump_vertex96( const bump_t& wave, float x, float y, float& height, float* flow )
+{
+    const float* m = wave.transform;
+    const float a = ( ( m[ 4 ] * y ) + ( m[ 0 ] * x ) ) + m[ 12 ];
+    const float b = ( ( m[ 5 ] * y ) + ( m[ 1 ] * x ) ) + m[ 13 ];
+    const float abs_a = std::fabs( a );
+    const float abs_b = std::fabs( b );
+    const float big = abs_a > abs_b ? abs_a : abs_b;   // maxss( |a|, |b| )
+    if ( !( 1.0f > big ) )
+        return;
+    const float f1 = wave_fold( ( b * 3.1415927f ) + 3.1415927f );
+    const float cos1 = wave_x87_cos( f1 );
+    const float sin1 = wave_x87_sin( f1 );
+    const float lift = ( cos1 + 1.0f ) * ( wave.amplitude * 0.5f );
+    float fade = 1.0f;
+    float sin2 = 0.0f;   // read only when set (the same test guards both)
+    if ( abs_a > wave.edge_a )
+    {
+        const float f2 = wave_fold( ( ( ( abs_a - wave.edge_a ) / ( 1.0f - wave.edge_a ) ) * 3.1415927f ) + 3.1415927f );
+        fade = ( wave_x87_cos( f2 ) + 1.0f ) * 0.5f;
+        sin2 = wave_x87_sin( f2 );
+    }
+    const float fl = fade * lift;
+    height = height + fl;
+    float m0 = m[ 0 ];
+    float m4 = m[ 4 ];
+    if ( !( a >= 0.0f ) )
+    {
+        m0 = -m0;
+        m4 = -m4;
+    }
+    const float s = ( wave.amplitude * -0.5f ) * sin1;
+    const float gby = ( m[ 5 ] * 3.1415927f ) * s;
+    const float gbx = ( m[ 1 ] * 3.1415927f ) * s;
+    float gax = 0.0f;
+    float gay = 0.0f;
+    if ( abs_a > wave.edge_a )
+    {
+        const float inv = 1.0f / ( 1.0f - wave.edge_a );
+        const float s2 = sin2 * -0.5f;
+        gax = ( ( inv * m0 ) * 3.1415927f ) * s2;
+        gay = ( ( inv * m4 ) * 3.1415927f ) * s2;
+    }
+    flow[ 0 ] = ( ( gax * fl ) + ( gbx * fade ) ) + flow[ 0 ];
+    flow[ 1 ] = ( ( gay * fl ) + ( gby * fade ) ) + flow[ 1 ];
+}
+
+// VuWaterBankedTurnWave @0x5a5ab0 (tag @0x5a5f10): the base's annulus, angle
+// and edge fade, with differences the disassembly shows - the direction dot
+// is MULTIPLIED by 1 / r (the base divides), the clamp is minss / maxss
+// (a NaN dot passes through), the band's cosine comes from an x87 fsincos -
+// and the height's in-plane gradient: the band term scaled by the fade, the
+// fade's term by fade * lift, through d(acos) = -1 / sqrt( 1 - c * c ).
+inline void banked_turn_vertex96( const banked_turn_t& wave, float x, float y, float& height, float* flow )
+{
+    const float dx = x - wave.centre_x;
+    const float dy = y - wave.centre_y;
+    const float outer = wave.outer_radius;
+    const float radius2 = ( dy * dy ) + ( dx * dx );
+    if ( !( ( outer * outer ) > radius2 ) || !( radius2 > ( wave.inner_radius * wave.inner_radius ) ) )
+        return;
+    const float radius = std::sqrt( radius2 );
+    const float inv_r = 1.0f / radius;
+    const float dot = ( ( wave.direction_y * dy ) + ( wave.direction_x * dx ) ) * inv_r;
+    const float c1 = 1.0f < dot ? 1.0f : dot;   // minss( 1, dot )
+    const float c = -1.0f > c1 ? -1.0f : c1;    // maxss( -1, . )
+    const float angle = std::acos( c );
+    if ( !( wave.extent > angle ) )
+        return;
+    const float phase = ( ( ( radius - wave.inner_radius ) / ( outer - wave.inner_radius ) ) * 6.2831855f ) - 3.1415927f;
+    const float cos_b = wave_x87_cos( phase );
+    const float sin_b = wave_x87_sin( phase );
+    const float across = angle / wave.extent;
+    const float lift = ( ( cos_b + 1.0f ) * 0.5f ) * wave.amplitude;
+    float fade = 1.0f;
+    float sin_e = 0.0f;   // read only when set (the same test guards both)
+    if ( across > wave.edge )
+    {
+        const float f = wave_fold( ( ( ( across - wave.edge ) / ( 1.0f - wave.edge ) ) * 3.1415927f ) + 3.1415927f );
+        sin_e = wave_x87_sin( f );
+        fade = ( wave_x87_cos( f ) + 1.0f ) * 0.5f;
+    }
+    const float fl = fade * lift;
+    height = height + fl;
+    const float ny = inv_r * dy;
+    const float nx = inv_r * dx;
+    const float dacos = -1.0f / std::sqrt( 1.0f - ( c * c ) );
+    const float inv_band = 1.0f / ( outer - wave.inner_radius );
+    const float sb = sin_b * -0.5f;
+    const float glx = ( ( ( inv_band * nx ) * 6.2831855f ) * sb ) * wave.amplitude;
+    const float gly = ( ( ( inv_band * ny ) * 6.2831855f ) * sb ) * wave.amplitude;
+    float gex = 0.0f;
+    float gey = 0.0f;
+    if ( across > wave.edge )
+    {
+        const float inv_r2 = 1.0f / radius2;
+        const float inv_ext = 1.0f / wave.extent;
+        const float inv_e = 1.0f / ( 1.0f - wave.edge );
+        const float se = sin_e * -0.5f;
+        gex = ( ( ( ( ( ( ( wave.direction_x * radius ) - ( c * nx ) ) * inv_r2 ) * dacos ) * inv_ext ) * inv_e ) * 3.1415927f ) * se;
+        gey = ( ( ( ( ( ( ( wave.direction_y * radius ) - ( c * ny ) ) * inv_r2 ) * dacos ) * inv_ext ) * inv_e ) * 3.1415927f ) * se;
+    }
+    flow[ 0 ] = ( ( gex * fl ) + ( glx * fade ) ) + flow[ 0 ];
+    flow[ 1 ] = ( ( gey * fl ) + ( gly * fade ) ) + flow[ 1 ];
+}
+
+// VuWaterDirectionalWave @0x59b860 (tag @0x59bde0): the base's travelling
+// sine across b, faded along a and b, as height plus its in-plane gradient.
+// Each fade's derivative term is scaled by the WHOLE height term h (retail
+// reuses that stack slot), the phase term by fade_a, and the a-terms plus the
+// phase term by fade_b; a row is negated when its coordinate is < 0 (or NaN).
+// Three x87 fsincos.
+inline void directional_vertex96( const directional_t& wave, float x, float y, float& height, float* flow )
+{
+    const float* m = wave.transform;
+    const float a = ( ( m[ 4 ] * y ) + ( m[ 0 ] * x ) ) + m[ 12 ];
+    const float b = ( ( m[ 5 ] * y ) + ( m[ 1 ] * x ) ) + m[ 13 ];
+    const float abs_a = std::fabs( a );
+    const float abs_b = std::fabs( b );
+    const float big = abs_a > abs_b ? abs_a : abs_b;   // maxss( |a|, |b| )
+    if ( !( 1.0f > big ) )
+        return;
+    const float fp = wave_fold( ( ( ( ( wave.phase_scale * b ) - ( wave.clock * wave.wavenumber ) ) * 2.0f ) * 3.1415927f ) + 3.1415927f );
+    const float cos_p = wave_x87_cos( fp );
+    const float sin_p = wave_x87_sin( fp );
+    const float w = wave.amplitude * sin_p;
+    float fade_a = 1.0f;
+    float sin_ea = 0.0f;   // read only when set (the same test guards both)
+    if ( abs_a > wave.edge_a )
+    {
+        const float f = wave_fold( ( ( ( abs_a - wave.edge_a ) / ( 1.0f - wave.edge_a ) ) * 3.1415927f ) + 3.1415927f );
+        sin_ea = wave_x87_sin( f );
+        fade_a = ( wave_x87_cos( f ) + 1.0f ) * 0.5f;
+    }
+    const float faw = fade_a * w;
+    float fade_b = 1.0f;
+    float sin_eb = 0.0f;
+    if ( abs_b > wave.edge_b )
+    {
+        const float f = wave_fold( ( ( ( abs_b - wave.edge_b ) / ( 1.0f - wave.edge_b ) ) * 3.1415927f ) + 3.1415927f );
+        sin_eb = wave_x87_sin( f );
+        fade_b = ( wave_x87_cos( f ) + 1.0f ) * 0.5f;
+    }
+    const float h = fade_b * faw;
+    height = height + h;
+    float sm0 = m[ 0 ];
+    float sm4 = m[ 4 ];
+    if ( !( a >= 0.0f ) )
+    {
+        sm0 = -sm0;
+        sm4 = -sm4;
+    }
+    const float sm1 = b >= 0.0f ? m[ 1 ] : -m[ 1 ];
+    const float sm5 = b >= 0.0f ? m[ 5 ] : -m[ 5 ];
+    const float ac = wave.amplitude * cos_p;
+    const float gpx = ( ( ( wave.phase_scale * m[ 1 ] ) * 2.0f ) * 3.1415927f ) * ac;
+    const float gpy = ( ( ( wave.phase_scale * m[ 5 ] ) * 2.0f ) * 3.1415927f ) * ac;
+    float gax = 0.0f;
+    float gay = 0.0f;
+    if ( abs_a > wave.edge_a )
+    {
+        const float inv = 1.0f / ( 1.0f - wave.edge_a );
+        const float s = sin_ea * -0.5f;
+        gax = ( ( inv * sm0 ) * 3.1415927f ) * s;
+        gay = ( ( inv * sm4 ) * 3.1415927f ) * s;
+    }
+    const float x1 = ( gax * h ) + ( gpx * fade_a );
+    const float y1 = ( gay * h ) + ( gpy * fade_a );
+    float gbx = 0.0f;
+    float gby = 0.0f;
+    if ( abs_b > wave.edge_b )
+    {
+        const float inv = 1.0f / ( 1.0f - wave.edge_b );
+        const float s = sin_eb * -0.5f;
+        gbx = ( ( inv * sm1 ) * 3.1415927f ) * s;
+        gby = ( ( inv * sm5 ) * 3.1415927f ) * s;
+    }
+    flow[ 0 ] = ( ( x1 * fade_b ) + ( gbx * h ) ) + flow[ 0 ];
+    flow[ 1 ] = ( ( y1 * fade_b ) + ( gby * h ) ) + flow[ 1 ];
+}
