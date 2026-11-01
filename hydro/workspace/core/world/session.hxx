@@ -4,13 +4,17 @@
 #include <workspace/core/boat/fleet.hxx>
 #include <workspace/core/boat/load.hxx>
 #include <workspace/core/boat/meshes.hxx>
+#include <workspace/core/boat/respawn.hxx>
+#include <workspace/core/dynamics/contact.hxx>
 #include <workspace/core/ui/config.hxx>
+#include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/start.hxx>
 #include <workspace/core/world/tick.hxx>
 #include <workspace/utility/logger.hxx>
 
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -38,10 +42,11 @@
 //   run's clock answers a fixed 0): "Race" builds its AI roster from it.
 // - 0x420A70 loads the collision / fluids meshes (the boat agent's meshes.hxx)
 //   and, with the surface-type table (surface.hxx, from SurfaceDB), runs to its
-//   end, the skin pass 0x421490 (world/livery.hxx) included. Still STOPPED, each
-//   counted and logged once: each boat's Decision 0x41EFF0 (recreated, not yet
-//   wired) and Build 0x41F330 (not recreated) ticks, and with them the race
-//   camera 0x409900 and the Viewports tick 0x4AB0A0.
+//   end, the skin pass 0x421490 (world/livery.hxx) included. Each boat's
+//   Decision tick 0x41EFF0 runs (world/drive.hxx, its hooks recreated or each
+//   declared there), and with it the race camera 0x409900; the Viewports tick
+//   0x4AB0A0 copies the viewport boat's camera into the view. Still STOPPED
+//   (declared, logged once): the Build tick 0x41F330's steps 1 - 6 (its 0x4200E0 runs).
 // - The signed-in player's name (the human entry's Driver Name) is a platform
 //   service: empty here.
 
@@ -61,6 +66,30 @@ struct race_session_boat_t
     std::vector< int > placements[ 3 ];
     int shown = -2;
 };
+
+// What the world lends the race's ticks, refreshed by c_world every frame
+// (world/drive.hxx reads it):
+// - water / view: VuWater g 0x759058 (the built water and the query's view of
+//   it; null: no VuWater);
+// - viewports: g_vuviewportmanager 0x759060 +4 - VuActionGameMode's enter
+//   0x4B9630 calls 0x530BB0(1) before its load, and 0x530BB0 stores min(n, 4)
+//   (cmovl) at +4: 1 for the race;
+// - control_method: g_vucontrolmethodmanager 0x758FC0 +0x18 - the input
+//   layer's answer (a PLATFORM HOOK: ours answers 0, the gamepad method, as
+//   the front end's ui flow does);
+// - display_w / _h: g_vumetrod3d11gfx vt+0x40, the display size (PLATFORM).
+struct race_world_t
+{
+    const water_built_t* water = nullptr;
+    const water_view_t* view = nullptr;
+    std::uint32_t viewports = 1;
+    std::int32_t control_method = 0;
+    std::int32_t display_w = 1280;
+    std::int32_t display_h = 720;
+};
+
+struct race_drive_t;
+struct race_contact_t;
 
 struct race_session_t
 {
@@ -88,7 +117,33 @@ struct race_session_t
     bool surfaces_built = false;
     // Counts of the stopped paths reached (UNKNOWN), logged once each.
     int stopped_decision = 0, stopped_build = 0, stopped_transform = 0, stopped_viewports = 0, stopped_fleet = 0;
+    // The world's services (refreshed per frame) and each boat's Decision
+    // composition (world/drive.hxx; by boat index).
+    race_world_t world;
+    std::vector< std::shared_ptr< race_drive_t > > drives;
+    // ConstantDB's ["VuDBAsset"]["Camera"]["VerticalFOV"] (gameutil +4's
+    // document, 0x4D2C60's lookups) - the race camera's fov input.
+    value_t vertical_fov;
+    // The viewport's camera (g 0x759060 +0x28: the 0x240 bytes the Viewports
+    // tick 0x4AB0A0 copies in) and whether one was copied yet.
+    std::uint8_t viewport_camera[ 0x240 ]{};
+    bool viewport_set = false;
+    // Each hook reached that is not recreated / not wired, by name (logged once).
+    std::map< std::string, int > unwired;
+    // The nuisance boats' entities (VuAiNuisanceDriverStartEntity +0x7C's children, 0x42FDC0).
+    std::vector< std::unique_ptr< entity_t > > nuisance;
+    // Bullet's contact-added callback for the race's dynamics world (world/drive.hxx race_contact_added ->
+    // boat contact.hxx contact_added): built by race_drive_setup, installed by whatever steps the bodies.
+    std::shared_ptr< race_contact_t > contact_user;
+    contact_callbacks_t contact{};
 };
+
+// The Decision tick 0x41EFF0 and the Viewports tick 0x4AB0A0 composed on the
+// session (world/drive.hxx).
+inline void race_drive_setup( race_session_t& s, const value_t* constant_db );
+inline void race_drive_decision( race_session_t& s, std::size_t boat, float dt );
+inline void race_drive_viewports( race_session_t& s );
+inline void race_drive_build( race_session_t& s, std::size_t boat, float dt );
 
 // The graph object a boat-image pointer slot refers to (-1 none).
 inline int race_session_ref( const boat_graph_t& g, int object, int slot )
@@ -101,10 +156,19 @@ inline int race_session_ref( const boat_graph_t& g, int object, int slot )
     return -1;
 }
 
+// The bytes a boat-image pointer slot points at: the referenced object's
+// image PLUS the ref's offset (the body: boat +0x21C points 16 bytes into its
+// btAlignedAlloc block, past the block's own unaligned address - boat
+// construct.hxx; the offset was ignored before world batch 14, so the
+// sections load read the body 16 bytes early).
 inline std::uint8_t* race_session_image( race_session_boat_t& b, int object, int slot )
 {
-    const int k = race_session_ref( b.graph, object, slot );
-    return k >= 0 ? b.graph.objects[ static_cast< std::size_t >( k ) ].image.data( ) : nullptr;
+    if ( object < 0 || object >= static_cast< int >( b.graph.objects.size( ) ) )
+        return nullptr;
+    for ( const image_ref_t& r : b.graph.objects[ static_cast< std::size_t >( object ) ].refs )
+        if ( r.slot == slot )
+            return r.object >= 0 ? b.graph.objects[ static_cast< std::size_t >( r.object ) ].image.data( ) + r.offset : nullptr;
+    return nullptr;
 }
 
 // 0x420A70 on the boat's graph objects (boat +0x21C body, +0x224 camera, +0x228
@@ -232,37 +296,43 @@ inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb
 }
 
 // The Decision / Build delegates the boat's gameInitialize registers (0x41EFF0
-// / 0x41F330 behind the thunks 0x4077ED / 0x404AB2). With the sections load
-// complete (the surface-type table, boat batch 11) they are reached, and both
-// are still STOPPED here - counted, logged once each:
-// - Decision 0x41EFF0 IS recreated (core/boat state.hxx boat_decision_tick)
-//   but NOT WIRED: its boat_decision_t (hull / engine strings, the engine's
-//   +0xF8 records, the water floor) and its hooks (the driver tick vt+0x48,
-//   the animation tick 0x40FFF0, the camera 0x409900 = boat_camera_tick, the
-//   respawn, slots 17 / 18, the debris paths) are not composed yet.
-// - Build 0x41F330 is NOT RECREATED anywhere (it moves the draw matrix +0x49C
-//   and feeds the dynamics).
+// / 0x41F330 behind the thunks 0x4077ED / 0x404AB2):
+// - Decision 0x41EFF0 = boat_decision_tick (core/boat state.hxx) composed on
+//   the boat's objects with its hooks by world/drive.hxx (race_drive_decision);
+//   a boat whose sections load stopped stays STOPPED (UNKNOWN, logged once).
+// - Build 0x41F330 (world/build.hxx, read whole): its last step 0x4200E0
+//   (boat_build_audio, verified) runs; steps 1 - 6 are declared (drive.hxx).
 struct race_session_tick_t
 {
     race_session_t* session;
     race_session_boat_t* boat;
+    std::size_t index;
 };
 
-inline void race_session_decision( void* user, float )
+inline void race_session_decision( void* user, float dt )
 {
     race_session_tick_t& t = *static_cast< race_session_tick_t* >( user );
+    if ( t.boat->sections && t.index < t.session->drives.size( ) && t.session->drives[ t.index ] )
+    {
+        race_drive_decision( *t.session, t.index, dt );
+        return;
+    }
     if ( t.session->stopped_decision++ == 0 )
-        LOG_WARNING( t.boat->sections ? "race: VuBoatEntity Decision tick 0x41EFF0 STOPPED - recreated (boat_decision_tick) but not wired "
-                                        "for %s yet"
+        LOG_WARNING( t.boat->sections ? "race: VuBoatEntity Decision tick 0x41EFF0 STOPPED (UNKNOWN) - %s's Decision composition did not build"
                                       : "race: VuBoatEntity Decision tick 0x41EFF0 STOPPED (UNKNOWN) - %s's sections load did not complete",
                      t.boat->name.c_str( ) );
 }
 
-inline void race_session_build( void* user, float )
+inline void race_session_build( void* user, float dt )
 {
     race_session_tick_t& t = *static_cast< race_session_tick_t* >( user );
+    if ( t.boat->sections && t.index < t.session->drives.size( ) && t.session->drives[ t.index ] )
+    {
+        race_drive_build( *t.session, t.index, dt );
+        return;
+    }
     if ( t.session->stopped_build++ == 0 )
-        LOG_WARNING( t.boat->sections ? "race: VuBoatEntity Build tick 0x41F330 STOPPED (UNKNOWN) - not recreated (%s)"
+        LOG_WARNING( t.boat->sections ? "race: VuBoatEntity Build tick 0x41F330 STOPPED (UNKNOWN) - %s's Decision composition did not build"
                                       : "race: VuBoatEntity Build tick 0x41F330 STOPPED (UNKNOWN) - %s's sections load did not complete",
                      t.boat->name.c_str( ) );
 }
@@ -276,16 +346,11 @@ inline void race_session_fleet( void* user, float dt )
 }
 
 // The Viewports phase's boat manager tick 0x4AB0A0 (boat_manager_viewport_tick,
-// core/boat manager.hxx) reads the viewport boat's camera image, which only
-// the Decision tick's camera step 0x409900 computes: STOPPED with the Decision
-// tick (counted, logged once) - the view stays on dev_vantage's orbit / freecam.
+// core/boat manager.hxx, composed by world/drive.hxx): the viewport boat's
+// camera image (the Decision tick's camera step 0x409900) into the viewport.
 inline void race_session_viewports( void* user, float )
 {
-    race_session_t& s = *static_cast< race_session_t* >( user );
-    if ( s.stopped_viewports++ == 0 && !s.boats.empty( ) )
-        LOG_WARNING( "race: the Viewports tick 0x4AB0A0 and the race camera 0x409900 STOPPED - %s", s.boats[ 0 ]->sections
-                         ? "the Decision tick that runs the camera is not wired yet"
-                         : "the Camera section is read after the sections load's stop" );
+    race_drive_viewports( *static_cast< race_session_t* >( user ) );
 }
 // A boat property's text into the boat image's inline std::string (+0x74 /
 // +0x8C / +0xA4 - VuEntity::load's targets): false for a text retail would
@@ -458,12 +523,13 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     s.start.laps = s.game.laps;
     s.start.difficulty = s.game.difficulty;
     s.start.root_name = tree.m_name;
-    static std::vector< race_session_tick_t > tick_users;
-    tick_users.assign( s.boats.size( ), race_session_tick_t{ } );
+    // The delegates' users (stable addresses: the tick manager holds them).
+    static std::vector< std::unique_ptr< race_session_tick_t > > tick_users;
+    tick_users.clear( );
     for ( std::size_t k = 0; k < s.boats.size( ); ++k )
     {
         race_session_boat_t& b = *s.boats[ k ];
-        tick_users[ k ] = { &s, &b };
+        tick_users.push_back( std::make_unique< race_session_tick_t >( race_session_tick_t{ &s, &b, k } ) );
         race_start_boat_t sb;
         sb.boat = b.graph.objects[ 0 ].image.data( );
         sb.transform = race_session_image( b, 0, 0x50 );
@@ -493,7 +559,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         ih.manager = &s.manager.lists;
         ih.entry = s.start_boats[ static_cast< std::size_t >( k ) ].boat;
         ih.kind = s.start_boats[ static_cast< std::size_t >( k ) ].kind;
-        race_session_tick_t* user = &tick_users[ static_cast< std::size_t >( k ) ];
+        race_session_tick_t* user = tick_users[ static_cast< std::size_t >( k ) ].get( );
         race_boat_game_initialize( &b, s.ticks, { &b, race_session_decision, user }, { &b, race_session_build, user }, b.draw_added, ih );
     };
     sh.add_driver = [ &s ]( int k )
@@ -515,6 +581,101 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     };
     sh.fleet_run = [ &s ] { fleet_run( s.fleet ); };
     race_begin( s.start, s.start_boats, s.manager, *track, *db.track_db, *db.constant_db, sh );
+
+    // VuAiNuisanceDriverStartEntity's gameInitialize 0x42FDC0 (boat nuisance.hxx) on each one in the tree, in
+    // pre-order: its child VuBoatEntity (operator new(0x520) + 0x41B710 + ctor 0x41B850 - the object the
+    // registry's create 0x41B690 makes) named name + "Boat", loaded from the slot's document (VuEntity::load
+    // 0x5009D0, then the postLoad 0x41CFF0 above: a VuAiNuisanceDriver named name + "Driver"), hashed from
+    // 0x811C9DC5, put at the start entity's world by 0x5344A0(notify 1), then initialised (0x500B10 -> the
+    // boat's 0x41D350). ORDER NOT READ: where the project's gameInitialize walk falls against VuGame's begin -
+    // the children are made after begin here (flagged).
+    // 0x5344A0 (thiscall transform; matrix*, notify; retn 8): world +0x50 = the matrix; +0xA0 = (atan2(m6,
+    // m10), asinf(clamp(-m2)), atan2(m1, m0)) (respawn_euler), +0xAC a stack word (UNKNOWN - 0 here); 0x534830
+    // with no parent (local +0x10 = world, +0x90 = the euler); 0x534C00(notify) - the boat has no children;
+    // with notify the watcher +0xC0 = the transform-changed delegate 0x421670.
+    {
+        entity_world_t bw = race_boat_world( registry, hooks );
+        std::vector< entity_t* > starts;
+        const auto find = [ & ]( const auto& self, entity_t& e ) -> void
+        {
+            if ( e.m_type == k_nuisance_start_class && e.m_state )
+                starts.push_back( &e );
+            for ( auto& child : e.m_children )
+                self( self, *child );
+        };
+        find( find, tree );
+        for ( entity_t* start : starts )
+        {
+            const transform_component_t* st = entity_transform( *start );
+            std::unique_ptr< entity_t > child = entity_create( "VuBoatEntity", bw );
+            if ( !child || !st || start->m_world_unknown )
+            {
+                LOG_WARNING( "race: %s's nuisance boat 0x42FDC0 STOPPED (UNKNOWN) - %s", start->m_name.c_str( ),
+                             child ? "the start entity's world is unknown" : "VuBoatEntity could not be created" );
+                continue;
+            }
+            const std::size_t before = s.boats.size( );
+            nuisance_start_hooks_t nh;
+            nh.name_child = [ & ]( const std::string& n ) { child->m_name = n; };
+            nh.load_child = [ & ]( const value_t& doc ) {
+                entity_load( *child, &doc, bw );
+                if ( hooks.post_load )
+                    hooks.post_load( *child, doc );
+            };
+            nh.hash_child = [ & ]( std::uint32_t seed ) { race_entity_hash( *child, seed ); };
+            nh.place_child = [ & ]( bool notify ) {
+                if ( s.boats.size( ) != before + 1 )
+                    return;
+                race_session_boat_t& r = *s.boats[ before ];
+                std::uint8_t* t = race_session_image( r, 0, 0x50 );
+                if ( !t )
+                    return;
+                std::memcpy( t + 0x50, st->world, 64 );
+                float e[ 3 ];
+                respawn_euler( st->world, e );
+                std::memcpy( t + 0xA0, e, 12 );
+                image_put32( t, 0xAC, 0 );   // a stack word in retail - UNKNOWN
+                std::memmove( t + 0x10, t + 0x50, 64 );
+                std::memmove( t + 0x90, t + 0xA0, 16 );
+                if ( notify && r.sections )
+                    boat_transform_changed( r.graph.objects[ 0 ].image.data( ), reinterpret_cast< const float* >( t + 0x50 ), r.body, r.io.camera,
+                                            r.io.instigator, boat_transform_hooks_t{ } );
+                else if ( notify )
+                    ++s.stopped_transform;
+            };
+            nh.add_child = [ & ] {
+                if ( s.boats.size( ) != before + 1 || !s.boats[ before ]->driver || s.boats[ before ]->driver->graph.empty( ) )
+                    return;
+                race_session_boat_t& b = *s.boats[ before ];
+                tick_users.push_back( std::make_unique< race_session_tick_t >( race_session_tick_t{ &s, &b, before } ) );
+                race_start_boat_t sb;
+                sb.boat = b.graph.objects[ 0 ].image.data( );
+                sb.transform = race_session_image( b, 0, 0x50 );
+                sb.engine = b.engine.object.image;
+                sb.driver = b.driver->graph[ 0 ].image.data( );
+                const std::uint32_t vt = load_word( sb.driver, 0 );
+                sb.cls = boat_driver_of( vt );
+                boat_driver_kind( vt, sb.kind );
+                s.start_boats.push_back( sb );
+                s.fleet_boats.push_back( { reinterpret_cast< const float* >( sb.transform + 0x50 ), 0.0f, 0.0f } );
+                race_boat_init_hooks_t ih;
+                ih.manager = &s.manager.lists;
+                ih.entry = sb.boat;
+                ih.kind = sb.kind;
+                race_session_tick_t* user = tick_users.back( ).get( );
+                race_boat_game_initialize( &b, s.ticks, { &b, race_session_decision, user }, { &b, race_session_build, user }, b.draw_added, ih );
+            };
+            nuisance_start_game_initialize( start->m_name, *static_cast< const nuisance_start_t* >( start->m_state.get( ) ), nh );
+            if ( s.boats.size( ) == before + 1 )
+                LOG_INFO( "race: nuisance boat %s (%s) from %s (0x42FDC0)", child->m_name.c_str( ), s.boats[ before ]->boat.c_str( ),
+                          start->m_name.c_str( ) );
+            s.nuisance.push_back( std::move( child ) );
+        }
+        if ( !starts.empty( ) )
+            LOG_INFO( "race: %d VuAiNuisanceDriverStartEntity, %d nuisance boat(s) made", static_cast< int >( starts.size( ) ),
+                      static_cast< int >( s.nuisance.size( ) ) );
+    }
+    race_drive_setup( s, db.constant_db );
     int placed = 0;
     for ( const race_start_boat_t& b : s.start_boats )
         placed += b.transform ? 1 : 0;

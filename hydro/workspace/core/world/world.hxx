@@ -22,6 +22,8 @@
 #include <workspace/core/world/livery.hxx>
 #include <workspace/core/world/race.hxx>
 #include <workspace/core/world/session.hxx>
+#include <workspace/core/world/build.hxx>
+#include <workspace/core/world/drive.hxx>
 #include <workspace/core/world/water.hxx>
 #include <workspace/core/assets/texture.hxx>
 #include <workspace/utility/logger.hxx>
@@ -1144,8 +1146,23 @@ public:
         water_view_build( m_water, m_water_view );
         trace::frame( ).ocean += trace::now( ) - ocean_start;
 
+        // The race's ticks see the world's VuWater (g 0x759058) and the display; then the view: with a race
+        // running (--boat / --skin) the viewport's camera (g 0x759060 +0x28, the Viewports tick 0x4AB0A0's copy
+        // of the viewport boat's VuBoatCamera): its eye +0x00 and target +0x10. The renderer takes only eye /
+        // target / far (c_engine::camera): the camera's own projection +0x30 / view +0x70 (fov, roll) are not
+        // consumed - SUBSTITUTION, the renderer's. The far plane stays the gfx settings' (the camera's +0x17C is
+        // boat +0x408, which the Build tick 0x41F330 fills). No race: dev_vantage's orbit / freecam (scaffold).
+        m_race.world.water = &m_water;
+        m_race.world.view = &m_water_view;
         race_session_frame( m_race, dt );
-        dev_vantage( dt );
+        if ( m_race.active && m_race.viewport_set )
+        {
+            std::memcpy( m_eye, m_race.viewport_camera + 0x00, sizeof( m_eye ) );
+            std::memcpy( m_target, m_race.viewport_camera + 0x10, sizeof( m_target ) );
+            m_far = m_authored_far;
+        }
+        else
+            dev_vantage( dt );
         race_draw( );
         water_draw( );
         // The crossing test wants the position of whatever the plane's Trigger
@@ -1441,6 +1458,8 @@ private:
     // Events delivered to node kinds that are not built yet. Counted rather
     // than guessed at, so the size of the remaining graph stays visible.
     int m_unhandled_events = 0;
+    // UpdateBranchProbabilities events reached without their VuParams (UNKNOWN, graph.hxx).
+    int m_waypoint_params_unknown = 0;
     // Assets already scored by the extent test, so it reports once each.
     std::set< std::string > m_scored;
     // Route single-bone props through the placement matrix instead of CPU

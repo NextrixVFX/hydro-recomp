@@ -419,6 +419,33 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
         return retval_t{};
     }
 
+    // VuAiWaypointEntity's input plugs (ctor 0x431770; boat track.hxx) on the
+    // track manager's waypoint the path names (its names below the project
+    // root): "AllowRecovery" 0x432740 / "DisallowRecovery" 0x432760 set +0x8B
+    // (what the respawn's track_nearest filters on); both return VuRetVal(0).
+    // "UpdateBranchProbabilities" 0x4325D0 reads the event's VuParams (two
+    // bools, two floats) - our events carry none, so it is UNKNOWN here
+    // (counted, never run on made-up params); its replan, the AI manager's
+    // slot 16 0x404220, is fleet_replan (race_drive_replan) once params arrive.
+    if ( m_track_built && ( plug == "AllowRecovery" || plug == "DisallowRecovery" || plug == "UpdateBranchProbabilities" ) )
+        for ( track_waypoint_t& w : m_track.waypoints )
+        {
+            std::string path;
+            for ( const entity_t* e = w.entity; e && e->m_parent; e = e->m_parent )
+                path = path.empty( ) ? e->m_name : e->m_name + "/" + path;
+            if ( path != entity )
+                continue;
+            if ( plug == "UpdateBranchProbabilities" )
+            {
+                if ( ++m_waypoint_params_unknown == 1 )
+                    LOG_WARNING( "event %s . UpdateBranchProbabilities 0x4325D0: its VuParams are not carried by our events - UNKNOWN, not run "
+                                 "(further ones counted)", entity.c_str( ) );
+                return retval_t{};
+            }
+            waypoint_allow_recovery( w, plug == "AllowRecovery" );
+            return retval_t{};
+        }
+
     // Everything else in the 813-node graph - keyframe motion, audio
     // emitters, pfx emitters, the other wave emitters - is not built yet.
     // Count it and say so once, so the gap stays visible instead of

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <workspace/core/world/build.hxx>
+#include <workspace/core/world/drive.hxx>
 #include <workspace/core/world/livery.hxx>
 #include <workspace/core/world/race.hxx>
 #include <workspace/core/world/start.hxx>
@@ -2004,9 +2006,118 @@ inline bool verify_race_game_ctor( )
     return failed == 0;
 }
 
+// race_drive_floor (core/world drive.hxx) against VuWater's surface list as
+// retail keeps it (oracle case water_surface_list: each add's push_back then
+// std::list::sort 0x52A670 with the predicate 0x527F50, run whole) and the
+// Decision tick's floor read [[[water +0x20]] +8] +0xD8: per vector the floor
+// word, bit for bit. Ties of the least height (6 of 48 vectors) and a lone
+// surface are among them.
+inline bool verify_water_surface_list( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_water_surface_list_count; ++index )
+    {
+        const unsigned* s = g_golden_water_surface_list_words + g_golden_water_surface_list_offsets[ index ];
+        const unsigned n = *s++;
+        water_built_t water;
+        for ( unsigned k = 0; k < n; ++k )
+        {
+            water_words_t w{};
+            w.set( 20, *s++ );
+            w.set( 216, *s++ );
+            water.surfaces.push_back( w );
+        }
+        bool unknown = false;
+        const float* floor = race_drive_floor( &water, unknown );
+        std::uint32_t got = 0;
+        if ( floor )
+            std::memcpy( &got, floor, 4 );
+        if ( !floor || unknown || got != *s )
+            if ( ++failed <= 4 )
+                LOG_ERROR( "water surface list vector %d: our floor 0x%08X, retail's 0x%08X", static_cast< int >( index ), got, *s );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "race_drive_floor matches VuWater's surface list order (0x5284C0's push_back + std::list::sort 0x52A670 / 0x527F50) "
+                     "and the Decision tick's floor read: %d vectors", static_cast< int >( g_golden_water_surface_list_count ) );
+    else
+        LOG_ERROR( "water surface list FAILED %d of %d vectors", failed, static_cast< int >( g_golden_water_surface_list_count ) );
+    return failed == 0;
+}
+
+// boat_build_audio (core/world build.hxx) against retail's 0x4200E0 run whole
+// (oracle case boat_build_audio; 0x50FBF0 and the FMOD imports intercepted):
+// +0x3F8..+0x407 bit for bit, +0x484, +0x48C and the calls in order, over 200
+// vectors (10 NaN probes).
+struct build_audio_log_t
+{
+    std::vector< unsigned > got;
+    unsigned ok = 0;
+};
+
+inline bool verify_boat_build_audio( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_build_audio_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_build_audio_words + g_golden_boat_build_audio_offsets[ index ];
+        std::vector< std::uint8_t > boat( 0x520, 0 ), body( 0x2D4, 0 ), engine( 0x104, 0 ), solver( 0x104, 0 ), camera( 0x308, 0 );
+        float dt;
+        std::memcpy( &dt, s++, 4 );
+        std::memcpy( body.data( ) + 0x140, s, 16 );
+        s += 4;
+        std::memcpy( camera.data( ) + 0x20, s, 12 );
+        s += 3;
+        const struct { std::uint8_t* b; int at; } in[ 11 ] = { { boat.data( ), 0x3F8 }, { boat.data( ), 0x3FC }, { boat.data( ), 0x400 },
+            { boat.data( ), 0x404 }, { boat.data( ), 0x30C }, { boat.data( ), 0x470 }, { engine.data( ), 4 }, { engine.data( ), 0xC },
+            { engine.data( ), 0x28 }, { solver.data( ), 0x54 }, { solver.data( ), 0x5C } };
+        for ( const auto& i : in )
+            std::memcpy( i.b + i.at, s++, 4 );
+        const unsigned n = *s++;
+        const std::string name( reinterpret_cast< const char* >( s ), n );
+        s += ( n + 3 ) / 4;
+        build_audio_log_t log;
+        log.ok = *s++;
+        boat[ 0x484 ] = static_cast< std::uint8_t >( *s++ );
+        image_put32( boat.data( ), 0x48C, *s++ );
+        const unsigned* after = s;
+        s += 4;
+        const unsigned flag_after = *s++, handle_after = *s++;
+        const unsigned calls = *s++;
+        std::vector< unsigned > want( s, s + 2 * calls );
+        boat_build_audio_hooks_t h;
+        h.user = &log;
+        h.slot = []( void* u, std::uint8_t* b, const std::string& ) {
+            build_audio_log_t& l = *static_cast< build_audio_log_t* >( u );
+            l.got.push_back( 1 );
+            l.got.push_back( 0 );
+            if ( l.ok )
+                image_put32( b, 0x48C, 0xE700u + static_cast< unsigned >( l.got.size( ) / 2 ) );
+            return l.ok != 0;
+        };
+        h.start = []( void* u, std::uint32_t x ) { auto& g = static_cast< build_audio_log_t* >( u )->got; g.push_back( 2 ); g.push_back( x ); };
+        h.callback = []( void* u, std::uint32_t x ) { auto& g = static_cast< build_audio_log_t* >( u )->got; g.push_back( 3 ); g.push_back( x ); };
+        h.release = []( void* u, std::uint32_t x ) { auto& g = static_cast< build_audio_log_t* >( u )->got; g.push_back( 4 ); g.push_back( x ); };
+        boat_build_audio( boat.data( ), body.data( ), engine.data( ), solver.data( ), camera.data( ), name, dt, h );
+        const bool same = std::memcmp( boat.data( ) + 0x3F8, after, 16 ) == 0 && boat[ 0x484 ] == flag_after && load_word( boat.data( ), 0x48C ) == handle_after &&
+                          log.got == want;
+        if ( !same && ++failed <= 4 )
+            LOG_ERROR( "boat build audio vector %d differs from retail's 0x4200E0 (+0x3F8 0x%08X / 0x%08X, +0x404 0x%08X / 0x%08X, %d / %d calls)",
+                       static_cast< int >( index ), load_word( boat.data( ), 0x3F8 ), after[ 0 ], load_word( boat.data( ), 0x404 ), after[ 3 ],
+                       static_cast< int >( log.got.size( ) / 2 ), static_cast< int >( calls ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "boat_build_audio matches the Build tick's 0x4200E0 (0x50FBF0 / FMOD hooked): %d vectors",
+                     static_cast< int >( g_golden_boat_build_audio_count ) );
+    else
+        LOG_ERROR( "boat build audio FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_build_audio_count ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_boat_build_audio( ) && ok;
+    ok = verify_water_surface_list( ) && ok;
     ok = verify_race_game_ctor( ) && ok;
     ok = verify_game_project_name( ) && ok;
     ok = verify_boat_skin( ) && ok;
