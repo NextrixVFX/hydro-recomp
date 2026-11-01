@@ -267,6 +267,9 @@
     <ClInclude Include="workspace\core\world\animate.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\world\blend.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\world\bodies.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>

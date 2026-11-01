@@ -177,6 +177,7 @@
     <ClInclude Include="workspace\core\ui\ticker.hxx" />
     <ClInclude Include="workspace\core\ui\wiring.hxx" />
     <ClInclude Include="workspace\core\world\animate.hxx" />
+    <ClInclude Include="workspace\core\world\blend.hxx" />
     <ClInclude Include="workspace\core\world\bodies.hxx" />
     <ClInclude Include="workspace\core\world\build.hxx" />
     <ClInclude Include="workspace\core\world\control.hxx" />
