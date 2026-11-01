@@ -4,6 +4,7 @@
 #include <workspace/core/boat/steer.hxx>
 #include <workspace/core/boat/update.hxx>
 #include <workspace/core/boat/tick.hxx>
+#include <workspace/core/boat/thunk.hxx>
 #include <workspace/core/boat/math.hxx>
 #include <workspace/core/boat/entity.hxx>
 #include <workspace/utility/golden.hxx>
@@ -975,9 +976,9 @@ inline bool verify_qaxis( )
 template < class Offsets >
 inline bool verify_boat_records( const unsigned* words, const Offsets* offsets, std::size_t count, int mode )
 {
-    const bool tick = mode >= 1, thunk = mode == 2;
-    const char* name = thunk ? "tickThunk 0x41E5E0" : tick ? "0x414010" : "0x414760";
-    int failed = 0, records = 0, submerged = 0, calls = 0, branch[ 3 ] = { }, gated = 0;
+    const bool tick = mode >= 1, thunk = mode >= 2, via = mode == 3;
+    const char* name = via ? "boat_thunk_build + tickThunk 0x41E5E0 (the 4 vectors whose Drives span is not a multiple of 32 bytes skipped)" : thunk ? "tickThunk 0x41E5E0" : tick ? "0x414010" : "0x414760";
+    int failed = 0, records = 0, submerged = 0, calls = 0, branch[ 3 ] = { }, gated = 0, skipped = 0;
     for ( std::size_t index = 0; index < count; ++index )
     {
         const unsigned* s = words + offsets[ index ];
@@ -1147,7 +1148,94 @@ inline bool verify_boat_records( const unsigned* words, const Offsets* offsets, 
         if ( tick )
             row6 = b.basis[ 9 ];   // 0x410B40's row 1 z
         const char* what = nullptr;
-        if ( !( thunk ? boat_tick_thunk( tc, dt ) : tick ? boat_414010( c4010 ) : boat_414760( c, m ) ) )
+        bool skip_vector = false;   // via: a Drives byte span no std::vector of 32-byte records can hold
+        if ( via )
+        {
+            // The same vector through boat_thunk_build: every input written into images at the offsets the builder
+            // reads (the offsets the oracle case wrote), the views built from them, then the written-back words read.
+            std::vector< std::uint8_t > vb( 0x520 ), vh( 0x200 ), vsv( 0x104 ), vtr( 0xC8 );
+            std::uint8_t *ib = vb.data( ), *ih = vh.data( ), *isv = vsv.data( ), *itr = vtr.data( );
+            const solver_rigid_t b_in = b;
+            std::memset( isv + 84, 0x77, 256 - 84 );   // as the case's image: zero below +0x54, 0x77 up to +0x100
+            auto pf = [ ]( std::uint8_t* q, int at, float x ) { std::memcpy( q + at, &x, 4 ); };
+            auto pu = [ ]( std::uint8_t* q, int at, std::uint32_t x ) { std::memcpy( q + at, &x, 4 ); };
+            boat_engine_t eng{ };
+            std::uint8_t* e = eng.object.image;
+            pf( e, 0x4, of[ 0 ] ); pf( e, 0xC, of[ 1 ] ); pf( e, 0x10, of[ 2 ] ); pf( e, 0x14, f14 ); pf( e, 0x18, f18 ); pf( e, 0x1C, f1C );
+            pf( e, 0x20, of[ 3 ] ); pf( e, 0x24, f24 ); pf( e, 0x28, of[ 4 ] ); pf( e, 0x2C, of[ 5 ] ); pu( e, 0x34, static_cast< std::uint32_t >( n ) );
+            for ( int k = 0; k < n; ++k )
+            {
+                std::uint32_t w;
+                std::memcpy( &w, &table[ k ], 4 );
+                eng.curve.push_back( w );
+            }
+            eng.drives.resize( nbytes / 32 );
+            if ( !eng.drives.empty( ) )
+                std::memcpy( eng.drives.data( ), points.data( ), 32 * eng.drives.size( ) );
+            eng.records = 8;
+            pf( ib, 0x2FC, f2FC ); pu( ib, 0x308, i308 ); ib[ 0x32C ] = b32C; ib[ 0x32F ] = b32F; pf( ib, 0x30C, p30C ); pf( ib, 0x470, p470 );
+            for ( int k = 0; k < 3; ++k )
+            {
+                pf( itr, 0x60 + 4 * k, qv[ k ] );
+                pf( ib, 0x290 + 4 * k, hf.boat_centre[ k ] );
+                pf( ih, 0x1C + 4 * k, hf.offset[ k ] );
+                pf( ih, 0x2C + 4 * k, h.aero_point[ k ] );
+                pf( ih, 0x3C + 4 * k, h.damping[ k ] );
+            }
+            pf( ih, 0x4C, hf.drag ); pf( ih, 0x50, hf.buoyancy ); pf( ih, 0x58, hf.factor_min ); pf( ih, 0x5C, hf.factor_speed );
+            for ( int k = 0; k < 4; ++k )
+                pf( ih, 0x60 + 4 * k, hf.curve[ k ] );
+            pf( ih, 0x70, hf.axis[ 0 ] ); pf( ih, 0x74, hf.axis[ 1 ] );
+            pf( ih, 0x54, h.aero ); pf( ih, 0x78, h.slide ); pf( ih, 0x94, h.aero_scale ); ib[ 0x495 ] = h.aero_off ? 1 : 0;
+            pf( ih, 0x7C, hs.speed_lo ); pf( ih, 0x80, hs.angle_lo ); pf( ih, 0x88, hs.speed_hi ); pf( ih, 0x8C, hs.angle_hi );
+            pf( ih, 0xB4, hs.angle_deep ); pf( ih, 0xCC, hs.depth_lo ); pf( ih, 0xD0, hs.depth_hi ); pf( ib, 0x300, hs.input );
+            pf( ih, 0x15C, f15C ); pf( ih, 0x160, f160 ); pf( ih, 0x164, f164 ); ih[ 0x174 ] = f174; pf( ih, 0x178, f178 );
+            pu( ih, 0x1DC, ex0 >= 0 ? 0x1000u + static_cast< std::uint32_t >( ex0 ) : 0u );
+            pu( ih, 0x1E0, ex1 >= 0 ? 0x1000u + static_cast< std::uint32_t >( ex1 ) : 0u );
+            pu( isv, 0x30, 0 ); pu( isv, 0x34, 0 ); pf( isv, 0x100, 0.0f );
+            ib[ 0x3D4 ] = b374;
+            pf( ib, 0x134, g19[ 0 ] ); pf( ib, 0x3D8, g19[ 1 ] ); pf( ib, 0x3DC, g19[ 2 ] );
+            pf( ib, 0x3E8, g19[ 3 ] ); pf( ib, 0x3EC, g19[ 4 ] ); pf( ib, 0x3F0, g19[ 5 ] );
+            fluids_mesh_asset_t asset;
+            asset.vertices.size = static_cast< std::int32_t >( mesh.verts.size( ) / 4 );
+            asset.vertices.bytes.resize( 4 * mesh.verts.size( ) );
+            std::memcpy( asset.vertices.bytes.data( ), mesh.verts.data( ), asset.vertices.bytes.size( ) );
+            asset.edges.size = static_cast< std::int32_t >( mesh.edges.size( ) / 2 );
+            asset.edges.bytes.resize( 4 * mesh.edges.size( ) );
+            std::memcpy( asset.edges.bytes.data( ), mesh.edges.data( ), asset.edges.bytes.size( ) );
+            asset.records.size = static_cast< std::int32_t >( mesh.triangles.size( ) / 15 );
+            asset.records.bytes.resize( 4 * mesh.triangles.size( ) );
+            std::memcpy( asset.records.bytes.data( ), mesh.triangles.data( ), asset.records.bytes.size( ) );
+            std::memcpy( asset.aabb, mesh.aabb_min, 16 );
+            std::memcpy( asset.aabb + 4, mesh.aabb_max, 16 );
+            std::memcpy( &asset.w9c, &mesh.total_area, 4 );
+            boat_thunk_in_t in;
+            in.boat = ib; in.hull = ih; in.solver = isv; in.transform = itr; in.engine = &eng; in.body = &b; in.fluids = &asset;
+            in.water = &water; in.kernel = fluid_fake_kernel; in.kernel_user = &fake; in.gravity = fluid_fake_gravity; in.gravity_user = gravity;
+            in.wave_index = [ ]( std::uint32_t w ) { return w >= 0x1000u && w < 0x1100u ? static_cast< int >( w - 0x1000u ) : -2; };
+            static boat_thunk_t bt;
+            bt = boat_thunk_t{ };
+            if ( nbytes % 32 != 0 )
+                skip_vector = true, ++skipped;
+            else if ( !boat_thunk_build( bt, in ) )
+                what = "the builder refused";
+            else
+            {
+                std::memset( bt.records.data( ), 0x77, bt.records.size( ) );
+                std::memset( bt.solver.vertices.data( ), 0x77, bt.solver.vertices.size( ) * sizeof( water_vertex_t ) );
+                std::memset( bt.solver.edges.data( ), 0x77, bt.solver.edges.size( ) * sizeof( fluid_edge_t ) );
+                if ( !boat_thunk_run( bt, in, dt ) )
+                    what = "a path not recreated was reached";
+                std::memcpy( out, bt.records.data( ), 64 );
+                std::memcpy( &hc.f178, ih + 0x178, 4 );
+                hc.f174 = ih[ 0x174 ];
+                std::memcpy( &solver.volume, isv + 0x54, 4 );
+                std::memcpy( &solver.area, isv + 0x58, 4 );
+                std::memcpy( &solver.min_depth, isv + 0x5C, 4 );
+                std::memcpy( solver.acc, isv + 0x60, sizeof( solver.acc ) );
+            }
+        }
+        else if ( !( thunk ? boat_tick_thunk( tc, dt ) : tick ? boat_414010( c4010 ) : boat_414760( c, m ) ) )
             what = "a path not recreated was reached";
         int bad = -1;
         for ( int k = 0; k < 672 && !what; k += 4 )
@@ -1169,8 +1257,9 @@ inline bool verify_boat_records( const unsigned* words, const Offsets* offsets, 
             std::memcpy( &o178, &hc.f178, 4 );
             if ( u( ) != o178 && !what )
                 what = "hull +0x178";
-            if ( u( ) != hc.f174 && !what )
-                what = "hull +0x174";
+            { const unsigned g174 = u( );
+            if ( g174 != hc.f174 && !what )
+                what = "hull +0x174"; }
             unsigned so[ 43 ];
             std::memcpy( &so[ 0 ], &solver.volume, 4 );
             std::memcpy( &so[ 1 ], &solver.area, 4 );
@@ -1200,7 +1289,7 @@ inline bool verify_boat_records( const unsigned* words, const Offsets* offsets, 
             submerged += out[ 8 * r ] == 1 ? 1 : 0;
         if ( nrec > 0 )
             ++branch[ row6 > 0.865f ? 0 : row6 > 0.5f ? 1 : 2 ];
-        if ( what )
+        if ( what && !skip_vector )
         {
             ++failed;
             LOG_ERROR( "%s vector %d: %s (+%d)", name, static_cast< int >( index ), what, bad );
@@ -1211,6 +1300,7 @@ inline bool verify_boat_records( const unsigned* words, const Offsets* offsets, 
                      "submerged, %d kernel calls; force branches %d / %d / %d; %d through 0x4219C0)",
             name, thunk ? "the hull update, 0x414010, and 0x4219C0 behind the +0x374 gate, on one boat" : tick ? "the boat tick body: the matrix, 0x414760, 0x414E90" : "the per-record water force: a loop, byte-offset records, the water query",
             static_cast< int >( count ), records, submerged, calls, branch[ 0 ], branch[ 1 ], branch[ 2 ], gated );
+
     if ( failed )
         LOG_ERROR( "%s FAILED %d of %d", name, failed, static_cast< int >( count ) );
     return failed == 0;
@@ -1229,6 +1319,13 @@ inline bool verify_boat_4010( )
 inline bool verify_tick_thunk( )
 {
     return verify_boat_records( g_golden_tick_thunk_words, g_golden_tick_thunk_offsets, g_golden_tick_thunk_count, 2 );
+}
+
+// boat_thunk_build (boat thunk.hxx: tickThunk's context composed from a boat's images) on case tick_thunk's vectors:
+// each input written into images at the builder's offsets, the step run through it, the same words compared.
+inline bool verify_thunk_build( )
+{
+    return verify_boat_records( g_golden_tick_thunk_words, g_golden_tick_thunk_offsets, g_golden_tick_thunk_count, 3 );
 }
 
 // VuBoatEntity slot 17 0x421980 with VuDynamicsImpl slots 15 / 11 / 25
