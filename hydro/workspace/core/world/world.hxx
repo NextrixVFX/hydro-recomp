@@ -575,6 +575,9 @@ private:
     // skin_props: animate.hxx
     void skin_props( float dt );
 
+    // update_static_draws: models.hxx
+    void update_static_draws( );
+
     void wipe_scene( )
     {
         for ( int alpha = 0; alpha <= 11; ++alpha )
@@ -585,6 +588,7 @@ private:
         m_stack.clear( );
         m_sky.clear( );
         m_animated.clear( );
+        m_static_draws.clear( );
         m_play.clear( );
         m_scored.clear( );
         m_triggers.clear( );
@@ -876,6 +880,28 @@ public:
 
         const double ocean_start = trace::now( );
         m_ocean.advance( dt );
+        // VuWater's tick 0x529E30 on the built water (surface.hxx water_built_tick), then the query's view rebuilt.
+        // The expire hook is VuPointWaveEntity's OnExpired 0x5D4B60: the wave half (water_point_wave_expired),
+        // then the entity's "OnExpired" plug through the event graph (the entity's +0xA0 = 0 is not modelled - no
+        // reader of it is recreated). The ocean field rebuild and the render kick have no hook: counted.
+        water_built_hooks_t hooks{};
+        hooks.user = this;
+        hooks.expire = []( void* user, water_built_t& b, int wave )
+        {
+            c_world& self = *static_cast< c_world* >( user );
+            water_point_wave_expired( b, wave );
+            const auto owner = self.m_wave_owner.find( wave );
+            if ( owner == self.m_wave_owner.end( ) )
+                return;
+            const std::string entity = owner->second;
+            self.m_wave_owner.erase( owner );
+            self.fire( entity, "OnExpired" );
+        };
+        const int missing = water_built_tick( m_water, dt, hooks );
+        if ( missing > 0 && m_water_missing == 0 )
+            LOG_WARNING( "water tick: %d unrecreated paths reached with no hook (the ocean field rebuild / render kick)", missing );
+        m_water_missing += missing;
+        water_view_build( m_water, m_water_view );
         trace::frame( ).ocean += trace::now( ) - ocean_start;
 
         dev_vantage( dt );
@@ -889,6 +915,7 @@ public:
 
         const double props_start = trace::now( );
         skin_props( dt );
+        update_static_draws( );
         trace::frame( ).props += trace::now( ) - props_start;
 
         const double pfx_start = trace::now( );
@@ -983,6 +1010,10 @@ private:
     // VuWater as the level builds it from the tree (water agent's surface.hxx
     // water_build_world); hold is what water_best_wake takes. Not rendered yet.
     water_built_t m_water;
+    // Each emitted point wave's entity (by wave index), for the tick's expire hook.
+    std::map< int, std::string > m_wave_owner;
+    // The built water's tick paths reached with no hook to answer them (water_built_tick's return), summed.
+    int m_water_missing = 0;
     // The query's view of m_water (kernel.hxx water_view_build) - water_view_kernel with &m_water_view as its user
     // is the water kernel the boat's tick takes (boat tick.hxx / fluid.hxx). Not consumed yet: the boat tick is
     // not wired into c_world.
@@ -991,6 +1022,18 @@ private:
     // this, so entries are only ever added.
     std::map< std::string, std::vector< timed_event_t > > m_timed;
     std::set< std::string > m_stack;
+
+    // One Vu3dDrawStaticModelComponent: its loaded properties, its world aabb (+0x24 / +0x34, 0x531D10 at load from
+    // the LOD 0 instance's scene aabb and the draw matrix +0x13C), and the placements of its model instances (+0xBC
+    // LOD 0 / +0xDC LOD 1 / +0xFC LOD 2; the reflection model +0x11C is not placed - our renderer has no pass that
+    // selects it). update_static_draws shows the one static_model_select (0x5B0730) picks each frame.
+    struct static_draw_item_t
+    {
+        model_draw_t draw{};
+        float aabb[ 8 ]{};
+        std::vector< int > placements[ 3 ];
+        int shown = -2;   // the instance whose placements are visible (-1 none; -2 before the first frame)
+    };
 
     // One Vu3dDrawAnimatedModelComponent instance. The clip and phase are
     // filled in by bind_animations() from the event graph, not from the
@@ -1124,6 +1167,9 @@ private:
     };
 
     std::vector< animated_t > m_animated;
+    std::vector< static_draw_item_t > m_static_draws;
+    // Each VuStaticModelAsset's scene aabb (model_for, from load_model_scene), by asset name.
+    std::map< std::string, std::array< float, 8 > > m_scene_aabbs;
     std::map< std::string, play_t > m_play;
     c_trigger_set m_triggers;
     c_light_rig m_rig;

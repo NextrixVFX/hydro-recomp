@@ -61,6 +61,7 @@ public:
     // Repoint a placement at a new world matrix: the cheap way to animate a
     // rigid object, instead of CPU-transforming and re-uploading its vertices.
     static bool move( int placement, const float* world );
+    static bool show( int placement, bool visible );
     static mesh_vertex_t* edit( int geometry, int& count );
     static void refresh( int geometry );
     static void stream( int geometry );

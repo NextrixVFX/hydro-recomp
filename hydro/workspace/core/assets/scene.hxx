@@ -377,6 +377,31 @@ inline void scene_aabb_grow( float* aabb, const float* source, const float* m )
     }
 }
 
+// 0x41B2A0 (thiscall out; source aabb*, matrix*): out = the empty aabb (FLT_MAX / -FLT_MAX), then 0x5175E0 - the
+// source aabb's corners through the matrix.
+inline void scene_aabb_transform( float* out, const float* source, const float* matrix )
+{
+    scene_aabb_empty( out );
+    scene_aabb_grow( out, source, matrix );
+}
+
+// The engine's zero aabb 0x7593F0 (min 0 0 0, max 0 0 0; its CRT initializer 0x64B690) - what the static model
+// component measures when its LOD 0 instance holds no scene (0x5B09E0 / 0x546AE0's `+0x10 ? +0x5C : 0x7593F0`).
+inline const float* scene_zero_aabb( )
+{
+    static const float zero[ 8 ]{};
+    return zero;
+}
+
+// The static model component's world aabb, 0x531D10 (thiscall component; source aabb*, matrix*): +0x24 .. +0x43 =
+// 0x41B2A0( source, matrix ); then, its +0x1E byte set, the draw manager g_ 0x7590B8's vt+0x30( component ) - the
+// rendering side, a hook: returned as true for the caller to act on.
+inline bool scene_component_aabb( float* component_aabb, const float* source, const float* matrix, bool flag_1e )
+{
+    scene_aabb_transform( component_aabb, source, matrix );
+    return flag_1e;
+}
+
 // The engine's static identity 0x7593B0 (its CRT initializer 0x64B520).
 inline const float* scene_identity( )
 {

@@ -20,6 +20,7 @@ public:
     void drop( int alpha_test );
     void lift( int alpha_test, float extra );
     bool move( int id, const float* world );
+    bool show( int id, bool visible );
     mesh_vertex_t* edit( int geometry, int& count );
     void refresh( int geometry );
     void stream( int geometry );
@@ -94,6 +95,9 @@ private:
         // do: drop() compacts the vector and shifts everything after the
         // hole, so any stored index would silently address the wrong item.
         int id = -1;
+        // show(): a hidden placement is kept (its handle, matrix and state) but not submitted - the static model
+        // component's LOD instances, one shown at a time by the world's draw selection.
+        bool hidden = false;
     };
 
     bool ensure( );
@@ -297,6 +301,20 @@ bool c_geometry::move( int id, const float* world )
         // base_z is what lift() restores from, so it has to track the matrix
         // or a later lift would snap the object back to its original height.
         item.base_z = world[ 14 ];
+        return true;
+    }
+    return false;
+}
+
+bool c_geometry::show( int id, bool visible )
+{
+    if ( id < 0 )
+        return false;
+    for ( placement_t& item : m_placements )
+    {
+        if ( item.id != id )
+            continue;
+        item.hidden = !visible;
         return true;
     }
     return false;
@@ -678,7 +696,7 @@ void c_geometry::draw( )
     {
         constants.eye[ 3 ] = fog_blue;
         constants.light[ 3 ] = sun_w;
-        if ( item.alpha_test == 6 )
+        if ( item.alpha_test == 6 || item.hidden )
             return;
         geometry_t& geometry = m_geometries[ static_cast< std::size_t >( item.geometry ) ];
         if ( geometry.vertex_buffer == nullptr || geometry.index_buffer == nullptr )
@@ -964,6 +982,11 @@ int c_engine::place( int geometry, int texture, int index_start, int index_count
 bool c_engine::move( int placement, const float* world )
 {
     return g_geometry( ).move( placement, world );
+}
+
+bool c_engine::show( int placement, bool visible )
+{
+    return g_geometry( ).show( placement, visible );
 }
 
 void c_engine::drop( int alpha_test )

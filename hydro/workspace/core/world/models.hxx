@@ -120,22 +120,47 @@ inline const std::vector< c_world::cached_part_t >& c_world::model_for( const st
     model_t loaded{};
     const std::string static_name = "VuStaticModelAsset/" + asset;
     const std::string animated_name = "VuAnimatedModelAsset/" + asset;
-    bool loaded_ok = m_archive.read( static_name.c_str( ), bytes ) && load_model( bytes, loaded );
-    // --scene-compare (diagnostic, the evidence for the switch to load_model_scene): the heuristic load_model and the
-    // retail scene load side by side, per part. Measured on Hydroelectric (2026-10-31): geometry, textures, cubes,
-    // constants and node matrices identical on 74 of 77 models; the detail / alpha differences are load_model taking
-    // the NEXT shader's name (it reads the text after table 2's "gAlphaTestEnabled"), predicted 14 / 2 / 1 / 7 / 1 /
-    // 66 / 1 / 7 by tools tmp\blendproof.py and measured the same; z09a (41 of 259 parts) and effects_7 / _11 (its
-    // invented duplicate filter) differ in their part lists.
+    // A VuStaticModelAsset loads through retail's scene load (scene.hxx scene_load_static, via load_model_scene); the
+    // animated asset still rides the heuristic load_model (its retail load, VuGfxAnimatedScene, is not recreated).
+    bool loaded_ok = m_archive.read( static_name.c_str( ), bytes ) && load_model_scene( bytes, loaded );
+    // --sc-variant O|X|Y (diagnostic, the pixel proof of the switch; tools tmp\variants.ps1): O = the old load_model
+    // everywhere; X = the scene load, but the old part list where the counts differ (z09a, effects_7 / _11); Y = X plus
+    // the old detail / alpha. Measured (2026-10-31): Y == O bit-exact on all three stills, X == the switched build -
+    // every changed pixel is the next-shader-name defect; the part-list defects change none of the three stills.
+    if ( loaded_ok && c_engine::option( "sc-variant" ) != nullptr )
+    {
+        model_t old{};
+        load_model( bytes, old );
+        const bool lists = old.parts.size( ) != loaded.parts.size( );
+        if ( lists || c_engine::option( "sc-variant" )[ 0 ] == 'O' )
+            loaded = old;
+        else if ( c_engine::option( "sc-variant" )[ 0 ] == 'Y' )
+            for ( std::size_t k = 0; k < old.parts.size( ); ++k )
+            {
+                loaded.parts[ k ].detail = old.parts[ k ].detail;
+                loaded.parts[ k ].alpha_test = old.parts[ k ].alpha_test;
+            }
+    }
+    // --scene-compare (diagnostic, the evidence for the switch): the old heuristic load_model beside the retail scene
+    // load, per part. Measured on Hydroelectric (2026-10-31), all 77 static models: the buffers' contents identical on
+    // all 77; geometry, textures, cubes, constants and node matrices identical on 74. Every difference is a PROVEN
+    // load_model defect: (1) the detail / alpha differences - it took each material's shader name from the text
+    // after table 2's "gAlphaTestEnabled", the NEXT shader's name (tools tmp\blendproof.py predicted 14 / 2 / 1 / 7 /
+    // 1 / 66 / 1 / 7, measured the same); (2) z09a 41 of 259, effects_11 3 of 6 - it kept only the meshes after the
+    // last mesh whose name lacks "Shape" (or has > 8 parts), then sized its pose table by that run and so rejected
+    // the whole node tree (every part once, at the identity); (3) effects_7 52 of 88 - its invented duplicate filter
+    // (same texture / chunk, index count within 32, aabb within 0.05, node within 0.01). tools tmp\partsproof.py
+    // predicts the old part count from (2) + (3) on all 77 models: 77 of 77 equal to the measured count.
     if ( c_engine::option( "scene-compare" ) != nullptr && loaded_ok )
     {
-        model_t scened{};
-        const bool sok = load_model_scene( bytes, scened );
+        const model_t& scened = loaded;
+        model_t heuristic{};
+        const bool sok = load_model( bytes, heuristic );
         int geo = 0, tex = 0, det = 0, cube = 0, con = 0, alpha = 0, node = 0;
-        const std::size_t n = scened.parts.size( ) < loaded.parts.size( ) ? scened.parts.size( ) : loaded.parts.size( );
+        const std::size_t n = scened.parts.size( ) < heuristic.parts.size( ) ? scened.parts.size( ) : heuristic.parts.size( );
         for ( std::size_t k = 0; k < n; ++k )
         {
-            const model_part_t& a = loaded.parts[ k ];
+            const model_part_t& a = heuristic.parts[ k ];
             const model_part_t& b = scened.parts[ k ];
             geo += a.buffer != b.buffer || a.index_start != b.index_start || a.index_count != b.index_count;
             tex += a.texture != b.texture;
@@ -149,10 +174,29 @@ inline const std::vector< c_world::cached_part_t >& c_world::model_for( const st
                 LOG_INFO( "scene-compare %s part %d: tex '%s' / '%s' alpha %d / %d diffuse %.3f %.3f %.3f / %.3f %.3f %.3f", asset.c_str( ), static_cast< int >( k ),
                     a.texture.c_str( ), b.texture.c_str( ), a.alpha_test, b.alpha_test, a.diffuse[ 0 ], a.diffuse[ 1 ], a.diffuse[ 2 ], b.diffuse[ 0 ], b.diffuse[ 1 ], b.diffuse[ 2 ] );
         }
-        LOG_INFO( "scene-compare %s ok %d parts %d / %d buffers %d / %d: geo %d tex %d detail %d cube %d constants %d alpha %d node %d", asset.c_str( ), sok ? 1 : 0,
-            static_cast< int >( loaded.parts.size( ) ), static_cast< int >( scened.parts.size( ) ), static_cast< int >( loaded.buffers.size( ) ),
-            static_cast< int >( scened.buffers.size( ) ), geo, tex, det, cube, con, alpha, node );
-    }    if ( !loaded_ok )
+        // The buffers' contents (the unpacked vertices, the indices, the skin binding), not only their count.
+        int content = 0;
+        for ( std::size_t k = 0; k < heuristic.buffers.size( ) && k < scened.buffers.size( ); ++k )
+        {
+            const model_buffer_t& a = heuristic.buffers[ k ];
+            const model_buffer_t& b = scened.buffers[ k ];
+            content += a.vertices.size( ) != b.vertices.size( ) || a.indices != b.indices || a.skin.size( ) != b.skin.size( )
+                || a.authored != b.authored
+                || std::memcmp( a.vertices.data( ), b.vertices.data( ), a.vertices.size( ) * sizeof( mesh_vertex_t ) ) != 0
+                || std::memcmp( a.skin.data( ), b.skin.data( ), a.skin.size( ) * sizeof( model_skin_t ) ) != 0;
+        }
+        LOG_INFO( "scene-compare %s ok %d parts %d / %d buffers %d / %d: geo %d tex %d detail %d cube %d constants %d alpha %d node %d content %d", asset.c_str( ), sok ? 1 : 0,
+            static_cast< int >( heuristic.parts.size( ) ), static_cast< int >( scened.parts.size( ) ), static_cast< int >( heuristic.buffers.size( ) ),
+            static_cast< int >( scened.buffers.size( ) ), geo, tex, det, cube, con, alpha, node, content );
+    }
+    // The scene's aabb, for the static model component's world aabb (static_aabb_for).
+    if ( loaded_ok && loaded.scened )
+    {
+        std::array< float, 8 > box{};
+        std::memcpy( box.data( ), loaded.aabb, sizeof( loaded.aabb ) );
+        m_scene_aabbs[ asset ] = box;
+    }
+    if ( !loaded_ok )
     {
         bytes.clear( );
         loaded = {};
@@ -306,4 +350,45 @@ inline void c_world::place_model( const std::string& asset, const float* world, 
             out_placements->push_back( handle );
         ++m_draws;
     }
+}
+
+// Each static model component's draw selection, per frame: Vu3dDrawStaticModelComponent's draw 0x5B0730
+// (static_model_select) against the camera eye on the normal pass (reflection pass byte +0x18 clear, skip +0x2D
+// clear; fade +0x17C 1.0 - the ctor's, its other writer unread), then only the chosen instance's placements shown.
+// SCAFFOLD: retail runs this inside the draw traversal per pass; our renderer's mirror pass reuses the normal pass's
+// choice (retail's reflection pass would pick the reflection model, instance 3 - not placed). The colour scaled by
+// fade and the rejection modifier the selection returns are not consumed (fade is 1.0; the reject test is the
+// renderer's 0x520130 - unread).
+inline void c_world::update_static_draws( )
+{
+    int changed = 0;
+    int shown[ 4 ]{};   // none, LOD 0, LOD 1, LOD 2
+    for ( static_draw_item_t& item : m_static_draws )
+    {
+        const static_draw_t pick = static_model_select( item.draw, item.aabb, item.aabb + 4, m_eye, false, false, 1.0f );
+        if ( pick.instance == item.shown )
+            continue;
+        if ( item.shown >= 0 && item.shown < 3 )
+            for ( int handle : item.placements[ item.shown ] )
+                c_engine::show( handle, false );
+        if ( pick.instance >= 0 && pick.instance < 3 )
+            for ( int handle : item.placements[ pick.instance ] )
+                c_engine::show( handle, true );
+        item.shown = pick.instance;
+        ++changed;
+    }
+    if ( changed == 0 )
+        return;
+    for ( const static_draw_item_t& item : m_static_draws )
+    {
+        ++shown[ item.shown + 1 ];
+        // --static-draw-trace (diagnostic): every component's choice, distances, aabb and placements.
+        if ( c_engine::option( "static-draw-trace" ) != nullptr )
+            LOG_INFO( "static draw %s: shown %d draw %g lod0 %g lod1 %g aabb %g %g %g / %g %g %g placements %d %d %d", item.draw.model_asset.c_str( ), item.shown,
+                item.draw.draw_distance, item.draw.lod0_draw_distance, item.draw.lod1_draw_distance, item.aabb[ 0 ], item.aabb[ 1 ], item.aabb[ 2 ], item.aabb[ 4 ],
+                item.aabb[ 5 ], item.aabb[ 6 ], static_cast< int >( item.placements[ 0 ].size( ) ), static_cast< int >( item.placements[ 1 ].size( ) ),
+                static_cast< int >( item.placements[ 2 ].size( ) ) );
+    }
+    LOG_INFO( "static draws: %d changed; of %d components none %d, LOD 0 %d, LOD 1 %d, LOD 2 %d (eye %.1f %.1f %.1f)", changed,
+        static_cast< int >( m_static_draws.size( ) ), shown[ 0 ], shown[ 1 ], shown[ 2 ], shown[ 3 ], m_eye[ 0 ], m_eye[ 1 ], m_eye[ 2 ] );
 }
