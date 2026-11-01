@@ -1051,11 +1051,6 @@ inline void race_session_key_tick( void* user, float dt )
 inline void race_session_key_motion( race_session_t& s, entity_t& e )
 {
     key_motion_state_t* st = static_cast< key_motion_state_t* >( e.m_state.get( ) );
-    if ( st->curve_authored )
-    {
-        race_unwired( s, "a VuKeyframeMotionEntity authoring Curve Type (VuStaticIntEnumProperty 0x74C354's read 0x503600 unread) - UNKNOWN, not run" );
-        return;
-    }
     auto k = std::make_unique< race_session_t::key_live_t >( );
     k->entity = &e;
     k->k = &st->value;

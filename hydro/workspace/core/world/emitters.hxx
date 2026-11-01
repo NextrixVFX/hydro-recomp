@@ -23,13 +23,13 @@ struct audio_emitter_state_t
 // VuKeyframeMotionEntity (world/keymotion.hxx key_motion_t, the water agent's - case key_motion): VuMotionEntity's ctor
 // 0x61A000 nodes "Initially Active" / "One Shot" and the ctor 0x5CE400's "Loop" / "Ease In/Out" / "Affect Position" /
 // "Affect Rotation" are VuBasicProperty<bool> (0x737450: property_bool); "Curve Type" is a VuStaticIntEnumProperty
-// (0x74C354, its value read 0x503600 UNREAD) - an entity that authors it is UNKNOWN (`curve_authored`, not run).
+// (0x74C354: property_enum over the table 0x752C18 - world batch 28; before it an authored one was UNKNOWN, not run).
 // VuKeyframeEntity (ctor 0x5CE110): "Time" +0x60, VuBasicProperty<float> (0x737484: property_float).
 struct key_motion_state_t
 {
     key_motion_t value;
     std::uint8_t d_active = 0, d_one_shot = 0, d_loop = 0, d_ease = 1, d_position = 1, d_rotation = 1;
-    bool curve_authored = false;
+    std::int32_t d_curve = 0;
 };
 
 struct keyframe_state_t
@@ -145,7 +145,11 @@ inline void key_motion_load_properties( entity_t& e, const value_t& p )
     property_bool( p, "Ease In/Out", v.ease, s.d_ease );
     property_bool( p, "Affect Position", v.affect_position, s.d_position );
     property_bool( p, "Affect Rotation", v.affect_rotation, s.d_rotation );
-    s.curve_authored = s.curve_authored || find( p, "Curve Type" ) != nullptr;
+    // "Curve Type" +0x70: VuStaticIntEnumProperty (vtable 0x74C354) - the node class VuSwitchEntity's "Initial State" uses
+    // (property_enum, verified there), over the table 0x752C18 {Linear 0, Cubic 1, Cubic Euler 2, Spline 3} (read from the
+    // image: {char*, int} pairs, a null name ends it).
+    static const property_choice_t k_curves[ 4 ] = { { "Linear", 0 }, { "Cubic", 1 }, { "Cubic Euler", 2 }, { "Spline", 3 } };
+    property_enum( p, "Curve Type", v.curve, s.d_curve, k_curves, 4 );
 }
 
 inline void key_motion_mark_properties( entity_t& e )
@@ -165,6 +169,7 @@ inline void key_motion_mark_properties( entity_t& e )
         s.d_ease = v.ease;
         s.d_position = v.affect_position;
         s.d_rotation = v.affect_rotation;
+        s.d_curve = v.curve;
     }
 }
 
