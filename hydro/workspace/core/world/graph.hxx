@@ -39,28 +39,32 @@ inline bool c_world::plug_returns_value( const std::string& type, const std::str
 }
 
 // VuScriptOutputPlug_fire @0x5023a0, both halves.
-inline c_world::retval_t c_world::fire( const std::string& owner, const std::string& plug, int depth)
+inline c_world::retval_t c_world::fire( const std::string& owner, const std::string& plug, int depth, const std::uint8_t* params )
 {
     const auto found = m_graph.find( std::make_pair( owner, plug ) );
     if ( found == m_graph.end( ) || found->second.empty( ) )
         return retval_t{};
     const auto type = m_entity_type.find( owner );
     if ( type != m_entity_type.end( ) && plug_returns_value( type->second, plug ) )
-        return dispatch( found->second.front( ).entity, found->second.front( ).plug, depth + 1 );
+        return dispatch( found->second.front( ).entity, found->second.front( ).plug, depth + 1, params );
     // The handler may edit m_graph-adjacent state but never m_graph
     // itself, so iterating the resolved list directly is safe.
     for ( const edge_t& edge : found->second )
-        dispatch( edge.entity, edge.plug, depth + 1 );
+        dispatch( edge.entity, edge.plug, depth + 1, params );
     return retval_t{};
 }
 
 // Slot 2 on an INPUT plug: invoke the VuMethod1 its entity's constructor
 // bound to it. Each branch below is one such handler, transliterated.
+// `params` reaches the handler (VuScriptOutputPlug_fire 0x5023A0 passes the
+// sender's VuParams to every link). A handler below that fires its own output
+// passes NONE on (null): whether each passes its input through is not read for
+// it - only the race's nuisance plugs (race_event_dispatch) read params so far.
 // DEVIATION, FLAGGED: the depth guard. Retail has none - VuOneShotFilter's
 // In handler even sets its latch AFTER firing Out, so a cyclic graph
 // recurses forever there too - and nothing in the authored graph is known
 // to be cyclic, so the guard only bounds a bug.
-inline c_world::retval_t c_world::dispatch( const std::string& entity, const std::string& plug, int depth)
+inline c_world::retval_t c_world::dispatch( const std::string& entity, const std::string& plug, int depth, const std::uint8_t* params )
 {
     if ( depth > 8 )
         return retval_t{};
@@ -419,6 +423,15 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
         return retval_t{};
     }
 
+    // The race's own receivers (world/drive.hxx race_event_dispatch): the
+    // gfx-settings entities' Trigger and the nuisance start's DriverTarget /
+    // DriverDisable - built by the race session's gameInitialize walk.
+    if ( race_event_dispatch( m_race, entity, plug, params ) )
+    {
+        ++m_fired;
+        return retval_t{};
+    }
+
     // VuAiWaypointEntity's input plugs (ctor 0x431770; boat track.hxx) on the
     // track manager's waypoint the path names (its names below the project
     // root): "AllowRecovery" 0x432740 / "DisallowRecovery" 0x432760 set +0x8B
@@ -494,6 +507,48 @@ inline void c_world::update_delays( float dt )
             continue;
         pair.second.pending = false;
         fire( pair.first, "Out" );
+    }
+}
+
+// The Triggers tick 0x536460's trigger half in a race, after the instigator
+// step (session.hxx race_session_triggers): every trigger in the manager's
+// list (+0x10: the active ones - VuTriggerEntity +132; the list's ORDER is our
+// load order, its registration order unread) gets its vt+0x30. A PLANE's is
+// VuTriggerPlaneEntity_testCrossings 0x5D1570: for each instigator record in
+// order, trigger_plane_crossing; a crossing is VuTriggerEntity_fireCrossing
+// 0x61CB70(the instigator component's +8 entity, enter): VuParams built by
+// 0x505150 - one entity parameter {11, the entity's hash} (size 8) - and fired
+// on "OnEnter" / "OnExit". A BOX's vt+0x30 (0x5D1AB0) is not recreated: not
+// run, logged UNKNOWN. The +0x1C in-tick byte and the pending add / remove
+// lists (Activate / Deactivate during the tick) are not modelled: our
+// set_active applies at once (FLAGGED - 0x61CCB0 / 0x61CD20 unread for it).
+inline void c_world::race_triggers( )
+{
+    for ( const trigger_t& gate : m_triggers.all( ) )
+    {
+        if ( !gate.active )
+            continue;
+        if ( gate.box )
+        {
+            race_unwired( m_race, "VuTriggerBoxEntity's crossing test 0x5D1AB0 (vt+0x30) is not recreated - the boxes are not tested in the race (UNKNOWN)" );
+            continue;
+        }
+        const std::string path = gate.path;
+        for ( std::size_t k = 0; k < m_race.triggers.instigators.size( ); ++k )
+        {
+            const trigger_record_t r = m_race.triggers.instigators[ k ];
+            const int crossed = trigger_plane_crossing( gate.frame, gate.half, gate.mask, r.at );
+            if ( crossed < 0 )
+                continue;
+            std::uint8_t params[ 0x84 ] = { };
+            const std::uint32_t type = 11, hash = race_entity_token( r.owner ), size = 8;
+            std::memcpy( params, &type, 4 );
+            std::memcpy( params + 4, &hash, 4 );
+            std::memcpy( params + 0x80, &size, 4 );
+            LOG_INFO( "race: %s crossed %s - %s", r.owner >= 0 && static_cast< std::size_t >( r.owner ) < m_race.boats.size( )
+                          ? m_race.boats[ static_cast< std::size_t >( r.owner ) ]->name.c_str( ) : "?", path.c_str( ), crossed ? "OnEnter" : "OnExit" );
+            fire( path, crossed ? "OnEnter" : "OnExit", 0, params );
+        }
     }
 }
 

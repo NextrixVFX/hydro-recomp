@@ -482,6 +482,9 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     m_wave_owner.clear( );
     m_water_missing = 0;
     water_build_world( *m_tree, m_water, []( entity_t& e ) { return entity_transform( e ); } );
+    // Destroyed wake records are reused (water agent: retail's list / pool / trees / refcounts untouched -
+    // verify_wake_reuse); the built water's default (off) keeps verify_race_hull_wake's creation-order indices.
+    m_water.wake_reuse = true;
     LOG_INFO( "water: %u surfaces, %u waves built from the tree; %d water entities not built", static_cast< unsigned >( m_water.surfaces.size( ) ),
         static_cast< unsigned >( m_water.waves.size( ) ), m_water.skipped );
     // Each surface's VuWaterMapAsset (+0x100) by its WaterMap name; the fetch

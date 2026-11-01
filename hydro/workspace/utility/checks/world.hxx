@@ -2748,9 +2748,104 @@ inline bool verify_gfx_blend( )
     return failed == 0;
 }
 
+// The trigger manager's instigators (trigger/volume.hxx: 0x531F50 trigger_instigator_initialize, 0x536460's step
+// trigger_instigators_step, 0x536350 trigger_instigator_update, 0x5362A0 trigger_instigator_release) against retail
+// (case trigger_instigators): per vector 1..6 components (world, mask, offset, radius, registered) and a sequence of
+// registers / ticks (new worlds and radii) / updates / releases; compared after every op: the record count, each
+// record's 13 words (component / transform as indices, the two never-read stack words 0) and each component's +0x28.
+inline bool verify_trigger_instigators( )
+{
+    const unsigned* s = g_golden_trigger_instigators_words;
+    int failed = 0, words = 0, ops = 0;
+    for ( std::size_t v = 0; v < g_golden_trigger_instigators_count; ++v )
+    {
+        const unsigned n = *s++;
+        std::vector< std::vector< std::uint8_t > > comps( n, std::vector< std::uint8_t >( 0x40, 0 ) ), transforms( n, std::vector< std::uint8_t >( 0x100, 0 ) );
+        for ( unsigned k = 0; k < n; ++k )
+        {
+            std::memcpy( transforms[ k ].data( ) + 0x50, s, 64 );
+            std::memcpy( comps[ k ].data( ) + 0x10, s + 16, 16 );
+            std::memcpy( comps[ k ].data( ) + 0x24, s + 20, 4 );
+            comps[ k ][ 0x28 ] = static_cast< std::uint8_t >( s[ 21 ] );
+            s += 22;
+        }
+        trigger_manager_t m;
+        const unsigned count = *s++;
+        for ( unsigned o = 0; o < count; ++o, ++ops )
+        {
+            const unsigned kind = s[ 0 ], k = s[ 1 ];
+            s += 2;
+            if ( kind == 0 )
+                trigger_instigator_initialize( m, comps[ k ].data( ), transforms[ k ].data( ), static_cast< int >( k ) );
+            else if ( kind == 1 )
+            {
+                ++s;   // dt: 0x536460 reads no dt in its instigator step
+                for ( unsigned c = 0; c < n; ++c, s += 17 )
+                {
+                    std::memcpy( transforms[ c ].data( ) + 0x50, s, 64 );
+                    std::memcpy( comps[ c ].data( ) + 0x24, s + 16, 4 );
+                }
+                trigger_instigators_step( m );
+            }
+            else if ( kind == 2 )
+            {
+                std::memcpy( transforms[ k ].data( ) + 0x50, s, 64 );
+                s += 16;
+                trigger_instigator_update( m, comps[ k ].data( ) );
+            }
+            else
+                trigger_instigator_release( m, comps[ k ].data( ) );
+            std::vector< unsigned > ours;
+            ours.push_back( static_cast< unsigned >( m.instigators.size( ) ) );
+            for ( const trigger_record_t& r : m.instigators )
+            {
+                unsigned ci = 0xFFFFFFFFu, ti = 0xFFFFFFFFu;
+                for ( unsigned c = 0; c < n; ++c )
+                {
+                    ci = r.component == comps[ c ].data( ) ? c : ci;
+                    ti = r.transform == transforms[ c ].data( ) ? c : ti;
+                }
+                unsigned w[ 13 ] = { ci, ti, r.at.mask };
+                std::memcpy( w + 3, r.at.prev, 12 );
+                std::memcpy( w + 7, &r.at.radius, 4 );
+                std::memcpy( w + 8, r.at.cur, 12 );
+                std::memcpy( w + 12, &r.at.rate, 4 );
+                ours.insert( ours.end( ), w, w + 13 );
+            }
+            for ( unsigned c = 0; c < n; ++c )
+                ours.push_back( comps[ c ][ 0x28 ] );
+            const unsigned len = *s++;
+            for ( unsigned i = 0; i < len; ++i )
+            {
+                ++words;
+                const unsigned mine = i < ours.size( ) ? ours[ i ] : 0xDEADBEEFu;
+                if ( mine != s[ i ] && ++failed <= 8 )
+                    LOG_ERROR( "trigger instigators vector %d op %u (kind %u) word %u: ours 0x%08X retail 0x%08X", static_cast< int >( v ), o, kind, i,
+                               mine, s[ i ] );
+            }
+            if ( ours.size( ) != len && ++failed <= 8 )
+                LOG_ERROR( "trigger instigators vector %d op %u: %u words ours, %u retail", static_cast< int >( v ), o,
+                           static_cast< unsigned >( ours.size( ) ), len );
+            s += len;
+        }
+    }
+    if ( s != g_golden_trigger_instigators_words + g_golden_trigger_instigators_size )
+    {
+        LOG_ERROR( "trigger instigators: the golden stream was not consumed exactly" );
+        ++failed;
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "The trigger manager's instigators (0x531F50 / 0x536460's step / 0x536350 / 0x5362A0) match retail: %d vectors, %d ops, "
+                     "%d words bit for bit", static_cast< int >( g_golden_trigger_instigators_count ), ops, words );
+    else
+        LOG_ERROR( "trigger instigators FAILED %d of %d words", failed, words );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_trigger_instigators( ) && ok;
     ok = verify_gfx_blend( ) && ok;
     ok = verify_gfx_zones( ) && ok;
     ok = verify_race_hull_wake( ) && ok;

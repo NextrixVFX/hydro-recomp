@@ -421,6 +421,8 @@ struct race_boat_init_hooks_t
     // The boat's slot 17 0x421980 (boat_enable on the race's dynamics world - world/session.hxx race_session_enable);
     // null: the row only.
     std::function< void( ) > slot17;
+    // VuInstigatorComponent's gameInitialize 0x531F50 on +0x70 (trigger/volume.hxx, the session's trigger manager); null: the row only.
+    std::function< void( ) > instigator;
 };
 
 inline void race_boat_game_initialize( const void* boat, tick_manager_t& tm, const tick_handler_t& decision, const tick_handler_t& build,
@@ -452,6 +454,8 @@ inline void race_boat_game_initialize( const void* boat, tick_manager_t& tm, con
     if ( hooks.manager )
         boat_manager_add( *hooks.manager, hooks.entry, hooks.kind );
     call( "0x531F50 inst" );
+    if ( hooks.instigator )
+        hooks.instigator( );
 }
 
 inline void race_boat_game_release( const void* boat, tick_manager_t& tm, std::uint8_t& draw_added, std::uint8_t& instigator_registered,
