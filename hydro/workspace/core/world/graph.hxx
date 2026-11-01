@@ -145,6 +145,54 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
         return retval_t{};
     }
 
+    // The lights' game-start "Trigger" (world/settings.hxx, the water agent's - case settings_triggers): VuAmbientLightEntity
+    // 0x5EF780 / VuDirectionalLightEntity 0x5EEEC0 write g_vulightmanager 0x759094's +0xCC .. +0xF8 (m_lights). The
+    // manager's consumer is the renderer's (not recreated): OUR light setup reads its words - the hull shader's ambient /
+    // front / back colours (each VuColor's R, G, B bytes / 255; the shader's light is two-sided), the sun direction +0xE0
+    // (the transform's row 2 negated, retail's own), Specular (+0xF8) not consumed. With several lights of a kind the last
+    // trigger wins (the manager holds one of each).
+    const auto lt = plug == "Trigger" ? m_entities.find( entity ) : m_entities.end( );
+    if ( lt != m_entities.end( ) && lt->second->m_state &&
+         ( lt->second->m_type == "VuAmbientLightEntity" || lt->second->m_type == "VuDirectionalLightEntity" ) )
+    {
+        const entity_t& le = *lt->second;
+        const auto to_rgb = []( std::uint32_t c, float* out ) {
+            for ( int k = 0; k < 3; ++k )
+                out[ k ] = static_cast< float >( ( c >> ( 8 * k ) ) & 0xFF ) / 255.0f;
+        };
+        if ( le.m_type == "VuAmbientLightEntity" )
+        {
+            ambient_light_trigger( static_cast< const ambient_light_state_t* >( le.m_state.get( ) )->value.color, m_lights );
+            to_rgb( m_lights.ambient, m_rig.ambient( ) );
+            m_rig.mark_lit( );
+        }
+        else
+        {
+            const transform_component_t* t = entity_transform( const_cast< entity_t& >( le ) );
+            if ( !t || le.m_world_unknown )
+            {
+                count_unhandled( entity, plug );
+                return retval_t{};
+            }
+            const directional_light_t& l = static_cast< const directional_light_state_t* >( le.m_state.get( ) )->value;
+            std::uint32_t words[ 16 ];
+            std::memcpy( words, t->world, 64 );
+            directional_light_trigger( words, l.front_color, l.back_color, l.specular_color, m_lights );
+            to_rgb( m_lights.front, m_rig.front( ) );
+            to_rgb( m_lights.back, m_rig.back( ) );
+            std::memcpy( m_rig.sun_world( ), t->world, 64 );
+            float direction[ 3 ];
+            std::memcpy( direction, m_lights.direction, 12 );
+            c_engine::sun( direction );
+            m_rig.mark_sun( );
+            m_rig.mark_lit( );
+        }
+        if ( c_engine::option( "no-rig" ) == nullptr )
+            c_engine::rig( m_rig.ambient( ), m_rig.front( ), m_rig.back( ) );
+        ++m_fired;
+        return retval_t{};
+    }
+
     // VuAudioEmitterEntity's inputs (world/sound.hxx, the water agent's - case audio_emitter): Start 0x5F3B80 (play at the
     // transform's world position, +0x80) and Stop 0x5F3BE0, on the entity's state (world/emitters.hxx) and the audio platform.
     const auto em = m_entities.find( entity );

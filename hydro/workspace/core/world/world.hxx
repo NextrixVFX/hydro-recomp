@@ -30,6 +30,7 @@
 #include <workspace/core/world/watchers.hxx>
 #include <workspace/core/world/background.hxx>
 #include <workspace/core/world/action.hxx>
+#include <workspace/core/world/settings.hxx>
 #include <workspace/core/assets/texture.hxx>
 #include <workspace/utility/logger.hxx>
 #include <workspace/utility/trace.hxx>
@@ -1727,6 +1728,7 @@ private:
     std::map< std::string, entity_t* > m_logic;
     std::map< std::string, std::uint32_t > m_static_pfx;   // VuStaticPfxEntity path -> its +0x94 instance (0: none)
     std::map< std::string, entity_t* > m_entities;   // every tree entity by its graph path
+    light_manager_t m_lights;                        // g_vulightmanager 0x759094's +0xCC .. +0xF8 (world/settings.hxx)
     // THE AUDIO PLATFORM (FMOD's imports, world/sound.hxx sound_hooks_t): there is none on this platform yet - every call
     // retail would make is counted (and logged once per kind); getEvent answers a failure (1, not FMOD_OK) as FMOD does
     // when an event cannot be made, so nothing is started or held.
