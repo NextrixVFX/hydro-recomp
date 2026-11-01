@@ -143,7 +143,9 @@
     <ClInclude Include="workspace\core\ui\entity.hxx" />
     <ClInclude Include="workspace\core\ui\flow.hxx" />
     <ClInclude Include="workspace\core\ui\fsm.hxx" />
+    <ClInclude Include="workspace\core\ui\gauge.hxx" />
     <ClInclude Include="workspace\core\ui\hud.hxx" />
+    <ClInclude Include="workspace\core\ui\map.hxx" />
     <ClInclude Include="workspace\core\ui\schema.hxx" />
     <ClInclude Include="workspace\core\ui\screen.hxx" />
     <ClInclude Include="workspace\core\ui\wiring.hxx" />
