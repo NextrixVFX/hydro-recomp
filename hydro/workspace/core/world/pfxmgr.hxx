@@ -367,3 +367,17 @@ inline void pfx_asset_unload( pfx_asset_t& a, pfx_manager_t* m, const pfx_manage
     if ( rt != nullptr && lib != nullptr )
         pfx_remove_project( *rt, *lib, std::string( a.name.c_str( ) ), r );
 }
+
+// Slot 0 0x5CAAD0 (flags): the dtor 0x5CAA30 - the unload's body inline (as
+// pfx_asset_unload), the VuGenericDataAsset vtable and its 0x4FBB10 twice
+// more on the (already empty) document, then VuAsset's dtor 0x515D00 (the
+// engine's asset base: `asset_base`, the caller's); operator delete when
+// flags & 1 (the caller owns the object here).
+inline void pfx_asset_destroy( pfx_asset_t& a, pfx_manager_t* m, const pfx_manager_ops_t& ops, pfx_runtime_t* rt, pfx_library_t* lib,
+    const pfx_release_hooks_t& r = pfx_release_hooks_t( ), void ( *asset_base )( void* user ) = nullptr, void* user = nullptr )
+{
+    pfx_asset_unload( a, m, ops, rt, lib, r );
+    a.document = value_t( );
+    if ( asset_base != nullptr )
+        asset_base( user );
+}

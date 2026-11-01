@@ -2302,9 +2302,9 @@ inline bool verify_static_pfx_entity( )
     return bad == 0;
 }
 
-// pfx_asset_load / pfx_asset_unload (world/pfxmgr.hxx) against VuPfxAsset's slot 5 0x5CAB30 / slot 6 0x5CAB80 (case
-// pfx_unload): the race's two documents loaded into two assets, then four unloads (Hydroelectric; Generic with both
-// globals null; Generic; Generic again). Compared per unload: the events in order (releaseAll 0x52BB60 - here: the one
+// pfx_asset_load / pfx_asset_unload / pfx_asset_destroy (world/pfxmgr.hxx) against VuPfxAsset's slot 5 0x5CAB30 / slot 6
+// 0x5CAB80 / slot 0 0x5CAAD0 -> 0x5CAA30 (case pfx_unload): the race's two documents loaded into two assets, then four
+// unloads (Hydroelectric; Generic with both globals null; Generic; Generic again), Hydroelectric loaded again, both destroyed. Compared per unload: the events in order (releaseAll 0x52BB60 - here: the one
 // effect created before each unload with the manager present, released through ops.release -, 0x563C00's entries, the
 // geom model resets, the texture releases by path and offset), the document cleared (retail's +0 / +8 / +0xC), the
 // projects left.
@@ -2368,16 +2368,31 @@ inline bool verify_pfx_unload( )
         for ( const auto& r : rows )
             log.path_of[ r.second ] = r.first;
         log.events.clear( );
-        if ( op.globals )
-            pfx_manager_create( manager, "effect", ops );
-        pfx_asset_unload( assets[ op.name ], op.globals ? &manager : nullptr, ops, op.globals ? &rt : nullptr, op.globals ? &lib : nullptr, hooks );
-        int bad = log.events.size( ) != op.count;
+        unsigned ret = 0;
+        if ( op.kind == 1 )
+        {
+            std::vector< std::uint8_t > blob;
+            ret = archive.read( ( std::string( "VuPfxAsset/" ) + op.name ).c_str( ), blob ) && pfx_asset_load( &rt, &lib, assets[ op.name ], blob ) ? 1u : 0u;
+        }
+        else
+        {
+            if ( op.globals )
+                pfx_manager_create( manager, "effect", ops );
+            if ( op.kind == 0 )
+                pfx_asset_unload( assets[ op.name ], op.globals ? &manager : nullptr, ops, op.globals ? &rt : nullptr, op.globals ? &lib : nullptr, hooks );
+            else
+                pfx_asset_destroy( assets[ op.name ], op.globals ? &manager : nullptr, ops, op.globals ? &rt : nullptr, op.globals ? &lib : nullptr, hooks,
+                    []( void* u ) { static_cast< log_t* >( u )->events.emplace_back( 4, std::string( "asset" ), 0u ); }, &log );
+        }
+        int bad = log.events.size( ) != op.count || ret != op.ret;
         for ( unsigned e = 0; e < op.count && e < log.events.size( ); ++e )
         {
             const golden_pfx_unload_event_t& g = g_golden_pul_events[ op.first + e ];
             bad += std::get< 0 >( log.events[ e ] ) != g.kind || std::get< 1 >( log.events[ e ] ) != g.path || std::get< 2 >( log.events[ e ] ) != g.offset;
         }
-        bad += ( op.doc[ 0 ] | op.doc[ 1 ] | op.doc[ 2 ] ) != 0u || assets[ op.name ].document.kind != value_t::kind_t::none;
+        // retail's tag +0: 0 none, 6 an object (the loaded document's root)
+        const value_t::kind_t kind = assets[ op.name ].document.kind;
+        bad += ( op.doc[ 0 ] == 0u ) != ( kind == value_t::kind_t::none ) || ( op.doc[ 0 ] == 6u ) != ( kind == value_t::kind_t::object );
         std::string left;
         for ( const auto& pr : lib.projects )
             left += ( left.empty( ) ? "" : "," ) + pr.first;
@@ -2386,13 +2401,13 @@ inline bool verify_pfx_unload( )
         if ( bad )
         {
             ++failed;
-            LOG_ERROR( "pfx_unload: unload %d (%s): %d differences (%d events, retail %u)", static_cast< int >( i ), op.name, bad,
+            LOG_ERROR( "pfx_unload: operation %d (%s): %d differences (%d events, retail %u)", static_cast< int >( i ), op.name, bad,
                 static_cast< int >( log.events.size( ) ), op.count );
         }
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "pfx_asset_unload matches VuPfxAsset's unload 0x5CAB80 (0x4FBB10, releaseAll 0x52BB60, removeProject 0x51D9C0): %d unloads, "
-                     "%d events in order, documents cleared, the projects left",
+        LOG_SUCCESS( "pfx_asset_load / _unload / _destroy match VuPfxAsset's 0x5CAB30 / 0x5CAB80 (0x4FBB10, releaseAll 0x52BB60, removeProject "
+                     "0x51D9C0) / 0x5CAAD0 -> 0x5CAA30: %d operations, %d events in order, the documents, the projects left",
             static_cast< int >( g_golden_pul_op_count ), events );
     else
         LOG_ERROR( "pfx_unload FAILED %d", failed );
