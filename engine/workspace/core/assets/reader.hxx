@@ -25,18 +25,36 @@ public:
     // or comes back null.
     value_t parse( )
     {
+        value_t root{};
+        read( root );
+        return root;
+    }
+
+    // parse( ) with 0x55B560's answer: false on any read error (root null), true for a whole document - which may
+    // itself be a null node, the case parse( ) alone cannot tell apart.
+    bool read( value_t& out )
+    {
+        out = value_t{};
         std::uint32_t magic = 0;
         std::uint32_t version = 0;
-        if ( !u32( &magic ) )
-            return {};
-        if ( !u32( &version ) )
-            return {};
+        if ( !u32( &magic ) || !u32( &version ) )
+            return false;
         if ( magic != 0x56554A42u || version != 1 )
-            return {};
+            return false;
         value_t root{};
         if ( !node( root ) )
-            return {};
-        return root;
+            return false;
+        out = std::move( root );
+        return true;
+    }
+
+    // The bytes at +0 must be the document (0x55B560 takes its buffer as is): the constructor's VUJB search skipped.
+    static bool read_at_start( const std::vector< std::uint8_t >& blob, value_t& out )
+    {
+        c_reader reader( blob );
+        reader.m_bytes = blob.data( );
+        reader.m_size = blob.size( );
+        return reader.read( out );
     }
 
 private:

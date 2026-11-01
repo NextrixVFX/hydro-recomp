@@ -575,3 +575,54 @@ inline bool powerup_package_apply( bool driver_38, bool driver_30, const std::st
         hooks.remove_from_world( );
     return true;
 }
+
+// ---- The power-ups' dtors (vtable slot 0, scalar-deleting: thiscall(entity, flags), retn 4; eax = this), on
+// retail's words (boat batch 25) ----
+//
+// VuPowerUpEntity's dtor body 0x43B890 (no vtable store of its own): the +0x118 std::map erased whole (0x43CA10 with
+// begin = the head's +0 and end = the head - std::map internals, the caller's: SUBSTITUTION class STL), its head node
+// freed (operator delete of +0x118 read after the erase), then the five strings +0xE8 / +0xC8 / +0xB0 / +0x94 / +0x74
+// in that order (the heap text freed when the capacity +0x14 is >= 16; then capacity 15, size 0, the first byte 0),
+// then VuEntity's dtor 0x500870. 0x43B830 (VuPowerUpEntity / Boost / Trigger slot 0) = that body. 0x43DCC0
+// (VuPowerUpHiddenPackageEntity slot 0) resets its own +0x138 string first. Then, with flags & 1, operator
+// delete(this). The imports, 0x43CA10 and 0x500870 are hooks, in retail's order.
+enum class powerup_dtor_kind_t
+{
+    entity,           // 0x43B830
+    hidden_package,   // 0x43DCC0
+};
+
+struct powerup_dtor_hooks_t
+{
+    std::function< void( std::uint32_t ) > free_block;                                 // operator delete
+    std::function< void( std::uint32_t, std::uint32_t, std::uint32_t ) > map_erase;   // 0x43CA10( map, first, last )
+    std::function< void( ) > entity_dtor;                                              // 0x500870
+};
+
+inline void powerup_string_reset( const vu_words_t& w, std::uint32_t at, const powerup_dtor_hooks_t& h )
+{
+    if ( w.get( at + 0x14 ) >= 0x10u && h.free_block )
+        h.free_block( w.get( at ) );
+    w.put( at + 0x14, 0xFu );
+    w.put( at + 0x10, 0u );
+    w.put( at, w.get( at ) & 0xFFFFFF00u );
+}
+
+inline std::uint32_t powerup_destroy( powerup_dtor_kind_t kind, const vu_words_t& w, std::uint32_t self, std::uint32_t flags,
+                                      const powerup_dtor_hooks_t& h )
+{
+    if ( kind == powerup_dtor_kind_t::hidden_package )
+        powerup_string_reset( w, self + 0x138, h );
+    const std::uint32_t head = w.get( self + 0x118 );
+    if ( h.map_erase )
+        h.map_erase( self + 0x118, w.get( head ), head );
+    if ( h.free_block )
+        h.free_block( w.get( self + 0x118 ) );
+    for ( std::uint32_t at : { 0xE8u, 0xC8u, 0xB0u, 0x94u, 0x74u } )
+        powerup_string_reset( w, self + at, h );
+    if ( h.entity_dtor )
+        h.entity_dtor( );
+    if ( ( flags & 1u ) && h.free_block )
+        h.free_block( self );
+    return self;
+}
