@@ -1251,6 +1251,115 @@ inline bool verify_boost_apply( )
     return false;
 }
 
+// VuPowerUpEntity's Decision tick 0x43BDB0 against retail (oracle case powerup_tick): the time, +0x12C, the scale
+// spring (+0x130 / +0x134), the bobbed position and every hook call in order, bit for bit. The hooks answer as the
+// case's recorders did (the driver's vt+0x38 / +0x30 ran retail's own 0x404BD0 / 0x4052D0 there: boat_driver_kind).
+inline bool verify_powerup_tick( )
+{
+    const unsigned* g = g_golden_powerup_tick_words;
+    const unsigned ns = *g++;
+    int failed = 0, compared = 0, ticks = 0;
+    auto fl = []( unsigned u ) { float x; std::memcpy( &x, &u, 4 ); return x; };
+    auto bits = []( float x ) { std::uint32_t u; std::memcpy( &u, &x, 4 ); return u; };
+    for ( unsigned s = 0; s < ns; ++s )
+    {
+        const unsigned nt = *g++;
+        for ( unsigned t = 0; t < nt; ++t, ++ticks )
+        {
+            const float dt = fl( *g++ );
+            powerup_t p;
+            std::memcpy( &p.time, g, 8 );
+            g += 2;
+            p.in_world = static_cast< std::uint8_t >( *g++ );
+            p.handle_wave_height = static_cast< std::uint8_t >( *g++ );
+            p.height_above_water = fl( *g++ );
+            p.pickup = *g++;
+            p.scale_velocity = fl( *g++ );
+            p.scale = fl( *g++ );
+            p.spring = fl( *g++ );
+            p.damping = fl( *g++ );
+            p.scale_initial = fl( *g++ );
+            p.scale_initial_velocity = fl( *g++ );
+            p.pfx = *g++;
+            float position[ 4 ];
+            std::memcpy( position, g, 16 );
+            g += 4;
+            const unsigned boat = *g++, kind = *g++, rtti = *g++, c0 = *g++, valid = *g++;
+            const unsigned water = *g++, apply = *g++, bac0 = *g++, getevent = *g++;
+            std::uint8_t boats[ 4 ] = { };
+            std::vector< std::vector< unsigned > > log;
+            auto index = [ & ]( void* b ) { return static_cast< unsigned >( static_cast< std::uint8_t* >( b ) - boats ); };
+            powerup_tick_hooks_t hooks;
+            hooks.water_height = [ & ]( const float* pos ) {
+                log.push_back( { 1u, bits( pos[ 0 ] ), bits( pos[ 1 ] ), bits( pos[ 2 ] ), bits( pos[ 3 ] ) } );
+                return fl( water );
+            };
+            hooks.moved = [ & ]( ) {
+                log.push_back( { 2u, 1u } );
+                log.push_back( { 3u, 1u } );
+                if ( c0 )
+                    log.push_back( { 4u, 1u } );
+            };
+            hooks.find = [ & ]( std::uint32_t id ) { log.push_back( { 5u, id } ); return static_cast< void* >( boats + boat ); };
+            hooks.is_boat = [ & ]( void* b ) { log.push_back( { 6u, index( b ) } ); return rtti == 1 || rtti == 2; };
+            hooks.apply = [ & ]( void* b ) { log.push_back( { 7u, index( b ) } ); return ( apply & 0xFF ) != 0; };
+            hooks.apply_pfx = [ & ]( void* ) {
+                log.push_back( { 8u, 1u } );
+                if ( bac0 )
+                    log.push_back( { 9u } );
+            };
+            hooks.driver_38 = [ & ]( void* ) { return true; };
+            hooks.driver_30 = [ & ]( void* ) { boat_driver_kind_t k; return boat_driver_kind( kind, k ) && k.human; };
+            hooks.sound = [ & ]( const float* pos ) {
+                log.push_back( { 11u, 1u } );
+                if ( getevent == 0 )
+                {
+                    log.push_back( { 12u, 1u, bits( pos[ 0 ] ), bits( pos[ 1 ] ), bits( pos[ 2 ] ) } );
+                    log.push_back( { 13u, 1u } );
+                }
+            };
+            hooks.voice = [ & ]( void* b ) { log.push_back( { 14u, index( b ), 1u } ); };
+            hooks.pfx_scale = [ & ]( std::uint32_t, float sc ) {
+                if ( valid )
+                    log.push_back( { 15u, bits( sc ) } );
+            };
+            const bool ok = powerup_decision_tick( p, position, dt, hooks );
+            unsigned mine[ 9 ];
+            std::memcpy( mine, &p.time, 8 );
+            mine[ 2 ] = p.pickup;
+            mine[ 3 ] = bits( p.scale_velocity );
+            mine[ 4 ] = bits( p.scale );
+            std::memcpy( mine + 5, position, 16 );
+            static const char* const names[ 9 ] = { "time lo", "time hi", "+0x12C", "+0x130", "+0x134", "x", "y", "z", "w" };
+            for ( int k = 0; k < 9; ++k, ++g )
+                if ( ++compared, ( !ok || mine[ k ] != *g ) && ++failed <= 8 )
+                    LOG_ERROR( "powerup_tick sequence %u tick %u %s: 0x%08X, retail 0x%08X", s, t, names[ k ], mine[ k ], *g );
+            const unsigned nl = *g++;
+            ++compared;
+            if ( log.size( ) != nl && ++failed <= 8 )
+                LOG_ERROR( "powerup_tick sequence %u tick %u: %zu calls, retail %u", s, t, log.size( ), nl );
+            for ( unsigned j = 0; j < nl; ++j )
+            {
+                const unsigned len = *g++;
+                ++compared;
+                bool same = j < log.size( ) && log[ j ].size( ) == len;
+                for ( unsigned k = 0; k < len; ++k )
+                    same = same && log[ j ][ k ] == g[ k ];
+                if ( !same && ++failed <= 8 )
+                    LOG_ERROR( "powerup_tick sequence %u tick %u call %u: retail code %u", s, t, j, g[ 0 ] );
+                g += len;
+            }
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuPowerUpEntity's Decision tick 0x43BDB0 matches retail: %u sequences, %d ticks, %d values", ns, ticks, compared );
+        return true;
+    }
+    LOG_ERROR( "powerup_tick FAILED %d of %d values", failed, compared );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -1266,5 +1375,6 @@ inline bool verify_race_all( )
     ok = verify_boat_manager( ) && ok;
     ok = verify_viewport_tick( ) && ok;
     ok = verify_boost_apply( ) && ok;
+    ok = verify_powerup_tick( ) && ok;
     return ok;
 }
