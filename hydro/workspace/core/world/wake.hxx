@@ -194,6 +194,76 @@ inline int water_wake_update( water_built_t& b, const std::uint32_t* desc, const
     return flat ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// VuStaticWakeWaveEntity (vtable 0x7535BC; no level authors one - verified on
+// synthetic entities, case static_wake): a wake that never ages.
+//
+// 0x5D5F20 (thiscall entity; a*, b*; retn 8), the two 13-word records into
+// zeroed 0x34 bytes, from the transform (t: its +0x50 world - +0x60 the y axis,
+// +0x80 the position -, +0xB0 / +0xB4 the scale) and the entity (e +0x6C ..
+// +0x7C: Falloff Time, Decay Time, Magnitude, Speed, Frequency):
+//   a = position (4: +0x80 .. +0x8C), t +0x60, t +0x64, e +0x6C, +0x70, +0x74,
+//       t +0xB0, e +0x78, e +0x7C, 0
+//   b = position + y axis x t +0xB4 (three lanes, each x + (axis * scale)), its
+//       fourth word t +0x64 (the stack temporary the first record left), then
+//       t +0x60, t +0x64, e +0x6C, +0x70, +0x74, t +0xB0, e +0x78, e +0x7C and
+//       e +0x6C again.
+// `entity` holds the words from +0x60, `transform` from +0x10 (water_input_t).
+inline void water_static_wake_records( const std::uint32_t* entity, const std::uint32_t* transform, std::uint32_t* a, std::uint32_t* b )
+{
+    auto e = [ & ]( int o ) { return entity[ ( o - 0x60 ) / 4 ]; };
+    auto t = [ & ]( int o ) { return transform[ ( o - 0x10 ) / 4 ]; };
+    for ( int k = 0; k < 4; ++k )
+        a[ k ] = t( 0x80 + 4 * k );
+    const std::uint32_t tail[ 8 ] = { t( 0x60 ), t( 0x64 ), e( 0x6C ), e( 0x70 ), e( 0x74 ), t( 0xB0 ), e( 0x78 ), e( 0x7C ) };
+    for ( int k = 0; k < 8; ++k )
+        a[ 4 + k ] = b[ 4 + k ] = tail[ k ];
+    a[ 12 ] = 0;
+    const float sy = wave_bits( t( 0xB4 ) );
+    for ( int k = 0; k < 3; ++k )
+    {
+        const float v = wave_bits( t( 0x80 + 4 * k ) ) + ( wave_bits( t( 0x60 + 4 * k ) ) * sy );
+        std::memcpy( &b[ k ], &v, 4 );
+    }
+    b[ 3 ] = t( 0x64 );
+    b[ 12 ] = e( 0x6C );
+}
+
+// Slot 6 0x5D5E80 = 0x5D6060 (thiscall entity): the records, then
+// VuWater_createWakeWave 0x5287D0( entity + 0x60 - Range Start / End Ratio %
+// and +0x68 as the wake's +0x4C .. +0x54 -, a ), b over the wake's +0x58 (its
+// moving end), 0x52C720, out of the trees 0x529B90 and back 0x529A90, and the
+// wake's +0x48 (the water tick's time scale) = 0. Returns the wave (entity
+// +0x80).
+inline int water_static_wake_create( water_built_t& b, const std::uint32_t* entity, const std::uint32_t* transform )
+{
+    std::uint32_t ra[ 13 ], rb[ 13 ];
+    water_static_wake_records( entity, transform, ra, rb );
+    const int wave = water_create_wake( b, entity, ra, false );
+    water_words_t& w = b.waves[ static_cast< std::size_t >( wave ) ];
+    for ( int k = 0; k < 13; ++k )
+        w.set( 0x58 + 4 * k, rb[ k ] );
+    water_wake_bounds( w );
+    water_hold_remove( b.hold, wave );
+    water_wake_hold_sync( b, wave );
+    water_hold_add( b.hold, wave );
+    w.set( 0x48, 0 );
+    return wave;
+}
+
+// Slot 2 0x5D5E30 (thiscall entity; one argument unread; retn 4) and the
+// transform's watcher 0x5D5ED0 (the same body without the argument): when the
+// entity's +0x14 bit 2 is set, its wake released as slot 7 0x5D5E90 does
+// (surface.hxx water_entity_release: the reference, then 0x529800; +0x80 = 0)
+// and made again (0x5D6060); else nothing. `wave` is the entity's +0x80.
+inline void water_static_wake_refresh( water_built_t& b, int& wave, bool initialised, const std::uint32_t* entity, const std::uint32_t* transform )
+{
+    if ( !initialised )
+        return;
+    water_entity_release( b, wave );
+    wave = water_static_wake_create( b, entity, transform );
+}
+
 // Live (not destroyed) wake / flat wake waves - what the race trace should count
 // (b.waves also keeps every destroyed record unless wake_reuse is on).
 inline int water_live_wakes( const water_built_t& b )

@@ -180,19 +180,19 @@ inline bool verify_water_controls( )
 // (summary + FNV-1a 64); water_view_kernel on 24 vertices per mode (slot 3 0x59C390: base 0x59C7C0, tag 0x59C920, +96
 // nothing) - every vertex word; water_flow_refresh (slot 2 0x5D66C0 -> 0x5D6740) - the same state and the layout box (w
 // lanes excepted); on every other entity water_entity_release (slot 7 0x5D6710): destroyed, the list, pool, trees.
-inline bool flow_check_state( const water_built_t& b, int wave, const unsigned*& s, bool words, int& compared )
+inline bool flow_check_state( const water_built_t& b, int wave, const unsigned*& s, bool words, int& compared, int nwords = 64 )
 {
     int bad = 0;
     if ( words )
     {
         const water_words_t& w = b.waves[ static_cast< std::size_t >( wave ) ];
-        for ( int k = 0; k < 64; ++k )
+        for ( int k = 0; k < nwords; ++k )
             if ( w.known[ k ] && k != 6 && k != 10 && k != 16 )
             {
                 ++compared;
                 bad += w.word[ k ] != s[ k ];
             }
-        s += 64;
+        s += nwords;
     }
     const unsigned ne = *s++;
     int at = b.hold.waves[ static_cast< std::size_t >( wave ) ].entries;
@@ -336,6 +336,106 @@ inline bool verify_flow_wave( )
             n, vertices, releases, compared );
     else
         LOG_ERROR( "flow_wave FAILED %d of %u", failed, n );
+    return failed == 0;
+}
+
+// VuStaticWakeWaveEntity (world/wake.hxx water_static_wake_create / _refresh) against retail on Hydroelectric's built water
+// (case static_wake): six synthetic entities. Per entity: slot 6 0x5D5E80 = 0x5D6060 - the wake's known words (+0x18 /
+// +0x28 the bounds' stack words, +0x40 the entry pointer excepted), entries, the wave list, the pool, every surface's wave
+// tree, the waves destroyed; slot 2 0x5D5E30 with +0x14 bit 2 set (released and made again) or clear (nothing) - the
+// same; after all six, slot 7 0x5D5E90 on every other (surface.hxx water_entity_release).
+inline bool verify_static_wake( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "static_wake: the document did not load" );
+        return false;
+    }
+    water_built_t b{};
+    water_build_world( *tree, b, []( entity_t& e ) { return entity_transform( e ); } );
+    const unsigned* s = g_golden_swk_words;
+    const unsigned n = *s++;
+    int failed = 0, compared = 0, remade = 0, releases = 0;
+    std::vector< std::pair< int, const unsigned* > > released;
+    auto gone_since = [ & ]( std::size_t before_size, const std::vector< std::uint8_t >& before ) {
+        std::vector< unsigned > out;
+        for ( std::size_t k = 0; k < b.wave_gone.size( ); ++k )
+            if ( b.wave_gone[ k ] && !( k < before_size && before[ k ] ) )
+                out.push_back( static_cast< unsigned >( k ) );
+        return out;
+    };
+    auto check_gone = [ & ]( const std::vector< unsigned >& got, const unsigned*& q ) {
+        const unsigned nd = *q++;
+        const int bad = got != std::vector< unsigned >( q, q + nd );
+        q += nd;
+        return bad;
+    };
+    for ( unsigned c = 0; c < n; ++c )
+    {
+        int bad = 0;
+        const int index = static_cast< int >( *s++ );
+        std::uint32_t entity[ 8 ];
+        std::memcpy( entity, s, 32 );
+        s += 8;
+        const unsigned* transform = s;
+        s += k_water_transform_words;
+        std::vector< std::uint8_t > before = b.wave_gone;
+        int wave = water_static_wake_create( b, entity, transform );
+        bad += wave != index;
+        bad += flow_check_state( b, wave, s, true, compared, 48 );
+        bad += check_gone( gone_since( before.size( ), before ), s );
+        std::memcpy( entity, s, 32 );
+        s += 8;
+        const unsigned* transform2 = s;
+        s += k_water_transform_words;
+        const bool flag = *s++ != 0;
+        const int index2 = static_cast< int >( *s++ );
+        before = b.wave_gone;
+        water_static_wake_refresh( b, wave, flag, entity, transform2 );
+        remade += flag ? 1 : 0;
+        bad += wave != index2;
+        bad += flow_check_state( b, wave, s, true, compared, 48 );
+        bad += check_gone( gone_since( before.size( ), before ), s );
+        if ( *s++ )
+        {
+            released.emplace_back( wave, s );
+            const unsigned* q = s + 1;
+            q += 1 + q[ 0 ];
+            q += 1 + 2 * q[ 0 ];
+            q += 1 + 2 * q[ 0 ];
+            q += 2;
+            q += 1 + 9 * q[ 0 ];
+            s = q;
+        }
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "static_wake: entity %u (wave %d): %d differences", c, index, bad );
+        }
+    }
+    for ( const auto& r : released )
+    {
+        ++releases;
+        const unsigned* q = r.second;
+        const unsigned e80 = *q++;
+        const std::vector< std::uint8_t > before = b.wave_gone;
+        water_entity_release( b, r.first );   // slot 7 0x5D5E90; the entity's +0x80 = 0 is the caller's
+        int bad = e80 != 0u;
+        bad += check_gone( gone_since( before.size( ), before ), q );
+        bad += flow_check_state( b, r.first, q, false, compared );
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "static_wake: the release of wave %d: %d differences", r.first, bad );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuStaticWakeWaveEntity (slot 6 0x5D5E80 = 0x5D6060: 0x5D5F20, 0x5287D0, 0x52C720; slot 2 0x5D5E30; slot 7 0x5D5E90) "
+                     "matches retail on Hydroelectric's built water: %u entities, %d remade, %d releases, %d values plus every wave tree",
+            n, remade, releases, compared );
+    else
+        LOG_ERROR( "static_wake FAILED %d", failed );
     return failed == 0;
 }
 
@@ -769,6 +869,7 @@ inline bool verify_watchers_all( )
     bool ok = true;
     ok = verify_water_types_game( ) && ok;
     ok = verify_flow_wave( ) && ok;
+    ok = verify_static_wake( ) && ok;
     ok = verify_wave_refresh( ) && ok;
     ok = verify_water_controls( ) && ok;
     ok = verify_water_surface_motion( ) && ok;
