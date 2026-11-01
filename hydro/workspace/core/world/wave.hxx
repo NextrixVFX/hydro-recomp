@@ -1083,9 +1083,22 @@ inline float wave_bits( std::uint32_t u )
 }
 
 // VuWaterWave's constructor @0x5a6390 (called with 0): +56 / +60 / +64 / +68
-// zero, +72 = 1.0. Its +12 .. +52 defaults are overwritten by every subclass.
+// zero, +72 = 1.0, +12 .. +52 its defaults (every subclass but the infinite
+// ocean overwrites them).
 inline void wave_base( wave_image_t& w )
 {
+    // the box (-FLT_MAX x3, +24 a stack word: UNKNOWN; FLT_MAX x3, +40 a stack
+    // word: UNKNOWN), centre 0 / 0, radius FLT_MAX - what VuWaterInfiniteOcean
+    // Wave keeps (it has no bounds of its own)
+    w.set( 12, 0xFF7FFFFFu );
+    w.set( 16, 0xFF7FFFFFu );
+    w.set( 20, 0xFF7FFFFFu );
+    w.set( 28, 0x7F7FFFFFu );
+    w.set( 32, 0x7F7FFFFFu );
+    w.set( 36, 0x7F7FFFFFu );
+    w.set( 44, 0 );
+    w.set( 48, 0 );
+    w.set( 52, 0x7F7FFFFFu );
     w.set( 56, 0 );
     w.set( 60, 0 );
     w.set( 64, 0 );

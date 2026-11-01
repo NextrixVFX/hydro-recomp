@@ -1757,9 +1757,144 @@ inline bool verify_water_map_unload( )
     return failed == 0;
 }
 
+// water_build_world (world/surface.hxx) on the FRONT END's water against retail (case water_build_menu): Screens/Background's
+// "Objects" with its water entities only - VuInfiniteOceanWaveEntity's slot 6 0x5D8970 (0x528A50, the ocean ctor 0x59CB10,
+// vtable 0x7508C0), two rectangular oceans, one surface. Compared as verify_water_build: every water entity's loaded
+// property and transform words, every surface's and wave's recreated words, the surface tree and the surface's wave tree
+// node for node, the wave list, each wave's entries, the pool.
+inline bool verify_water_build_menu( )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_wbm_document );
+    static const value_t document = c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_wbm_document_bytes ) ).parse( );
+    static const entity_registry_t registry = build_entity_registry( { } );
+    entity_world_t world;
+    world.m_registry = &registry;
+    world.m_ctor_for = entity_ctor_for;
+    world.m_template = []( const std::string& ) -> const value_t* { return nullptr; };
+    world.m_components_for = entity_components_constructed;
+    world.m_component_load = entity_load_component;
+    world.m_component_mark = entity_mark_component;
+    world.m_state_for = entity_state_for;
+    world.m_properties_load = entity_load_properties;
+    world.m_properties_mark = entity_mark_properties;
+    const std::unique_ptr< entity_t > tree = entity_load_project( member( document, "VuProject" ), "Data/Projects/Background.vuprj", world );
+    if ( !tree )
+    {
+        LOG_ERROR( "water_build_menu: the document did not load" );
+        return false;
+    }
+    water_built_t b{};
+    water_build_world( *tree, b, []( entity_t& e ) { return entity_transform( e ); } );
+    std::vector< entity_t* > order;
+    const auto post = [ & ]( const auto& self, entity_t& e ) -> void {
+        for ( auto& child : e.m_children )
+            self( self, *child );
+        if ( water_kind_of( e.m_type ) != water_kind_none )
+            order.push_back( &e );
+    };
+    post( post, *tree );
+    const unsigned* s = g_golden_wbm_words;
+    int bad = 0, compared = 0;
+    auto cmp = [ & ]( const char* what, int a, int k, std::uint32_t ours, std::uint32_t theirs ) {
+        ++compared;
+        if ( ours != theirs && ++bad <= 12 )
+            LOG_ERROR( "water_build_menu %s %d word %d: ours 0x%08X retail 0x%08X", what, a, k, ours, theirs );
+    };
+    const unsigned ne = *s++;
+    bad += order.size( ) != ne;
+    for ( unsigned i = 0; i < ne; ++i, s += 1 + 57 + 44 + 2 )
+    {
+        if ( i >= order.size( ) )
+            continue;
+        entity_t& e = *order[ i ];
+        const water_entity_state_t* st = static_cast< const water_entity_state_t* >( e.m_state.get( ) );
+        const transform_component_t* t = entity_transform( e );
+        if ( !st || !t || static_cast< unsigned >( water_kind_of( e.m_type ) ) != s[ 0 ] )
+        {
+            ++bad;
+            LOG_ERROR( "water_build_menu: entity %u is %s (kind %u retail)", i, e.m_type.c_str( ), s[ 0 ] );
+            continue;
+        }
+        for ( int k = 0; k < k_water_entity_words; ++k )
+            if ( st->value.known[ k ] )
+                cmp( "entity property", static_cast< int >( i ), 0x60 + 4 * k, st->value.word[ k ], s[ 1 + k ] );
+        std::uint32_t words[ k_water_transform_words ];
+        water_transform_words( *t, words );
+        for ( int k = 0; k < k_water_transform_words; ++k )
+            if ( k != 35 && k != 39 && k != 43 )
+                cmp( "entity transform", static_cast< int >( i ), 0x10 + 4 * k, words[ k ], s[ 58 + k ] );
+    }
+    const unsigned ns = *s++;
+    bad += b.surfaces.size( ) != ns;
+    for ( unsigned i = 0; i < ns; ++i, s += 65 )
+        for ( int k = 0; k < 65 && i < b.surfaces.size( ); ++k )
+            if ( b.surfaces[ i ].known[ k ] )
+                cmp( "surface", static_cast< int >( i ), 4 * k, b.surfaces[ i ].word[ k ], s[ k ] );
+    const unsigned nw = *s++;
+    bad += b.waves.size( ) != nw;
+    for ( unsigned i = 0; i < nw; ++i )
+    {
+        const unsigned len = *s++;
+        for ( unsigned k = 0; k < len && i < b.waves.size( ); ++k )
+            if ( k < 64 && b.waves[ i ].known[ k ] && k != 64 / 4 )
+                cmp( "wave", static_cast< int >( i ), static_cast< int >( 4 * k ), b.waves[ i ].word[ k ], s[ k ] );
+        s += len;
+    }
+    const unsigned nt = *s++;
+    bad += nt != 1 + b.hold.surfaces.size( );
+    for ( unsigned i = 0; i < nt; ++i )
+    {
+        const water_tree_t& t = i == 0 ? b.hold.surface_tree : b.hold.surfaces[ i - 1 ].waves;
+        std::vector< unsigned > w = water_tree_words( t );
+        const unsigned len = 6 + 8 * s[ 5 ];
+        for ( unsigned k = 0; k < len; ++k )
+            cmp( "tree", static_cast< int >( i ), static_cast< int >( k ), k < w.size( ) ? w[ k ] : 0xDEADBEEFu, s[ k ] );
+        bad += w.size( ) != len;
+        s += len;
+    }
+    const unsigned nl = *s++;
+    std::vector< int > listed;
+    int e = b.hold.list;
+    for ( unsigned k = 0; k < nl; ++k, s += 2 )
+    {
+        cmp( "list", static_cast< int >( k ), 0, static_cast< unsigned >( e ), s[ 0 ] );
+        if ( e < 0 )
+            break;
+        cmp( "list", static_cast< int >( k ), 1, static_cast< unsigned >( b.hold.pool[ e ].leaf ), s[ 1 ] );
+        e = b.hold.pool[ e ].next;
+    }
+    bad += e != -1;
+    for ( unsigned i = 0; i < nw; ++i )
+    {
+        const unsigned m = *s++;
+        int c = i < b.hold.waves.size( ) ? b.hold.waves[ i ].entries : -1;
+        for ( unsigned j = 0; j < m; ++j, s += 3 )
+        {
+            cmp( "entry", static_cast< int >( i ), static_cast< int >( j ), static_cast< unsigned >( c ), s[ 0 ] );
+            if ( c < 0 )
+                break;
+            cmp( "entry surface", static_cast< int >( i ), static_cast< int >( j ), static_cast< unsigned >( b.hold.pool[ c ].surface ), s[ 1 ] );
+            cmp( "entry leaf", static_cast< int >( i ), static_cast< int >( j ), static_cast< unsigned >( b.hold.pool[ c ].leaf ), s[ 2 ] );
+            c = b.hold.pool[ c ].next;
+        }
+        bad += c != -1;
+    }
+    cmp( "pool count", 0, 0, static_cast< unsigned >( b.hold.pool_count ), *s++ );
+    cmp( "pool free", 0, 0, static_cast< unsigned >( b.hold.pool_free ), *s++ );
+    bad += s != g_golden_wbm_words + g_golden_wbm_size || b.skipped != 0;
+    if ( bad == 0 )
+        LOG_SUCCESS( "water_build_world matches retail on the front end's water (Screens/Background: the infinite ocean 0x5D8970 / "
+                     "0x528A50, two rectangular oceans, a surface): %d values",
+            compared );
+    else
+        LOG_ERROR( "water_build_menu FAILED: %d differences", bad );
+    return bad == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_water_build_menu( ) && ok;
     ok = verify_water_map_unload( ) && ok;
     ok = verify_water_shutdown( ) && ok;
     ok = verify_point_entity( ) && ok;

@@ -143,11 +143,16 @@ enum water_kind_t
 {
     water_kind_surface, water_kind_ramp, water_kind_rectangular, water_kind_circular, water_kind_banked, water_kind_whirlpool,
     water_kind_directional, water_kind_bump, water_kind_none,
-    water_kind_point   // made at run time (VuWater_createPointWave 0x528E10), not by an entity's slot 6
+    water_kind_point,   // made at run time (VuWater_createPointWave 0x528E10), not by an entity's slot 6
+    // VuInfiniteOceanWaveEntity (vtable 0x753B34; the front end's Screens/Background authors one): the ocean ctor
+    // 0x5D8380's eight properties (+0x68 .. +0x84, k_water_ocean_props' names and defaults), slot 6 0x5D8970.
+    water_kind_infinite
 };
 
 inline water_kind_t water_kind_of( const std::string& cls )
 {
+    if ( cls == "VuInfiniteOceanWaveEntity" )
+        return water_kind_infinite;
     static const char* const names[] = { "VuWaterSurfaceEntity", "VuWaterRampEntity", "VuRectangularOceanWaveEntity",
         "VuCircularOceanWaveEntity", "VuBankedTurnWaveEntity", "VuWhirlpoolWaveEntity", "VuDirectionalWaveEntity", "VuBumpWaveEntity" };
     for ( int k = 0; k < water_kind_none; ++k )
@@ -200,6 +205,7 @@ inline void water_props_rows( water_kind_t kind, const water_prop_row_t* rows[ 3
     case water_kind_whirlpool: rows[ 0 ] = k_water_whirlpool_props; break;
     case water_kind_directional: rows[ 0 ] = k_water_directional_props; break;
     case water_kind_bump: rows[ 0 ] = k_water_bump_props; break;
+    case water_kind_infinite: rows[ 0 ] = k_water_ocean_props; break;
     default: break;
     }
 }
@@ -743,6 +749,7 @@ inline std::uint32_t water_wave_vtable( water_kind_t k )
     case water_kind_directional: return 0x750768u;
     case water_kind_bump: return 0x7509B4u;
     case water_kind_point: return 0x750978u;
+    case water_kind_infinite: return 0x7508C0u;
     default: return 0u;
     }
 }
@@ -797,9 +804,24 @@ inline void water_build_entity( water_built_t& b, water_kind_t kind, const water
     }
     case water_kind_rectangular:
     case water_kind_circular:
+    case water_kind_infinite:
     {
-        add_wave( from_image( kind == water_kind_rectangular ? rectangular_ocean_create( in.source( ) ) : circular_ocean_create( in.source( ) ) ),
-            kind );
+        if ( kind == water_kind_infinite )
+        {
+            // VuInfiniteOceanWaveEntity's slot 6 0x5D8970: the descriptor is the entity's +0x68 .. +0x87 (a zeroed
+            // 32-byte block, then the eight words); 0x528A50: new 0xD0, +8 / +0x38 / +0x3C / +0x40 / +0x90 .. +0xA0
+            // zeroed, the ocean ctor 0x59CB10 (ocean_construct), vtable 0x7508C0, +4 incremented, the allocators'
+            // common tail; the entity's +0x88 = the wave. No bounds of its own.
+            std::uint32_t d[ 8 ];
+            for ( int k = 0; k < 8; ++k )
+                d[ k ] = in.source( ).e( 0x68 + 4 * k );
+            wave_image_t image{};
+            ocean_construct( image, d );
+            add_wave( from_image( image ), kind );
+        }
+        else
+            add_wave( from_image( kind == water_kind_rectangular ? rectangular_ocean_create( in.source( ) ) : circular_ocean_create( in.source( ) ) ),
+                kind );
         // the ctor's 0x59CCB0 field half, at the ctor's time (+0x88, 0.0)
         water_built_t::ocean_t o{};
         o.wave = static_cast< int >( b.waves.size( ) ) - 1;
@@ -979,7 +1001,7 @@ inline void water_built_destroy( water_built_t& b, int wave )
         ++b.unread_dtors;   // a class this file does not build
         return;
     }
-    if ( kind == water_kind_rectangular || kind == water_kind_circular )
+    if ( kind == water_kind_rectangular || kind == water_kind_circular || kind == water_kind_infinite )
         if ( water_built_t::ocean_t* o = water_ocean_of( b, wave ) )
             o->field = decltype( o->field )( );
     water_built_remove( b, wave );
@@ -1365,6 +1387,7 @@ inline int water_built_tick( water_built_t& b, float dt, const water_built_hooks
         case water_kind_bump: alive = static_wave_tick( static_cast< int >( v.word[ 1 ] ) ); break;
         case water_kind_rectangular:
         case water_kind_circular:
+        case water_kind_infinite:   // its vtable 0x7508C0's slot 2 is 0x59CC00 too
         {
             ocean_clock_t c{};
             std::memcpy( &c.time, &v.word[ 0x88 / 4 ], 8 );
@@ -1448,8 +1471,7 @@ inline int water_built_tick( water_built_t& b, float dt, const water_built_hooks
 // make? Counted so the gap is visible.
 inline bool water_class_unbuilt( const std::string& cls )
 {
-    static const char* const others[] = { "VuInfiniteOceanWaveEntity", "VuDirectionalFlowWaveEntity", "VuStaticWakeWaveEntity",
-        "VuWakeWaveEntity" };
+    static const char* const others[] = { "VuDirectionalFlowWaveEntity", "VuStaticWakeWaveEntity", "VuWakeWaveEntity" };
     for ( const char* o : others )
         if ( cls == o )
             return true;
