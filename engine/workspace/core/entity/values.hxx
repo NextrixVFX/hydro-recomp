@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/assets/tree.hxx>
+#include <workspace/core/entity/json.hxx>
 #include <workspace/core/entity/property.hxx>
 
 #include <cstdint>
@@ -197,38 +198,7 @@ struct property_node_t
     int choice_count = 0;
 };
 
-inline void json_clear( value_t& j )   // 0x4FBB10
-{
-    j = value_t{ };
-}
-
-inline value_t& json_member( value_t& j, const std::string& key )   // 0x4FC090 (0x4FC6B0, then find-or-insert)
-{
-    if ( j.tag != 6 )
-    {
-        json_clear( j );
-        j.tag = 6;
-        j.kind = value_t::kind_t::object;
-    }
-    auto at = j.object.begin( );
-    while ( at != j.object.end( ) && at->first < key )
-        ++at;
-    if ( at != j.object.end( ) && at->first == key )
-        return at->second;
-    return j.object.insert( at, { key, value_t{ } } )->second;
-}
-
-inline void json_set_int( value_t& j, std::int32_t v )
-{
-    json_clear( j );
-    j.tag = 1, j.kind = value_t::kind_t::integer, j.integer = v;
-}
-
-inline void json_set_float( value_t& j, float v )
-{
-    json_clear( j );
-    j.tag = 2, j.kind = value_t::kind_t::real, j.real = v;
-}
+// json_clear 0x4FBB10 / json_member 0x4FC090 / json_set_int / json_set_float: entity/json.hxx.
 
 inline float property_bits_float( std::uint32_t w )
 {
