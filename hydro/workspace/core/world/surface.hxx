@@ -179,6 +179,12 @@ struct water_entity_state_t
     // (0x5DC7E0) into the node's +0x4C - the asset manager is a hook here
     // (water_build_maps).
     std::string water_map;
+    // The property's own default (its node +0x14, empty from the ctor): the
+    // template mark's slot 7 0x406A70 copies the value into it (game/types.hxx
+    // entity_mark_properties), and the load 0x406C20 first resets the value to
+    // it - so an instance of a template keeps the template's WaterMap unless it
+    // authors its own.
+    std::string water_map_default;
 };
 
 inline void water_props_rows( water_kind_t kind, const water_prop_row_t* rows[ 3 ] )
@@ -225,7 +231,7 @@ inline std::shared_ptr< water_entity_state_t > water_entity_state_for( const std
 inline void water_entity_load( water_entity_state_t& s, const value_t& properties )
 {
     if ( s.kind == water_kind_surface || s.kind == water_kind_ramp )
-        property_string( properties, "WaterMap", s.water_map, std::string( ) );
+        property_string( properties, "WaterMap", s.water_map, s.water_map_default );   // 0x406C20: reset to the default, then read
     const water_prop_row_t* rows[ 3 ];
     water_props_rows( s.kind, rows );
     for ( const water_prop_row_t* table : rows )

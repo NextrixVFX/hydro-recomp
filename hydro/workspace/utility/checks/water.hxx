@@ -2455,9 +2455,53 @@ inline bool verify_pfx_system_instance( )
     return failed == 0;
 }
 
+// The WaterMap through the race project's templates: HydroelectricRace loaded the way c_world loads it (checks/world.hxx
+// race_check_tree), its water built (water_build_world) - each surface's WaterMap must be the one retail's own load of
+// the level template gives (case water_point's names: VuAssetProperty<VuWaterMapAsset>'s mark 0x406A70 copies the
+// template's value into the default, its load 0x406C20 resets to that default), and every named map must load from the
+// pack (water_build_maps).
+inline bool verify_water_template_maps( )
+{
+    c_archive archive;
+    std::map< std::string, value_t > templates;
+    const std::unique_ptr< entity_t > tree = race_check_tree( archive, templates, "VuProjectAsset/Games/HydroelectricRace" );
+    if ( !tree )
+    {
+        LOG_ERROR( "water_template_maps: HydroelectricRace did not load (pack missing?)" );
+        return false;
+    }
+    water_built_t built{};
+    water_build_world( *tree, built, []( entity_t& e ) { return entity_transform( e ); } );
+    const int missing = water_build_maps(
+        built, []( void* user, const std::string& asset, std::vector< std::uint8_t >& blob ) { return static_cast< c_archive* >( user )->read( asset.c_str( ), blob ); },
+        &archive );
+    int bad = 0, named = 0;
+    if ( built.map_names.size( ) != g_golden_wpt_surfaces )
+        ++bad;
+    for ( std::size_t k = 0; k < built.map_names.size( ) && k < g_golden_wpt_surfaces; ++k )
+    {
+        named += built.map_names[ k ].empty( ) ? 0 : 1;
+        if ( built.map_names[ k ] != g_golden_wpt_names[ k ] )
+        {
+            if ( ++bad <= 4 )
+                LOG_ERROR( "water_template_maps: surface %d names \"%s\", retail's template \"%s\"", static_cast< int >( k ), built.map_names[ k ].c_str( ),
+                    g_golden_wpt_names[ k ] );
+        }
+    }
+    bad += missing;
+    if ( bad == 0 )
+        LOG_SUCCESS( "WaterMap through the race project's templates (0x406A70 mark / 0x406C20 load): %d of %d HydroelectricRace surfaces name "
+                     "retail's map, all %d load", named, static_cast< int >( built.map_names.size( ) ), named );
+    else
+        LOG_ERROR( "water_template_maps FAILED: %d differences (%d of %d surfaces named, %d not loaded)", bad, named,
+            static_cast< int >( built.map_names.size( ) ), missing );
+    return bad == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
+    ok = verify_water_template_maps( ) && ok;
     ok = verify_pfx_system_instance( ) && ok;
     ok = verify_pfx_classes( ) && ok;
     ok = verify_boat_hull( ) && ok;

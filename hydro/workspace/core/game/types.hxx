@@ -1464,6 +1464,7 @@ inline void entity_mark_properties( entity_t& entity )
     {
         water_entity_state_t* s = static_cast< water_entity_state_t* >( entity.m_state.get( ) );
         s->defaults = s->value;
+        s->water_map_default = s->water_map;   // VuAssetProperty<VuWaterMapAsset> slot 7 0x406A70
     }
 }
 
