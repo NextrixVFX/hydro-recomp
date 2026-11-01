@@ -2333,3 +2333,46 @@ inline bool verify_lens_emitters( )
         LOG_ERROR( "lens_emitters FAILED %d", bad );
     return bad == 0;
 }
+// entity/sort.hxx vc_sort_range against retail's std::sort instantiation _Sort 0x501810 (case entity_sort): 260 arrays
+// (n up to 600, ties, shaped inputs, small ideals for the heap path) - the final order index for index.
+inline bool verify_entity_sort( )
+{
+    logic_check_t c{ g_golden_esr_words };
+    const unsigned n = c.next( );
+    int bad = 0, unstable = 0;
+    unsigned elements = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned count = c.next( );
+        const std::int32_t ideal = static_cast< std::int32_t >( c.next( ) );
+        std::vector< std::int32_t > keys( count );
+        for ( auto& k : keys )
+            k = static_cast< std::int32_t >( c.next( ) );
+        std::vector< std::uint32_t > order( count );
+        for ( unsigned j = 0; j < count; ++j )
+            order[ j ] = j;
+        auto pred = [ &keys ]( std::uint32_t a, std::uint32_t b ) { return keys[ a ] < keys[ b ]; };
+        vc_sort_range( order.data( ), order.data( ) + count, ideal, pred );
+        bool ok = true, stable = true;
+        for ( unsigned j = 0; j < count; ++j )
+        {
+            const unsigned want = c.next( );
+            ok = order[ j ] == want && ok;
+            if ( j > 0 && keys[ want ] == keys[ order[ j - 1 ] ] && want < order[ j - 1 ] )
+                stable = false;
+        }
+        unstable += !stable;
+        elements += count;
+        if ( !ok )
+        {
+            if ( bad < 4 )
+                LOG_ERROR( "entity_sort vector %u (n %u, ideal %d) differs", v, count, ideal );
+            ++bad;
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "vc_sort matches retail's std::sort _Sort 0x501810 (0x501900 0x501AF0 0x501CC0 0x501DA0 0x501E00 0x501EB0): %u arrays, %u elements, %d with ties out of input order", n, elements, unstable );
+    else
+        LOG_ERROR( "entity_sort FAILED %d", bad );
+    return bad == 0;
+}
