@@ -37,14 +37,11 @@
 //   retail's 0x566230 does (fleet_random_seed on the platform clock; a --bench
 //   run's clock answers a fixed 0): "Race" builds its AI roster from it.
 // - 0x420A70 loads the collision / fluids meshes (the boat agent's meshes.hxx)
-//   and stops at the surface-type table (g_vudynamicsimpl +0x38 slot 2): not
-//   recreated - and with it everything that reads what it loads after: the
-//   transform-changed delegate (it reads the +0x290 centre), each boat's
-//   Decision 0x41EFF0 and Build 0x41F330 ticks, the race camera (the Camera
-//   section) and the Viewports tick. Each is counted and logged once.
-// - The skin pass 0x421490 (world/livery.hxx, 1:1) is 0x420A70's last step:
-//   with the sections load stopped it is not reached, and the hulls draw their
-//   models' own materials (c_world race_switch_on applies it once b.sections).
+//   and, with the surface-type table (surface.hxx, from SurfaceDB), runs to its
+//   end, the skin pass 0x421490 (world/livery.hxx) included. Still STOPPED, each
+//   counted and logged once: each boat's Decision 0x41EFF0 (recreated, not yet
+//   wired) and Build 0x41F330 (not recreated) ticks, and with them the race
+//   camera 0x409900 and the Viewports tick 0x4AB0A0.
 // - The signed-in player's name (the human entry's Driver Name) is a platform
 //   service: empty here.
 
@@ -235,8 +232,16 @@ inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb
 }
 
 // The Decision / Build delegates the boat's gameInitialize registers (0x41EFF0
-// / 0x41F330 behind the thunks 0x4077ED / 0x404AB2): with the sections load
-// stopped, both are UNKNOWN - counted.
+// / 0x41F330 behind the thunks 0x4077ED / 0x404AB2). With the sections load
+// complete (the surface-type table, boat batch 11) they are reached, and both
+// are still STOPPED here - counted, logged once each:
+// - Decision 0x41EFF0 IS recreated (core/boat state.hxx boat_decision_tick)
+//   but NOT WIRED: its boat_decision_t (hull / engine strings, the engine's
+//   +0xF8 records, the water floor) and its hooks (the driver tick vt+0x48,
+//   the animation tick 0x40FFF0, the camera 0x409900 = boat_camera_tick, the
+//   respawn, slots 17 / 18, the debris paths) are not composed yet.
+// - Build 0x41F330 is NOT RECREATED anywhere (it moves the draw matrix +0x49C
+//   and feeds the dynamics).
 struct race_session_tick_t
 {
     race_session_t* session;
@@ -246,15 +251,20 @@ struct race_session_tick_t
 inline void race_session_decision( void* user, float )
 {
     race_session_tick_t& t = *static_cast< race_session_tick_t* >( user );
-    if ( !t.boat->sections && t.session->stopped_decision++ == 0 )
-        LOG_WARNING( "race: VuBoatEntity Decision tick 0x41EFF0 STOPPED (UNKNOWN) - %s's sections load did not complete", t.boat->name.c_str( ) );
+    if ( t.session->stopped_decision++ == 0 )
+        LOG_WARNING( t.boat->sections ? "race: VuBoatEntity Decision tick 0x41EFF0 STOPPED - recreated (boat_decision_tick) but not wired "
+                                        "for %s yet"
+                                      : "race: VuBoatEntity Decision tick 0x41EFF0 STOPPED (UNKNOWN) - %s's sections load did not complete",
+                     t.boat->name.c_str( ) );
 }
 
 inline void race_session_build( void* user, float )
 {
     race_session_tick_t& t = *static_cast< race_session_tick_t* >( user );
-    if ( !t.boat->sections && t.session->stopped_build++ == 0 )
-        LOG_WARNING( "race: VuBoatEntity Build tick 0x41F330 STOPPED (UNKNOWN) - %s's sections load did not complete", t.boat->name.c_str( ) );
+    if ( t.session->stopped_build++ == 0 )
+        LOG_WARNING( t.boat->sections ? "race: VuBoatEntity Build tick 0x41F330 STOPPED (UNKNOWN) - not recreated (%s)"
+                                      : "race: VuBoatEntity Build tick 0x41F330 STOPPED (UNKNOWN) - %s's sections load did not complete",
+                     t.boat->name.c_str( ) );
 }
 
 // The AI manager's tick 0x403900 (fleet_tick), in Decision ahead of the boats
@@ -265,22 +275,18 @@ inline void race_session_fleet( void* user, float dt )
     fleet_tick( s.fleet, *s.track, s.pilots, s.fleet_boats, *s.random, dt );
 }
 
-// The Viewports phase's boat manager tick 0x4AB0A0 (boat_manager_viewport_tick)
-// reads the viewport boat's camera, which boat_camera_tick 0x409900 computes
-// from the Camera section: UNKNOWN while the sections load stops - counted.
+// The Viewports phase's boat manager tick 0x4AB0A0 (boat_manager_viewport_tick,
+// core/boat manager.hxx) reads the viewport boat's camera image, which only
+// the Decision tick's camera step 0x409900 computes: STOPPED with the Decision
+// tick (counted, logged once) - the view stays on dev_vantage's orbit / freecam.
 inline void race_session_viewports( void* user, float )
 {
     race_session_t& s = *static_cast< race_session_t* >( user );
-    for ( const auto& b : s.boats )
-        if ( !b->sections )
-        {
-            if ( s.stopped_viewports++ == 0 )
-                LOG_WARNING( "race: the Viewports tick 0x4AB0A0 and the race camera 0x409900 STOPPED (UNKNOWN) - %s's Camera section is "
-                             "read after the stop", b->name.c_str( ) );
-            return;
-        }
+    if ( s.stopped_viewports++ == 0 && !s.boats.empty( ) )
+        LOG_WARNING( "race: the Viewports tick 0x4AB0A0 and the race camera 0x409900 STOPPED - %s", s.boats[ 0 ]->sections
+                         ? "the Decision tick that runs the camera is not wired yet"
+                         : "the Camera section is read after the sections load's stop" );
 }
-
 // A boat property's text into the boat image's inline std::string (+0x74 /
 // +0x8C / +0xA4 - VuEntity::load's targets): false for a text retail would
 // keep on the heap (16 characters or more - not modelled by the image).
