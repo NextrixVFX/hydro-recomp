@@ -247,6 +247,10 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
             // c_ocean::emit: the wave goes into m_water's hold.
             const point_wave_source_t& source = ripple->second;
             const int wave = water_point_wave_emit( m_water, source.position, source.properties );
+            // The wave's +0x8C callback is this entity's VuPointWaveCallbackIF (its OnExpired 0x5D4B60): kept so
+            // the tick's expire hook can find the entity whose "OnExpired" plug it fires.
+            if ( wave >= 0 )
+                m_wave_owner[ wave ] = entity;
             ++m_fired;
             LOG_SUCCESS( "event: %s emitted point wave %d into the water", entity.c_str( ), wave );
             return retval_t{};

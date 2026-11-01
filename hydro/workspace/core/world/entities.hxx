@@ -485,6 +485,8 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     // which caller does is unread. Point waves are made later by their tick.
     // An entity it cannot build is counted, never stood in for.
     m_water = water_built_t{ };
+    m_wave_owner.clear( );
+    m_water_missing = 0;
     water_build_world( *m_tree, m_water, []( entity_t& e ) { return entity_transform( e ); } );
     LOG_INFO( "water: %u surfaces, %u waves built from the tree; %d water entities not built", static_cast< unsigned >( m_water.surfaces.size( ) ),
         static_cast< unsigned >( m_water.waves.size( ) ), m_water.skipped );
