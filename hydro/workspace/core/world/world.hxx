@@ -688,9 +688,99 @@ private:
     // project authors neither. So this orbits the bounding box of whatever the
     // entity walk actually placed. It is a measuring instrument, not a
     // recreation, and no part of it may be taken as retail behaviour.
+    // SCAFFOLD - ours. A free camera for looking around a loaded level: F
+    // toggles it (or start in it with --freecam); WASD moves along the view,
+    // Q / E down / up, Shift is 4x; hold the right mouse button and move the
+    // mouse to look. Input counts only while this process owns the foreground
+    // window, and never in a --bench run (the stills must stay reproducible).
+    // World up is +z, as the orbit below assumes.
+    bool dev_freecam( float dt )
+    {
+#if defined( _WIN32 )
+        if ( c_engine::option( "bench" ) != nullptr )
+            return false;
+        DWORD owner = 0;
+        const HWND foreground = GetForegroundWindow( );
+        if ( foreground != nullptr )
+            GetWindowThreadProcessId( foreground, &owner );
+        const bool focused = owner == GetCurrentProcessId( );
+        const auto down = [ focused ]( int key ) { return focused && ( GetAsyncKeyState( key ) & 0x8000 ) != 0; };
+
+        // Entering the free camera starts from wherever the orbit is looking.
+        const auto enter = [ this ]( )
+        {
+            const float dx = m_target[ 0 ] - m_eye[ 0 ];
+            const float dy = m_target[ 1 ] - m_eye[ 1 ];
+            const float dz = m_target[ 2 ] - m_eye[ 2 ];
+            m_yaw = std::atan2( dy, dx );
+            m_pitch = std::atan2( dz, std::sqrt( dx * dx + dy * dy ) );
+            LOG_INFO( "dev camera: FREECAM (WASD / Q E / Shift, right mouse to look, F back to the orbit)" );
+        };
+        const bool toggle = down( 'F' );
+        if ( !m_freecam_init )
+        {
+            m_freecam_init = true;
+            m_freecam = c_engine::option( "freecam" ) != nullptr;
+            if ( m_freecam )
+                enter( );
+        }
+        if ( toggle && !m_freecam_toggle_held )
+        {
+            m_freecam = !m_freecam;
+            if ( m_freecam )
+                enter( );
+            else
+                LOG_INFO( "dev camera: orbit" );
+        }
+        m_freecam_toggle_held = toggle;
+        if ( !m_freecam )
+            return false;
+
+        POINT cursor{};
+        GetCursorPos( &cursor );
+        if ( down( VK_RBUTTON ) && m_freecam_looking )
+        {
+            m_yaw -= static_cast< float >( cursor.x - m_freecam_cursor.x ) * 0.004f;
+            m_pitch -= static_cast< float >( cursor.y - m_freecam_cursor.y ) * 0.004f;
+            if ( m_pitch > 1.55f )
+                m_pitch = 1.55f;
+            if ( m_pitch < -1.55f )
+                m_pitch = -1.55f;
+        }
+        m_freecam_looking = down( VK_RBUTTON );
+        m_freecam_cursor = cursor;
+
+        const float forward[ 3 ] = { std::cos( m_pitch ) * std::cos( m_yaw ), std::cos( m_pitch ) * std::sin( m_yaw ), std::sin( m_pitch ) };
+        // forward x up (0, 0, 1), flattened: the view's right on the ground plane.
+        float right[ 3 ] = { forward[ 1 ], -forward[ 0 ], 0.0f };
+        const float length = std::sqrt( right[ 0 ] * right[ 0 ] + right[ 1 ] * right[ 1 ] );
+        if ( length > 0.0f )
+        {
+            right[ 0 ] /= length;
+            right[ 1 ] /= length;
+        }
+        const float speed = ( down( VK_SHIFT ) ? 160.0f : 40.0f ) * dt;
+        const float along = ( down( 'W' ) ? 1.0f : 0.0f ) - ( down( 'S' ) ? 1.0f : 0.0f );
+        const float side = ( down( 'D' ) ? 1.0f : 0.0f ) - ( down( 'A' ) ? 1.0f : 0.0f );
+        const float rise = ( down( 'E' ) ? 1.0f : 0.0f ) - ( down( 'Q' ) ? 1.0f : 0.0f );
+        for ( int axis = 0; axis < 3; ++axis )
+            m_eye[ axis ] += ( forward[ axis ] * along + right[ axis ] * side ) * speed;
+        m_eye[ 2 ] += rise * speed;
+        for ( int axis = 0; axis < 3; ++axis )
+            m_target[ axis ] = m_eye[ axis ] + forward[ axis ];
+        m_far = m_authored_far;
+        return true;
+#else
+        ( void )dt;
+        return false;
+#endif
+    }
+
     void dev_vantage( float dt )
     {
         if ( m_authored_camera )
+            return;
+        if ( m_vantage_ready && dev_freecam( dt ) )
             return;
         if ( !m_vantage_ready )
         {
@@ -840,6 +930,16 @@ private:
     float m_authored_far = 500.0f;
     float m_centre[ 3 ]{};
     float m_radius = 64.0f;
+    // The free camera's state (dev_freecam - scaffold).
+    bool m_freecam = false;
+    bool m_freecam_init = false;
+    bool m_freecam_toggle_held = false;
+    bool m_freecam_looking = false;
+    float m_yaw = 0.0f;
+    float m_pitch = 0.0f;
+#if defined( _WIN32 )
+    POINT m_freecam_cursor{};
+#endif
     float m_orbit = 0.0f;
 
     c_archive m_archive{};
