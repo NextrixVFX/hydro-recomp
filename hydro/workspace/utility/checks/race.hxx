@@ -1701,6 +1701,168 @@ inline bool verify_trigger_apply( )
     return false;
 }
 
+// The PowerUpDB reads against retail (oracle case powerup_db), on the real VuDBAsset/PowerUpDB and three synthetic
+// documents parsed here by c_reader: 0x43C1F0 (powerup_load_db with its tail), 0x43DA90 (powerup_boost_load_energy),
+// 0x43D960 (powerup_boost_enable) and 0x43B9D0 (powerup_disabled_in_games + powerup_game_initialize). Per run: the
+// three strings, the seven floats' bits, +0x128 / +0x129 / +0x140, the body, +0x130 / +0x134, the call log; the
+// layout bounds' lanes 0-2 / 4-6 (3 and 7 are stale stack in retail); the map after gameInitialize.
+inline bool verify_powerup_db( )
+{
+    const unsigned* g = g_golden_powerup_db_words;
+    auto text = [ &g ]( ) {
+        const unsigned n = *g++;
+        std::string s( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        return s;
+    };
+    auto bits = []( float x ) { std::uint32_t u; std::memcpy( &u, &x, 4 ); return u; };
+    auto real = []( unsigned u ) { float x; std::memcpy( &x, &u, 4 ); return x; };
+    std::vector< value_t > docs( *g++ );
+    for ( value_t& d : docs )
+    {
+        const unsigned n = *g++;
+        const std::uint8_t* raw = reinterpret_cast< const std::uint8_t* >( g );
+        d = c_reader( std::vector< std::uint8_t >( raw, raw + n ) ).parse( );
+        g += ( n + 3 ) / 4;
+    }
+    const unsigned nv = *g++;
+    static const value_t null{};
+    int failed = 0, runs = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned doc = *g++;
+        const std::string type = text( );
+        const bool asset = *g++ != 0;
+        const unsigned flags = *g++, enabled = *g++;
+        unsigned floats[ 7 ];
+        for ( unsigned& f : floats )
+            f = *g++;
+        const bool has_body = g[ 0 ] != 0, has_shape = g[ 1 ] != 0;
+        g += 2;
+        const unsigned b128 = *g++, b129 = *g++, b138 = *g++, b140 = *g++;
+        std::string pre[ 3 ];
+        for ( std::string& s : pre )
+            s = text( );
+        const std::int32_t humans = static_cast< std::int32_t >( *g++ );
+        std::vector< std::uint32_t > ids( *g++ );
+        for ( std::uint32_t& id : ids )
+            id = respawn_fnv( text( ).c_str( ) );
+        const std::string mode = text( );
+        const value_t& root = doc < docs.size( ) ? docs[ doc ] : null;
+        const value_t& entry = asset ? powerup_db_entry( root, type ) : null;
+        const value_t& mp = asset ? powerup_db_entry( root, "MPBoost" ) : null;
+        for ( int run = 0; run < 4; ++run, ++runs )
+        {
+            std::string want_s[ 3 ];
+            for ( std::string& s : want_s )
+                s = text( );
+            unsigned want[ 13 ];
+            for ( unsigned& w : want )
+                w = *g++;
+            std::vector< std::vector< unsigned > > glog( *g++ );
+            for ( auto& e : glog )
+            {
+                e.assign( g + 1, g + 1 + *g );
+                g += 1 + e.size( );
+            }
+            unsigned want_bounds[ 8 ] = { };
+            std::vector< unsigned > want_map;
+            if ( run == 0 )
+                for ( unsigned& b : want_bounds )
+                    b = *g++;
+            if ( run == 3 )
+            {
+                want_map.assign( g + 1, g + 1 + 3 * *g );
+                g += 1 + want_map.size( );
+            }
+            powerup_t p;
+            p.static_pfx = pre[ 0 ];
+            p.apply_pfx = pre[ 1 ];
+            p.audio_event = pre[ 2 ];
+            float* fields[ 6 ] = { &p.radius, &p.recover_time, &p.spring, &p.damping, &p.scale_initial, &p.scale_initial_velocity };
+            for ( int k = 0; k < 6; ++k )
+                *fields[ k ] = real( floats[ k ] );
+            float energy = real( floats[ 6 ] );
+            p.initially_enabled = static_cast< std::uint8_t >( enabled );
+            p.in_world = static_cast< std::uint8_t >( b128 );
+            p.active = static_cast< std::uint8_t >( b129 );
+            p.scale = p.scale_velocity = real( 0xCDCDCDCDu );
+            std::uint8_t multiplayer = static_cast< std::uint8_t >( b140 );
+            bool body = has_body;
+            float bounds[ 8 ];
+            for ( float& b : bounds )
+                b = real( 0xCDCDCDCDu );
+            std::vector< std::vector< unsigned > > log;
+            if ( run == 0 )
+            {
+                powerup_db_hooks_t h;
+                h.remove_from_world = [ & ]( ) { log.push_back( { 4u } ); };
+                h.destroy_body = [ & ]( ) {
+                    if ( has_shape )
+                        log.push_back( { 6u, 1u } );
+                    log.push_back( { 7u, 1u } );
+                    body = false;
+                };
+                h.create_body = [ & ]( ) { log.push_back( { 1u } ); };
+                h.add_to_world = [ & ]( ) { log.push_back( { 3u } ); };
+                h.load_extra = [ & ]( ) { log.push_back( { 5u } ); };
+                powerup_load_db( p, entry, bounds, flags, has_body, h );
+            }
+            else if ( run == 1 )
+                powerup_boost_load_energy( energy, entry );
+            else if ( run == 2 )
+            {
+                powerup_world_hooks_t h;
+                h.create_pfx = [ & ]( const std::string& name, std::uint8_t, float ) {
+                    log.push_back( { 8u, respawn_fnv( name.c_str( ) ) } );
+                    return 0u;
+                };
+                h.add_body = [ & ]( ) { log.push_back( { 9u, 1u } ); };
+                powerup_boost_enable( p, static_cast< std::uint8_t >( b138 ), multiplayer, humans, mp, h );
+            }
+            else
+            {
+                powerup_init_hooks_t h;
+                h.create_body = [ & ]( ) { log.push_back( { 1u } ); };
+                h.register_tick = [ & ]( ) { log.push_back( { 2u, 1u } ); };
+                h.enable = [ & ]( ) { log.push_back( { 3u } ); };
+                powerup_game_initialize( p, mode, powerup_disabled_in_games( entry ), ids, h );
+            }
+            const unsigned mine[ 13 ] = { bits( p.radius ), bits( p.recover_time ), bits( p.spring ), bits( p.damping ), bits( p.scale_initial ),
+                bits( p.scale_initial_velocity ), bits( energy ), p.in_world, p.active, multiplayer, body ? 1u : 0u, bits( p.scale_velocity ),
+                bits( p.scale ) };
+            bool same = log == glog && p.static_pfx == want_s[ 0 ] && p.apply_pfx == want_s[ 1 ] && p.audio_event == want_s[ 2 ];
+            for ( int k = 0; k < 13; ++k )
+                same = same && mine[ k ] == want[ k ];
+            if ( run == 0 )
+                for ( int k : { 0, 1, 2, 4, 5, 6 } )
+                    same = same && bits( bounds[ k ] ) == want_bounds[ k ];
+            if ( run == 3 )
+            {
+                std::vector< unsigned > map;
+                for ( const auto& e : p.last_pickup )
+                {
+                    std::uint32_t w[ 2 ];
+                    std::memcpy( w, &e.second, 8 );
+                    map.insert( map.end( ), { e.first, w[ 0 ], w[ 1 ] } );
+                }
+                same = same && map == want_map;
+            }
+            if ( !same && ++failed <= 8 )
+                LOG_ERROR( "powerup_db vector %u (document %u, \"%s\") run %d: radius 0x%X (retail 0x%X), +0x129 %u (%u), %zu calls (%zu)", v,
+                           doc, type.c_str( ), run, mine[ 0 ], want[ 0 ], mine[ 8 ], want[ 8 ], log.size( ), glog.size( ) );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "The PowerUpDB reads 0x43C1F0 / 0x43DA90 / 0x43D960 / 0x43B9D0 match retail on the real PowerUpDB and 3 synthetic "
+                     "documents: %u vectors, %d runs", nv, runs );
+        return true;
+    }
+    LOG_ERROR( "powerup_db FAILED %d of %d runs", failed, runs );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -1722,5 +1884,6 @@ inline bool verify_race_all( )
     ok = verify_powerup_contact( ) && ok;
     ok = verify_powerup_world( ) && ok;
     ok = verify_trigger_apply( ) && ok;
+    ok = verify_powerup_db( ) && ok;
     return ok;
 }

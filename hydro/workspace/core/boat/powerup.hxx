@@ -388,11 +388,108 @@ inline void powerup_load_db( powerup_t& p, const value_t& entry )
     powerup_db_number( member( entry, "ScaleInitialVelocity" ), p.scale_initial_velocity );
 }
 
+// 0x43C1F0's tail, after the nine fields. What it calls that is not this
+// code's: the power-up's own vt+0x30 (slot 12) / vt+0x34 (slot 13) / vt+0x38
+// (slot 14), the body's destruction (+0x114: its +0xCC shape's vt+0(1) when
+// set, the body's vt+4(1), +0x114 = 0 - the dynamics') and the body's build
+// 0x43C700 (a btSphereShape of Radius: the dynamics').
+struct powerup_db_hooks_t
+{
+    std::function< void( ) > remove_from_world;   // vt+0x30
+    std::function< void( ) > destroy_body;        // only when +0x114 is set
+    std::function< void( ) > create_body;         // 0x43C700
+    std::function< void( ) > add_to_world;        // vt+0x34
+    std::function< void( ) > load_extra;          // vt+0x38 (the boost's 0x43DA90)
+};
+
+// The whole of 0x43C1F0 (the PowerUpDB entry already resolved: entry =
+// powerup_db_entry(root, Type), or the null container when the Type
+// property has no asset). bounds = the 3d layout component +0x64's +0x18..
+// +0x37 (8 floats): lanes 0-2 = -Radius, 4-6 = +Radius (movss / xorps of
+// the sign mask 0x6F7CD0, the pairs stored by movq); lanes 3 and 7 receive
+// two stack dwords retail never wrote (UNKNOWN: left untouched here). Then,
+// with the entity's +0x14 bit 2 (in a game): +0x128 read, slot 12, the body
+// destroyed when there is one, rebuilt (0x43C700), slot 13 when +0x128 was
+// set; finally slot 14 always.
+inline void powerup_load_db( powerup_t& p, const value_t& entry, float* bounds, std::uint32_t entity_flags, bool has_body,
+    const powerup_db_hooks_t& hooks )
+{
+    powerup_load_db( p, entry );
+    const float r = p.radius;
+    float n;
+    std::uint32_t u;
+    std::memcpy( &u, &r, 4 );
+    u ^= 0x80000000u;
+    std::memcpy( &n, &u, 4 );
+    bounds[ 0 ] = n;
+    bounds[ 1 ] = n;
+    bounds[ 2 ] = n;
+    bounds[ 4 ] = r;
+    bounds[ 5 ] = r;
+    bounds[ 6 ] = r;
+    if ( entity_flags & 4u )
+    {
+        const bool was_in_world = p.in_world != 0;
+        if ( hooks.remove_from_world )
+            hooks.remove_from_world( );
+        if ( has_body && hooks.destroy_body )
+            hooks.destroy_body( );
+        if ( hooks.create_body )
+            hooks.create_body( );
+        if ( was_in_world && hooks.add_to_world )
+            hooks.add_to_world( );
+    }
+    if ( hooks.load_extra )
+        hooks.load_extra( );
+}
+
 // VuPowerUpBoostEntity slot 14 0x43DA90: the same entry's "BoostEnergy" into
 // +0x13C (1 / 2 / 7 as above).
 inline void powerup_boost_load_energy( float& energy, const value_t& entry )
 {
     powerup_db_number( member( entry, "BoostEnergy" ), energy );
+}
+
+// The "DisabledInGames" list as gameInitialize 0x43B9D0 walks it: the
+// entry's member (0x4FBDF0), its size 0x4FBC40 (the element count of an
+// array - tag 5 - else 0), each element's text when it is a string (tag 4),
+// else the function-local static empty string 0x819950 (built on first use,
+// its guard 0x81994C bit 0). Feed the result to powerup_game_initialize.
+inline std::vector< std::string > powerup_disabled_in_games( const value_t& entry )
+{
+    std::vector< std::string > out;
+    const value_t& list = member( entry, "DisabledInGames" );
+    if ( list.tag != 5 )
+        return out;
+    for ( const value_t& e : list.list )
+        out.push_back( e.tag == 4 ? e.text : std::string( ) );
+    return out;
+}
+
+// VuPowerUpBoostEntity slot 13 0x43D960 (the "Enable" plug): when
+// Randomize for Multiplayer (+0x138) and the boat manager's human count
+// (+0x28, signed: jle 1) > 1, the PowerUpDB's "MPBoost" entry (root
+// ["VuDBAsset"]["MPBoost"] through 0x4FBDF0 twice; the null container
+// without an asset) overrides StaticPfx / ApplyPfx / AudioEvent where they
+// are text, and +0x140 = 1. Then the base slot 13 inlined (0x43BD40's body:
+// powerup_add_to_world).
+inline void powerup_boost_enable( powerup_t& p, std::uint8_t randomize, std::uint8_t& multiplayer, std::int32_t humans,
+    const value_t& mp_entry, const powerup_world_hooks_t& hooks )
+{
+    if ( randomize && humans > 1 )
+    {
+        const value_t& static_pfx = member( mp_entry, "StaticPfx" );
+        if ( static_pfx.tag == 4 )
+            p.static_pfx = static_pfx.text;
+        const value_t& apply_pfx = member( mp_entry, "ApplyPfx" );
+        if ( apply_pfx.tag == 4 )
+            p.apply_pfx = apply_pfx.text;
+        const value_t& audio = member( mp_entry, "AudioEvent" );
+        if ( audio.tag == 4 )
+            p.audio_event = audio.text;
+        multiplayer = 1;
+    }
+    powerup_add_to_world( p, hooks );
 }
 // ---- VuPowerUpTriggerEntity (ctor 0x43E160, vtable 0x73AFE4) --------------
 //
