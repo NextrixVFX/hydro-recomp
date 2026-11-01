@@ -222,6 +222,9 @@
     <ClInclude Include="workspace\core\world\pfx.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\world\pfxclass.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\world\query.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
