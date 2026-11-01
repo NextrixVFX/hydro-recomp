@@ -134,6 +134,9 @@
     <ClInclude Include="workspace\core\assets\archive.hxx">
       <Filter>workspace\core\assets</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\assets\factory.hxx">
+      <Filter>workspace\core\assets</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\assets\reader.hxx">
       <Filter>workspace\core\assets</Filter>
     </ClInclude>

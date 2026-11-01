@@ -133,6 +133,7 @@ copy /Y "$(ProjectDir)impl\engine.hxx" "$(ProjectDir)..\hydro\impl\engine\engine
     <ClInclude Include="workspace\utility\trace.hxx" />
     <ClInclude Include="workspace\utility\verify.hxx" />
     <ClInclude Include="workspace\core\assets\archive.hxx" />
+    <ClInclude Include="workspace\core\assets\factory.hxx" />
     <ClInclude Include="workspace\core\assets\reader.hxx" />
     <ClInclude Include="workspace\core\assets\rtti.hxx" />
     <ClInclude Include="workspace\core\assets\tree.hxx" />
