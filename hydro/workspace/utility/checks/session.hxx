@@ -657,6 +657,299 @@ inline bool verify_race_results( )
     return failed == 0;
 }
 
+// timetrial_write_results (world/modes.hxx) against retail's VuTimeTrialGame slot 12 0x48F560 run whole (oracle case
+// timetrial_results): the once flag, IsChampionship / the circuit / the laps / the track, the racer (+0x18 [0]) and the
+// human (+0x24 [0]: the same boat or another), their drivers (the five vtables through boat_driver_of and two fakes),
+// TrackDB / BoatDB / the progress manager's round (VUJB read by c_reader), the pre-filled root, the VuRandom state.
+// Compared per vector: the whole root (canonical), +0x738, the 34 VuRandom words after, the StringDB ids asked for in
+// order, the progress-manager calls and the qsort's element count - one failure per differing vector.
+inline bool verify_timetrial_results( )
+{
+    int failed = 0;
+    const unsigned* w = g_golden_ttr_words;
+    std::size_t s = 0;
+    const auto next = [ & ] { return *w++; };
+    const auto text = [ & ] { return std::string( g_golden_ttr_text[ s++ ] ); };
+    const auto doc = [ & ] {
+        const std::string hex = text( );
+        std::vector< std::uint8_t > bytes;
+        for ( std::size_t k = 0; k + 1 < hex.size( ); k += 2 )
+            bytes.push_back( static_cast< std::uint8_t >( std::stoul( hex.substr( k, 2 ), nullptr, 16 ) ) );
+        return c_reader( bytes ).parse( );
+    };
+    static const std::uint32_t k_vt[ 5 ] = { 0x737B5Cu, 0x737F44u, 0x737CDCu, 0x737C4Cu, 0x737DDCu };
+    const unsigned nv = next( );
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        std::uint8_t once = static_cast< std::uint8_t >( next( ) );
+        timetrial_results_in_t in;
+        in.championship = static_cast< std::uint8_t >( next( ) );
+        in.circuit = static_cast< std::uint8_t >( next( ) );
+        in.laps = static_cast< std::int32_t >( next( ) );
+        const bool two = next( ) != 0;
+        in.track = text( );
+        std::vector< std::uint8_t > images[ 2 ] = { std::vector< std::uint8_t >( 0x520, 0 ), std::vector< std::uint8_t >( 0x520, 0 ) };
+        race_results_entry_t entries[ 2 ];
+        for ( int b = 0; b < 2; ++b )
+        {
+            std::uint8_t* img = images[ b ].data( );
+            img[ 0x32F ] = static_cast< std::uint8_t >( next( ) );
+            const unsigned time = next( ), best = next( );
+            std::memcpy( img + 0x4B4, &time, 4 );
+            std::memcpy( img + 0x4B8, &best, 4 );
+            rules_put_i32( img, 0x4CC, static_cast< std::int32_t >( next( ) ) );
+            rules_put_i32( img, 0x4D4, static_cast< std::int32_t >( next( ) ) );
+            const unsigned kind = next( );
+            race_results_entry_t& e = entries[ b ];
+            e.boat_class = text( );
+            e.boat_name = text( );
+            e.driver_name = text( );
+            if ( kind < 5 )
+            {
+                const boat_driver_t d = boat_driver_of( k_vt[ kind ] );
+                e.human = d.slot[ 0 ], e.local = d.slot[ 2 ];
+            }
+            else
+                e.human = kind == 5, e.local = false;
+        }
+        in.racer = { images[ 0 ].data( ), entries[ 0 ] };
+        in.human = two ? timetrial_results_boat_t{ images[ 1 ].data( ), entries[ 1 ] } : in.racer;
+        const value_t tdb = doc( ), bdb = doc( ), cur = doc( );
+        in.track_db = &tdb;
+        in.boat_db = &bdb;
+        int pm = 0;
+        in.current = [ & ]( ) { ++pm; return &cur; };
+        std::vector< std::string > ids;
+        in.string_db = [ & ]( const char* id ) {
+            ids.push_back( id );
+            return "TN" + std::string( id ) + "#" + std::to_string( v );
+        };
+        fleet_random_t rnd;
+        {
+            unsigned words[ 34 ];
+            for ( unsigned& x : words )
+                x = next( );
+            std::memcpy( &rnd, words, sizeof( words ) );
+        }
+        in.random = &rnd;
+        value_t root;
+        const std::string pre = text( );
+        if ( pre == "string" )
+            ui_json_set_string( ui_json_child( root, "GameResults" ), "junk text" );
+        else if ( pre == "table_int" )
+            race_results_set( ui_json_child( ui_json_child( root, "GameResults" ), "Table" ), 1, 77 );
+        else if ( pre == "stale" )
+        {
+            race_results_set( ui_json_child( ui_json_child( root, "GameResults" ), "Old" ), 1, 5 );
+            race_results_set( ui_json_child( root, "Old" ), 1, 6 );
+        }
+        const bool known = timetrial_write_results( root, once, in );
+        const std::string want_root = text( );
+        const unsigned want_once = next( );
+        bool same = known && race_results_canonical( root ) == want_root && once == want_once;
+        unsigned out[ 34 ];
+        std::memcpy( out, &rnd, sizeof( out ) );
+        for ( unsigned x : out )
+            same = next( ) == x && same;
+        const unsigned nid = next( );
+        same = ids.size( ) == nid && same;
+        for ( unsigned k = 0; k < nid; ++k )
+            same = text( ) == ( k < ids.size( ) ? ids[ k ] : std::string( ) ) && same;
+        same = static_cast< unsigned >( pm ) == next( ) && same;
+        const unsigned nq = next( );
+        for ( unsigned k = 0; k < nq; ++k )
+            next( );   // the qsort's element count: the rows the tree holds
+        if ( !same && ++failed <= 4 )
+            LOG_ERROR( "timetrial results vector %u: ours %.400s\n retail %.400s", v, race_results_canonical( root ).c_str( ), want_root.c_str( ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "timetrial_write_results matches VuTimeTrialGame slot 12 0x48F560 on %u vectors (the whole root, +0x738, VuRandom, the "
+                     "StringDB ids, the round calls)", nv );
+    else
+        LOG_ERROR( "the time trial results writer FAILED on %d of %u vectors", failed, nv );
+    return failed == 0;
+}
+
+// ui_race_checkpoint (core/ui split.hxx - the UI agent's VuRaceGame slot 15 0x48B180) against retail's VuTimeTrialGame
+// slot 15 0x490D70 run whole (oracle case timetrial_split): the same code byte for byte but for the split vector's place
+// (+0x720, VuRaceGame's +0x72C) - compared: +0x6D8 / +0x6DC, every condition's value / pulse (and the record before the
+// vector: the missing-condition write), the split vector after. One failure per differing vector.
+inline bool verify_timetrial_split( )
+{
+    int failed = 0;
+    const unsigned* w = g_golden_tts_words;
+    std::size_t s = 0;
+    const auto next = [ & ] { return *w++; };
+    const unsigned sentinel = next( );
+    std::vector< std::vector< std::string > > sets( next( ) );
+    for ( auto& set : sets )
+        set.resize( next( ) );
+    for ( auto& set : sets )
+        for ( std::string& n : set )
+            n = g_golden_tts_text[ s++ ];
+    std::vector< value_t > docs( next( ) );
+    for ( value_t& d : docs )
+    {
+        d.tag = next( );
+        const unsigned n = next( );
+        for ( unsigned k = 0; k < n; ++k )
+        {
+            value_t e;
+            e.tag = next( );
+            const unsigned lo = next( ), hi = next( );
+            e.integer = static_cast< int >( lo );
+            std::memcpy( &e.real, &lo, 4 );
+            e.int64 = static_cast< long long >( ( static_cast< unsigned long long >( hi ) << 32 ) | lo );
+            if ( d.tag == 5 )
+                d.list.push_back( e );
+        }
+    }
+    const unsigned nv = next( );
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned human = next( ), lap = next( ), laps = next( ), finish = next( ), ji = next( ), prior = next( ), ci = next( ), race = next( ),
+                       best = next( );
+        c_fsm fsm;
+        for ( const std::string& n : sets[ ci ] )
+        {
+            fsm_condition_t c;
+            c.m_name = n;
+            c.m_hash = fsm_hash( n.c_str( ) );
+            fsm.m_conditions.push_back( c );
+        }
+        ui_race_split_t g;
+        g.m_laps = static_cast< std::int32_t >( laps );
+        std::memcpy( &g.m_best_time, &best, 4 );
+        g.m_best_splits = docs[ ji ];
+        std::memcpy( &g.m_split_delta, &sentinel, 4 );
+        std::memcpy( &g.m_result_delta, &sentinel, 4 );
+        for ( unsigned k = 0; k < prior; ++k )
+        {
+            const unsigned t = next( );
+            float f;
+            std::memcpy( &f, &t, 4 );
+            g.m_splits.push_back( f );
+        }
+        ui_race_split_boat_t boat;
+        boat.m_human = human != 0;
+        boat.m_lap = static_cast< std::int32_t >( lap );
+        std::memcpy( &boat.m_race_time, &race, 4 );
+        const bool ok = ui_race_checkpoint( g, fsm, boat, finish != 0 );
+        std::string have = ok ? "0000" : "0001";
+        for ( const fsm_condition_t& c : fsm.m_conditions )
+        {
+            char t[ 8 ];
+            std::snprintf( t, sizeof( t ), "%02x%02x", c.m_value, c.m_pulse );
+            have += t;
+        }
+        const unsigned after = next( );
+        bool same = g.m_splits.size( ) == after;
+        for ( unsigned k = 0; k < after; ++k )
+        {
+            const unsigned t = next( );
+            same = same && std::memcmp( &g.m_splits[ k ], &t, 4 ) == 0;
+        }
+        unsigned d[ 2 ];
+        std::memcpy( &d[ 0 ], &g.m_split_delta, 4 );
+        std::memcpy( &d[ 1 ], &g.m_result_delta, 4 );
+        const unsigned d0 = next( ), d1 = next( );
+        const std::string want = g_golden_tts_text[ s++ ];
+        same = same && d[ 0 ] == d0 && d[ 1 ] == d1 && have == want;
+        if ( !same && ++failed <= 6 )
+            LOG_ERROR( "timetrial split vector %u: conditions %s / %s, deltas 0x%08X 0x%08X / 0x%08X 0x%08X", v, have.c_str( ), g_golden_tts_text[ s - 1 ], d[ 0 ],
+                       d[ 1 ], d0, d1 );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_race_checkpoint matches VuTimeTrialGame slot 15 0x490D70 on %u vectors (+0x6D8 / +0x6DC, the conditions, the splits)", nv );
+    else
+        LOG_ERROR( "the time trial split FAILED on %d of %u vectors", failed, nv );
+    return failed == 0;
+}
+
+// race_place_timetrial (world/start.hxx) against retail's VuTimeTrialGame slot 13 0x490CA0 run whole (oracle case
+// timetrial_place: 0..2 game boats, 0..3 grid entries, ConstantDB TimeTrial InitialBoostEnergy as float / int / int64 /
+// string / absent / broken). Compared: whether boat [0]'s transform got setWorldTransform (0x5344A0) and with which
+// world (+0x50 after) and notify (the +0xC0 delegate), and every boat's +0x310 bits - one failure per differing vector.
+inline bool verify_timetrial_place( )
+{
+    int failed = 0;
+    const unsigned* w = g_golden_ttp_words;
+    std::size_t s = 0;
+    const auto next = [ & ] { return *w++; };
+    const unsigned nv = next( );
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned nb = next( ), ng = next( );
+        race_boat_manager_t m;
+        float worlds[ 3 ][ 16 ];
+        for ( auto& world : worlds )
+            for ( float& x : world )
+            {
+                const unsigned b = next( );
+                std::memcpy( &x, &b, 4 );
+            }
+        for ( unsigned k = 0; k < ng; ++k )
+        {
+            race_grid_entry_t g;
+            g.name = "Grid" + std::to_string( k );
+            std::memcpy( g.world, worlds[ k ], 64 );
+            m.grid.push_back( g );
+        }
+        const unsigned want_boost[ 2 ] = { next( ), next( ) };
+        const unsigned nc = next( );
+        int want_t = -1, want_notify = 0;
+        unsigned want_world[ 16 ] = { };
+        for ( unsigned c = 0; c < nc; ++c )
+        {
+            want_t = static_cast< int >( next( ) );
+            for ( unsigned& x : want_world )
+                x = next( );
+            want_notify = static_cast< int >( next( ) );
+        }
+        std::vector< std::uint8_t > images[ 2 ] = { std::vector< std::uint8_t >( 0x600, 0 ), std::vector< std::uint8_t >( 0x600, 0 ) };
+        std::vector< std::uint8_t > trans[ 2 ] = { std::vector< std::uint8_t >( 0x100, 0 ), std::vector< std::uint8_t >( 0x100, 0 ) };
+        std::vector< race_start_boat_t > boats;
+        for ( unsigned k = 0; k < 2; ++k )
+        {
+            const unsigned fill = 0xCDCDCDCDu;
+            std::memcpy( images[ k ].data( ) + 0x310, &fill, 4 );
+            if ( k < nb )
+            {
+                race_start_boat_t b;
+                b.boat = images[ k ].data( );
+                b.transform = trans[ k ].data( );
+                boats.push_back( b );
+            }
+        }
+        const std::string hex = g_golden_ttp_text[ s++ ];
+        std::vector< std::uint8_t > bytes;
+        for ( std::size_t k = 0; k + 1 < hex.size( ); k += 2 )
+            bytes.push_back( static_cast< std::uint8_t >( std::stoul( hex.substr( k, 2 ), nullptr, 16 ) ) );
+        const value_t cdb = c_reader( bytes ).parse( );
+        int changed = 0;
+        race_start_hooks_t hooks;
+        hooks.transform_changed = [ & ]( int ) { ++changed; };
+        race_place_timetrial( boats, m, cdb, hooks );
+        bool same = changed == ( nc ? want_notify : 0 );
+        if ( nc )
+            same = same && want_t == 0 && std::memcmp( trans[ 0 ].data( ) + 0x50, want_world, 64 ) == 0;
+        else
+        {
+            static const std::uint8_t zero[ 64 ] = { };
+            same = same && std::memcmp( trans[ 0 ].data( ) + 0x50, zero, 64 ) == 0;
+        }
+        for ( unsigned k = 0; k < 2; ++k )
+            same = same && std::memcmp( images[ k ].data( ) + 0x310, &want_boost[ k ], 4 ) == 0;
+        if ( !same && ++failed <= 6 )
+            LOG_ERROR( "timetrial place vector %u (boats %u, grid %u, calls %u): differs from retail", v, nb, ng, nc );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "race_place_timetrial matches VuTimeTrialGame slot 13 0x490CA0 on %u vectors (the grid placement, notify, +0x310)", nv );
+    else
+        LOG_ERROR( "the time trial placement FAILED on %d of %u vectors", failed, nv );
+    return failed == 0;
+}
+
 // race_rules_cheat_finish (world/rules.hxx) against retail's OnCheatFinish 0x483190 -> 0x4848C0 (oracle case
 // cheat_finish): 300 human lists of 0..4 boats - the six words of each boat after, and the AI manager's vt+0x30 calls.
 inline bool verify_cheat_finish( )
@@ -925,6 +1218,9 @@ inline bool verify_session_all( )
     ok = verify_kinematic_step( ) && ok;
     ok = verify_cheat_finish( ) && ok;
     ok = verify_race_results( ) && ok;
+    ok = verify_timetrial_results( ) && ok;
+    ok = verify_timetrial_split( ) && ok;
+    ok = verify_timetrial_place( ) && ok;
     ok = verify_breakable_properties( ) && ok;
     ok = verify_breakable_contact( ) && ok;
     ok = verify_breakable_dynamic_contact( ) && ok;
