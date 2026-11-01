@@ -6,6 +6,7 @@
 #include <workspace/core/ui/leave.hxx>
 #include <workspace/core/ui/leaves.hxx>
 #include <workspace/core/ui/navigate.hxx>
+#include <workspace/core/ui/results.hxx>
 #include <workspace/core/ui/screen.hxx>
 #include <workspace/core/ui/slider.hxx>
 #include <workspace/core/ui/ticker.hxx>
@@ -63,6 +64,9 @@
 // - batch 19: VuGameConfigEntity / VuBoatConfigEntity (see ui_bound_config_t),
 //   VuShortUnlockUITextEntity 0x445570, VuBoatStatEntity "Set" 0x44FCA0, and
 //   VuUISubtitlesSettingEntity (chooser.hxx: slots 13..16, 0x475B40).
+// - batch 21: VuUserNextUIAction's Trigger (slot 12 0x470E50), and the
+//   gameInitialize / gameRelease walk for the Screens (project_initialize /
+//   project_release, k_ui_game_slots: the screen, button and subtitles slots).
 // Anything else: an input plug reached is UNKNOWN (counted; its VuRetVal is
 // the m_answer hook's - e.g. VuLicenseEntity's IsFullVersion, a platform
 // service); a registered handler not recreated (k_ui_event_facts) is entered
@@ -109,7 +113,73 @@ enum class ui_trace_kind_t
     button,     // the input manager's vt+0x44 (an on-screen button): the name
     axis,       // the input manager's vt+0x48 (an on-screen axis): the name, the value bits
     profile,    // a platform answer the config selectors ask (m_platform): "tag|text|..."
+    game,       // batch 21: an entity's gameInitialize slot 6 / gameRelease slot 7 entered (0x500B10 /
+                // 0x500B80): the owner, the retail address, recreated (k_ui_game_slots)
 };
+
+// Batch 21: every entity type of the 68 Screens / HUDs projects whose slot 6
+// (gameInitialize) or slot 7 (gameRelease) is not the nullsub 0x401560 (tools
+// tmp/b21/allslots.py over the vtables; every component type there - VuScript /
+// VuUIDraw / Vu2dLayout / Vu3dDraw / VuTransform / VuControlComponent - has
+// nullsubs at slots 9 / 10). Recreated in game_slot( ): VuUIScreenEntity
+// 0x629A70 / 0x629B00 (c_ui_screen enter / exit), VuBarracudaUIButtonEntity
+// 0x4426E0 / 0x4253D0, VuUISubtitlesSettingEntity 0x46D7A0 / 0x4253D0 (and the
+// race HUD's pause / recover / toast / multi delay rows in game_initialize, with
+// their own traces). Every other row is entered as UNKNOWN (traced, counted).
+struct ui_game_slot_t
+{
+    std::uint32_t m_vtable;
+    std::uint32_t m_init;     // slot 6
+    std::uint32_t m_release;  // slot 7
+};
+
+inline constexpr std::uint32_t k_ui_nullsub = 0x401560u;
+
+inline constexpr ui_game_slot_t k_ui_game_slots[] = {
+    { 0x6F7140u, 0x629A70u, 0x629B00u },  // VuUIScreenEntity
+    { 0x6F71ACu, 0x425390u, 0x4253D0u },  // VuUITouchButtonEntity
+    { 0x6F72C4u, 0x62D9A0u, 0x62DA10u },  // VuUIPageLayoutEntity
+    { 0x737104u, 0x401560u, 0x405090u },  // VuCheatEntity
+    { 0x7375E4u, 0x405D70u, 0x405DA0u },  // VuSignInEntity
+    { 0x7385E0u, 0x423560u, 0x423610u },  // VuOnAnyButtonOrKeyEntity
+    { 0x738AC4u, 0x425390u, 0x4253D0u },  // VuHUDPauseButtonEntity
+    { 0x738B24u, 0x425390u, 0x4253D0u },  // VuHUDRecoverButtonEntity
+    { 0x738BDCu, 0x4245F0u, 0x401560u },  // VuHUDHiddenPackageToastEntity
+    { 0x73B4FCu, 0x440400u, 0x440830u },  // VuBarracudaTrackUIImageEntity
+    { 0x73B7B0u, 0x4426E0u, 0x4253D0u },  // VuBarracudaUIButtonEntity
+    { 0x73BE9Cu, 0x444D80u, 0x401560u },  // VuBarracudaUnlockUITextEntity
+    { 0x73BEDCu, 0x4448C0u, 0x401560u },  // VuBarracudaTuningUITextEntity
+    { 0x73BF1Cu, 0x4445F0u, 0x401560u },  // VuBarracudaTrackUITextEntity
+    { 0x73BF9Cu, 0x444160u, 0x401560u },  // VuBarracudaSlalomPenaltyUITextEntity
+    { 0x73BFDCu, 0x443EB0u, 0x401560u },  // VuBarracudaEventUITextEntity
+    { 0x73C69Cu, 0x44CD10u, 0x44D090u },  // VuBoatConfigEntity (config_setup( ) runs its slot 6)
+    { 0x73C998u, 0x451370u, 0x451540u },  // VuChampionshipEntity
+    { 0x73CC34u, 0x4595A0u, 0x401560u },  // VuChampionshipCompletionUITextEntity
+    { 0x73CC74u, 0x459060u, 0x401560u },  // VuTimeTrialCompletionUITextEntity
+    { 0x73CCB4u, 0x458A40u, 0x401560u },  // VuSlalomCompletionUITextEntity
+    { 0x73CCF4u, 0x458500u, 0x401560u },  // VuRaceCompletionUITextEntity
+    { 0x73D1DCu, 0x45D050u, 0x45D080u },  // VuGameConfigEntity (config_setup( ) runs its slot 6)
+    { 0x73D45Cu, 0x461200u, 0x461290u },  // VuThrottleRemappingEntity
+    { 0x73D4F4u, 0x461200u, 0x461290u },  // VuInputRemappingEntity
+    { 0x73D724u, 0x463220u, 0x401560u },  // VuLoadingProgressBarEntity
+    { 0x73D7E0u, 0x401560u, 0x464060u },  // VuMessageBoxEntity
+    { 0x73D8E4u, 0x466C60u, 0x466D80u },  // VuMessageBoxScreenEntity
+    { 0x73DA38u, 0x469B10u, 0x401560u },  // VuRaceResultsTableEntity (results.hxx ui_results_initialize: not called here)
+    { 0x73DAA8u, 0x46BE00u, 0x46BE10u },  // VuSellScreen
+    { 0x73DE6Cu, 0x46DE30u, 0x4253D0u },  // VuUIFlipIntervalSettingEntity
+    { 0x73DED4u, 0x46DA70u, 0x4253D0u },  // VuUIFidelitySettingEntity
+    { 0x73DF3Cu, 0x46D7A0u, 0x4253D0u },  // VuUISubtitlesSettingEntity
+    { 0x73DFA4u, 0x46D3E0u, 0x4253D0u },  // VuUIUnitsSettingEntity
+    { 0x73E0BCu, 0x46CD70u, 0x4253D0u },  // VuVibrationSettingsEntity
+    { 0x73E15Cu, 0x46C780u, 0x4253D0u },  // VuTiltSteeringSettingsEntity
+    { 0x73F2C8u, 0x479C50u, 0x479CF0u },  // VuUILeaderboardEntity
+    { 0x73F408u, 0x47DAB0u, 0x47DB10u },  // VuUIMiniLeaderboardEntity
+    { 0x754B68u, 0x5E0610u, 0x43A420u },  // VuMultiDelayEntity
+    { 0x754B9Cu, 0x5DFAF0u, 0x43A420u },  // VuDelayEntity
+};
+
+// VuUserNextUIAction (vtable 0x73EA10): Trigger -> slot 12 0x470E50 (results.hxx ui_user_next).
+inline constexpr std::uint32_t k_ui_user_next_vtable = 0x73EA10u;
 
 struct ui_trace_t
 {
@@ -1068,6 +1138,8 @@ private:
             return true;
         if ( vt == k_ui_boat_stat_vtable && std::strcmp( plug, "Set" ) == 0 )
             return true;
+        if ( vt == k_ui_user_next_vtable && std::strcmp( plug, "Trigger" ) == 0 )
+            return true;
         if ( ( vt == k_ui_game_config_vtable || vt == k_ui_boat_config_vtable ) && index_of( owner ) >= 0 &&
              m_bound[ static_cast< std::size_t >( index_of( owner ) ) ]->m_config )
             for ( const char* name : { "Unlocked", "Available", "InstalledOnHost", "NotUsedSP" } )
@@ -1206,7 +1278,72 @@ private:
             m_bound[ static_cast< std::size_t >( index_of( e ) ) ]->m_shown->m_visible = false;            // 0x4245F0
         else if ( vt == k_ui_multi_delay_vtable )
             trace( ui_trace_kind_t::hook, index_of( e ), "multi_delay_init", 0u, ui_params_t( ), true ); // 0x5E0610 (the world's)
+        else
+            game_slot( e, vt, true );
         e.m_flags |= 4u;
+    }
+
+    // Batch 21: the slot 6 / 7 of a k_ui_game_slots row (not the race HUD's four,
+    // which game_initialize / game_release handle above). Recreated:
+    // - VuUIScreenEntity (the bound root only): 0x629A70 = ScreenEnter, 0x629B00 =
+    //   ScreenExit (c_ui_screen).
+    // - VuBarracudaUIButtonEntity 0x4426E0: 0x53FB90 { entity + 0x5C, 0 } on the
+    //   touch device g 0x759070 (+4), then 0x53FAE0 (callback, +0x178 "Focus
+    //   Priority" - OUR loaded value); slot 7 0x4253D0: 0x53FA60 (callback).
+    // - VuUISubtitlesSettingEntity 0x46D7A0 / 0x4253D0 (chooser.hxx initialize /
+    //   release; the subtitles byte = the settings manager g 0x758FE0 +0x5C).
+    // Retail reads g 0x759070 / g 0x758FE0 without a null test: without
+    // m_touch_device / m_settings the row is entered as UNKNOWN (and counted).
+    void game_slot( entity_t& e, std::uint32_t vt, bool init )
+    {
+        const ui_game_slot_t* row = nullptr;
+        for ( const ui_game_slot_t& r : k_ui_game_slots )
+            if ( r.m_vtable == vt )
+                row = &r;
+        if ( !row )
+            return;
+        const std::uint32_t address = init ? row->m_init : row->m_release;
+        if ( address == k_ui_nullsub )
+            return;
+        const int index = index_of( e );
+        ui_bound_t* b = index >= 0 ? m_bound[ static_cast< std::size_t >( index ) ].get( ) : nullptr;
+        bool known = false;
+        if ( vt == k_ui_screen_vtable && index == 0 )
+            known = true;
+        else if ( vt == k_ui_button_vtable && b && b->m_button && m_hooks.m_touch_device )
+            known = true;
+        else if ( vt == k_ui_subtitles_vtable && b && b->m_combo && m_hooks.m_touch_device && ( !init || m_hooks.m_settings ) )
+            known = true;
+        trace( ui_trace_kind_t::game, index, std::string( ), address, ui_params_t( ), known );
+        if ( !known )
+        {
+            ++m_unknown_slots;
+            return;
+        }
+        if ( vt == k_ui_screen_vtable )
+        {
+            if ( init )
+                m_screen.screen_enter( );
+            else
+                m_screen.screen_exit( );
+        }
+        else if ( vt == k_ui_button_vtable )
+        {
+            if ( init )
+            {
+                std::uint32_t priority = 0;
+                if ( const ui_slot_t* s = ui_bind_slot( e, "Focus Priority" ) )
+                    priority = s->m_bits[ 0 ];
+                ui_touch_add( *m_hooks.m_touch_device, b->m_button.get( ), 0u );
+                ui_touch_set_priority( *m_hooks.m_touch_device, b->m_button.get( ), priority );
+            }
+            else
+                ui_touch_remove( *m_hooks.m_touch_device, b->m_button.get( ) );
+        }
+        else if ( init )
+            b->m_combo->initialize( *m_hooks.m_touch_device, m_hooks.m_settings->m_subtitles ? 1u : 0u );
+        else
+            b->m_combo->release( *m_hooks.m_touch_device );
     }
 
     void game_release( entity_t& e )
@@ -1225,6 +1362,8 @@ private:
         }
         else if ( vt == k_ui_multi_delay_vtable )
             trace( ui_trace_kind_t::hook, index_of( e ), "multi_delay_release", 0u, ui_params_t( ), true ); // 0x43A420 (the world's)
+        else if ( vt != k_ui_hud_toast_vtable )
+            game_slot( e, vt, false );
         if ( !( e.m_flags & 8u ) )
             trace( ui_trace_kind_t::hook, index_of( e ), "repository_remove", 0u, ui_params_t( ), true );
         e.m_flags &= ~4u;
@@ -1242,6 +1381,15 @@ public:
             b->m_map.handle( h, ui_params_t( ) );
     }
     void hud_release( ) { game_release( *m_bound.front( )->m_entity ); }
+    // Batch 21: a Screens project the same way - the front end's screen load
+    // 0x4C0550 runs 0x500B10 + 0x501260 on the loaded root (unless its flags hold
+    // 4; the repository add g 0x759080 vt+0x18 before is a HOOK), and the root's
+    // slot 6 IS ScreenEnter 0x629A70 (the release's slot 7 ScreenExit 0x629B00):
+    // a caller of project_initialize( ) does not call enter( ) / exit( ). The
+    // GameConfig* selectors' slot 6 stays config_setup( )'s (UNKNOWN here).
+    void project_initialize( ) { hud_initialize( ); }
+    void project_release( ) { hud_release( ); }
+    int m_unknown_slots = 0;   // slot 6 / 7 rows entered that are not recreated
     // VuHUDEntity slot 12 0x423A20: VuParams { float dt } -> "OnUITick" to the
     // DIRECT children (0x5011A0).
     void hud_tick( float dt )
@@ -1303,6 +1451,13 @@ private:
             out.m_known = false;
             out.m_words[ 0 ] = 3u;
             out.m_words[ 1 ] = static_cast< std::uint32_t >( ui_config_plug( plug, c.base( ), *m_hooks.m_root, c.m_class, c.m_profile ) );
+            return out;
+        }
+        if ( vt == k_ui_user_next_vtable )
+        {
+            // Trigger (the action base's 0x472800 -> thunk 0x4077E3) -> slot 12 0x470E50: VuRetVal +0 = 0 (+4 the caller's)
+            out.m_words[ 0 ] = ui_user_next( [ this ]( std::uint32_t hash, const ui_params_t& q ) { broadcast( hash, q ); } );
+            out.m_known = false;
             return out;
         }
         if ( vt == k_ui_subtitles_vtable )

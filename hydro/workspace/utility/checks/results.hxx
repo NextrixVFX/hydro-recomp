@@ -1,9 +1,11 @@
 #pragma once
 
+#include <workspace/core/ui/bind.hxx>
 #include <workspace/core/ui/chooser.hxx>
 #include <workspace/core/ui/results.hxx>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -327,10 +329,220 @@ inline bool verify_ui_subtitles_combo( )
     return failed == 0;
 }
 
+// verify_ui_screen_game_init (batch 21): c_ui_binding::project_initialize /
+// project_release on OUR loaded Screens projects (the scripted world, as
+// verify_ui_frames) against retail's 0x500B10 + 0x501260 / 0x500B80 (oracle case
+// screen_game_init): the repository adds / removes and every non-nullsub slot 6 /
+// 7 entered (owner, address) in order, the OnProjectInitialized handlers entered,
+// then the touch device's entries (owner, priority) and +0x1C, the subtitles
+// combos' choices / +0x2A4 / +0x2A8 and every entity's flags & 4 after each
+// phase; and each VuUserNextUIAction's Trigger input through the binding's graph
+// (c_ui_wiring::input): the broadcasts and the VuRetVal. Retail stubbed the screen's
+// 0x629A70 / 0x629B00 (case ui_frames runs them): OUR enter / exit run, so the
+// graph's own traces in the init / release phases are not compared (only the
+// kinds above; the events only 0x5EFA60).
+inline bool verify_ui_screen_game_init( )
+{
+    const ui_loaded_t& base = ui_loaded( );
+    std::vector< std::string > names( g_golden_entity_templates, g_golden_entity_templates + g_golden_entity_templates_count );
+    static const entity_registry_t registry = build_entity_registry( names );
+    const std::map< std::string, value_t >* templates = &base.templates;
+    const entity_world_t world = ui_scripted_world( registry, [ templates ]( const std::string& name ) -> const value_t*
+    {
+        const auto found = templates->find( "VuTemplateAsset/" + name );
+        return found == templates->end( ) ? nullptr : &found->second;
+    } );
+    int failed = 0, phases = 0, logs = 0, slots = 0, triggers = 0;
+    const auto bad = [ &failed ]( const char* project, int phase, const char* what )
+    {
+        if ( ++failed <= 8 )
+            LOG_ERROR( "ui screen game init: %s phase %d: %s differs from retail's", project, phase, what );
+    };
+    for ( std::size_t w = 0; w < g_golden_sgi_projects_count; ++w )
+    {
+        const golden_sgi_project_t& gp = g_golden_sgi_projects[ w ];
+        const golden_ui_project_t* project = nullptr;
+        for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+            if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, gp.m_asset ) == 0 )
+                project = &g_golden_ui_projects[ p ];
+        if ( !project )
+        {
+            bad( gp.m_asset, -1, "the project's presence in the loaded set" );
+            continue;
+        }
+        const unsigned char* raw = reinterpret_cast< const unsigned char* >( project->m_words );
+        const value_t document = c_reader( std::vector< std::uint8_t >( raw, raw + project->m_bytes ) ).parse( );
+        const std::unique_ptr< entity_t > root = entity_load_project( member( document, "VuProject" ), project->m_path, world );
+        if ( !root )
+        {
+            bad( gp.m_asset, -1, "the load" );
+            continue;
+        }
+        ui_touch_device_t device;
+        ui_settings_t settings;
+        settings.m_subtitles = gp.m_subtitles != 0;
+        ui_bind_hooks_t hooks;
+        hooks.m_touch_device = &device;
+        hooks.m_settings = &settings;
+        c_ui_binding bind( *root, hooks );
+        if ( static_cast< int >( bind.m_bound.size( ) ) != gp.m_count )
+        {
+            bad( gp.m_asset, -1, "the entity count" );
+            continue;
+        }
+        // the case's Focus Priority pokes "index,value;" into OUR loaded values
+        for ( const char* at = gp.m_pokes; *at; )
+        {
+            char* end = nullptr;
+            const int index = static_cast< int >( std::strtol( at, &end, 10 ) );
+            if ( !end || *end != ',' )
+                break;
+            const int value = static_cast< int >( std::strtol( end + 1, &end, 10 ) );
+            if ( !end || *end != ';' )
+                break;
+            at = end + 1;
+            if ( const ui_slot_t* s = ui_bind_slot( *bind.m_bound[ static_cast< std::size_t >( index ) ]->m_entity, "Focus Priority" ) )
+                const_cast< ui_slot_t* >( s )->m_bits[ 0 ] = static_cast< std::uint32_t >( value );
+            else
+                bad( gp.m_asset, -1, "a poked Focus Priority's presence" );
+        }
+        const auto owner_of = [ &bind ]( const void* callback )
+        {
+            for ( const auto& b : bind.m_bound )
+                if ( ( b->m_button && b->m_button.get( ) == callback ) || ( b->m_combo && b->m_combo.get( ) == callback ) )
+                    return b->m_index;
+            return -1;
+        };
+        const auto state = [ & ]
+        {
+            char word[ 64 ];
+            std::string t = "E";
+            for ( const auto& c : device.m_callbacks )
+            {
+                std::snprintf( word, sizeof word, "%d,0,%u;", owner_of( c.first ), c.second );
+                t += word;
+            }
+            std::snprintf( word, sizeof word, "|P%u|C", device.m_priority );
+            t += word;
+            for ( const auto& b : bind.m_bound )
+                if ( b->m_combo )
+                {
+                    std::uint32_t bits;
+                    std::memcpy( &bits, &b->m_combo->m_shown, 4 );
+                    std::snprintf( word, sizeof word, "%d,%d,0x%08X,", b->m_index, b->m_combo->m_current, bits );
+                    t += word;
+                    for ( const auto& c : b->m_combo->m_choice_texts )
+                        t += c.first + ":" + std::to_string( c.second ) + "/";
+                    t += ";";
+                }
+            t += "|F";
+            for ( const auto& b : bind.m_bound )
+                t += ( b->m_entity->m_flags & 4u ) ? "1" : "0";
+            return t;
+        };
+        // the trace from `first` as retail's log lines (init / release: repository, slots, 0x5EFA60; trigger: broadcasts)
+        const auto lines = [ &bind ]( std::size_t first, bool trigger )
+        {
+            std::vector< std::string > out;
+            char line[ 96 ];
+            for ( std::size_t k = first; k < bind.m_trace.size( ); ++k )
+            {
+                const ui_trace_t& t = bind.m_trace[ k ];
+                line[ 0 ] = 0;
+                if ( trigger )
+                {
+                    if ( t.m_kind == ui_trace_kind_t::broadcast )
+                        std::snprintf( line, sizeof line, "broadcast|0x%08X|%d", t.m_word, t.m_params.m_size );
+                }
+                else if ( t.m_kind == ui_trace_kind_t::hook && ( t.m_name == "repository_add" || t.m_name == "repository_remove" ) )
+                    std::snprintf( line, sizeof line, "%s|%d", t.m_name == "repository_add" ? "repo_add" : "repo_remove", t.m_index );
+                else if ( t.m_kind == ui_trace_kind_t::game )
+                    std::snprintf( line, sizeof line, "slot|%d|0x%06X", t.m_index, t.m_word );
+                else if ( t.m_kind == ui_trace_kind_t::event && t.m_word == 0x5EFA60u )
+                    std::snprintf( line, sizeof line, "event|%d|0x%06X", t.m_index, t.m_word );
+                if ( line[ 0 ] )
+                    out.push_back( line );
+            }
+            return out;
+        };
+        const auto same_log = [ & ]( const std::vector< std::string >& have, int first, int count )
+        {
+            if ( static_cast< int >( have.size( ) ) != count )
+                return false;
+            for ( int q = 0; q < count; ++q )
+            {
+                if ( have[ static_cast< std::size_t >( q ) ] != g_golden_sgi_logs[ first + q ] )
+                    return false;
+                ++logs;
+                slots += have[ static_cast< std::size_t >( q ) ].compare( 0, 5, "slot|" ) == 0 ? 1 : 0;
+            }
+            return true;
+        };
+        std::size_t mark = bind.m_trace.size( );
+        bind.project_initialize( );
+        // retail's phases 0 (0x500B10) and 1 (0x501260) as one: OUR project_initialize runs both
+        int first = -1, count = 0;
+        const golden_sgi_phase_t* after = nullptr;
+        for ( int p = 0; p < gp.m_phases; ++p )
+        {
+            const golden_sgi_phase_t& ph = g_golden_sgi_phases[ gp.m_first + p ];
+            if ( ph.m_phase > 1 )
+                continue;
+            first = first < 0 ? ph.m_first_log : first;
+            count += ph.m_logs;
+            after = &ph;   // phase 1's state (0x501260 last)
+            ++phases;
+        }
+        if ( !same_log( lines( mark, false ), first, count ) )
+            bad( gp.m_asset, 0, "the gameInitialize / OnProjectInitialized log" );
+        if ( !after || state( ) != after->m_state )
+            bad( gp.m_asset, 1, "the state after gameInitialize" );
+        for ( int p = 0; p < gp.m_phases; ++p )
+        {
+            const golden_sgi_phase_t& ph = g_golden_sgi_phases[ gp.m_first + p ];
+            if ( ph.m_phase == 2 )
+            {
+                entity_t& e = *bind.m_bound[ static_cast< std::size_t >( ph.m_entity ) ]->m_entity;
+                script_link_t link;
+                link.m_entity = &e;
+                const script_component_t* sc = script_of( e );
+                for ( std::size_t k = 0; sc && k < sc->m_plugs.size( ); ++k )
+                    if ( std::strcmp( sc->m_plugs[ k ].m_row->m_name, "Trigger" ) == 0 )
+                        link.m_plug = static_cast< int >( k );
+                mark = bind.m_trace.size( );
+                const ui_ret_t ret = link.m_plug >= 0 ? bind.m_wiring.input( link, ui_params_t( ) ) : ui_ret_t( );
+                ++triggers;
+                ++phases;
+                if ( ( link.m_plug >= 0 ? 1 : 0 ) != ph.m_found || !same_log( lines( mark, true ), ph.m_first_log, ph.m_logs ) || ret.m_words[ 0 ] != ph.m_ret[ 0 ] )
+                    bad( gp.m_asset, p, "a VuUserNextUIAction Trigger's broadcasts / VuRetVal" );
+            }
+            else if ( ph.m_phase == 3 )
+            {
+                mark = bind.m_trace.size( );
+                bind.project_release( );
+                ++phases;
+                if ( !same_log( lines( mark, false ), ph.m_first_log, ph.m_logs ) )
+                    bad( gp.m_asset, p, "the gameRelease log" );
+                if ( state( ) != ph.m_state )
+                    bad( gp.m_asset, p, "the state after gameRelease" );
+            }
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_binding project_initialize / project_release (+ VuUserNextUIAction's Trigger) match retail's 0x500B10 / 0x501260 / "
+                     "0x500B80 (button 0x4426E0 + 0x53FAE0, subtitles 0x46D7A0, 0x4253D0; 0x470E50) on %d Screens projects: %d phases, %d log "
+                     "lines in order (%d slot 6 / 7 entries), %d triggers, the touch device / combos / flags after each",
+            static_cast< int >( g_golden_sgi_projects_count ), phases, logs, slots, triggers );
+    else
+        LOG_ERROR( "the UI screens' gameInitialize / gameRelease FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_results_all( )
 {
     bool ok = true;
     ok = verify_ui_race_results( ) && ok;
     ok = verify_ui_subtitles_combo( ) && ok;
+    ok = verify_ui_screen_game_init( ) && ok;
     return ok;
 }
