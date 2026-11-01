@@ -6,6 +6,7 @@
 #include <workspace/core/boat/fleet.hxx>
 #include <workspace/core/boat/human.hxx>
 #include <workspace/core/boat/manager.hxx>
+#include <workspace/core/boat/pilots.hxx>
 #include <workspace/core/boat/respawn.hxx>
 #include <workspace/core/boat/state.hxx>
 #include <workspace/core/game/input.hxx>
@@ -81,8 +82,12 @@ struct race_drive_t
     boat_decision_t d{};
     boat_decision_hooks_t hooks{};
     // The driver step, by class.
-    bool human = false, ai = false;
+    bool human = false, ai = false, nuisance = false;
     int pilot = -1;   // the fleet pilot of an AI boat
+    // VuAiNuisanceDriver (vtable 0x737C4C): its pilot (boat pilots.hxx) and target views - no target until the
+    // DriverTarget plug (0x42FF90, not wired) sets one.
+    nuisance_pilot_t nuisance_pilot;
+    nuisance_target_t nuisance_target;
     human_pilot_t human_pilot;
     human_decision_driver_t human_driver;
     camera_env_t camera_env;
@@ -235,7 +240,31 @@ inline void race_drive_driver( void* user, float dt )
         fleet_driver_tick( *s.track, s.pilots[ static_cast< std::size_t >( r.pilot ) ], t, transforms.data( ), dt, h );
         return;
     }
-    race_unwired( s, "a driver tick of a class not wired here (UI / nuisance / ghost, or an AI boat with no pilot) - UNKNOWN" );
+    if ( r.nuisance )
+    {
+        // Slot 18 0x40DA90 = nuisance_driver_tick (boat pilots.hxx). Its audio-line hooks (the boat's DB
+        // "AudioLines", FMOD) are reached only with a target: absent here.
+        ai_tick_t t;
+        t.boat = r.d.boat;
+        t.body = r.d.body;
+        t.solver = r.d.solver;
+        t.transform = r.d.transform;
+        t.engine = r.d.engine;
+        t.owner = r.d.boat;
+        t.animation = r.d.animation;
+        nuisance_hooks_t h;
+        h.ai.avoid.user = &s;
+        h.ai.avoid.ray = race_drive_ray;
+        h.ai.avoid.aabb = nullptr;   // reached only after a hit
+        h.ai.controls.user = &s;
+        h.ai.controls.misfire = []( void* u ) { race_unwired( *static_cast< race_session_t* >( u ), "audio: the BoostMisfire sound 0x41E060 (FMOD - platform)" ); };
+        h.ai.controls.voice = []( void* u, const char* ) { race_unwired( *static_cast< race_session_t* >( u ), "the voice-over manager g 0x758FEC vt+0x1C (not wired)" ); };
+        h.user = &s;
+        h.release_target = []( void* u ) { race_unwired( *static_cast< race_session_t* >( u ), "the nuisance driver's weak-reference release 0x40E4D0 (not wired)" ); };
+        nuisance_driver_tick( *s.track, r.nuisance_pilot, t, r.nuisance_target, *s.random, dt, h );
+        return;
+    }
+    race_unwired( s, "a driver tick of a class not wired here (UI / ghost, or an AI boat with no pilot) - UNKNOWN" );
 }
 
 inline void race_drive_camera( void* user, float dt )
@@ -321,6 +350,17 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         // The driver step.
         r->human = d.human;
         r->ai = vtable == 0x737B5Cu;
+        if ( vtable == 0x737C4Cu )
+        {
+            // The ctor 0x40D880's state: no target (+0xF0 0), no target sector (+0xF4 0), an empty plan (+0x84).
+            if ( load_word( driver, 0xF0 ) != 0 || load_word( driver, 0xF4 ) != 0 )
+                LOG_WARNING( "race: %s's nuisance driver has a target / sector word set (not modelled) - its tick is UNKNOWN", b.name.c_str( ) );
+            else
+            {
+                r->nuisance = true;
+                r->nuisance_pilot.driver = driver;
+            }
+        }
         for ( std::size_t p = 0; p < s.pilots.size( ); ++p )
             if ( s.pilots[ p ].boat == static_cast< int >( k ) )
                 r->pilot = static_cast< int >( p );
