@@ -59,8 +59,8 @@
 //   Angular Speed  entity +108  -> desc +28 -> wave +104
 //   Linear Speed   entity +112  -> desc +32 -> wave +108
 //   Foaminess      entity +116  -> desc +36 -> wave +112, which THIS kernel
-//                                              never reads, so it is not a
-//                                              member here
+//                                              never reads; the +96 kernel
+//                                              @0x5a1f80 does
 //
 // THE ENTITY DECLARES "Inner Radius" BEFORE "Outer Radius" BUT BINDS THEM THE
 // OTHER WAY ROUND: Inner goes to `v3 = this + 25` and Outer to
@@ -78,6 +78,7 @@ struct whirlpool_t
     float depth = 0.0f;         // wave[ 25 ], byte +100
     float angular_speed = 0.0f; // wave[ 26 ], byte +104
     float linear_speed = 0.0f;  // wave[ 27 ], byte +108
+    float foaminess = 0.0f;     // wave[ 28 ], byte +112 (the +96 kernel only)
 };
 
 // One vertex, transliterated statement for statement. The operand order is
@@ -315,6 +316,10 @@ struct ramp_t
     float along_x = 0.0f;
     float along_y = 0.0f;
     float along_offset = 0.0f;
+    // +256 / +260: the plateau's in-plane slope (inverse +188 / +204 times
+    // +252), read only by the +96 kernel @0x5a2fc0
+    float grad_x = 0.0f;
+    float grad_y = 0.0f;
 };
 
 inline void ramp_vertex( const ramp_t& wave, float x, float y,
@@ -420,6 +425,11 @@ struct point_wave_t
     float rate = 0.0f;
     float amplitude_scale = 0.0f;
     float slope = 0.0f;
+    // read only by the +96 kernel @0x5a39b0: +108 Speed, +116 Foaminess,
+    // +136 = 1 / Magnitude (the ctor's reciprocal of +96)
+    float speed = 0.0f;
+    float foaminess = 0.0f;
+    float inv_amplitude = 0.0f;
 };
 
 inline void point_wave_vertex( const point_wave_t& wave, float x, float y,
@@ -1371,4 +1381,137 @@ inline void whirlpool_apply( const whirlpool_t& wave, unsigned char* vertices,
         std::memcpy( vertex + 16, displacement, sizeof( displacement ) );
         std::memcpy( vertex + 32, &height, sizeof( height ) );
     }
+}
+
+// ---------------------------------------------------------------------------
+// THE +96 KERNELS: what each wave's slot 3 runs when ctx+0x60 is set - which
+// the water renderer's vertex pass 0x597D70 does (ctx+0x60 = 1, ctx+0x64 = 0,
+// a 32-byte stride), never the physics query (VuFluidSolver_prepare passes
+// 0). They are SEPARATE BODIES, not the base kernels behind a test: they
+// write a different record -
+//
+//   +0 x   +4 y   +8 the height (on entry to 0x529F70's +96 branch, the z)
+//   +0xC / +0x10 the in-plane displacement (the height's gradient)
+//   +0x14 foam   +0x18 1.0 / +0x1C 0 (0x529ED0 / 0x529F70 store them)
+//
+// and read members the base kernels do not (Foaminess on the whirlpool and
+// the point wave, the ramp's +256 / +260). Each tag variant (ctx+0x64 set) is
+// the same body behind `tags[ i ] != ctx+0x5C -> skip` (census/vdiff.py on
+// each pair; the oracle runs both). Every one is transliterated from its
+// disassembly in retail's operand order.
+
+// VuWaterWhirlpoolWave @0x5a1f80 (tag @0x5a2160).
+inline void whirlpool_vertex96( const whirlpool_t& wave, float x, float y, float& height, float* flow, float& foam )
+{
+    const float dx = x - wave.centre_x;
+    const float dy = y - wave.centre_y;
+    const float outer = wave.outer_radius;
+    const float radius2 = ( dy * dy ) + ( dx * dx );
+    if ( !( ( outer * outer ) > radius2 ) )
+        return;
+    const float rise_inner = -wave.depth;
+    if ( !( radius2 > ( wave.inner_radius * wave.inner_radius ) ) )
+    {
+        foam = wave.foaminess + foam;
+        height = height + rise_inner;
+        return;
+    }
+    const float radius = std::sqrt( radius2 ) + 1.1920929e-7f;
+    const float span = 1.0f / ( outer - wave.inner_radius );
+    const float t = ( radius - wave.inner_radius ) * span;
+    const float across = std::sqrt( t );
+    const float inv_r = 1.0f / radius;
+    const float rise = rise_inner + ( wave.depth * across );
+    const float inv_across = 1.0f / across;
+    const float gy = ( ( ( ( inv_r * dy ) * span ) * 0.5f ) * inv_across ) * wave.depth;
+    const float gx = ( ( ( ( inv_r * dx ) * span ) * 0.5f ) * inv_across ) * wave.depth;
+    flow[ 1 ] = flow[ 1 ] + gy;
+    flow[ 0 ] = gx + flow[ 0 ];
+    foam = ( ( 1.0f - t ) * wave.foaminess ) + foam;
+    height = height + rise;
+}
+
+// VuWaterRampWave @0x5a2fc0 (tag @0x5a3160). No spatial rejection, as the
+// base. Its tests are the base's with the branches the other way round (so a
+// NaN coordinate lands on the plateau here): |a| > 1 - band blends, and the
+// blend's a < 0 half is the first.
+inline void ramp_vertex96( const ramp_t& wave, float x, float y, float& height, float* flow )
+{
+    const float along = ( ( y * wave.along_y ) + ( x * wave.along_x ) ) + wave.along_offset;
+    if ( !( std::fabs( along ) > ( 1.0f - wave.band ) ) )
+    {
+        height = ( wave.slope * along ) + height;
+        flow[ 0 ] = wave.grad_x + flow[ 0 ];
+        flow[ 1 ] = wave.grad_y + flow[ 1 ];
+        return;
+    }
+    float shaped;
+    float grad;
+    if ( 0.0f > along )
+    {
+        const float u = along + 1.0f;
+        shaped = ( ( u * u ) * wave.curve ) - 1.0f;
+        grad = ( u * 2.0f ) * wave.curve;
+    }
+    else
+    {
+        const float u = 1.0f - along;
+        shaped = 1.0f - ( ( u * u ) * wave.curve );
+        grad = ( u * 2.0f ) * wave.curve;
+    }
+    const float half = wave.blend_height * 0.5f;
+    height = ( half * shaped ) + height;
+    flow[ 0 ] = ( half * ( grad * wave.along_x ) ) + flow[ 0 ];
+    flow[ 1 ] = flow[ 1 ] + ( half * ( grad * wave.along_y ) );
+}
+
+// VuWaterPointWave @0x5a39b0 (tag @0x5a3ca0): the base's ring gates, the
+// height term sin * tail, an in-plane gradient in place of the base's z
+// displacement, and a foam term outside the ring test (reached by every
+// vertex past the first two gates). The x87 fsincos as wave_x87_* (host
+// double, as under the oracle).
+inline void point_wave_vertex96( const point_wave_t& wave, float x, float y, float& height, float* flow, float& foam )
+{
+    const float dx = x - wave.centre_x;
+    const float dy = y - wave.centre_y;
+    const float radius = std::sqrt( ( dy * dy ) + ( dx * dx ) );
+    if ( !( wave.outer_radius > radius ) )
+        return;
+    const float from_inner = radius - wave.inner_radius;
+    const float span = from_inner > 0.0f ? from_inner : 0.0f;   // maxss( d, 0 )
+    const float scaled = wave.rate * span;
+    if ( !( wave.clock > scaled ) )
+        return;
+    const float edge = scaled + wave.tail_width;
+    const float amount = ( ( ( wave.outer_radius - wave.inner_radius ) - span ) * wave.amplitude ) * wave.amplitude_scale;
+    if ( edge > wave.clock && amount > 0.0f )
+    {
+        const float phase = ( wave.clock - scaled ) * wave.phase_scale;
+        const float k = ( edge - wave.clock ) * wave.slope;
+        const float cosine = wave_x87_cos( phase );
+        const float sine = wave_x87_sin( phase );
+        const float tail = k * amount;
+        const float inv_r = 1.0f / radius;
+        height = ( sine * tail ) + height;
+        const float rel = radius - wave.inner_radius;
+        float nx = 0.0f;
+        float ny = inv_r * dy;
+        if ( rel >= 0.0f )
+            nx = inv_r * dx;
+        if ( !( rel >= 0.0f ) )
+            ny = 0.0f;
+        const float rnx = wave.rate * nx;
+        const float rny = wave.rate * ny;
+        const float ct = cosine * tail;
+        const float gy = ( ( ( -( ( wave.amplitude * ny ) * wave.amplitude_scale ) * k ) + ( ( wave.slope * rny ) * amount ) ) * sine ) +
+                         ( -( wave.phase_scale * rny ) * ct );
+        const float gx = ( ( ( -( ( wave.amplitude * nx ) * wave.amplitude_scale ) * k ) + ( ( wave.slope * rnx ) * amount ) ) * sine ) +
+                         ( -( wave.phase_scale * rnx ) * ct );
+        flow[ 1 ] = flow[ 1 ] + gy;
+        flow[ 0 ] = gx + flow[ 0 ];
+    }
+    const float t = ( ( wave.clock - wave.tail_width ) * wave.speed ) * wave.amplitude_scale;
+    const float f0 = 1.0f - t;
+    const float f = f0 < 1.0f ? f0 : 1.0f;   // minss( 1 - t, 1 )
+    foam = ( ( ( wave.inv_amplitude * amount ) * wave.foaminess ) * f ) + foam;
 }

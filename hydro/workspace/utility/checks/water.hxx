@@ -1056,13 +1056,15 @@ inline bool verify_water_build( )
 
 struct water_query_stats_t
 {
-    int vertices = 0, moved = 0, calls = 0, tagged = 0;
+    int vertices = 0, moved = 0, calls = 0, tagged = 0, skipped = 0;
 };
 
 // The queries of one golden stream (emit/water.py _wq_stream) through query.hxx's water_query on `view`, its kernel
 // hook water_view_kernel with the calls logged; returns the queries that differ.
+// f96: the renderer's mode (ctx+0x60 = 1, 32-byte records, 8 words each, all compared). `unread`: per wave, true when its
+// kernel for this mode is not recreated - a query whose retail slot 3 calls include one is SKIPPED (counted), not compared.
 inline int water_query_vectors( const water_view_t& view, const unsigned* words, const unsigned* offsets, std::size_t count, const char* name,
-    water_query_stats_t& st )
+    water_query_stats_t& st, bool f96 = false, const std::vector< bool >* unread = nullptr )
 {
     struct logged_t
     {
@@ -1092,31 +1094,43 @@ inline int water_query_vectors( const water_view_t& view, const unsigned* words,
         for ( int k = 0; k < ctx.exclude_count; ++k )
             ctx.exclude[ k ] = static_cast< int >( u( ) );
         ctx.forced = -1;
+        const int nw = f96 ? 8 : 10;
         std::vector< water_vertex_t > v( ctx.count );
+        std::vector< std::uint32_t > raw( static_cast< std::size_t >( ctx.count ) * 8, 0x77777777u );
         std::memset( v.data( ), 0x77, v.size( ) * sizeof( water_vertex_t ) );
-        for ( water_vertex_t& x : v )
+        for ( int i = 0; i < ctx.count; ++i )
         {
-            for ( float& p : x.pos )
-                p = water_bits( u( ) );
+            water_vertex_t& x = v[ static_cast< std::size_t >( i ) ];
+            for ( int k = 0; k < 3; ++k )
+            {
+                const unsigned p = u( );
+                x.pos[ k ] = water_bits( p );
+                raw[ static_cast< std::size_t >( i ) * 8 + static_cast< std::size_t >( k ) ] = p;
+            }
             x.pos_w = 0x3F800000u;
         }
         ctx.vertices = v.data( );
+        if ( f96 )
+        {
+            ctx.flag96 = 1;
+            ctx.records = reinterpret_cast< unsigned char* >( raw.data( ) );
+            ctx.stride = 32;
+        }
         logged.log.clear( );
         std::vector< std::uint32_t > tags;
         const char* what = nullptr;
         int bad = -1;
-        if ( !water_query( view.water, ctx, kernel, &logged, tags ) )
-            what = "a path not recreated was reached";
-        const std::uint32_t* ours = reinterpret_cast< const std::uint32_t* >( v.data( ) );
-        for ( int k = 0; k < 10 * ctx.count; ++k )
+        const bool reached = water_query( view.water, ctx, kernel, &logged, tags );
+        const std::uint32_t* ours = f96 ? raw.data( ) : reinterpret_cast< const std::uint32_t* >( v.data( ) );
+        for ( int k = 0; k < nw * ctx.count; ++k )
         {
             const unsigned r = u( );
-            if ( !what && k % 10 != 7 && ours[ k ] != r )
+            if ( !what && ( f96 || k % 10 != 7 ) && ours[ k ] != r )
             {
                 what = "a vertex record word";
                 bad = k;
             }
-            if ( k % 10 == 4 && r != 0u )
+            if ( k % nw == ( f96 ? 3 : 4 ) && r != 0u )
                 ++st.moved;
         }
         st.vertices += ctx.count;
@@ -1127,15 +1141,25 @@ inline int water_query_vectors( const water_view_t& view, const unsigned* words,
         st.calls += static_cast< int >( n );
         if ( logged.log.size( ) != 3 * n && !what )
             what = "the number of slot 3 calls";
+        bool skip = false;
         for ( unsigned k = 0; k < 3 * n; ++k )
         {
             const unsigned r = u( );
+            if ( unread && k % 3 == 0 && r < unread->size( ) && ( *unread )[ r ] )
+                skip = true;
             if ( !what && k < logged.log.size( ) && logged.log[ k ] != r )
             {
                 what = "a slot 3 call";
                 bad = static_cast< int >( k );
             }
         }
+        if ( skip )
+        {
+            ++st.skipped;
+            continue;
+        }
+        if ( !reached )
+            what = "a path not recreated was reached";
         if ( what )
         {
             ++failed;
@@ -1171,6 +1195,55 @@ inline bool verify_water_query( )
             static_cast< int >( g_golden_water_query_count ), st.vertices, st.moved, st.calls, st.tagged );
     else
         LOG_ERROR( "water_query FAILED %d of %d queries against 0x528FC0", failed, static_cast< int >( g_golden_water_query_count ) );
+    return failed == 0;
+}
+
+// The query in the renderer's +96 mode (case water_query96): water_build_world's water plus 12 point waves
+// (water_create_point_wave, each ticked once), query.hxx's +96 branches of 0x529ED0 / 0x529F70 and the waves' +96
+// kernels through water_view_kernel. Compared: all 8 words of every record, ctx+0x64, the slot 3 calls in order. A query
+// reaching a kind whose +96 kernel is not recreated yet is skipped and counted.
+inline bool verify_water_query96( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "water_query96: the document did not load" );
+        return false;
+    }
+    water_built_t built{};
+    water_build_world( *tree, built, []( entity_t& e ) { return entity_transform( e ); } );
+    for ( std::size_t k = 0; k < g_golden_wq96_point_count; ++k )
+    {
+        const unsigned* p = g_golden_wq96_points + 12 * k;
+        const int wave = water_create_point_wave( built, p );
+        water_words_t& w = built.waves[ static_cast< std::size_t >( wave ) ];
+        point_wave_life_t life{};
+        life.tail_width = w.f( 92 );
+        life.outer_radius = w.f( 104 );
+        life.elapsed = w.f( 120 );
+        life.rate = w.f( 124 );
+        point_wave_tick( life, static_cast< int >( w.word[ 1 ] ), water_bits( p[ 11 ] ), nullptr, nullptr );
+        w.setf( 120, life.elapsed );
+        w.word[ 144 / 4 ] = ( w.word[ 144 / 4 ] & ~0xFFu ) | ( life.expired ? 1u : 0u );
+    }
+    water_view_t view{};
+    water_view_build( built, view );
+    std::vector< bool > unread( built.waves.size( ) );
+    for ( std::size_t i = 0; i < built.waves.size( ); ++i )
+    {
+        const water_kind_t k = built.wave_kind[ i ];
+        unread[ i ] = !( k == water_kind_whirlpool || k == water_kind_ramp || k == water_kind_point );
+    }
+    water_query_stats_t st{};
+    const int failed = water_query_vectors( view, g_golden_wq96_words, g_golden_wq96_offsets, g_golden_wq96_count, "query96", st, true, &unread );
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_query + the +96 kernels (whirlpool 0x5A1F80 / 0x5A2160, ramp 0x5A2FC0 / 0x5A3160, point 0x5A39B0 / 0x5A3CA0; "
+                     "0x529ED0 / 0x529F70's +96 branches) match retail's 0x528FC0 in the renderer's mode: %d of %d queries compared (%d "
+                     "vertices, %d with a displacement; %d slot 3 calls, %d tagged), %d skipped (a +96 kernel not recreated)",
+            static_cast< int >( g_golden_wq96_count ) - st.skipped, static_cast< int >( g_golden_wq96_count ), st.vertices, st.moved, st.calls,
+            st.tagged, st.skipped );
+    else
+        LOG_ERROR( "water_query96 FAILED %d of %d queries", failed, static_cast< int >( g_golden_wq96_count ) );
     return failed == 0;
 }
 
@@ -1444,6 +1517,7 @@ inline bool verify_water_all( )
 {
     bool ok = true;
     ok = verify_water_built_tick( ) && ok;
+    ok = verify_water_query96( ) && ok;
     ok = verify_water_build( ) && ok;
     ok = verify_water_query( ) && ok;
     ok = verify_point_waves( ) && ok;

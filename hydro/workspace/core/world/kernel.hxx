@@ -76,6 +76,7 @@ inline water_wave_kernel_t water_wave_kernel( water_kind_t kind, const water_wor
         k.whirlpool.depth = w.f( 100 );
         k.whirlpool.angular_speed = w.f( 104 );
         k.whirlpool.linear_speed = w.f( 108 );
+        k.whirlpool.foaminess = w.f( 112 );   // the +96 kernel 0x5A1F80
         break;
     case water_kind_directional:   // 0x59B110
         k.directional.amplitude = w.f( 104 );
@@ -95,6 +96,8 @@ inline water_wave_kernel_t water_wave_kernel( water_kind_t kind, const water_wor
         k.ramp.along_offset = w.f( 236 );
         k.ramp.curve = w.f( 248 );
         k.ramp.slope = w.f( 252 );
+        k.ramp.grad_x = w.f( 256 );   // the +96 kernel 0x5A2FC0
+        k.ramp.grad_y = w.f( 260 );
         for ( int i = 0; i < 3; ++i )
         {
             k.ramp.flow_inner[ i ] = w.f( 280 + 4 * i );
@@ -130,6 +133,9 @@ inline water_wave_kernel_t water_wave_kernel( water_kind_t kind, const water_wor
         k.point.rate = w.f( 124 );
         k.point.amplitude_scale = w.f( 128 );
         k.point.slope = w.f( 132 );
+        k.point.speed = w.f( 108 );   // the +96 kernel 0x5A39B0
+        k.point.foaminess = w.f( 116 );
+        k.point.inv_amplitude = w.f( 136 );
         break;
     default: break;
     }
@@ -204,9 +210,35 @@ inline void water_view_build( const water_built_t& b, water_view_t& v )
 inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
 {
     const water_view_t& v = *static_cast< const water_view_t* >( user );
-    if ( ctx.flag96 )
-        return false;   // the +96 variants: not recreated
     const water_wave_kernel_t& k = v.kernels[ wave ];
+    if ( ctx.flag96 )
+    {
+        // The +96 kernels (wave.hxx), on the raw records.
+        switch ( k.kind )
+        {
+        case water_kind_whirlpool:
+        case water_kind_ramp:
+        case water_kind_point: break;
+        default: return false;   // not recreated yet (directional / bump / banked turn), ocean, or not built
+        }
+        for ( int i = 0; i < ctx.count; ++i )
+        {
+            if ( ctx.flag100 && ctx.tags[ i ] != ctx.tag )
+                continue;
+            const float x = *water_record( ctx, i, 0 );
+            const float y = *water_record( ctx, i, 4 );
+            float& height = *water_record( ctx, i, 8 );
+            float* flow = water_record( ctx, i, 0xC );
+            float& foam = *water_record( ctx, i, 0x14 );
+            switch ( k.kind )
+            {
+            case water_kind_whirlpool: whirlpool_vertex96( k.whirlpool, x, y, height, flow, foam ); break;
+            case water_kind_ramp: ramp_vertex96( k.ramp, x, y, height, flow ); break;
+            default: point_wave_vertex96( k.point, x, y, height, flow, foam ); break;
+            }
+        }
+        return true;
+    }
     switch ( k.kind )
     {
     case water_kind_whirlpool:
