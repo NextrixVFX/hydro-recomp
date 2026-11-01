@@ -18,7 +18,7 @@
 
 inline void c_world::load_huds( )
 {
-    static const char* k_names[ 3 ] = { "HUDs/RacePreGameHUD", "HUDs/RaceGameHUD", "HUDs/RacePostGameHUD" };
+    const char* const* k_names = k_race_hud_projects;   // the ctor 0x489030's three loads (world/rules.hxx)
     m_multi_delays.clear( );
     m_start_lights.clear( );
     for ( int p = 0; p < 3; ++p )

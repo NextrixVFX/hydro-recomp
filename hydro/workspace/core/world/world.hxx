@@ -1167,6 +1167,9 @@ public:
         // race_session_start - after Decision, where the hulls' wake update 0x417D80 writes VuWater, and before
         // DynamicsKick); without a race it runs here, once per frame, as before.
         m_race.world.water = &m_water;
+        m_race.world.pfx = m_pfx.runtime( );
+        m_race.world.pfx_manager = m_pfx.manager( );
+        m_race.world.pfx_ops = m_pfx.manager_ops( );
         m_race.world.view = &m_water_view;
         m_race.world.water_tick = [ this ]( float step ) { water_frame( step ); };
         m_race.world.triggers = [ this ] { race_triggers( ); };
