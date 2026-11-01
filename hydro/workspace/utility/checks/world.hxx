@@ -3284,9 +3284,96 @@ inline bool verify_dynamic_prop_bodies( )
     return failed == 0;
 }
 
+// The dynamic game prop's step callback (world/dynprop.hxx dynamic_prop_step: 0x437730 with the sphere buoyancy
+// 0x5474A0 and applyForce 0x4133B0) against retail's own run (oracle case dynamic_prop_step): 240 seeded entity /
+// component / body images, the water query answered as the case's hook did (the point back, the vector's disp and
+// height). Compared: the water points asked (count and words), the body's force / torque +0x1B0 .. +0x1CC (the
+// w lanes too - untouched) and the entity's +0x180 / +0x181.
+inline bool verify_dynamic_prop_step( )
+{
+    int failed = 0, words = 0, wet = 0;
+    for ( std::size_t index = 0; index < g_golden_dynamic_prop_step_count; ++index )
+    {
+        const unsigned* s = g_golden_dynamic_prop_step_words + g_golden_dynamic_prop_step_offsets[ index ];
+        std::uint8_t ent[ 0x190 ], comp[ 0x108 ], body[ 0x2D4 ];
+        std::memcpy( ent, s, 0x190 );
+        std::memcpy( comp, s + 100, 0x108 );
+        std::memcpy( body, s + 166, 0x2D4 );
+        const unsigned* w = s + 347;
+        float disp[ 3 ], height;
+        std::memcpy( disp, w, 12 );
+        std::memcpy( &height, w + 3, 4 );
+        const unsigned n = w[ 4 ];
+        const unsigned* points = w + 5;
+        const unsigned* want = points + 3 * n;
+        dynamic_prop_t p;
+        dynamic_prop_construct( p );
+        std::memcpy( &p.mass, ent + 0x78, 4 );
+        std::memcpy( &p.fluids_radius, ent + 0xB8, 4 );
+        std::memcpy( &p.fluids_density, ent + 0xBC, 4 );
+        std::memcpy( &p.fluids_drag, ent + 0xC0, 4 );
+        std::memcpy( &p.fluids_lift, ent + 0xC4, 4 );
+        std::memcpy( p.hydro_centre, ent + 0xC8, 12 );
+        std::memcpy( &p.splash_speed, ent + 0xF0, 4 );
+        p.linear_anchor = ent[ 0xFC ];
+        p.angular_anchor = ent[ 0xFD ];
+        std::memcpy( &p.anchor_spring, ent + 0x100, 4 );
+        std::memcpy( &p.anchor_damping, ent + 0x104, 4 );
+        dynamic_prop_live_t live;
+        std::memcpy( live.anchor, ent + 0x144, 12 );
+        std::memcpy( live.anchor_q, ent + 0x154, 16 );
+        live.in_water = ent[ 0x180 ];
+        live.splash = ent[ 0x181 ];
+        float centre[ 3 ];
+        std::memcpy( centre, comp + 0xDC, 12 );
+        std::vector< std::uint32_t > asked;
+        const dynamic_prop_water_fn water = [ & ]( const float* point, water_vertex_t& out ) {
+            out = water_vertex_t{ };
+            std::memcpy( out.pos, point, 12 );
+            std::memcpy( out.disp, disp, 12 );
+            out.height = height;
+            for ( int k = 0; k < 3; ++k )
+            {
+                std::uint32_t u;
+                std::memcpy( &u, point + k, 4 );
+                asked.push_back( u );
+            }
+            return true;
+        };
+        bool bad = !dynamic_prop_step( p, live, centre, body, water );
+        bad = bad || asked.size( ) != 3 * n;
+        for ( std::size_t k = 0; !bad && k < asked.size( ); ++k )
+            bad = asked[ k ] != points[ k ];
+        for ( int k = 0; !bad && k < 8; ++k )
+        {
+            ++words;
+            std::uint32_t u;
+            std::memcpy( &u, body + 0x1B0 + 4 * k, 4 );
+            if ( u != want[ k ] )
+            {
+                bad = true;
+                if ( failed < 6 )
+                    LOG_ERROR( "dynamic prop step vector %d: body +0x%X = 0x%08X, retail 0x%08X", static_cast< int >( index ), 0x1B0 + 4 * k, u, want[ k ] );
+            }
+        }
+        bad = bad || live.in_water != want[ 8 ] || live.splash != want[ 9 ];
+        wet += live.in_water ? 1 : 0;
+        if ( bad && ++failed <= 6 )
+            LOG_ERROR( "dynamic prop step vector %d differs", static_cast< int >( index ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuDynamicGamePropEntity's step callback 0x437730 (buoyancy 0x5474A0, applyForce 0x4133B0, the anchors) matches retail "
+                     "over %d vectors (%d in water; %d force / torque words bit for bit, the water points, +0x180 / +0x181)",
+                     static_cast< int >( g_golden_dynamic_prop_step_count ), wet, words );
+    else
+        LOG_ERROR( "dynamic prop step FAILED %d of %d", failed, static_cast< int >( g_golden_dynamic_prop_step_count ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_dynamic_prop_step( ) && ok;
     ok = verify_dynamic_prop_bodies( ) && ok;
     ok = verify_trigger_instigators( ) && ok;
     ok = verify_gfx_blend( ) && ok;

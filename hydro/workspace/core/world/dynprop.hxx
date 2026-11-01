@@ -1,6 +1,9 @@
 #pragma once
 
+#include <workspace/core/boat/events.hxx>
 #include <workspace/core/boat/hull.hxx>
+#include <workspace/core/boat/math.hxx>
+#include <workspace/core/world/query.hxx>
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/entity/property.hxx>
 #include <workspace/core/entity/rigid.hxx>
@@ -10,6 +13,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <xmmintrin.h>
@@ -277,5 +281,198 @@ inline bool dynamic_prop_game_initialize( level_body_t& b, rigid_component_t& c,
     const float ld = body_clamp01( p.linear_damping ), ad = body_clamp01( p.angular_damping );
     std::memcpy( &body_word( b.body, 0x1D0 ), &ld, 4 );
     std::memcpy( &body_word( b.body, 0x1D4 ), &ad, 4 );
+    return true;
+}
+
+// ---- The step callback 0x437730 (vtable 0x73A254 slot 1, on the entity's +0xB0; dt unused; retn 4) ----
+// Recreated from the disassembly with every scalar op in retail's operand order (the SSE NaN rule written out:
+// boat/events.hxx sse_mul / sse_add / sse_sub, dp_div here), checked by the case dynamic_prop_step.
+inline float dp_div( float a, float b ) { bool p; const float n = sse_nan_pick( a, b, p ); return p ? n : a / b; }
+inline float dp_neg( float a ) { std::uint32_t u; std::memcpy( &u, &a, 4 ); u ^= 0x80000000u; std::memcpy( &a, &u, 4 ); return a; }   // xorps 0x6F7CD0
+inline bool dp_gt( float a, float b ) { return _mm_comigt_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) != 0; }   // comiss a, b; ja
+inline float dp_min( float a, float b ) { return _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); }
+inline float dp_f( const std::uint8_t* p, int at ) { float f; std::memcpy( &f, p + at, 4 ); return f; }
+inline void dp_put( std::uint8_t* p, int at, float f ) { std::memcpy( p + at, &f, 4 ); }
+
+// g_vuwater 0x529140 (thiscall out*, point*): the caller's water (world/drive.hxx water_point_height). False: a
+// path not recreated - the step is then UNKNOWN.
+using dynamic_prop_water_fn = std::function< bool( const float* point, water_vertex_t& out ) >;
+
+// btRigidBody::applyForce 0x4133B0 (ecx body, edx force*, the position on the stack; plain ret): rel = point -
+// origin (+0x40); +0x1B0 += force x linear factor (+0x170); +0x1C0 += angular factor (+0x260) x (rel x (force x
+// linear factor)).
+inline void dp_apply_force( std::uint8_t* b, const float* f, const float* point )
+{
+    const float rx = sse_sub( point[ 0 ], dp_f( b, 0x40 ) ), ry = sse_sub( point[ 1 ], dp_f( b, 0x44 ) ), rz = sse_sub( point[ 2 ], dp_f( b, 0x48 ) );
+    dp_put( b, 0x1B0, sse_add( sse_mul( f[ 0 ], dp_f( b, 0x170 ) ), dp_f( b, 0x1B0 ) ) );
+    dp_put( b, 0x1B4, sse_add( dp_f( b, 0x1B4 ), sse_mul( dp_f( b, 0x174 ), f[ 1 ] ) ) );
+    dp_put( b, 0x1B8, sse_add( dp_f( b, 0x1B8 ), sse_mul( dp_f( b, 0x178 ), f[ 2 ] ) ) );
+    const float a = sse_mul( f[ 0 ], dp_f( b, 0x170 ) ), bb = sse_mul( dp_f( b, 0x174 ), f[ 1 ] ), c = sse_mul( dp_f( b, 0x178 ), f[ 2 ] );
+    const float tx = sse_sub( sse_mul( c, ry ), sse_mul( bb, rz ) );
+    const float ty = sse_sub( sse_mul( a, rz ), sse_mul( c, rx ) );
+    const float tz = sse_sub( sse_mul( bb, rx ), sse_mul( a, ry ) );
+    dp_put( b, 0x1C0, sse_add( sse_mul( tx, dp_f( b, 0x260 ) ), dp_f( b, 0x1C0 ) ) );
+    dp_put( b, 0x1C4, sse_add( dp_f( b, 0x1C4 ), sse_mul( dp_f( b, 0x264 ), ty ) ) );
+    dp_put( b, 0x1C8, sse_add( dp_f( b, 0x1C8 ), sse_mul( dp_f( b, 0x268 ), tz ) ) );
+}
+
+// The sphere buoyancy 0x5474A0 (thiscall on the 0x50-byte block the step builds: +0 body, +4 the point, +0x14 mass,
+// +0x18 radius, +0x1C density, +0x20 drag, +0x24 lift): the water under the point; with height > z - r (comiss):
+// frac = min((height - (z - r)) / (r x 2), 1), vol = ((r x 4/3pi) r) r (0x6F7758), k = (mass / vol) / density,
+// buoyancy z = -(((frac vol) k) gravity z (body +0x198)); dv = linear velocity (+0x140) - the water's disp;
+// area = ((r pi) r) frac (0x6F7750), half = k x 0.5; D = -(|dv| ((area half) drag)); force = (D dvx, D dvy,
+// lift + ((dvz D) + buoyancy)) with lift = ((half (dvx^2 + dvy^2)) area) lift coeff; in water = 1. Else force 0.
+// Out: the force, the water's disp (16 bytes, its w the query's) and height; the in-water byte.
+struct dp_fluid_out_t
+{
+    float force[ 3 ] = { 0, 0, 0 };
+    float disp[ 3 ] = { 0, 0, 0 };
+    float height = 0.0f;
+    bool in_water = false;
+};
+
+inline bool dp_sphere_fluid( const std::uint8_t* b, const float* point, float mass, float r, float density, float drag, float lift,
+                             const dynamic_prop_water_fn& water, dp_fluid_out_t& out )
+{
+    out = dp_fluid_out_t{ };
+    water_vertex_t v{ };
+    if ( !water || !water( point, v ) )
+        return false;
+    std::memcpy( out.disp, v.disp, 12 );
+    out.height = v.height;
+    const float bottom = sse_sub( v.pos[ 2 ], r );
+    if ( !dp_gt( v.height, bottom ) )
+        return true;
+    const float depth = sse_sub( v.height, bottom );
+    const float vol = sse_mul( sse_mul( sse_mul( r, support_bits( 0x40860A92u ) ), r ), r );
+    const float frac = dp_min( dp_div( depth, sse_mul( r, 2.0f ) ), 1.0f );
+    const float k = dp_div( dp_div( mass, vol ), density );
+    const float dvy = sse_sub( dp_f( b, 0x144 ), out.disp[ 1 ] );
+    const float dvx = sse_sub( dp_f( b, 0x140 ), out.disp[ 0 ] );
+    const float dvz = sse_sub( dp_f( b, 0x148 ), out.disp[ 2 ] );
+    const float buoy = dp_neg( sse_mul( sse_mul( sse_mul( frac, vol ), k ), dp_f( b, 0x198 ) ) );
+    const float half = sse_mul( k, 0.5f );
+    const float h2 = sse_add( sse_mul( dvx, dvx ), sse_mul( dvy, dvy ) );
+    const float area = sse_mul( sse_mul( sse_mul( r, support_bits( 0x40490FDBu ) ), r ), frac );
+    const float speed = hull_sqrt( sse_add( sse_mul( dvz, dvz ), h2 ) );
+    const float lift_term = sse_mul( sse_mul( sse_mul( half, h2 ), area ), lift );
+    const float d = dp_neg( sse_mul( speed, sse_mul( sse_mul( area, half ), drag ) ) );
+    out.force[ 0 ] = sse_mul( d, dvx );
+    out.force[ 1 ] = sse_mul( d, dvy );
+    out.force[ 2 ] = sse_add( lift_term, sse_add( sse_mul( dvz, d ), buoy ) );
+    out.in_water = true;
+    return true;
+}
+
+// 0x437730 itself, on the entity's state (p), its in-water flags (+0x180 / +0x181), the anchor position (+0x144)
+// and quaternion (+0x154) the show stored, the component's centre and the body's bytes. M = 0x410B40(the body's
+// basis / origin): the entity's origin p = M(-centre); with Fluids Radius > 0 (comiss) the buoyancy at p and its
+// force applied (0x4133B0) at M(Hydrodynamic Center - centre); entering the water (+0x180 0 -> 1) faster than Splash
+// Speed x 0.44704 (0x6F7654; |linear velocity - disp|, VuMath_sqrt) sets +0x181; +0x180 = in water. Linear Anchor:
+// +0x1B0 += linear factor x (spring m (anchor - p) - damping m v) in x / y (z: (spring m) 0 - (damping m) 0).
+// Angular Anchor: the rotation from M (0x531000) against the anchor's (0x41B4E0), its axis-angle (0x531330), the
+// torque (spring (M3 axis (-angle))) + (-angular velocity) damping) through the INVERSE of the world inverse
+// inertia (+0x110, cofactors / determinant), x angular factor, into +0x1C0.
+struct dynamic_prop_live_t
+{
+    std::uint8_t in_water = 0;      // +0x180
+    std::uint8_t splash = 0;        // +0x181
+    float anchor[ 3 ] = { 0, 0, 0 };    // +0x144 (the show: the world's translation)
+    float anchor_q[ 4 ] = { 0, 0, 0, 1 };   // +0x154 (0x531000 of the world)
+};
+
+inline bool dynamic_prop_step( const dynamic_prop_t& p, dynamic_prop_live_t& live, const float* centre, std::uint8_t* b,
+                               const dynamic_prop_water_fn& water )
+{
+    float m[ 16 ];
+    for ( int row = 0; row < 3; ++row )
+    {
+        for ( int k = 0; k < 3; ++k )
+            m[ 4 * row + k ] = dp_f( b, 0x10 + 16 * k + 4 * row );
+        m[ 4 * row + 3 ] = 0.0f;
+    }
+    m[ 12 ] = dp_f( b, 0x40 );
+    m[ 13 ] = dp_f( b, 0x44 );
+    m[ 14 ] = dp_f( b, 0x48 );
+    m[ 15 ] = 1.0f;
+    const float ncx = dp_neg( centre[ 0 ] ), ncy = dp_neg( centre[ 1 ] ), ncz = dp_neg( centre[ 2 ] );
+    float pos[ 4 ];
+    pos[ 0 ] = sse_add( sse_add( sse_add( sse_mul( m[ 4 ], ncy ), sse_mul( m[ 0 ], ncx ) ), sse_mul( m[ 8 ], ncz ) ), m[ 12 ] );
+    pos[ 1 ] = sse_add( sse_add( sse_add( sse_mul( m[ 5 ], ncy ), sse_mul( m[ 1 ], ncx ) ), sse_mul( m[ 9 ], ncz ) ), m[ 13 ] );
+    pos[ 2 ] = sse_add( sse_add( sse_add( sse_mul( m[ 6 ], ncy ), sse_mul( m[ 2 ], ncx ) ), sse_mul( m[ 10 ], ncz ) ), m[ 14 ] );
+    pos[ 3 ] = 0.0f;   // the stack word 0x9C is never written - the water query copies it to a word nothing reads
+    if ( dp_gt( p.fluids_radius, 0.0f ) )
+    {
+        dp_fluid_out_t f;
+        if ( !dp_sphere_fluid( b, pos, p.mass, p.fluids_radius, p.fluids_density, p.fluids_drag, p.fluids_lift, water, f ) )
+            return false;
+        const float hx = sse_sub( p.hydro_centre[ 0 ], centre[ 0 ] ), hy = sse_sub( p.hydro_centre[ 1 ], centre[ 1 ] ),
+                    hz = sse_sub( p.hydro_centre[ 2 ], centre[ 2 ] );
+        float at[ 3 ];
+        at[ 0 ] = sse_add( sse_add( sse_add( sse_mul( m[ 0 ], hx ), sse_mul( m[ 4 ], hy ) ), sse_mul( m[ 8 ], hz ) ), m[ 12 ] );
+        at[ 1 ] = sse_add( sse_add( sse_add( sse_mul( m[ 1 ], hx ), sse_mul( m[ 5 ], hy ) ), sse_mul( m[ 9 ], hz ) ), m[ 13 ] );
+        at[ 2 ] = sse_add( sse_add( sse_add( sse_mul( m[ 2 ], hx ), sse_mul( m[ 6 ], hy ) ), sse_mul( m[ 10 ], hz ) ), m[ 14 ] );
+        dp_apply_force( b, f.force, at );
+        if ( f.in_water && !live.in_water )
+        {
+            const float dy = sse_sub( dp_f( b, 0x144 ), f.disp[ 1 ] ), dx = sse_sub( dp_f( b, 0x140 ), f.disp[ 0 ] ),
+                        dz = sse_sub( dp_f( b, 0x148 ), f.disp[ 2 ] );
+            const float speed = hull_sqrt( sse_add( sse_add( sse_mul( dy, dy ), sse_mul( dx, dx ) ), sse_mul( dz, dz ) ) );
+            if ( dp_gt( speed, sse_mul( p.splash_speed, support_bits( 0x3EE4E26Du ) ) ) )
+                live.splash = 1;
+        }
+        live.in_water = f.in_water ? 1 : 0;
+    }
+    if ( p.linear_anchor )
+    {
+        const float c = sse_mul( p.anchor_damping, p.mass );
+        const float k = sse_mul( p.anchor_spring, p.mass );
+        const float dx = sse_sub( live.anchor[ 0 ], pos[ 0 ] ), dy = sse_sub( live.anchor[ 1 ], pos[ 1 ] );
+        const float fx = sse_sub( sse_mul( k, dx ), sse_mul( dp_f( b, 0x140 ), c ) );
+        const float fy = sse_sub( sse_mul( k, dy ), sse_mul( dp_f( b, 0x144 ), c ) );
+        const float fz = sse_sub( sse_mul( k, 0.0f ), sse_mul( c, 0.0f ) );
+        dp_put( b, 0x1B0, sse_add( sse_mul( fx, dp_f( b, 0x170 ) ), dp_f( b, 0x1B0 ) ) );
+        dp_put( b, 0x1B4, sse_add( sse_mul( dp_f( b, 0x174 ), fy ), dp_f( b, 0x1B4 ) ) );
+        dp_put( b, 0x1B8, sse_add( sse_mul( dp_f( b, 0x178 ), fz ), dp_f( b, 0x1B8 ) ) );
+    }
+    if ( p.angular_anchor )
+    {
+        float q[ 4 ], qd[ 4 ], axis[ 4 ], angle[ 1 ];
+        quat_from_rows( q, m );
+        quat_inverse_mul( qd, q, live.anchor_q );
+        quat_to_axis_angle( qd, axis, angle );
+        const float na = dp_neg( angle[ 0 ] );
+        const float ay = sse_mul( axis[ 1 ], na ), az = sse_mul( axis[ 2 ], na ), ax = sse_mul( axis[ 0 ], na );
+        const float wx = sse_add( sse_add( sse_mul( m[ 4 ], ay ), sse_mul( m[ 0 ], ax ) ), sse_mul( m[ 8 ], az ) );
+        const float wy = sse_add( sse_add( sse_mul( m[ 5 ], ay ), sse_mul( m[ 1 ], ax ) ), sse_mul( m[ 9 ], az ) );
+        const float wz = sse_add( sse_add( sse_mul( m[ 6 ], ay ), sse_mul( m[ 2 ], ax ) ), sse_mul( m[ 10 ], az ) );
+        const float k = p.anchor_spring, c = p.anchor_damping;
+        const float tx = sse_add( sse_mul( dp_neg( dp_f( b, 0x150 ) ), c ), sse_mul( k, wx ) );
+        const float ty = sse_add( sse_mul( dp_neg( dp_f( b, 0x154 ) ), c ), sse_mul( wy, k ) );
+        const float tz = sse_add( sse_mul( dp_neg( dp_f( b, 0x158 ) ), c ), sse_mul( wz, k ) );
+        const float m00 = dp_f( b, 0x110 ), m01 = dp_f( b, 0x114 ), m02 = dp_f( b, 0x118 );
+        const float m10 = dp_f( b, 0x120 ), m11 = dp_f( b, 0x124 ), m12 = dp_f( b, 0x128 );
+        const float m20 = dp_f( b, 0x130 ), m21 = dp_f( b, 0x134 ), m22 = dp_f( b, 0x138 );
+        const float c00 = sse_sub( sse_mul( m11, m22 ), sse_mul( m12, m21 ) );
+        const float c10 = sse_sub( sse_mul( m20, m12 ), sse_mul( m10, m22 ) );
+        const float c20 = sse_sub( sse_mul( m10, m21 ), sse_mul( m20, m11 ) );
+        const float det = sse_add( sse_add( sse_mul( c00, m00 ), sse_mul( c10, m01 ) ), sse_mul( c20, m02 ) );
+        const float inv = dp_div( 1.0f, det );
+        const float i22 = sse_mul( sse_sub( sse_mul( m00, m11 ), sse_mul( m01, m10 ) ), inv );
+        const float i20 = sse_mul( c20, inv );
+        const float i21 = sse_mul( sse_sub( sse_mul( m01, m20 ), sse_mul( m00, m21 ) ), inv );
+        const float i12 = sse_mul( sse_sub( sse_mul( m02, m10 ), sse_mul( m00, m12 ) ), inv );
+        const float i11 = sse_mul( sse_sub( sse_mul( m00, m22 ), sse_mul( m02, m20 ) ), inv );
+        const float i10 = sse_mul( c10, inv );
+        const float i01 = sse_mul( sse_sub( sse_mul( m02, m21 ), sse_mul( m01, m22 ) ), inv );
+        const float i02 = sse_mul( sse_sub( sse_mul( m01, m12 ), sse_mul( m02, m11 ) ), inv );
+        const float i00 = sse_mul( c00, inv );
+        const float r0 = sse_add( sse_add( sse_mul( tx, i00 ), sse_mul( ty, i10 ) ), sse_mul( tz, i20 ) );
+        const float r1 = sse_add( sse_add( sse_mul( tx, i01 ), sse_mul( ty, i11 ) ), sse_mul( tz, i21 ) );
+        const float r2 = sse_add( sse_add( sse_mul( tx, i02 ), sse_mul( ty, i12 ) ), sse_mul( tz, i22 ) );
+        dp_put( b, 0x1C0, sse_add( sse_mul( dp_f( b, 0x260 ), r0 ), dp_f( b, 0x1C0 ) ) );
+        dp_put( b, 0x1C4, sse_add( sse_mul( dp_f( b, 0x264 ), r1 ), dp_f( b, 0x1C4 ) ) );
+        dp_put( b, 0x1C8, sse_add( sse_mul( dp_f( b, 0x268 ), r2 ), dp_f( b, 0x1C8 ) ) );
+    }
     return true;
 }
