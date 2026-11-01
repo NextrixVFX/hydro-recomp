@@ -199,6 +199,11 @@ public:
         }
     }
 
+    // The runtime / VuPfxManager the race's boats reach (the Build tick's pfx, the hull's splash).
+    pfx_runtime_t* runtime( ) { return m_ready ? &m_rt : nullptr; }
+    pfx_manager_t* manager( ) { return m_ready ? &m_manager : nullptr; }
+    const pfx_manager_ops_t* manager_ops( ) const { return m_ready ? &m_ops : nullptr; }
+
 private:
     // The shared VuRandom in for one runtime call, back out after it (see the top).
     struct shared_t

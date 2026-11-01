@@ -3,6 +3,7 @@
 #include <workspace/core/boat/anim.hxx>
 #include <workspace/core/boat/camera.hxx>
 #include <workspace/core/boat/contact.hxx>
+#include <workspace/core/boat/effects.hxx>
 #include <workspace/core/boat/fleet.hxx>
 #include <workspace/core/boat/human.hxx>
 #include <workspace/core/boat/manager.hxx>
@@ -100,6 +101,9 @@ struct race_drive_t
     camera_env_t camera_env;
     boat_respawn_t respawn{};
     boat_respawn_hooks_t respawn_hooks{};
+    // Build step 5's pfx controller (boat effects.hxx): its on bytes / aabb, read from the image once, written back.
+    boat_pfx_t pfx;
+    bool pfx_read = false;
 };
 
 inline void race_drive_contact_setup( race_session_t& s );
@@ -603,12 +607,41 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         h.respawn = race_drive_respawn;
         h.enable = []( void* u ) { race_session_enable( *race_drive_of( u ).session, race_drive_boat( race_drive_of( u ) ), true ); };
         h.disable = []( void* u ) { race_session_enable( *race_drive_of( u ).session, race_drive_boat( race_drive_of( u ) ), false ); };
-        h.debris_410FF0 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the debris 0x410FF0 (2391 b: the damage pieces' Bullet bodies - the boat agent's) - not recreated" ); };
+        // 0x410FF0 (boat effects.hxx boat_debris_launch): with no parts and no pieces (all a race's debris holds here -
+        // their images / models / bodies are not built) it is 0x411950 (nothing to remove), +0x94 = 1, +0x98 = 10.0,
+        // +0xC8 = 1.0 and no draws; with any, UNKNOWN.
+        h.debris_410FF0 = []( void* u ) {
+            race_drive_t& d = race_drive_of( u );
+            std::uint8_t* db = d.d.debris;
+            if ( load_word( db, 0x70 ) != 0u || load_word( db, 0xA0 ) != 0u || !d.session->random )
+            {
+                race_unwired( *d.session, "the debris launch 0x410FF0 with parts / pieces (not built here) or no VuRandom - UNKNOWN, not run" );
+                return;
+            }
+            boat_debris_sub_t sub;
+            std::memcpy( sub.range, db + 0x24, sizeof( sub.range ) );
+            std::vector< boat_debris_part_t > parts;
+            std::vector< boat_launch_piece_t > pieces;
+            const solver_rigid_t body = boat_decision_body( d.d.body );
+            boat_debris_launch( db, sub, parts, pieces, reinterpret_cast< const float* >( d.d.transform + 0x50 ), body, *d.session->random,
+                                boat_launch_hooks_t{ } );
+        };
         // 0x41E240: an FMOD one-shot at the boat (g 0x759010 EventSystem getEvent on the name at +0x1EC, set3DAttributes at the
         // transform's +0x80, start, release - imports 0x64C348 / 0x64C358 / 0x64C354): the audio platform layer, a hook.
-        h.boat_41E240 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "audio: the boat's one-shot 0x41E240 (FMOD - platform)" ); };
-        h.piece_follow = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the debris pieces' follow 0x5344A0 / 0x50E660 (not recreated)" ); };
-        h.piece_remove = []( void* u, int ) { race_unwired( *race_drive_of( u ).session, "the debris pieces' removal (0x411950's dynamics calls, not recreated)" ); };
+        h.boat_41E240 = []( void* u ) {
+            race_drive_t& d = race_drive_of( u );
+            const auto it = race_drive_boat( d ).io.boat_strings.find( 0x1EC );
+            boat_event_hooks_t eh;
+            eh.user = d.session;
+            eh.get = []( void* v, const std::string&, std::uint32_t& ) {
+                race_unwired( *static_cast< race_session_t* >( v ), "audio: the boat's destroyed event 0x41E240 (FMOD getEvent - platform) - no event made" );
+                return false;
+            };
+            boat_destroyed_event( it == race_drive_boat( d ).io.boat_strings.end( ) ? std::string( ) : it->second,
+                                  reinterpret_cast< const float* >( d.d.transform + 0x80 ), eh );
+        };
+        h.piece_follow = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the debris pieces' follow (boat_debris_follow) with pieces - none are built here: UNKNOWN" ); };
+        h.piece_remove = []( void* u, int ) { race_unwired( *race_drive_of( u ).session, "a debris piece's removal (boat_piece_remove) - no piece is built here: UNKNOWN" ); };
         h.boost.user = r.get( );
         h.boost.sound = []( void* u, const std::string& ) { race_unwired( *race_drive_of( u ).session, "audio: the boost sounds (FMOD - platform)" ); };
         h.boost.stats = []( void* u, const char* ) { race_unwired( *race_drive_of( u ).session, "the stats service g 0x758FEC vt+0x1C (platform)" ); };
@@ -618,7 +651,26 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
             race_unwired( *race_drive_of( u ).session, "audio: FMOD getEvent (platform) - no event made" );
             return false;
         };
-        h.hull.splash = []( void* u, const std::string& ) { race_unwired( *race_drive_of( u ).session, "the hull's splash pfx 0x52BCD0 (not wired)" ); };
+        // The hull's splash (boat effects.hxx boat_hull_splash): createEffect 0x52BCD0 on the world's VuPfxManager
+        // (world/pfxmgr.hxx pfx_manager_create - the water agent's), the runtime's ops.
+        h.hull.splash = []( void* u, const std::string& name ) {
+            race_drive_t& d = race_drive_of( u );
+            race_session_t& rs = *d.session;
+            if ( !rs.world.pfx || !rs.world.pfx_manager || !rs.world.pfx_ops )
+            {
+                race_unwired( rs, "the hull's splash 0x52BCD0 with no VuPfx runtime / manager - UNKNOWN, not run" );
+                return;
+            }
+            const auto create = []( void* v, const char* n ) {
+                race_session_t& x = *static_cast< race_session_t* >( v );
+                const int e = pfx_manager_create( *x.world.pfx_manager, n, *x.world.pfx_ops );
+                if ( e < 0 )
+                    race_unwired( x, std::string( "the hull's splash: createEffect 0x52BCD0 made no effect for '" ) + n + "' (no free entry or the project is not loaded)" );
+                return e;
+            };
+            boat_hull_splash( *rs.world.pfx_manager, name.c_str( ), create, &rs, reinterpret_cast< const std::uint32_t* >( d.d.body + 0x140 ),
+                              reinterpret_cast< const float* >( d.d.transform + 0x80 ), boat_pfx_runtime_ops( *rs.world.pfx ) );
+        };
         // VuLensWaterManagerImpl g 0x759048 (the camera's water droplets): vt+0x28 0x513600 adds to its +0x2490, vt+0x2C
         // 0x513620 stores [0x7358A0] x v at +0x68 - state only its own tick 0x513B90 / draw read (the water / render side's).
         h.hull.lens = []( void* u, float ) { race_unwired( *race_drive_of( u ).session, "the lens-water manager g 0x759048 vt+0x28 / vt+0x2C (VuLensWaterManagerImpl - the water / render side's) - not wired" ); };
@@ -756,6 +808,108 @@ inline void race_drive_decision( race_session_t& s, std::size_t boat, float dt )
     boat_decision_tick( r.d, dt, r.hooks );
 }
 
+// ---- Build step 5: the pfx controller 0x419700 and the debris 0x411A50 (boat effects.hxx) ----------------------
+//
+// The controller (boat +0x234) keeps seven record lists (+0x38 .. +0x88, std::vector) and a system at +0x94 that
+// its ctor fills (NOT READ); every record's system is a VuPfxSystemInstance from the runtime. A race controller
+// image holding any record or a +0x94 system is UNKNOWN here (systems the recreated runtime never made) and the
+// step is not run; with none, 0x419700's on / off machine, its raises (0x41E2E0 on the driver) and the aabb run.
+// The debris (boat +0x238): parts (+4 +0x6C) or pieces (+0xA0) present -> UNKNOWN (their images / models are not
+// built here); with none, 0x411A50's aabb reset (and the empty walks).
+inline bool race_drive_pfx_empty( race_session_boat_t& b, const std::uint8_t* pc )
+{
+    const int k = race_session_ref( b.graph, 0, 0x234 );
+    if ( k < 0 || !pc )
+        return false;
+    for ( const image_ref_t& ref : b.graph.objects[ static_cast< std::size_t >( k ) ].refs )
+        if ( ( ref.slot >= 0x38 && ref.slot < 0x8C ) || ref.slot == 0x94 )
+            return false;
+    for ( int l = 0; l < 7; ++l )
+        if ( load_word( pc, 0x38 + 0xC * l ) != load_word( pc, 0x3C + 0xC * l ) )
+            return false;
+    return load_word( pc, 0x94 ) == 0u;
+}
+
+// 0x41E2E0 (ops.raise): boat_driver_raise on the boat's driver; the runtime's ops own `user`, so the boat being
+// ticked is held here for the call (one boat at a time).
+inline thread_local race_drive_t* g_race_drive_raising = nullptr;
+
+// The driver's vt+0x64 (boat pilots.hxx): the human / ghost 0x40EB00 (0x41D570), the AI / UI / nuisance 0x40BDD0.
+inline bool race_drive_throttle( const race_drive_t& r, float& t )
+{
+    if ( r.human )
+        t = driver_entity_throttle( r.d.boat, r.d.transform, r.d.engine, r.d.body );
+    else if ( r.ai || r.nuisance )
+        t = ai_driver_throttle( r.d.driver, r.d.boat, r.d.engine, r.d.boat );
+    else
+        return false;
+    return true;
+}
+
+inline void race_drive_effects( race_session_t& s, race_drive_t& r, float dt )
+{
+    race_session_boat_t& b = race_drive_boat( r );
+    std::uint8_t* pc = race_session_image( b, 0, 0x234 );
+    float throttle = 0.0f;
+    if ( !race_drive_pfx_empty( b, pc ) )
+        race_unwired( s, "Build step 5: the pfx controller 0x419700 holds records / a +0x94 system its unread ctor made - UNKNOWN, not run" );
+    else if ( !race_drive_throttle( r, throttle ) )
+        race_unwired( s, "Build step 5: 0x419700's driver vt+0x64 for this driver class - UNKNOWN, not run" );
+    else
+    {
+        if ( !r.pfx_read )
+        {
+            std::memcpy( r.pfx.on, pc + 0x8C, 5 );
+            std::memcpy( r.pfx.aabb, pc + 0x98, 32 );
+            r.pfx_read = true;
+            LOG_INFO( "race: boat %d Build step 5 runs - 0x419700 on an empty controller (on bytes %d%d%d%d%d), 0x411A50", static_cast< int >( r.index ),
+                      r.pfx.on[ 0 ], r.pfx.on[ 1 ], r.pfx.on[ 2 ], r.pfx.on[ 3 ], r.pfx.on[ 4 ] );
+        }
+        race_unwired( s, "Build step 5: the pfx controller's seven record lists are empty in the boat image - the fill (its ctor / "
+                         "load) is not read, so the systems retail places and ticks are absent (UNKNOWN); 0x419700's on / off "
+                         "machine, raises and aabb reset run" );
+        boat_pfx_boat_t pb;
+        pb.throttle = throttle;
+        pb.d570 = driver_entity_throttle( r.d.boat, r.d.transform, r.d.engine, r.d.body );   // 0x41D570 itself
+        pb.velocity = reinterpret_cast< const std::uint32_t* >( r.d.body + 0x140 );
+        pb.b32c = r.d.boat[ 0x32C ];
+        pb.f400 = load_word( r.d.boat, 0x400 );
+        pb.f404 = load_word( r.d.boat, 0x404 );
+        pb.f2b4 = state_f( r.d.boat, 0x2B4 );
+        pb.colour = r.d.boat + 0x454;
+        pb.offset = reinterpret_cast< const float* >( r.d.boat + 0x49C );
+        pb.world = reinterpret_cast< const float* >( r.d.transform + 0x50 );
+        boat_pfx_ops_t o = s.world.pfx ? boat_pfx_runtime_ops( *s.world.pfx ) : boat_pfx_ops_t{ };
+        o.raise = []( void*, float a, float c ) {
+            if ( race_drive_t* d = g_race_drive_raising )
+                boat_driver_raise( d->d.driver, d->d.human, a, c );
+        };
+        g_race_drive_raising = &r;
+        const bool ran = boat_pfx_tick( r.pfx, pb, dt, o );
+        g_race_drive_raising = nullptr;
+        if ( !ran )
+            race_unwired( s, "Build step 5: a pfx record's bone outside the model's palette - UNKNOWN" );
+        std::memcpy( pc + 0x8C, r.pfx.on, 5 );
+        std::memcpy( pc + 0x98, r.pfx.aabb, 32 );
+        if ( r.pfx.aabb_w_stale )
+            race_unwired( s, "Build step 5: 0x41A790's aabb merge left +0xA4 / +0xB4 = a stale stack word - UNKNOWN" );
+    }
+    std::uint8_t* db = r.d.debris;
+    if ( load_word( db, 0x70 ) != 0u || load_word( db, 0xA0 ) != 0u )
+    {
+        race_unwired( s, "Build step 5: the debris 0x411A50 with parts / pieces (their images and models are not built here) - UNKNOWN, not run" );
+        return;
+    }
+    boat_debris_t d;
+    d.gravity = state_f( db, 0x6C );
+    d.out = db[ 0x94 ];
+    d.timer = state_f( db, 0xC8 );
+    std::memcpy( d.aabb, db + 0xA8, 32 );
+    boat_debris_tick( d, dt, boat_pfx_ops_t{ } );
+    std::memcpy( db + 0xA8, d.aabb, 12 );
+    std::memcpy( db + 0xB8, d.aabb + 4, 12 );   // the w lanes +0xB4 / +0xC4: a stack word retail never writes - left
+}
+
 // The Build tick 0x41F330 (world/build.hxx): steps 1 - 6 are NOT recreated
 // (declared, logged once each); step 7, 0x4200E0 = boat_build_audio, reads
 // nothing steps 1 - 6 write (body, engine, solver, camera +0x20, +0x30C,
@@ -766,8 +920,8 @@ inline void race_drive_build( race_session_t& s, std::size_t boat, float dt )
     race_drive_t& r = *s.drives[ boat ];
     // Step 3, the driver's vt+0x4C(dt): 0x4021A0 (ret 4) in every driver vtable - VuHumanDriver 0x737F44, VuAiDriver
     // 0x737B5C, VuAiNuisanceDriver 0x737C4C, the UI driver 0x737CDC, VuGhostDriver 0x737DDC (read from the image): nothing.
-    race_unwired( s, "the Build tick 0x41F330's steps 4 - 6 (the animation 0x5169E0 / 0x516CF0 and model instances 0x532720 / 0x532990, the "
-                     "pfx 0x419700, the debris 0x411A50, the draw aabb + g_vu3ddrawmanager vt+0x30) - NOT recreated" );
+    race_unwired( s, "the Build tick 0x41F330's steps 4 and 6 (the animation 0x5169E0 / 0x516CF0 and model instances 0x532720 / 0x532990; the "
+                     "draw aabb merge + g_vu3ddrawmanager vt+0x30 - not read here) - NOT recreated" );
     // Step 1: 0x52F690 on the blender g 0x759430 (world/blend.hxx) with the position (transform +0x80, copied first)
     // into boat +0x408 (the 22-word record: +0x408 the far plane the race camera reads, +0x454 / +0x458 the pfx
     // colours step 2 lerps).
@@ -786,6 +940,8 @@ inline void race_drive_build( race_session_t& s, std::size_t boat, float dt )
         if ( !boat_build_water( r.d.boat, position, s.world.view ? &s.world.view->water : nullptr ) )
             race_unwired( s, "the Build tick's step 2 (0x52ACB0 / 0x535E10) with no VuWater, a tree overflow or a map cell outside its map - UNKNOWN, nothing written" );
     }
+    // Step 5 (after 4, which is not run: only a record with a bone would read its palette).
+    race_drive_effects( s, r, dt );
     boat_build_audio_hooks_t h;
     h.user = &s;
     h.slot = []( void* u, std::uint8_t*, const std::string& ) {
@@ -1001,10 +1157,13 @@ inline void race_session_game_mode( void* user, float dt )
         LOG_INFO( "race: VuRaceGame state %s -> %s (sync %d)", before.c_str( ), after.c_str( ), s.dynamics ? s.dynamics->syncs : -1 );
     if ( !s.rules.sorted )
         race_unwired( s, "0x48AB20 over more than 32 boats (MSVC's partition / heap sort paths, not recreated) - the places not sorted (UNKNOWN)" );
-    if ( !running )
-        race_unwired( s, "slot 7 answered the Exit state: VuGame's +0x0C machine's EventFinished (not recreated)" );
-    race_unwired( s, "VuGame's own state machines +0x0C / +0x67C (0x480BA0's states: the pause / split-display flow) - not recreated, their evaluate / "
-                     "tick not run (UNKNOWN)" );
+    // VuGame's two machines after slot 7 (world/rules.hxx vugame_fsms_tick: verified tables, handlers hooks).
+    const std::string event_before = s.rules.event.current( ) ? s.rules.event.current( )->m_name : std::string( );
+    const bool game_running = vugame_fsms_tick( s.rules, running, dt );
+    const std::string event_after = s.rules.event.current( ) ? s.rules.event.current( )->m_name : std::string( );
+    if ( event_before != event_after )
+        LOG_INFO( "race: VuGame +0x0C state %s -> %s (sync %d)%s", event_before.c_str( ), event_after.c_str( ), s.dynamics ? s.dynamics->syncs : -1,
+                  game_running ? "" : " - the game's tick answers done" );
     for ( race_rules_boat_t& rb : s.rules_boats )
         std::memcpy( rb.boat + 0x4DC, rb.transform + 0x50, 64 );
     // Ours (dev trace): every boat's progress every 240 game ticks.

@@ -7,11 +7,13 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <memory>
 #include <string>
 #include <vector>
+#include <emmintrin.h>
 #include <xmmintrin.h>
 
 // THE RACE RULES - VuGame's per-frame race bookkeeping and VuRaceGame's own
@@ -357,25 +359,55 @@ inline void race_rules_hide_finished( const std::vector< std::uint8_t* >& ais, c
 //     vt+0x1C), its tick (the root, when it is a VuHUDEntity - RTTI 0x7362AC -
 //     vt+0x30(dt)) and its draw (vt+0x34(1.0)) - the HUD's update / drawing is
 //     the UI's; the project load / init / release run through the world.
-//   platform(name): PostGame's enter 0x48AB70 after its HUD - the broadcast
-//     "OnSetAllowPause" {false}, the progress manager's vt+0x34 (race results to
-//     the save), the leaderboard 0x4B0650 ("Race", -(int)(time x 1000)) when the
-//     human did not quit (+0x334 clear), the voice-over vt+0x1C ("FinishFirst" /
-//     "FinishSecond" / "FinishThird" / "FinishLast" / "FinishLessThanThird") and
-//     vt+0x20 "DidNotUseBoost"; its exit 0x48ADE0's "DingDong" achievement -
-//     saves / online / achievements / audio: platform services (BRIEF).
+//   broadcast(name, value): PostGame's enter 0x48AB70 after its HUD broadcasts
+//     "OnSetAllowPause" (VuEventManager_broadcast 0x505690, VuParams {bool
+//     false}: 5 bytes) - to the world's subscribers.
+//   platform(call): the rest of 0x48AB70, with a human (boat manager +0x28 not
+//     0; human = its +0x24 [0]): the progress manager g 0x758FD8 vt+0x34 (the
+//     track +0x68, the boat +0x160, 0, place +0x4CC, +0x4B4, +0x4B8 - the save),
+//     the leaderboard 0x4B0650 (track + "Race", -(int)(+0x4B4 x 1000), as int64)
+//     when +0x334 is clear, the voice-over g 0x758FEC vt+0x1C (the line chosen
+//     below) and vt+0x20 "DidNotUseBoost" (place > 0, +0x328 > 0 ordered, +0x32D
+//     clear); its exit 0x48ADE0's achievement 0x4AA1A0 "DingDong" (the track
+//     "Hydroelectric", the human first, +0x744 == 0x1F) - saves / online /
+//     achievements / audio: platform services (BRIEF). The calls reach the hook
+//     as text ("progress <track> <place> <4B4 hex> <4B8 hex>", "leaderboard
+//     <name> <value>", "vo <line>", "vo20 <line>", "achievement <name>").
+// All of it oracle-verified (case race_game_fsm: the ctor run whole, then the
+// machine driven through retail's own handlers).
 enum class race_hud_verb_t { initialize, release, tick };
+
+// The ctor's project loads (0x4B4360, in order: +0x738 / +0x73C / +0x740) and
+// its two event methods (0x5156E0, VuMethod1<VuRaceGame, void, VuParams const&>
+// vtable 0x73F8EC, in order) - VuGame's base 0x480BA0 registers its own
+// OnUserNext / OnCheatFinish before them.
+inline constexpr const char* k_race_hud_projects[ 3 ] = { "HUDs/RacePreGameHUD", "HUDs/RaceGameHUD", "HUDs/RacePostGameHUD" };
+
+struct race_rules_event_t
+{
+    const char* name;
+    std::uint32_t method;
+};
+
+inline constexpr race_rules_event_t k_race_rules_events[ 2 ] = { { "OnStartLightsOut", 0x48A780u }, { "OnCheckPointBuoyHit", 0x48A7B0u } };
 
 struct race_rules_hooks_t
 {
     std::function< void( int project, race_hud_verb_t verb, float dt ) > hud;
-    std::function< void( const char* what ) > platform;
+    std::function< void( const char* name, bool value ) > broadcast;
+    std::function< void( const std::string& call ) > platform;
 };
 
 struct race_rules_t
 {
+    // VuGame's own two machines (its ctor 0x480BA0; begun by 0x4829A0 - the first state, its enter; ticked by
+    // 0x482F10 around slot 7): +0x0C the post-race flow, +0x67C the split / leaderboard display.
+    c_fsm event;                     // +0x0C
+    c_fsm split;                     // +0x67C
+    std::function< void( std::uint32_t address, const char* what ) > unrecreated;   // a VuGame state handler reached
     c_fsm fsm;                       // +0x6F8
     std::uint32_t buoys = 0;         // +0x744
+    std::string track;               // the game's +0x68 (VuGame's track name)
     race_rules_hooks_t hooks;
     // The tick's inputs, refreshed by the caller before slot 7: the game's
     // boats, the boat manager's human list.
@@ -410,8 +442,163 @@ inline void race_rules_clock_and_place( race_rules_t& r, float dt )
         r.sorted = false;
 }
 
+inline void race_rules_platform( race_rules_t& r, const std::string& call )
+{
+    if ( r.hooks.platform )
+        r.hooks.platform( call );
+}
+
+// 0x48AB70's tail past the HUD and the broadcast (see the hooks above). The
+// leaderboard value: mulss by 1000.0 (0x6F7828), fld / fistp (round to
+// nearest; out of range the integer indefinite 0x80000000 - cvtss2si gives
+// the same), neg, cdq. The voice-over line: "FinishLessThanThird" unless the
+// human finished (+0x32F); then place 0 / 1 / 2 "FinishFirst" / "FinishSecond"
+// / "FinishThird", else "FinishLast" only when the place EQUALS the boat count
+// (+0x3C - cmp / cmovne: as retail has it), else "FinishLessThanThird".
+inline void race_rules_post_results( race_rules_t& r )
+{
+    if ( r.humans.empty( ) )
+        return;
+    const std::uint8_t* h = r.humans[ 0 ];
+    const std::int32_t place = rules_i32( h, 0x4CC );
+    char text[ 160 ];
+    std::snprintf( text, sizeof( text ), "progress %s %d %08X %08X", r.track.c_str( ), place, rules_i32( h, 0x4B4 ), rules_i32( h, 0x4B8 ) );
+    race_rules_platform( r, text );
+    if ( !h[ 0x334 ] )
+    {
+        const std::int32_t ms = _mm_cvtss_si32( _mm_set_ss( rules_f( h, 0x4B4 ) * 1000.0f ) );
+        const std::int64_t value = static_cast< std::int32_t >( 0u - static_cast< std::uint32_t >( ms ) );
+        std::snprintf( text, sizeof( text ), "leaderboard %sRace %lld", r.track.c_str( ), static_cast< long long >( value ) );
+        race_rules_platform( r, text );
+    }
+    const char* line = "FinishLessThanThird";
+    if ( h[ 0x32F ] )
+    {
+        const std::int32_t boats = r.boats ? static_cast< std::int32_t >( r.boats->size( ) ) : 0;
+        line = place == 0 ? "FinishFirst" : place == 1 ? "FinishSecond" : place == 2 ? "FinishThird" : place == boats ? "FinishLast" : "FinishLessThanThird";
+    }
+    race_rules_platform( r, std::string( "vo " ) + line );
+    if ( place > 0 && _mm_comigt_ss( _mm_set_ss( rules_f( h, 0x328 ) ), _mm_set_ss( 0.0f ) ) && !h[ 0x32D ] )
+        race_rules_platform( r, "vo20 DidNotUseBoost" );
+}
+
+// 0x48ADE0's tail past the HUD release: the track compared with
+// "Hydroelectric" (0x404AC0 over min(size, 13) bytes, then the sizes), the
+// human's place +0x4CC == 0 and +0x744 == 0x1F -> the achievement "DingDong".
+// Retail reads the human list's first entry whatever its count (a race always
+// has a human); with none here, nothing.
+inline void race_rules_post_exit( race_rules_t& r )
+{
+    if ( r.track != "Hydroelectric" || r.humans.empty( ) )
+        return;
+    if ( rules_i32( r.humans[ 0 ], 0x4CC ) == 0 && r.buoys == 0x1Fu )
+        race_rules_platform( r, "achievement DingDong" );
+}
+
+// ---- VuGame's machines (ctor 0x480BA0): the tables -------------------------
+//
+// +0x0C: Event (no handlers) -> Results "EventFinished"; Results {enter
+// 0x484110, exit 0x484250, tick 0x484280, draw 0x4842F0} -> Awards
+// "OnUserNext" (VuGame's OnUserNext 0x483170 pulses it: +0x1D), -> Exit
+// "NoResults"; Awards {0x484320, 0x4844F0, 0x484520, 0x484580} -> Exit
+// "AwardsDone"; Exit. +0x67C (the friend-score / split flow - its handlers are
+// the leaderboard's (OpenFeint: online, a platform service) and the HUD's):
+// GetFriendScores {enter 0x483B90, tick 0x483BE0}, DownloadBlob {enter the
+// nullsub 0x401560, tick 0x483C10}, PersonalBestConfig {enter 0x483C40},
+// Intro {tick 0x483CB0, draw 0x483CF0}, Racing, Split {tick 0x483D00, draw
+// 0x483D40}, Result {enter 0x483D50, tick 0x483E00, draw 0x483E40}, Done; the
+// transitions below. Verified against the ctor run whole (case race_game_fsm).
+// The handlers are NOT recreated: reaching one calls `unrecreated` (UNKNOWN);
+// the nullsub is nothing.
+inline void vugame_fsm_handlers( race_rules_t& r, fsm_state_t& s, std::uint32_t enter, std::uint32_t exit, std::uint32_t tick,
+                                 std::uint32_t draw )
+{
+    s.m_address[ 0 ] = enter, s.m_address[ 1 ] = exit, s.m_address[ 2 ] = tick, s.m_address[ 3 ] = draw;
+    const auto hook = [ &r ]( std::uint32_t a, const std::string& name, const char* verb ) {
+        return [ &r, a, name, verb ] {
+            if ( r.unrecreated )
+                r.unrecreated( a, ( "VuGame " + name + " " + verb ).c_str( ) );
+        };
+    };
+    if ( enter && enter != 0x401560u )
+        s.m_enter = hook( enter, s.m_name, "enter" );
+    if ( exit )
+        s.m_exit = hook( exit, s.m_name, "exit" );
+    if ( tick )
+    {
+        auto h = hook( tick, s.m_name, "tick" );
+        s.m_tick = [ h ]( float ) { h( ); };
+    }
+    if ( draw )
+        s.m_draw = hook( draw, s.m_name, "draw" );
+}
+
+inline void vugame_fsms_construct( race_rules_t& r )
+{
+    r.event = c_fsm{ };
+    r.event.add_state( "Event" );
+    vugame_fsm_handlers( r, r.event.add_state( "Results" ), 0x484110u, 0x484250u, 0x484280u, 0x4842F0u );
+    vugame_fsm_handlers( r, r.event.add_state( "Awards" ), 0x484320u, 0x4844F0u, 0x484520u, 0x484580u );
+    r.event.add_state( "Exit" );
+    r.event.add_transition( "Event", "Results", "EventFinished" );
+    r.event.add_transition( "Results", "Awards", "OnUserNext" );
+    r.event.add_transition( "Results", "Exit", "NoResults" );
+    r.event.add_transition( "Awards", "Exit", "AwardsDone" );
+    r.split = c_fsm{ };
+    vugame_fsm_handlers( r, r.split.add_state( "GetFriendScores" ), 0x483B90u, 0, 0x483BE0u, 0 );
+    vugame_fsm_handlers( r, r.split.add_state( "DownloadBlob" ), 0x401560u, 0, 0x483C10u, 0 );
+    vugame_fsm_handlers( r, r.split.add_state( "PersonalBestConfig" ), 0x483C40u, 0, 0, 0 );
+    vugame_fsm_handlers( r, r.split.add_state( "Intro" ), 0, 0, 0x483CB0u, 0x483CF0u );
+    r.split.add_state( "Racing" );
+    vugame_fsm_handlers( r, r.split.add_state( "Split" ), 0, 0, 0x483D00u, 0x483D40u );
+    vugame_fsm_handlers( r, r.split.add_state( "Result" ), 0x483D50u, 0, 0x483E00u, 0x483E40u );
+    r.split.add_state( "Done" );
+    static const char* const k_split_transitions[ 15 ][ 3 ] = {
+        { "GetFriendScores", "Done", "NoHumansPlaying" },          { "GetFriendScores", "PersonalBestConfig", "UserNotLoggedIn" },
+        { "GetFriendScores", "PersonalBestConfig", "LeaderboardNotFound" }, { "GetFriendScores", "PersonalBestConfig", "OpenFeintFailure" },
+        { "GetFriendScores", "PersonalBestConfig", "NoFriendsFound" }, { "GetFriendScores", "DownloadBlob", "OpponentChosen" },
+        { "DownloadBlob", "PersonalBestConfig", "OpenFeintFailure" }, { "DownloadBlob", "Intro", "OpenFeintSuccess" },
+        { "PersonalBestConfig", "Done", "NoPersonalBestTime" },    { "PersonalBestConfig", "Intro", "" },
+        { "Intro", "Racing", "Expired" },                          { "Racing", "Split", "ShowSplit" },
+        { "Racing", "Result", "ShowResult" },                      { "Split", "Racing", "Expired" },
+        { "Result", "Done", "Expired" } };
+    for ( const auto& t : k_split_transitions )
+        r.split.add_transition( t[ 0 ], t[ 1 ], t[ 2 ] );
+}
+
+// 0x4829A0's tail: each machine's current = its first state, then that state's enter.
+inline void vugame_fsm_begin( c_fsm& f )
+{
+    f.m_current = f.m_states.empty( ) ? -1 : 0;
+    if ( fsm_state_t* s = f.current( ) )
+        if ( s->m_enter )
+            s->m_enter( );
+}
+
+// VuGame's tick 0x482F10 past the bookkeeping: slot 7 answered `running`;
+// false -> +0x0C's "EventFinished" +28 = 1; +0x0C evaluate (0x555AD0), the
+// current state's tick, +0x30 += dt; the same on +0x67C (+0x6A0 += dt); the
+// tick's answer = +0x0C's current state is not "Exit" (0x404AC0 over min(size,
+// 4), then the sizes).
+inline bool vugame_fsms_tick( race_rules_t& r, bool running, float dt )
+{
+    if ( !running )
+        r.event.set_condition( "EventFinished", true );
+    for ( c_fsm* f : { &r.event, &r.split } )
+    {
+        f->evaluate( );
+        if ( fsm_state_t* s = f->current( ) )
+            if ( s->m_tick )
+                s->m_tick( dt );
+        f->m_time = f->m_time + dt;
+    }
+    const fsm_state_t* s = r.event.current( );
+    return !s || s->m_name != "Exit";
+}
+
 inline void race_rules_construct( race_rules_t& r )
 {
+    vugame_fsms_construct( r );
     r.fsm = c_fsm{ };
     r.buoys = 0;
     fsm_state_t& pre = r.fsm.add_state( "PreGame" );
@@ -440,13 +627,13 @@ inline void race_rules_construct( race_rules_t& r )
     fsm_state_t& post = r.fsm.add_state( "PostGame" );
     post.m_enter = [ &r ] {
         race_rules_hud( r, 2, race_hud_verb_t::initialize );
-        if ( r.hooks.platform )
-            r.hooks.platform( "PostGame enter 0x48AB70: OnSetAllowPause, the progress manager, the leaderboard, the voice-over" );
+        if ( r.hooks.broadcast )
+            r.hooks.broadcast( "OnSetAllowPause", false );
+        race_rules_post_results( r );
     };
     post.m_exit = [ &r ] {
         race_rules_hud( r, 2, race_hud_verb_t::release );
-        if ( r.hooks.platform )
-            r.hooks.platform( "PostGame exit 0x48ADE0: the DingDong achievement" );
+        race_rules_post_exit( r );
     };
     // 0x48AE80: the clocks and places; "Exit" = the time in the state >= 4.0.
     post.m_tick = [ &r ]( float dt ) {
@@ -474,9 +661,11 @@ inline void race_rules_start( race_rules_t& r )
 // 0x48A780 ("OnStartLightsOut"): the condition StartLightsOut's +28 = 1.
 inline void race_rules_on_start_lights_out( race_rules_t& r ) { r.fsm.set_condition( "StartLightsOut", true ); }
 
-// 0x48A7B0 ("OnCheckPointBuoyHit"): 0x4237B0 reads the params' first entry (a
-// 4-byte tag, then when the tag is 0 the 4-byte value; else 0): +0x744 |= 1 <<
-// that value (shl: the count taken mod 32).
+// 0x48A7B0 ("OnCheckPointBuoyHit"): 0x4237B0 reads the params' first entry -
+// when the size (+0x80, signed) is above 0 a 4-byte tag, then when the tag is
+// 0 the next 4 bytes as the value whatever the size left (memcpy_s(4, 4): the
+// size is only decremented); else 0: +0x744 |= 1 << that value (shl: the count
+// taken mod 32).
 inline void race_rules_on_buoy_hit( race_rules_t& r, const std::uint8_t* params, std::int32_t size )
 {
     std::int32_t value = 0;
@@ -484,7 +673,7 @@ inline void race_rules_on_buoy_hit( race_rules_t& r, const std::uint8_t* params,
     {
         std::int32_t tag = -1;
         std::memcpy( &tag, params, 4 );
-        if ( tag == 0 && size >= 8 )
+        if ( tag == 0 )
             std::memcpy( &value, params + 4, 4 );
     }
     r.buoys |= 1u << ( static_cast< std::uint32_t >( value ) & 31u );

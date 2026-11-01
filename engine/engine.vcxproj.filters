@@ -233,6 +233,9 @@
     <ClInclude Include="workspace\core\dynamics\world.hxx">
       <Filter>workspace\core\dynamics</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\dynamics\wrapper.hxx">
+      <Filter>workspace\core\dynamics</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\dynamics\writeback.hxx">
       <Filter>workspace\core\dynamics</Filter>
     </ClInclude>

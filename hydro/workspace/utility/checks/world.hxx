@@ -7,6 +7,7 @@
 #include <workspace/core/world/rules.hxx>
 #include <workspace/core/world/start.hxx>
 #include <workspace/core/world/tick.hxx>
+#include <workspace/utility/checks/game.hxx>
 
 // The world area's oracle-backed checks (one file per parallel agent; included by check.hxx after every
 // shared check, so anything above is usable here). verify_world_all runs them all.
@@ -3086,6 +3087,7 @@ inline bool verify_world_all( )
     ok = verify_trigger_box( ) && ok;
     ok = verify_race_progress( ) && ok;
     ok = verify_multi_delay( ) && ok;
+    ok = verify_race_game_fsm( ) && ok;
     ok = verify_static_model_draw( ) && ok;
     ok = verify_static_world_aabb( ) && ok;
     return ok;

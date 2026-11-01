@@ -15,6 +15,8 @@
 #include <workspace/core/world/bodies.hxx>
 #include <workspace/core/world/dynamics.hxx>
 #include <workspace/core/world/kernel.hxx>
+#include <workspace/core/world/pfxmgr.hxx>
+#include <workspace/core/world/pfxsim.hxx>
 #include <workspace/core/world/rules.hxx>
 #include <workspace/core/world/start.hxx>
 #include <workspace/core/world/tick.hxx>
@@ -108,6 +110,10 @@ struct race_world_t
     std::function< void( int project, race_hud_verb_t verb, float dt ) > hud;
     // A VuEventManager broadcast reaching the world's graph (the HUD's / the level's subscribers).
     std::function< void( const char* name ) > broadcast;
+    // The world's VuPfx runtime / VuPfxManager g 0x75905C (c_effects; null: none - the boats' pfx calls are UNKNOWN).
+    pfx_runtime_t* pfx = nullptr;
+    pfx_manager_t* pfx_manager = nullptr;
+    const pfx_manager_ops_t* pfx_ops = nullptr;
     std::uint32_t viewports = 1;
     std::int32_t control_method = 0;
     std::int32_t display_w = 1280;
@@ -1073,7 +1079,19 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         else
             race_unwired( s, "the race HUD projects (VuRaceGame +0x738 / +0x73C / +0x740) with no world to load them - not run (UNKNOWN)" );
     };
-    s.rules.hooks.platform = [ &s ]( const char* what ) { race_unwired( s, std::string( "platform services: " ) + what + " (saves / online / achievements / audio - hooks)" ); };
+    s.rules.hooks.broadcast = [ &s ]( const char* name, bool )
+    {
+        if ( s.world.broadcast )
+            s.world.broadcast( name );
+    };
+    s.rules.hooks.platform = [ &s ]( const std::string& call ) { race_unwired( s, "platform services: " + call + " (saves / online / achievements / audio - hooks)" ); };
+    s.rules.track = s.game.track;
+    s.rules.unrecreated = [ &s ]( std::uint32_t address, const char* what )
+    {
+        char text[ 160 ];
+        std::snprintf( text, sizeof( text ), "%s 0x%X - not recreated, not run (UNKNOWN)", what, address );
+        race_unwired( s, text );
+    };
     for ( std::size_t k = 0; k < s.game.boats.size( ) && k < s.start_boats.size( ); ++k )
     {
         race_rules_boat_t rb;
@@ -1089,6 +1107,11 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     {
         // Slot 5 0x4896A0: "(whatever the track) the game's +0x6F8 state machine enters its first state" - PreGame's enter
         // 0x48A7F0, before the +0x4CC loop (which it does not read).
+        // VuGame's begin 0x4829A0: its two machines (+0x0C from +0x18, +0x67C from +0x688) enter their first states.
+        if ( std::strcmp( row, "state enter fsm+0x18" ) == 0 )
+            vugame_fsm_begin( s.rules.event );
+        if ( std::strcmp( row, "state enter fsm+0x688" ) == 0 )
+            vugame_fsm_begin( s.rules.split );
         if ( std::strcmp( row, "state enter fsm+0x704" ) == 0 )
         {
             s.rules_game.circuit = s.start.circuit;

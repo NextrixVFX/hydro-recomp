@@ -396,6 +396,9 @@
     <ClInclude Include="workspace\utility\checks\boat.hxx">
       <Filter>workspace\utility\checks</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\utility\checks\game.hxx">
+      <Filter>workspace\utility\checks</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\utility\checks\leaves.hxx">
       <Filter>workspace\utility\checks</Filter>
     </ClInclude>
@@ -430,6 +433,9 @@
       <Filter>workspace\utility\checks</Filter>
     </ClInclude>
     <ClInclude Include="workspace\utility\checks\world.hxx">
+      <Filter>workspace\utility\checks</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\checks\wrapper.hxx">
       <Filter>workspace\utility\checks</Filter>
     </ClInclude>
   </ItemGroup>
