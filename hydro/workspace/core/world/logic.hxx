@@ -1,0 +1,529 @@
+#pragma once
+
+#include <workspace/core/ui/button.hxx>
+#include <workspace/core/ui/select.hxx>
+#include <workspace/core/world/pfx.hxx>
+
+#include <cstdint>
+#include <cstring>
+#include <string>
+
+// The engine's generic script / logic entities (the 0x5DC890 .. 0x5E56E0 block):
+// integer math, compares, the Set* senders, the integer / string / counter
+// stores, the sequencer, the trigger array, the random trigger, the platform /
+// build filters and the switch. Recreated from their plug handlers and verified
+// against retail (hydro checks/logic.hxx, case logic_plugs: every input plug
+// fired through VuScriptInputPlug slot 2 0x404BE0 on entities made by the
+// registry creates, the outputs linked to logged stubs).
+//
+// Shared shape. A handler is VuMethod1<T, VuRetVal, const VuParams&> (stdcall
+// on the entity: VuRetVal* out, const VuParams& in; retn 8). It reaches an
+// output plug by VuScriptComponent_findPlug 0x504770 on +0x5C and fires it
+// through its slot 2 (VuScriptOutputPlug_fire 0x5023A0: {0, 0} for a void plug
+// - a broadcast -, the first link's answer for a typed one, {0, 0} unlinked).
+// A VuRetVal is { type, value } (type 1 int, 3 bool - only the value's LOW BYTE
+// is written -, 4 a char*); a handler answering "void" writes ONLY the type word
+// (0): the value word keeps what the caller's slot held. An output fired "with
+// nothing" gets a fresh empty VuParams (size 0), "passing the params" the
+// handler's own input.
+//
+// The ctor property sets are engine entity/schema.hxx's (every default 0; the
+// VuString +0x60 empty, capacity 15) - the state here starts from that.
+// NOT here (other areas): VuIfEntity, VuDelayEntity, VuMultiDelayEntity,
+// VuTriggerForwarderEntity, VuOneShotFilterEntity, VuBooleanEntity,
+// VuGenericEventEntity, VuOnProjectInitializedEntity (world, graph.hxx); the
+// VuPersistent* entities (saves: platform, re-made); VuIsSkuEntity /
+// VuIsTegraEntity / VuHumanFilterEntity (game, 0x42C..; not read).
+
+struct logic_retval_t
+{
+    std::uint32_t type = 0;
+    std::uint32_t value = 0;
+    const char* text = nullptr;   // type 4: the char* (the value word in retail)
+};
+
+// One entity's state: the words from +0x60 (k = (offset - 0x60) / 4) and, for
+// the two string classes, the VuString at +0x60.
+struct logic_entity_t
+{
+    std::uint32_t vtable = 0;
+    std::uint32_t words[ 8 ] = { };
+    std::string text;
+};
+
+struct logic_hooks_t
+{
+    void* user = nullptr;
+    // VuScriptOutputPlug_fire on the entity's output `plug` with `params`; returns what 0x5023A0 returns.
+    logic_retval_t ( *fire )( void* user, logic_entity_t& e, const char* plug, const ui_params_t& params ) = nullptr;
+    // The global VuRand 0x736810 (the same one the particles draw from - world/pfx.hxx pfx_rand_t).
+    pfx_rand_t* rand = nullptr;
+};
+
+using logic_handler_fn = void ( * )( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h );
+
+inline logic_retval_t logic_fire( logic_entity_t& e, const logic_hooks_t& h, const char* plug, const ui_params_t& p )
+{
+    return h.fire ? h.fire( h.user, e, plug, p ) : logic_retval_t{ };
+}
+
+inline logic_retval_t logic_fire_empty( logic_entity_t& e, const logic_hooks_t& h, const char* plug )
+{
+    const ui_params_t empty{ };
+    return logic_fire( e, h, plug, empty );
+}
+
+// The getters behind the compares: an int when the answer's type is 1 (else 0,
+// 0x5DE800); a bool = the value's low byte when the type is 1 (sic: not 3; else
+// 0, 0x5DE2E0); a string when the type is 4 (else "" 0x64D5FA, 0x5DEBD0).
+inline std::int32_t logic_get_int( logic_entity_t& e, const logic_hooks_t& h, const char* plug )
+{
+    const logic_retval_t r = logic_fire_empty( e, h, plug );
+    return r.type == 1u ? static_cast< std::int32_t >( r.value ) : 0;
+}
+
+inline std::uint8_t logic_get_bool( logic_entity_t& e, const logic_hooks_t& h, const char* plug )
+{
+    const logic_retval_t r = logic_fire_empty( e, h, plug );
+    return r.type == 1u ? static_cast< std::uint8_t >( r.value & 0xFFu ) : 0u;
+}
+
+inline const char* logic_get_string( logic_entity_t& e, const logic_hooks_t& h, const char* plug )
+{
+    const logic_retval_t r = logic_fire_empty( e, h, plug );
+    return r.type == 4u && r.text ? r.text : "";
+}
+
+inline void logic_ret_bool( logic_retval_t& out, bool b )
+{
+    out.type = 3u;
+    out.value = ( out.value & 0xFFFFFF00u ) | ( b ? 1u : 0u );
+}
+
+// VuAddIntegerConstantEntity "A + C" 0x5DCB20: C (+0x60) + A when A's type is 1.
+inline void logic_add_constant( logic_entity_t& e, logic_retval_t& out, const ui_params_t&, const logic_hooks_t& h )
+{
+    std::uint32_t v = e.words[ 0 ];
+    const logic_retval_t a = logic_fire_empty( e, h, "A" );
+    if ( a.type == 1u )
+        v += a.value;
+    out.type = 1u;
+    out.value = v;
+}
+
+// VuAddIntegersEntity "A + B" 0x5DCEC0 / VuSubtractIntegersEntity "A - B" 0x5DD2F0:
+// A fired first, then B; each counts only with type 1.
+inline void logic_add_integers( logic_entity_t& e, logic_retval_t& out, const ui_params_t&, const logic_hooks_t& h )
+{
+    const logic_retval_t a = logic_fire_empty( e, h, "A" );
+    const logic_retval_t b = logic_fire_empty( e, h, "B" );
+    std::uint32_t v = a.type == 1u ? a.value : 0u;
+    if ( b.type == 1u )
+        v += b.value;
+    out.type = 1u;
+    out.value = v;
+}
+
+inline void logic_subtract_integers( logic_entity_t& e, logic_retval_t& out, const ui_params_t&, const logic_hooks_t& h )
+{
+    const logic_retval_t a = logic_fire_empty( e, h, "A" );
+    const logic_retval_t b = logic_fire_empty( e, h, "B" );
+    std::uint32_t v = a.type == 1u ? a.value : 0u;
+    if ( b.type == 1u )
+        v -= b.value;
+    out.type = 1u;
+    out.value = v;
+}
+
+// VuIntegerEntity "Get" 0x5DD680 (also VuCounterEntity "GetCount"): {1, +0x60}.
+inline void logic_get_word0( logic_entity_t& e, logic_retval_t& out, const ui_params_t&, const logic_hooks_t& )
+{
+    out.type = 1u;
+    out.value = e.words[ 0 ];
+}
+
+// VuIntegerEntity "Set" 0x5DD9D0: the params' first record as an int
+// (0x4237B0, ui/select.hxx ui_params_read_int: 0 unless an int record), then
+// 0x5DDA10: a different value is stored and "OnChanged" fired with nothing.
+inline void logic_integer_set( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    std::uint8_t view[ 132 ];
+    std::memcpy( view, in.m_bytes, 128 );
+    std::memcpy( view + 128, &in.m_size, 4 );
+    ui_params_reader_t r( in );
+    r.m_at = view;
+    const std::uint32_t v = static_cast< std::uint32_t >( ui_params_read_int( r ) );
+    if ( v != e.words[ 0 ] )
+    {
+        e.words[ 0 ] = v;
+        logic_fire_empty( e, h, "OnChanged" );
+    }
+    out.type = 0u;
+}
+
+// VuCompareBooleansEntity "A == B" 0x5DE020 (B fetched first, then A).
+inline void logic_compare_booleans( logic_entity_t& e, logic_retval_t& out, const ui_params_t&, const logic_hooks_t& h )
+{
+    const std::uint8_t b = logic_get_bool( e, h, "B" );
+    const std::uint8_t a = logic_get_bool( e, h, "A" );
+    logic_ret_bool( out, a == b );
+}
+
+// VuCompareIntegersEntity "A > B" 0x5DE3D0, "A < B" 0x5DE410, "A == B" 0x5DE450
+// (B first, then A; signed).
+inline void logic_compare_greater( logic_entity_t& e, logic_retval_t& out, const ui_params_t&, const logic_hooks_t& h )
+{
+    const std::int32_t b = logic_get_int( e, h, "B" );
+    const std::int32_t a = logic_get_int( e, h, "A" );
+    logic_ret_bool( out, a > b );
+}
+
+inline void logic_compare_less( logic_entity_t& e, logic_retval_t& out, const ui_params_t&, const logic_hooks_t& h )
+{
+    const std::int32_t b = logic_get_int( e, h, "B" );
+    const std::int32_t a = logic_get_int( e, h, "A" );
+    logic_ret_bool( out, a < b );
+}
+
+inline void logic_compare_equal( logic_entity_t& e, logic_retval_t& out, const ui_params_t&, const logic_hooks_t& h )
+{
+    const std::int32_t b = logic_get_int( e, h, "B" );
+    const std::int32_t a = logic_get_int( e, h, "A" );
+    logic_ret_bool( out, a == b );
+}
+
+// VuCompareStringsEntity "A == B" 0x5DE8F0 (B first, then A; an inlined strcmp).
+inline void logic_compare_strings( logic_entity_t& e, logic_retval_t& out, const ui_params_t&, const logic_hooks_t& h )
+{
+    const std::string b = logic_get_string( e, h, "B" );
+    const std::string a = logic_get_string( e, h, "A" );
+    logic_ret_bool( out, std::strcmp( a.c_str( ), b.c_str( ) ) == 0 );
+}
+
+// VuSetBooleanEntity "Trigger" 0x5E3150: a fresh VuParams + Value (+0x60) as a
+// bool record (0x4051A0 copies the property's RAW byte - unlike ui/select.hxx's
+// bool add, which takes a C++ bool), "Set" fired with it.
+inline void logic_set_boolean( logic_entity_t& e, logic_retval_t& out, const ui_params_t&, const logic_hooks_t& h )
+{
+    ui_params_t p{ };
+    const std::uint32_t type = 3u;
+    std::memcpy( p.m_bytes, &type, 4 );
+    p.m_bytes[ 4 ] = static_cast< std::uint8_t >( e.words[ 0 ] & 0xFFu );
+    p.m_size = 5;
+    logic_fire( e, h, "Set", p );
+    out.type = 0u;
+}
+
+// VuSetIntegerEntity "Trigger" 0x5E34D0: + Value as an int record (0x434E50).
+inline void logic_set_integer( logic_entity_t& e, logic_retval_t& out, const ui_params_t&, const logic_hooks_t& h )
+{
+    ui_params_t p{ };
+    ui_params_add( p, 0u, e.words[ 0 ] );
+    logic_fire( e, h, "Set", p );
+    out.type = 0u;
+}
+
+// VuSetStringEntity "Trigger" 0x5E3860: + Value (+0x60 VuString) as a string
+// record (inlined: dropped when strlen + 1 + 4 > 0x80).
+inline void logic_set_string( logic_entity_t& e, logic_retval_t& out, const ui_params_t&, const logic_hooks_t& h )
+{
+    ui_params_t p{ };
+    p.add_string( e.text.c_str( ) );
+    logic_fire( e, h, "Set", p );
+    out.type = 0u;
+}
+
+// VuSequencerEntity "In" 0x5DF6A0: with +0x60 < 8 (signed): the output named
+// sprintf( "%d", +0x60 + 1 ) - when the component has one - fired with the
+// params, then +0x60 += 1. "Reset" 0x5DF0C0: +0x60 = 0.
+inline bool logic_has_output( std::uint32_t vtable, const char* plug );
+
+inline void logic_sequencer_in( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    if ( static_cast< std::int32_t >( e.words[ 0 ] ) < 8 )
+    {
+        const std::string name = std::to_string( static_cast< std::int32_t >( e.words[ 0 ] ) + 1 );
+        if ( logic_has_output( e.vtable, name.c_str( ) ) )
+            logic_fire( e, h, name.c_str( ), in );
+        e.words[ 0 ] += 1u;
+    }
+    out.type = 0u;
+}
+
+inline void logic_sequencer_reset( logic_entity_t& e, logic_retval_t& out, const ui_params_t&, const logic_hooks_t& )
+{
+    e.words[ 0 ] = 0u;
+    out.type = 0u;
+}
+
+// VuTriggerArrayEntity "Trigger" 0x5E0C80: "1" .. "8" fired in order with the params.
+inline void logic_trigger_array( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    for ( int i = 1; i <= 8; ++i )
+    {
+        const std::string name = std::to_string( i );
+        if ( logic_has_output( e.vtable, name.c_str( ) ) )
+            logic_fire( e, h, name.c_str( ), in );
+    }
+    out.type = 0u;
+}
+
+// VuRandomTriggerEntity "Trigger" 0x5E1690: sum = Weight 1 + .. + Weight 8
+// (+0x60 .. +0x7C, addss in order); unless sum > 0 (comiss / jbe: NaN fails)
+// nothing (type 0). Else x = VuRand (inlined, pfx_rand_t::next; VuMath_min
+// 0x403260) * sum; the first i with Weight i >= x (comiss / jae) fires "i"
+// with the params INTO the handler's own VuRetVal (both words: {0, 0} for these
+// void plugs); x -= Weight i otherwise; none -> type 0.
+inline void logic_random_trigger( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    float w[ 8 ];
+    std::memcpy( w, e.words, 32 );
+    float sum = w[ 0 ];
+    for ( int i = 1; i < 8; ++i )
+        sum = sum + w[ i ];
+    if ( !( sum > 0.0f ) || !h.rand )
+    {
+        out.type = 0u;
+        return;
+    }
+    float x = h.rand->next( ) * sum;
+    for ( int i = 0; i < 8; ++i )
+    {
+        if ( w[ i ] >= x )
+        {
+            const std::string name = std::to_string( i + 1 );
+            if ( logic_has_output( e.vtable, name.c_str( ) ) )
+            {
+                const logic_retval_t r = logic_fire( e, h, name.c_str( ), in );
+                out.type = r.type;
+                out.value = r.value;
+                out.text = r.text;
+                return;
+            }
+            out.type = 0u;
+            return;
+        }
+        x = x - w[ i ];
+    }
+    out.type = 0u;
+}
+
+// VuPlatformFilterEntity "Trigger" 0x5E1CF0: "Metro" (this build's platform)
+// fired with the params. VuBuildFilterEntity "Trigger" 0x5E2080: "Retail".
+inline void logic_platform_filter( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    logic_fire( e, h, "Metro", in );
+    out.type = 0u;
+}
+
+inline void logic_build_filter( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    logic_fire( e, h, "Retail", in );
+    out.type = 0u;
+}
+
+// VuSwitchEntity: +0x60 Initial State, +0x64 the state (2 on, 1 off). "TurnOn"
+// 0x5E24F0: unless on, "OnTurnedOn" with the params, state = 2; "TurnOff"
+// 0x5E25B0: unless off, "OnTurnedOff", state = 1. Slot 6 0x5E24E0 (the game
+// initialize): state = Initial State.
+inline void logic_switch_on( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    if ( e.words[ 1 ] != 2u )
+    {
+        logic_fire( e, h, "OnTurnedOn", in );
+        e.words[ 1 ] = 2u;
+    }
+    out.type = 0u;
+}
+
+inline void logic_switch_off( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    if ( e.words[ 1 ] != 1u )
+    {
+        logic_fire( e, h, "OnTurnedOff", in );
+        e.words[ 1 ] = 1u;
+    }
+    out.type = 0u;
+}
+
+inline void logic_switch_init( logic_entity_t& e )
+{
+    e.words[ 1 ] = e.words[ 0 ];
+}
+
+// VuCounterEntity: +0x60 the count (Initial Count), +0x64 Target Count. "Inc"
+// 0x5E4B50 / "Dec" 0x5E4B70 -> 0x5E5070( +1 / -1 ): count += delta (no clamp);
+// equal to the target -> "Trigger" with the params; then "OnChanged" with the
+// params, always.
+inline void logic_counter_step( logic_entity_t& e, std::uint32_t delta, const ui_params_t& in, const logic_hooks_t& h )
+{
+    e.words[ 0 ] += delta;
+    if ( e.words[ 0 ] == e.words[ 1 ] )
+        logic_fire( e, h, "Trigger", in );
+    logic_fire( e, h, "OnChanged", in );
+}
+
+inline void logic_counter_inc( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    logic_counter_step( e, 1u, in, h );
+    out.type = 0u;
+}
+
+inline void logic_counter_dec( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    logic_counter_step( e, 0xFFFFFFFFu, in, h );
+    out.type = 0u;
+}
+
+// VuStringEntity: +0x60 Value (VuString). The setter 0x5E55F0: unless equal
+// (VuString_equals 0x404990), assign and fire "OnChanged" with nothing.
+// "Set" 0x5E55B0: the params' string (readString 0x505260, ui/flow.hxx;
+// "" unless a string record); "Clear" 0x5E5190: ""; "Get" 0x5E51B0: {4, text}.
+inline void logic_string_assign( logic_entity_t& e, const char* s, const logic_hooks_t& h )
+{
+    if ( e.text == s )
+        return;
+    e.text = s;
+    logic_fire_empty( e, h, "OnChanged" );
+}
+
+inline void logic_string_set( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    ui_params_reader_t r( in );
+    const std::string s = r.read_string( );
+    logic_string_assign( e, s.c_str( ), h );
+    out.type = 0u;
+}
+
+inline void logic_string_clear( logic_entity_t& e, logic_retval_t& out, const ui_params_t&, const logic_hooks_t& h )
+{
+    logic_string_assign( e, "", h );
+    out.type = 0u;
+}
+
+inline void logic_string_get( logic_entity_t& e, logic_retval_t& out, const ui_params_t&, const logic_hooks_t& )
+{
+    out.type = 4u;
+    out.value = 0u;
+    out.text = e.text.c_str( );
+}
+
+// ---------------------------------------------------------------------------
+// THE TABLE the world's dispatcher calls by the entity's vtable (+0) and the
+// input plug's name; g_logic_outputs gives each class's output plugs and their
+// return types (VuScriptOutputPlug_init's second argument, plug_probe.json).
+struct logic_plug_t
+{
+    std::uint32_t vtable;
+    const char* cls;
+    const char* plug;
+    std::uint32_t retail;
+    logic_handler_fn fn;
+};
+
+static const logic_plug_t g_logic_plugs[] = {
+    { 0x75415Cu, "VuAddIntegerConstantEntity", "A + C", 0x5DCB20u, logic_add_constant },
+    { 0x754128u, "VuAddIntegersEntity", "A + B", 0x5DCEC0u, logic_add_integers },
+    { 0x7540F4u, "VuSubtractIntegersEntity", "A - B", 0x5DD2F0u, logic_subtract_integers },
+    { 0x75420Cu, "VuIntegerEntity", "Set", 0x5DD9D0u, logic_integer_set },
+    { 0x75420Cu, "VuIntegerEntity", "Get", 0x5DD680u, logic_get_word0 },
+    { 0x754CA0u, "VuCompareBooleansEntity", "A == B", 0x5DE020u, logic_compare_booleans },
+    { 0x754C6Cu, "VuCompareIntegersEntity", "A > B", 0x5DE3D0u, logic_compare_greater },
+    { 0x754C6Cu, "VuCompareIntegersEntity", "A < B", 0x5DE410u, logic_compare_less },
+    { 0x754C6Cu, "VuCompareIntegersEntity", "A == B", 0x5DE450u, logic_compare_equal },
+    { 0x754C38u, "VuCompareStringsEntity", "A == B", 0x5DE8F0u, logic_compare_strings },
+    { 0x754EE4u, "VuSetBooleanEntity", "Trigger", 0x5E3150u, logic_set_boolean },
+    { 0x754EB0u, "VuSetIntegerEntity", "Trigger", 0x5E34D0u, logic_set_integer },
+    { 0x754E7Cu, "VuSetStringEntity", "Trigger", 0x5E3860u, logic_set_string },
+    { 0x754BD0u, "VuSequencerEntity", "In", 0x5DF6A0u, logic_sequencer_in },
+    { 0x754BD0u, "VuSequencerEntity", "Reset", 0x5DF0C0u, logic_sequencer_reset },
+    { 0x754B34u, "VuTriggerArrayEntity", "Trigger", 0x5E0C80u, logic_trigger_array },
+    { 0x754ACCu, "VuRandomTriggerEntity", "Trigger", 0x5E1690u, logic_random_trigger },
+    { 0x754A98u, "VuPlatformFilterEntity", "Trigger", 0x5E1CF0u, logic_platform_filter },
+    { 0x754A64u, "VuBuildFilterEntity", "Trigger", 0x5E2080u, logic_build_filter },
+    { 0x754A30u, "VuSwitchEntity", "TurnOn", 0x5E24F0u, logic_switch_on },
+    { 0x754A30u, "VuSwitchEntity", "TurnOff", 0x5E25B0u, logic_switch_off },
+    { 0x755224u, "VuCounterEntity", "Inc", 0x5E4B50u, logic_counter_inc },
+    { 0x755224u, "VuCounterEntity", "Dec", 0x5E4B70u, logic_counter_dec },
+    { 0x755224u, "VuCounterEntity", "GetCount", 0x5DD680u, logic_get_word0 },
+    { 0x7552D0u, "VuStringEntity", "Set", 0x5E55B0u, logic_string_set },
+    { 0x7552D0u, "VuStringEntity", "Clear", 0x5E5190u, logic_string_clear },
+    { 0x7552D0u, "VuStringEntity", "Get", 0x5E51B0u, logic_string_get },
+};
+
+struct logic_output_t
+{
+    std::uint32_t vtable;
+    const char* plug;
+    std::uint32_t type;   // 0 void (a broadcast), 1 int, 3 bool, 4 string
+};
+
+static const logic_output_t g_logic_outputs[] = {
+    { 0x75415Cu, "A", 1u },
+    { 0x754128u, "A", 1u }, { 0x754128u, "B", 1u },
+    { 0x7540F4u, "A", 1u }, { 0x7540F4u, "B", 1u },
+    { 0x75420Cu, "OnChanged", 0u },
+    { 0x754CA0u, "A", 3u }, { 0x754CA0u, "B", 3u },
+    { 0x754C6Cu, "A", 1u }, { 0x754C6Cu, "B", 1u },
+    { 0x754C38u, "A", 4u }, { 0x754C38u, "B", 4u },
+    { 0x754EE4u, "Set", 0u }, { 0x754EB0u, "Set", 0u }, { 0x754E7Cu, "Set", 0u },
+    { 0x754BD0u, "1", 0u }, { 0x754BD0u, "2", 0u }, { 0x754BD0u, "3", 0u }, { 0x754BD0u, "4", 0u },
+    { 0x754BD0u, "5", 0u }, { 0x754BD0u, "6", 0u }, { 0x754BD0u, "7", 0u }, { 0x754BD0u, "8", 0u },
+    { 0x754B34u, "1", 0u }, { 0x754B34u, "2", 0u }, { 0x754B34u, "3", 0u }, { 0x754B34u, "4", 0u },
+    { 0x754B34u, "5", 0u }, { 0x754B34u, "6", 0u }, { 0x754B34u, "7", 0u }, { 0x754B34u, "8", 0u },
+    { 0x754ACCu, "1", 0u }, { 0x754ACCu, "2", 0u }, { 0x754ACCu, "3", 0u }, { 0x754ACCu, "4", 0u },
+    { 0x754ACCu, "5", 0u }, { 0x754ACCu, "6", 0u }, { 0x754ACCu, "7", 0u }, { 0x754ACCu, "8", 0u },
+    { 0x754A98u, "Win32", 0u }, { 0x754A98u, "Xbox360", 0u }, { 0x754A98u, "Android", 0u },
+    { 0x754A98u, "Ios", 0u }, { 0x754A98u, "Metro", 0u }, { 0x754A98u, "BB10", 0u },
+    { 0x754A64u, "Debug", 0u }, { 0x754A64u, "Release", 0u }, { 0x754A64u, "Retail", 0u },
+    { 0x754A30u, "OnTurnedOn", 0u }, { 0x754A30u, "OnTurnedOff", 0u },
+    { 0x755224u, "Trigger", 0u }, { 0x755224u, "OnChanged", 0u },
+    { 0x7552D0u, "OnChanged", 0u },
+};
+
+inline const logic_output_t* logic_output( std::uint32_t vtable, const char* plug )
+{
+    for ( const logic_output_t& o : g_logic_outputs )
+        if ( o.vtable == vtable && std::strcmp( o.plug, plug ) == 0 )
+            return &o;
+    return nullptr;
+}
+
+inline bool logic_has_output( std::uint32_t vtable, const char* plug ) { return logic_output( vtable, plug ) != nullptr; }
+
+// The class's vtable by its type name (0 = not a logic class here).
+inline std::uint32_t logic_vtable_of( const char* cls )
+{
+    for ( const logic_plug_t& p : g_logic_plugs )
+        if ( std::strcmp( p.cls, cls ) == 0 )
+            return p.vtable;
+    return 0u;
+}
+
+inline const logic_plug_t* logic_plug( std::uint32_t vtable, const char* plug )
+{
+    for ( const logic_plug_t& p : g_logic_plugs )
+        if ( p.vtable == vtable && std::strcmp( p.plug, plug ) == 0 )
+            return &p;
+    return nullptr;
+}
+
+// One input plug fired (VuScriptInputPlug slot 2 0x404BE0 -> the VuMethod1):
+// false when (vtable, plug) is not in the table (the caller's other handlers).
+inline bool logic_dispatch( logic_entity_t& e, const char* plug, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    const logic_plug_t* p = logic_plug( e.vtable, plug );
+    if ( !p )
+        return false;
+    p->fn( e, out, in, h );
+    return true;
+}
+
+// A new entity as its ctor leaves it (every property default 0, the VuString
+// empty); the loader then applies the authored properties to words / text.
+inline logic_entity_t logic_construct( std::uint32_t vtable )
+{
+    logic_entity_t e{ };
+    e.vtable = vtable;
+    return e;
+}
