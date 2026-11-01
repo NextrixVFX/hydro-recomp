@@ -7,6 +7,7 @@
 #include <workspace/core/boat/human.hxx>
 #include <workspace/core/boat/manager.hxx>
 #include <workspace/core/boat/pilots.hxx>
+#include <workspace/core/boat/rays.hxx>
 #include <workspace/core/boat/respawn.hxx>
 #include <workspace/core/boat/state.hxx>
 #include <workspace/core/game/input.hxx>
@@ -164,13 +165,27 @@ inline race_session_boat_t& race_drive_boat( race_drive_t& r )
     return *r.session->boats[ r.index ];
 }
 
-// The dynamics world's ray test: not wired (see the head).
-inline int race_drive_ray( void* user, const float*, const float*, const ai_ray_hit_t** hits )
+// The dynamics world's ray test (g_vudynamicsimpl vt+0x6C's collision world vt+0x18): the boat agent's
+// boat_ray_hits (boat/rays.hxx, engine collision/raytest.hxx) on the race's collision world; a hit object's
+// image is its VuRigidBody (the solver_rigid_t starts it). A ray that reached a path not recreated (rw.unknown:
+// e.g. the BVH ray path of the level's triangle meshes) is logged UNKNOWN.
+inline int race_drive_ray( void* user, const float* from, const float* to, const ai_ray_hit_t** hits )
 {
-    race_unwired( *static_cast< race_session_t* >( user ), "the dynamics world's ray test (g_vudynamicsimpl vt+0x6C, vt+0x18) is NOT WIRED - "
-                                                          "camera / AI rays answer no hit (UNKNOWN)" );
+    race_session_t& s = *static_cast< race_session_t* >( user );
     *hits = nullptr;
-    return 0;
+    if ( !s.dynamics )
+    {
+        race_unwired( s, "the dynamics world's ray test with no dynamics world - no hit (UNKNOWN)" );
+        return 0;
+    }
+    boat_ray_world_t& rw = s.rays;
+    rw.world = &s.dynamics->collision;
+    rw.image = []( void*, const collision_object_t& o ) { return reinterpret_cast< const std::uint8_t* >( o.body.object ); };
+    rw.unknown = false;
+    const int n = boat_ray_hits( &rw, from, to, hits );
+    if ( rw.unknown )
+        race_unwired( s, "the dynamics world's ray test reached a path not recreated (boat rays.hxx: rw.unknown) - its hits are retail's only up to there (UNKNOWN)" );
+    return n;
 }
 
 // 0x5296C0 on the probe point with the callback {vtable, point x, y,

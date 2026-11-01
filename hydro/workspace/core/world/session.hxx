@@ -4,6 +4,7 @@
 #include <workspace/core/boat/fleet.hxx>
 #include <workspace/core/boat/load.hxx>
 #include <workspace/core/boat/meshes.hxx>
+#include <workspace/core/boat/rays.hxx>
 #include <workspace/core/boat/respawn.hxx>
 #include <workspace/core/boat/thunk.hxx>
 #include <workspace/core/dynamics/contact.hxx>
@@ -156,6 +157,8 @@ struct race_session_t
     // The gfx-settings blender g 0x759430 (world/blend.hxx; 0x52F620 at the session's start) and the level's gfx-settings
     // entities' blend views (the zones in its list; the global's not listed - its timer only), made by their gameInitialize.
     gfx_blender_t blender;
+    // The ray test's view of the dynamics world (boat rays.hxx; world/drive.hxx race_drive_ray).
+    boat_ray_world_t rays;
     std::vector< std::unique_ptr< gfx_zone_t > > gfx_entities;
 };
 

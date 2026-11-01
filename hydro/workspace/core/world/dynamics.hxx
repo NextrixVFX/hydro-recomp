@@ -159,7 +159,7 @@ struct race_dynamics_t
     vu_dynamics_t impl{};                        // +0xD pending, +0x40 listeners, +0x48 step callbacks
     world_t world;                               // +0x34 (VuDynamicsWorldImpl)
     collision_world_t collision;
-    simplex_solver_t simplex{};                  // the collision configuration's (value-initialised here - its ctor is not read)
+    simplex_solver_t simplex{};                  // the collision configuration's (simplex_construct in race_dynamics_init)
     std::uint8_t async = 1;                      // +0xC
     float dt = 0.0f;                             // +0x10
     std::int32_t max_sub_steps = 6;              // +0x50
@@ -179,6 +179,7 @@ struct race_dynamics_t
 inline void race_dynamics_init( race_dynamics_t& d, const contact_callbacks_t* contact )
 {
     collision_world_init( d.collision );
+    simplex_construct( d.simplex );   // retail's simplex-solver setup (equal-vertex threshold 1e-4; boat batch 15)
     d.collision.dispatcher.simplex = &d.simplex;
     d.collision.dispatcher.callbacks = contact;
     world_attach_collision( d.world, d.collision );
