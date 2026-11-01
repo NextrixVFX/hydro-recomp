@@ -1428,11 +1428,7 @@ inline void race_session_game_mode( void* user, float dt )
                   s.dynamics ? s.dynamics->syncs : -1 );
         // VuRaceGame slot 15 0x48B180 (core/ui split.hxx ui_race_checkpoint): the boat's driver slot 12 (human), lap +0x4AC,
         // race time +0x4B4; the checkpoint's +0x8A finish byte; the game's +0x4C laps; the +0x67C machine (rules.hxx).
-        if ( s.start.timetrial )
-        {
-            race_unwired( s, "VuTimeTrialGame slot 15 0x490D70 (its checkpoint split) - not read, not run (UNKNOWN)" );
-            return;
-        }
+        // VuTimeTrialGame's slot 15 0x490D70 is the same code (its split vector at +0x720; case timetrial_split).
         const race_rules_boat_t& rb = s.rules_boats[ static_cast< std::size_t >( boat ) ];
         ui_race_split_boat_t sb;
         sb.m_human = rb.human;

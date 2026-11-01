@@ -770,6 +770,102 @@ inline bool verify_timetrial_results( )
     return failed == 0;
 }
 
+// ui_race_checkpoint (core/ui split.hxx - the UI agent's VuRaceGame slot 15 0x48B180) against retail's VuTimeTrialGame
+// slot 15 0x490D70 run whole (oracle case timetrial_split): the same code byte for byte but for the split vector's place
+// (+0x720, VuRaceGame's +0x72C) - compared: +0x6D8 / +0x6DC, every condition's value / pulse (and the record before the
+// vector: the missing-condition write), the split vector after. One failure per differing vector.
+inline bool verify_timetrial_split( )
+{
+    int failed = 0;
+    const unsigned* w = g_golden_tts_words;
+    std::size_t s = 0;
+    const auto next = [ & ] { return *w++; };
+    const unsigned sentinel = next( );
+    std::vector< std::vector< std::string > > sets( next( ) );
+    for ( auto& set : sets )
+        set.resize( next( ) );
+    for ( auto& set : sets )
+        for ( std::string& n : set )
+            n = g_golden_tts_text[ s++ ];
+    std::vector< value_t > docs( next( ) );
+    for ( value_t& d : docs )
+    {
+        d.tag = next( );
+        const unsigned n = next( );
+        for ( unsigned k = 0; k < n; ++k )
+        {
+            value_t e;
+            e.tag = next( );
+            const unsigned lo = next( ), hi = next( );
+            e.integer = static_cast< int >( lo );
+            std::memcpy( &e.real, &lo, 4 );
+            e.int64 = static_cast< long long >( ( static_cast< unsigned long long >( hi ) << 32 ) | lo );
+            if ( d.tag == 5 )
+                d.list.push_back( e );
+        }
+    }
+    const unsigned nv = next( );
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned human = next( ), lap = next( ), laps = next( ), finish = next( ), ji = next( ), prior = next( ), ci = next( ), race = next( ),
+                       best = next( );
+        c_fsm fsm;
+        for ( const std::string& n : sets[ ci ] )
+        {
+            fsm_condition_t c;
+            c.m_name = n;
+            c.m_hash = fsm_hash( n.c_str( ) );
+            fsm.m_conditions.push_back( c );
+        }
+        ui_race_split_t g;
+        g.m_laps = static_cast< std::int32_t >( laps );
+        std::memcpy( &g.m_best_time, &best, 4 );
+        g.m_best_splits = docs[ ji ];
+        std::memcpy( &g.m_split_delta, &sentinel, 4 );
+        std::memcpy( &g.m_result_delta, &sentinel, 4 );
+        for ( unsigned k = 0; k < prior; ++k )
+        {
+            const unsigned t = next( );
+            float f;
+            std::memcpy( &f, &t, 4 );
+            g.m_splits.push_back( f );
+        }
+        ui_race_split_boat_t boat;
+        boat.m_human = human != 0;
+        boat.m_lap = static_cast< std::int32_t >( lap );
+        std::memcpy( &boat.m_race_time, &race, 4 );
+        const bool ok = ui_race_checkpoint( g, fsm, boat, finish != 0 );
+        std::string have = ok ? "0000" : "0001";
+        for ( const fsm_condition_t& c : fsm.m_conditions )
+        {
+            char t[ 8 ];
+            std::snprintf( t, sizeof( t ), "%02x%02x", c.m_value, c.m_pulse );
+            have += t;
+        }
+        const unsigned after = next( );
+        bool same = g.m_splits.size( ) == after;
+        for ( unsigned k = 0; k < after; ++k )
+        {
+            const unsigned t = next( );
+            same = same && std::memcmp( &g.m_splits[ k ], &t, 4 ) == 0;
+        }
+        unsigned d[ 2 ];
+        std::memcpy( &d[ 0 ], &g.m_split_delta, 4 );
+        std::memcpy( &d[ 1 ], &g.m_result_delta, 4 );
+        const unsigned d0 = next( ), d1 = next( );
+        const std::string want = g_golden_tts_text[ s++ ];
+        same = same && d[ 0 ] == d0 && d[ 1 ] == d1 && have == want;
+        if ( !same && ++failed <= 6 )
+            LOG_ERROR( "timetrial split vector %u: conditions %s / %s, deltas 0x%08X 0x%08X / 0x%08X 0x%08X", v, have.c_str( ), g_golden_tts_text[ s - 1 ], d[ 0 ],
+                       d[ 1 ], d0, d1 );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_race_checkpoint matches VuTimeTrialGame slot 15 0x490D70 on %u vectors (+0x6D8 / +0x6DC, the conditions, the splits)", nv );
+    else
+        LOG_ERROR( "the time trial split FAILED on %d of %u vectors", failed, nv );
+    return failed == 0;
+}
+
 // race_rules_cheat_finish (world/rules.hxx) against retail's OnCheatFinish 0x483190 -> 0x4848C0 (oracle case
 // cheat_finish): 300 human lists of 0..4 boats - the six words of each boat after, and the AI manager's vt+0x30 calls.
 inline bool verify_cheat_finish( )
@@ -1039,6 +1135,7 @@ inline bool verify_session_all( )
     ok = verify_cheat_finish( ) && ok;
     ok = verify_race_results( ) && ok;
     ok = verify_timetrial_results( ) && ok;
+    ok = verify_timetrial_split( ) && ok;
     ok = verify_breakable_properties( ) && ok;
     ok = verify_breakable_contact( ) && ok;
     ok = verify_breakable_dynamic_contact( ) && ok;
