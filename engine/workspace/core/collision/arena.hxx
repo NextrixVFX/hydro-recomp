@@ -2,6 +2,7 @@
 
 #include <workspace/core/collision/teardown.hxx>
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <xmmintrin.h>
@@ -1040,4 +1041,154 @@ inline void bt_dbvt_broadphase_aabb_test( const bt_mem_t& m, std::uint32_t self,
         bt_dbvt_collide_tv( m, root, volume, frame );
     if ( const std::uint32_t root = m.rd( m.user, self + 0x2C ) )
         bt_dbvt_collide_tv( m, root, volume, frame );
+}
+
+// btPolyhedralConvexShape::localGetSupportingVertexWithoutMargin 0x54B230
+// (slot; out*, dir*; retn 8; eax = out): out = 0; maxDot = -9.99999984e17
+// (0xDD5E0B6B); the direction's length squared (y y + x x) + z z under
+// 9.99999975e-05 (ordered) -> (1, 0, 0), else the direction x 1 / sqrt; then
+// for each vertex (getNumVertices vt+0x58, re-asked each step; getVertex
+// vt+0x64( i, v* ) through io) the dot (v.y d.y + v.x d.x) + v.z d.z above
+// maxDot (ordered) -> out = v (four lanes), maxDot = dot.
+inline std::uint32_t bt_polyhedral_local_support( const bt_io_t& io, std::uint32_t self, std::uint32_t out, std::uint32_t dir )
+{
+    const bt_mem_t& m = *io.m;
+    for ( std::uint32_t k = 0; k < 16; k += 4 )
+        m.wr( m.user, out + k, 0 );
+    float max_dot;
+    const std::uint32_t lowest = 0xDD5E0B6Bu;
+    std::memcpy( &max_dot, &lowest, 4 );
+    const float x = bt_rdf( m, dir ), y = bt_rdf( m, dir + 4 ), z = bt_rdf( m, dir + 8 );
+    const float len2 = ( y * y + x * x ) + z * z;
+    float dx = 1.0f, dy = 0.0f, dz = 0.0f;
+    if ( !( 9.99999975e-05f > len2 ) )
+    {
+        const float r = 1.0f / std::sqrt( len2 );
+        dx = x * r;
+        dy = y * r;
+        dz = z * r;
+    }
+    for ( std::int32_t i = 0; i < static_cast< std::int32_t >( m.vcall( m.user, self, 0x58, nullptr, 0 ) ); ++i )
+    {
+        const std::uint32_t a = static_cast< std::uint32_t >( i );
+        std::uint32_t v[ 4 ] = { };
+        io.vcall_out( m.user, self, 0x64, &a, 1, v, 4 );
+        float f[ 3 ];
+        std::memcpy( f, v, 12 );
+        const float dot = ( f[ 1 ] * dy + f[ 0 ] * dx ) + f[ 2 ] * dz;
+        if ( dot > max_dot )
+        {
+            for ( std::uint32_t k = 0; k < 4; ++k )
+                m.wr( m.user, out + 4 * k, v[ k ] );
+            max_dot = dot;
+        }
+    }
+    return out;
+}
+
+// btPolyhedralConvexShape::batchedUnitVectorGetSupportingVertexWithoutMargin
+// 0x54B3C0 (dirs*, outs*, n; retn 0Ch): each out's w = -9.99999984e17; then
+// per direction j, per vertex (vt+0x58 re-asked, vt+0x64 through io) the dot
+// (d.x v.x + d.y v.y) + d.z v.z above out[ j ].w (ordered) -> out[ j ] = v
+// (four lanes), then its w = the dot.
+inline void bt_polyhedral_batched_support( const bt_io_t& io, std::uint32_t self, std::uint32_t dirs, std::uint32_t outs, std::int32_t n )
+{
+    const bt_mem_t& m = *io.m;
+    for ( std::int32_t j = 0; j < n; ++j )
+        m.wr( m.user, outs + 16u * static_cast< std::uint32_t >( j ) + 0xC, 0xDD5E0B6Bu );
+    for ( std::int32_t j = 0; j < n; ++j )
+    {
+        const std::uint32_t d = dirs + 16u * static_cast< std::uint32_t >( j ), o = outs + 16u * static_cast< std::uint32_t >( j );
+        for ( std::int32_t i = 0; i < static_cast< std::int32_t >( m.vcall( m.user, self, 0x58, nullptr, 0 ) ); ++i )
+        {
+            const std::uint32_t a = static_cast< std::uint32_t >( i );
+            std::uint32_t v[ 4 ] = { };
+            io.vcall_out( m.user, self, 0x64, &a, 1, v, 4 );
+            float f[ 3 ];
+            std::memcpy( f, v, 12 );
+            const float dot = ( bt_rdf( m, d ) * f[ 0 ] + bt_rdf( m, d + 4 ) * f[ 1 ] ) + bt_rdf( m, d + 8 ) * f[ 2 ];
+            if ( dot > bt_rdf( m, o + 0xC ) )
+            {
+                for ( std::uint32_t k = 0; k < 4; ++k )
+                    m.wr( m.user, o + 4 * k, v[ k ] );
+                bt_wrf( m, o + 0xC, dot );
+            }
+        }
+    }
+}
+
+// btTriangleShape::isInside 0x5B8110 (slot 28; point*, tolerance; retn 8; al):
+// the normal (e1 x e2 of the vertices +0x50 / +0x60 / +0x70) normalised (1 /
+// sqrt), the point's plane distance within [-tol, tol] (both ordered: a NaN
+// is outside), then for each edge (getEdge vt+0x60( i, pa*, pb* ) through io)
+// its inward normal (edge x normal, normalised) - the point's distance below
+// -tol (ordered) -> false. Products / sums in retail's grouping.
+inline bool bt_triangle_is_inside( const bt_io_t& io, std::uint32_t self, std::uint32_t point, std::uint32_t tolerance_bits )
+{
+    const bt_mem_t& m = *io.m;
+    const auto v = [ & ]( std::uint32_t k, std::uint32_t lane ) { return bt_rdf( m, self + 0x50 + 0x10 * k + 4 * lane ); };
+    const float e1y = v( 1, 1 ) - v( 0, 1 ), e1z = v( 1, 2 ) - v( 0, 2 ), e2z = v( 2, 2 ) - v( 0, 2 );
+    const float e2y = v( 2, 1 ) - v( 0, 1 ), e1x = v( 1, 0 ) - v( 0, 0 ), e2x = v( 2, 0 ) - v( 0, 0 );
+    const float nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+    const float r = 1.0f / std::sqrt( ( ny * ny + nx * nx ) + nz * nz );
+    const float ux = nx * r, uy = ny * r, uz = nz * r;
+    const float px = bt_rdf( m, point ), py = bt_rdf( m, point + 4 ), pz = bt_rdf( m, point + 8 );
+    const float dist = ( ( uy * py + px * ux ) + uz * pz ) - ( ( v( 0, 1 ) * uy + v( 0, 0 ) * ux ) + v( 0, 2 ) * uz );
+    float tol, neg;
+    const std::uint32_t neg_bits = tolerance_bits ^ 0x80000000u;
+    std::memcpy( &tol, &tolerance_bits, 4 );
+    std::memcpy( &neg, &neg_bits, 4 );
+    if ( !( dist >= neg ) || !( tol >= dist ) )
+        return false;
+    for ( std::uint32_t i = 0; i < 3; ++i )
+    {
+        std::uint32_t w[ 8 ] = { };
+        io.vcall_out( m.user, self, 0x60, &i, 1, w, 8 );
+        float pa[ 3 ], pb[ 3 ];
+        std::memcpy( pa, w, 12 );
+        std::memcpy( pb, w + 4, 12 );
+        const float edz = pb[ 2 ] - pa[ 2 ], edy = pb[ 1 ] - pa[ 1 ], edx = pb[ 0 ] - pa[ 0 ];
+        const float enx = edy * uz - edz * uy, eny = edz * ux - edx * uz, enz = edx * uy - edy * ux;
+        const float s = 1.0f / std::sqrt( ( eny * eny + enx * enx ) + enz * enz );
+        const float qx = enx * s, qy = eny * s, qz = enz * s;
+        const float edist = ( ( qy * py + px * qx ) + qz * pz ) - ( ( qy * pa[ 1 ] + qx * pa[ 0 ] ) + qz * pa[ 2 ] );
+        if ( neg > edist )
+            return false;
+    }
+    return true;
+}
+
+// btConvexPlaneCollisionAlgorithm::CreateFunc::CreateCollisionAlgorithm
+// 0x56C5B0 (ci*, body0, body1; retn 0Ch): mem = the dispatcher's (ci +0)
+// vt+0x34 allocateCollisionAlgorithm( 0x1C ); null -> 0; else the ctor
+// inline: [mem] = 0x7573CC then 0x7575BC, +4 the dispatcher, +8 m_ownManifold
+// 0, +0xC m_manifoldPtr 0, +0x10 m_isSwapped (this +4 non-zero -> 1), +0x14 /
+// +0x18 = this +8 / +0xC (the perturbation iterations / threshold); the
+// bodies in that order (swapped: body1, body0) to needsCollision vt+0x14 -
+// al set -> m_manifoldPtr = getNewManifold vt+8 (same order) on mem +4, own
+// = 1. eax = mem.
+inline std::uint32_t bt_convex_plane_create( const bt_mem_t& m, std::uint32_t self, std::uint32_t ci, std::uint32_t body0, std::uint32_t body1 )
+{
+    const std::uint32_t size = 0x1C;
+    const std::uint32_t mem = m.vcall( m.user, m.rd( m.user, ci ), 0x34, &size, 1 );
+    const bool swapped = m.rd8( m.user, self + 4 ) != 0;
+    if ( mem == 0 )
+        return 0;
+    const std::uint32_t threshold = m.rd( m.user, self + 0xC ), iterations = m.rd( m.user, self + 8 );
+    const std::uint32_t dispatcher = m.rd( m.user, ci );
+    m.wr( m.user, mem, 0x7573CCu );
+    m.wr( m.user, mem + 4, dispatcher );
+    m.wr( m.user, mem + 0x14, iterations );
+    m.wr( m.user, mem, 0x7575BCu );
+    m.wr8( m.user, mem + 8, 0 );
+    m.wr( m.user, mem + 0xC, 0 );
+    m.wr8( m.user, mem + 0x10, swapped ? 1 : 0 );
+    m.wr( m.user, mem + 0x18, threshold );
+    const std::uint32_t bodies[ 2 ] = { swapped ? body1 : body0, swapped ? body0 : body1 };
+    if ( ( m.vcall( m.user, dispatcher, 0x14, bodies, 2 ) & 0xFFu ) != 0 )
+    {
+        m.wr( m.user, mem + 0xC, m.vcall( m.user, m.rd( m.user, mem + 4 ), 8, bodies, 2 ) );
+        m.wr8( m.user, mem + 8, 1 );
+    }
+    return mem;
 }

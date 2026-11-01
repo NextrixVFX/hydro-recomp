@@ -2148,6 +2148,24 @@ inline bool verify_bt_rows7( )
                 bt_dbvt_collide_tv( f, self, args[ 0 ], args[ 1 ] );
             return *m.num_aligned_alloc - before;
         } );
+}// verify_bt_rows8 (boat batch 21): cases/boat.py bt_rows8 - the polyhedral
+// localGetSupportingVertexWithoutMargin 0x54B230 / batchedUnitVector... 0x54B3C0
+// (getVertex through io), btTriangleShape::isInside 0x5B8110 (getEdge through
+// io) and btConvexPlaneCollisionAlgorithm::CreateFunc 0x56C5B0.
+inline bool verify_bt_rows8( )
+{
+    return bt_rows_verify( g_golden_bt_rows8_words, "bt_rows8",
+        "four Bullet rows 0x54B230 / 0x54B3C0 / 0x5B8110 / 0x56C5B0 (collision/arena.hxx: the polyhedral supporting vertex and its batched "
+        "form, btTriangleShape::isInside, the convex-plane CreateFunc)",
+        []( unsigned kind, const bt_mem_t& m, const bt_io_t& io, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            switch ( kind )
+            {
+                case 1: return bt_polyhedral_local_support( io, self, args[ 0 ], args[ 1 ] );
+                case 2: bt_polyhedral_batched_support( io, self, args[ 0 ], args[ 1 ], static_cast< std::int32_t >( args[ 2 ] ) ); return 0;
+                case 3: return bt_triangle_is_inside( io, self, args[ 0 ], args[ 1 ] ) ? 1u : 0u;
+                default: return bt_convex_plane_create( m, self, args[ 0 ], args[ 1 ], args[ 2 ] );
+            }
+        } );
 }// verify_mesh_scaling (boat batch 20): cases/boat.py mesh_scaling -
 // btTriangleMeshShape::setLocalScaling 0x60C1C0 (concave.hxx mesh_shape_set
 // _local_scaling: under the BVH vtable the BVH-walk recalc, under the plain
