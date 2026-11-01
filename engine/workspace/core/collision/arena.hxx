@@ -353,3 +353,124 @@ inline void bt_compound_recalculate_local_aabb( const bt_io_t& io, std::uint32_t
         }
     }
 }
+
+// btPolyhedralConvexShape::calculateLocalInertia 0x54B4C0 (slot 7 of the
+// polyhedral / aabb-caching / convex-triangle-mesh shapes; thiscall; mass,
+// inertia*; retn 8): margin = vt+0x28 getMargin (ST0, stored as a float);
+// getAabb (vt+4) on an identity transform (0x413280's stores: the basis
+// rows (1,0,0,0) (0,1,0,0) (0,0,1,0), origin 0); per lane L = ((max - min) *
+// 0.5 (0x6F765C) + margin) * 2.0 (0x6F76F8), squared; k = mass * 0x6F7608
+// (0x3DAAAAAA, 1/12); inertia = ((z2 + y2) k, (z2 + x2) k, (y2 + x2) k, 0).
+// `margin` answers vt+0x28 (its float bits).
+inline void bt_polyhedral_local_inertia( const bt_io_t& io, std::uint32_t self, std::uint32_t mass_bits, std::uint32_t inertia,
+                                         std::uint32_t ( *margin )( const bt_mem_t& m, std::uint32_t self ) )
+{
+    const bt_mem_t& m = *io.m;
+    const std::uint32_t mg = margin( m, self );
+    float margin_f, mass;
+    std::memcpy( &margin_f, &mg, 4 );
+    std::memcpy( &mass, &mass_bits, 4 );
+    const std::uint32_t identity[ 16 ] = { 0x3F800000u, 0, 0, 0, 0, 0x3F800000u, 0, 0, 0, 0, 0x3F800000u, 0, 0, 0, 0, 0 };
+    std::uint32_t out[ 8 ] = { };   // min, max
+    io.vcall_out( m.user, self, 4, identity, 16, out, 8 );
+    float mn[ 4 ], mx[ 4 ];
+    std::memcpy( mn, out, 16 );
+    std::memcpy( mx, out + 4, 16 );
+    float l[ 3 ];
+    for ( int k = 0; k < 3; ++k )
+    {
+        const float h = ( mx[ k ] - mn[ k ] ) * 0.5f + margin_f;
+        const float e = h * 2.0f;
+        l[ k ] = e * e;
+    }
+    float scaled;
+    const std::uint32_t twelfth = 0x3DAAAAAAu;
+    std::memcpy( &scaled, &twelfth, 4 );
+    scaled = mass * scaled;
+    bt_wrf( m, inertia + 0, ( l[ 2 ] + l[ 1 ] ) * scaled );
+    bt_wrf( m, inertia + 4, ( l[ 2 ] + l[ 0 ] ) * scaled );
+    bt_wrf( m, inertia + 8, ( l[ 1 ] + l[ 0 ] ) * scaled );
+    m.wr( m.user, inertia + 12, 0 );
+}
+
+// btTriangleShape (vertices at +0x50 / +0x60 / +0x70, 16 bytes each).
+// The max-dot vertex index the support rows inline: d1 > d0 (`comiss`,
+// ordered) -> 1 + (d2 > d1); else d2 > d0 ? 2 : 0.
+inline std::uint32_t bt_triangle_max_vertex( float d0, float d1, float d2 )
+{
+    if ( _mm_comigt_ss( _mm_set_ss( d1 ), _mm_set_ss( d0 ) ) )
+        return 1u + ( _mm_comigt_ss( _mm_set_ss( d2 ), _mm_set_ss( d1 ) ) ? 1u : 0u );
+    return _mm_comigt_ss( _mm_set_ss( d2 ), _mm_set_ss( d0 ) ) ? 2u : 0u;
+}
+
+// localGetSupportingVertexWithoutMargin 0x5B7D60 (slot 15; out*, dir*; retn
+// 8): the dots (v.y dy + v.x dx) + v.z dz per vertex; out = that vertex's 16
+// bytes.
+inline void bt_triangle_support( const bt_mem_t& m, std::uint32_t self, std::uint32_t out, std::uint32_t dir )
+{
+    const float dx = bt_rdf( m, dir ), dy = bt_rdf( m, dir + 4 ), dz = bt_rdf( m, dir + 8 );
+    float d[ 3 ];
+    for ( std::uint32_t k = 0; k < 3; ++k )
+    {
+        const std::uint32_t v = self + 0x50 + 0x10 * k;
+        d[ k ] = ( bt_rdf( m, v + 4 ) * dy + bt_rdf( m, v ) * dx ) + bt_rdf( m, v + 8 ) * dz;
+    }
+    bt_copy16( m, out, self + 0x50 + 0x10 * bt_triangle_max_vertex( d[ 0 ], d[ 1 ], d[ 2 ] ) );
+}
+
+// batchedUnitVectorGetSupportingVertexWithoutMargin 0x5B7E20 (slot 17;
+// dirs*, outs*, count; retn 0Ch): count <= 0 -> nothing; else per direction
+// (16-byte strides) the same pick into the next output.
+inline void bt_triangle_support_batch( const bt_mem_t& m, std::uint32_t self, std::uint32_t dirs, std::uint32_t outs, std::uint32_t count )
+{
+    for ( std::int32_t i = 0; i < static_cast< std::int32_t >( count ); ++i )
+        bt_triangle_support( m, self, outs + 0x10u * static_cast< std::uint32_t >( i ), dirs + 0x10u * static_cast< std::uint32_t >( i ) );
+}
+
+// The forwarder 0x5B7FA0 (slot 27 getPlane; normal*, support*, i; retn 0Ch):
+// this one's vt+0x74 getPlaneEquation( i, normal*, support* ); the forwarded
+// call answers.
+inline std::uint32_t bt_triangle_get_plane( const bt_mem_t& m, std::uint32_t self, const std::uint32_t* args )
+{
+    const std::uint32_t a[ 3 ] = { args[ 2 ], args[ 0 ], args[ 1 ] };
+    return m.vcall( m.user, self, 0x74, a, 3 );
+}
+
+// calcNormal as 0x5B7FC0 / 0x5B83D0 inline it: e1 = v1 - v0, e2 = v2 - v0,
+// n = (e1y e2z - e1z e2y, e1z e2x - e1x e2z, e1x e2y - e1y e2x, 0) stored,
+// then (re-read) times 1.0 (0x6F76B8) / sqrt( (x x + y y) + z z ) - the
+// three lanes stored again.
+inline void bt_triangle_calc_normal( const bt_mem_t& m, std::uint32_t self, std::uint32_t out )
+{
+    const auto f = [ & ]( std::uint32_t at ) { return bt_rdf( m, self + at ); };
+    const float e1y = f( 0x64 ) - f( 0x54 ), e1z = f( 0x68 ) - f( 0x58 ), e2z = f( 0x78 ) - f( 0x58 );
+    const float e1x = f( 0x60 ) - f( 0x50 ), e2y = f( 0x74 ) - f( 0x54 ), e2x = f( 0x70 ) - f( 0x50 );
+    bt_wrf( m, out, e1y * e2z - e1z * e2y );
+    bt_wrf( m, out + 4, e1z * e2x - e1x * e2z );
+    bt_wrf( m, out + 8, e1x * e2y - e1y * e2x );
+    m.wr( m.user, out + 12, 0 );
+    const float x = bt_rdf( m, out ), y = bt_rdf( m, out + 4 ), z = bt_rdf( m, out + 8 );
+    const float r = 1.0f / _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( x * x + y * y ) + z * z ) ) );
+    bt_wrf( m, out, x * r );
+    bt_wrf( m, out + 4, y * r );
+    bt_wrf( m, out + 8, z * r );
+}
+
+// getPlaneEquation 0x5B7FC0 (slot 29; i, normal*, support*; retn 0Ch):
+// calcNormal into normal, support = v0 (+0x50, 16 bytes).
+inline void bt_triangle_plane_equation( const bt_mem_t& m, std::uint32_t self, std::uint32_t normal, std::uint32_t support )
+{
+    bt_triangle_calc_normal( m, self, normal );
+    bt_copy16( m, support, self + 0x50 );
+}
+
+// getPreferredPenetrationDirection 0x5B83D0 (slot 20; index, out*; retn 8):
+// calcNormal into out; index != 0 -> the three lanes times -1.0 (0x6F78A0).
+inline void bt_triangle_penetration_direction( const bt_mem_t& m, std::uint32_t self, std::uint32_t index, std::uint32_t out )
+{
+    bt_triangle_calc_normal( m, self, out );
+    if ( index == 0 )
+        return;
+    for ( std::uint32_t k = 0; k < 12; k += 4 )
+        bt_wrf( m, out + k, bt_rdf( m, out + k ) * -1.0f );
+}

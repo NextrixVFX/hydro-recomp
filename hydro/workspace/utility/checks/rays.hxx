@@ -1763,8 +1763,9 @@ inline bool verify_bt_misc( )
 // 0x605FA0, 0x6027A0, 0x602830, 0x527160) run whole on fake objects in one
 // arena: eax (ST0 bits / al), the arena after, gNumAlignedFree, the frees,
 // the deletes, the virtual calls in order (arguments compared, retail's eax
-// and out words answered).
-inline bool verify_bt_rows( )
+// and out words answered). bt_rows_verify runs one case's words through
+// `call( kind, m, io, self, args )` (it answers the row's eax).
+template < typename F > inline bool bt_rows_verify( const unsigned* g, const char* tag, const char* what, F&& call )
 {
     struct arena_t
     {
@@ -1801,10 +1802,8 @@ inline bool verify_bt_rows( )
             return bad ? nullptr : c;
         }
     };
-    const unsigned* g = g_golden_bt_rows_words;
     const unsigned n = *g++;
     int failed = 0, calls = 0, frees = 0;
-    int per_kind[ 14 ] = { };
     for ( unsigned v = 0; v < n; ++v )
     {
         const unsigned kind = *g++, address = *g++, self = *g++, base = *g++, eax = *g++, c0 = *g++, c1 = *g++, na = *g++;
@@ -1878,34 +1877,16 @@ inline bool verify_bt_rows( )
             std::memcpy( out, c + 5 + c[ 2 ], 4u * static_cast< unsigned >( words ) );
             return c[ 3 + c[ 2 ] ];
         };
-        std::uint32_t r = 0;
-        switch ( kind )
-        {
-            case 1: bt_convex_internal_set_scaling( m, self, args[ 0 ] ); break;
-            case 2: bt_point_collector_add( m, self, args[ 0 ], args[ 1 ], args[ 2 ] ); break;
-            case 3: r = bt_convex_triangle_callback_delete( m, self, args[ 0 ] ); break;
-            case 4: r = bt_compound_shape_delete( m, self, args[ 0 ] ); break;
-            case 5: r = bt_bvh_mesh_shape_delete( m, self, args[ 0 ] ); break;
-            case 6: bt_collision_world_remove_object( m, self, args[ 0 ] ); break;
-            case 7: bt_dbvt_broadphase_get_aabb( m, args[ 0 ], args[ 1 ], args[ 2 ] ); break;
-            case 8: bt_dbvt_broadphase_world_aabb( m, self, args[ 0 ], args[ 1 ] ); break;
-            case 9: bt_dbvt_broadphase_reset_pool( m, self ); break;
-            case 10: r = bt_closest_convex_add_single_result( m, self, args[ 0 ], args[ 1 ] ); break;
-            case 11: r = bt_closest_not_me_add_single_result( m, self, args[ 0 ], args[ 1 ] ); break;
-            case 12: r = bt_closest_not_me_needs_collision( m, self, args[ 0 ] ) ? 1u : 0u; break;
-            default: bt_compound_recalculate_local_aabb( io, self ); break;
-        }
+        const std::uint32_t r = call( kind, m, io, self, args );
         calls += static_cast< int >( x.nv );
         frees += static_cast< int >( nf );
         const bool same = !x.bad && x.at == x.nv && r == eax && counter == c1 && x.frees == want_frees && x.deletes == want_deletes && x.bytes == want;
-        if ( same )
-            ++per_kind[ kind < 14 ? kind : 0 ];
-        else if ( ++failed <= 4 )
+        if ( !same && ++failed <= 4 )
         {
             std::size_t first = 0;
             while ( first < want.size( ) && x.bytes[ first ] == want[ first ] )
                 ++first;
-            LOG_ERROR( "bt_rows %u (0x%06X): eax 0x%08X (retail 0x%08X), arena %s (first at +0x%X), calls %s, frees %d (retail %u)", v, address, r,
+            LOG_ERROR( "%s %u (0x%06X): eax 0x%08X (retail 0x%08X), arena %s (first at +0x%X), calls %s, frees %d (retail %u)", tag, v, address, r,
                        eax, x.bytes == want ? "same" : "differs", static_cast< unsigned >( first ), x.bad || x.at != x.nv ? "differ" : "same",
                        static_cast< int >( x.frees.size( ) ), nf );
             if ( first + 16 <= want.size( ) )
@@ -1919,12 +1900,59 @@ inline bool verify_bt_rows( )
     }
     if ( failed == 0 )
     {
-        LOG_SUCCESS( "thirteen Bullet rows 0x552F30 .. 0x527160 (collision/arena.hxx: scaling, point collector, three dtors, removeCollisionObject, "
-                     "the broadphase's getAabb / getBroadphaseAabb / resetPool, the convex result callbacks, recalculateLocalAabb) match retail: "
-                     "%u calls, %d virtual calls, %d frees",
-                     n, calls, frees );
+        LOG_SUCCESS( "%s match retail: %u calls, %d virtual calls, %d frees", what, n, calls, frees );
         return true;
     }
-    LOG_ERROR( "bt_rows FAILED %d of %u", failed, n );
+    LOG_ERROR( "%s FAILED %d of %u", tag, failed, n );
     return false;
+}
+
+inline bool verify_bt_rows( )
+{
+    return bt_rows_verify( g_golden_bt_rows_words, "bt_rows",
+        "thirteen Bullet rows 0x552F30 .. 0x527160 (collision/arena.hxx: scaling, point collector, three dtors, removeCollisionObject, the "
+        "broadphase's getAabb / getBroadphaseAabb / resetPool, the convex result callbacks, recalculateLocalAabb)",
+        []( unsigned kind, const bt_mem_t& m, const bt_io_t& io, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            switch ( kind )
+            {
+                case 1: bt_convex_internal_set_scaling( m, self, args[ 0 ] ); return 0;
+                case 2: bt_point_collector_add( m, self, args[ 0 ], args[ 1 ], args[ 2 ] ); return 0;
+                case 3: return bt_convex_triangle_callback_delete( m, self, args[ 0 ] );
+                case 4: return bt_compound_shape_delete( m, self, args[ 0 ] );
+                case 5: return bt_bvh_mesh_shape_delete( m, self, args[ 0 ] );
+                case 6: bt_collision_world_remove_object( m, self, args[ 0 ] ); return 0;
+                case 7: bt_dbvt_broadphase_get_aabb( m, args[ 0 ], args[ 1 ], args[ 2 ] ); return 0;
+                case 8: bt_dbvt_broadphase_world_aabb( m, self, args[ 0 ], args[ 1 ] ); return 0;
+                case 9: bt_dbvt_broadphase_reset_pool( m, self ); return 0;
+                case 10: return bt_closest_convex_add_single_result( m, self, args[ 0 ], args[ 1 ] );
+                case 11: return bt_closest_not_me_add_single_result( m, self, args[ 0 ], args[ 1 ] );
+                case 12: return bt_closest_not_me_needs_collision( m, self, args[ 0 ] ) ? 1u : 0u;
+                default: bt_compound_recalculate_local_aabb( io, self ); return 0;
+            }
+        } );
+}
+
+// verify_bt_rows2 (boat batch 19): cases/boat.py bt_rows2 - the polyhedral
+// calculateLocalInertia 0x54B4C0 (vt+0x28 is retail's getMargin leaf 0x43D5C0
+// in the case: fld [this + 0x30] - answered here from the arena) and the
+// btTriangleShape rows 0x5B7D60 / 0x5B7E20 / 0x5B7FA0 / 0x5B7FC0 / 0x5B83D0.
+inline bool verify_bt_rows2( )
+{
+    return bt_rows_verify( g_golden_bt_rows2_words, "bt_rows2",
+        "six Bullet rows 0x54B4C0 / 0x5B7D60 / 0x5B7E20 / 0x5B7FA0 / 0x5B7FC0 / 0x5B83D0 (collision/arena.hxx: the polyhedral "
+        "calculateLocalInertia, btTriangleShape's support / batched support / getPlane / getPlaneEquation / penetration direction)",
+        []( unsigned kind, const bt_mem_t& m, const bt_io_t& io, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            switch ( kind )
+            {
+                case 1:
+                    bt_polyhedral_local_inertia( io, self, args[ 0 ], args[ 1 ],
+                        []( const bt_mem_t& q, std::uint32_t s ) -> std::uint32_t { return q.rd( q.user, s + 0x30 ); } );   // 0x43D5C0
+                    return 0;
+                case 2: bt_triangle_support( m, self, args[ 0 ], args[ 1 ] ); return 0;
+                case 3: bt_triangle_support_batch( m, self, args[ 0 ], args[ 1 ], args[ 2 ] ); return 0;
+                case 4: return bt_triangle_get_plane( m, self, args );
+                case 5: bt_triangle_plane_equation( m, self, args[ 1 ], args[ 2 ] ); return 0;
+                default: bt_triangle_penetration_direction( m, self, args[ 0 ], args[ 1 ] ); return 0;
+            }
+        } );
 }
