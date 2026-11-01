@@ -705,13 +705,14 @@ inline bool verify_race_results( )
 // TrackDB / BoatDB / the progress manager's round (VUJB read by c_reader), the pre-filled root, the VuRandom state.
 // Compared per vector: the whole root (canonical), +0x738, the 34 VuRandom words after, the StringDB ids asked for in
 // order, the progress-manager calls and the qsort's element count - one failure per differing vector.
-inline bool verify_timetrial_results( )
+// The same for VuSlalomGame slot 12 0x48CAF0 (case slalom_results: + each boat's +0x4D0 GatesMissed, its once flag +0x768).
+inline bool verify_game_results_writer( const unsigned* words, const char* const* texts, bool slalom )
 {
     int failed = 0;
-    const unsigned* w = g_golden_ttr_words;
+    const unsigned* w = words;
     std::size_t s = 0;
     const auto next = [ & ] { return *w++; };
-    const auto text = [ & ] { return std::string( g_golden_ttr_text[ s++ ] ); };
+    const auto text = [ & ] { return std::string( texts[ s++ ] ); };
     const auto doc = [ & ] {
         const std::string hex = text( );
         std::vector< std::uint8_t > bytes;
@@ -725,6 +726,7 @@ inline bool verify_timetrial_results( )
     {
         std::uint8_t once = static_cast< std::uint8_t >( next( ) );
         timetrial_results_in_t in;
+        in.slalom = slalom;
         in.championship = static_cast< std::uint8_t >( next( ) );
         in.circuit = static_cast< std::uint8_t >( next( ) );
         in.laps = static_cast< std::int32_t >( next( ) );
@@ -742,6 +744,8 @@ inline bool verify_timetrial_results( )
             rules_put_i32( img, 0x4CC, static_cast< std::int32_t >( next( ) ) );
             rules_put_i32( img, 0x4D4, static_cast< std::int32_t >( next( ) ) );
             const unsigned kind = next( );
+            if ( slalom )
+                rules_put_i32( img, 0x4D0, static_cast< std::int32_t >( next( ) ) );
             race_results_entry_t& e = entries[ b ];
             e.boat_class = text( );
             e.boat_name = text( );
@@ -802,15 +806,19 @@ inline bool verify_timetrial_results( )
         for ( unsigned k = 0; k < nq; ++k )
             next( );   // the qsort's element count: the rows the tree holds
         if ( !same && ++failed <= 4 )
-            LOG_ERROR( "timetrial results vector %u: ours %.400s\n retail %.400s", v, race_results_canonical( root ).c_str( ), want_root.c_str( ) );
+            LOG_ERROR( "%s results vector %u: ours %.400s\n retail %.400s", slalom ? "slalom" : "timetrial", v, race_results_canonical( root ).c_str( ),
+                       want_root.c_str( ) );
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "timetrial_write_results matches VuTimeTrialGame slot 12 0x48F560 on %u vectors (the whole root, +0x738, VuRandom, the "
-                     "StringDB ids, the round calls)", nv );
+        LOG_SUCCESS( "timetrial_write_results matches %s on %u vectors (the whole root, the once flag, VuRandom, the StringDB ids, the round calls)",
+                     slalom ? "VuSlalomGame slot 12 0x48CAF0" : "VuTimeTrialGame slot 12 0x48F560", nv );
     else
-        LOG_ERROR( "the time trial results writer FAILED on %d of %u vectors", failed, nv );
+        LOG_ERROR( "the %s results writer FAILED on %d of %u vectors", slalom ? "slalom" : "time trial", failed, nv );
     return failed == 0;
 }
+
+inline bool verify_timetrial_results( ) { return verify_game_results_writer( g_golden_ttr_words, g_golden_ttr_text, false ); }
+inline bool verify_slalom_results( ) { return verify_game_results_writer( g_golden_slr_words, g_golden_slr_text, true ); }
 
 // ui_race_checkpoint (core/ui split.hxx - the UI agent's VuRaceGame slot 15 0x48B180) against retail's VuTimeTrialGame
 // slot 15 0x490D70 run whole (oracle case timetrial_split): the same code byte for byte but for the split vector's place
@@ -1416,6 +1424,7 @@ inline bool verify_session_all( )
     ok = verify_cheat_finish( ) && ok;
     ok = verify_race_results( ) && ok;
     ok = verify_timetrial_results( ) && ok;
+    ok = verify_slalom_results( ) && ok;
     ok = verify_timetrial_split( ) && ok;
     ok = verify_timetrial_place( ) && ok;
     ok = verify_breakable_properties( ) && ok;

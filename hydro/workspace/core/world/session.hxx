@@ -2572,13 +2572,9 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
             }
             return e;
         };
-        if ( s.start.slalom )
+        if ( s.start.timetrial || s.start.slalom )
         {
-            race_unwired( s, "VuSlalomGame slot 12 0x48CAF0 (its results writer, 3989 bytes) - not read, not run (UNKNOWN): no GameResults" );
-            return;
-        }
-        if ( s.start.timetrial )
-        {
+            // VuSlalomGame slot 12 0x48CAF0 is the same writer (in.slalom: case slalom_results).
             // VuTimeTrialGame slot 12 0x48F560 (world/modes.hxx timetrial_write_results, case timetrial_results): the boat
             // manager's +0x18 / +0x24 lists' first boats (by image) as the racer / the human.
             const auto first_of = [ &s, &entry_of ]( const boat_manager_list_t& l ) {
@@ -2599,6 +2595,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
             in.boat_db = s.boat_db;
             in.string_db = s.world.string_db;
             in.random = s.random;
+            in.slalom = s.start.slalom;
             if ( !in.racer.boat || !in.human.boat )
             {
                 race_unwired( s, "0x48F560: the boat manager's +0x18 / +0x24 list has no first boat (retail reads [0] of an empty list: UNKNOWN) - not run" );
@@ -2626,7 +2623,8 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
             const value_t& results = ui_json_find( s.util, "GameResults" );
             const value_t& table = ui_json_find( results, "Table" );
             LOG_INFO( "race: GameResults written (%s) - CircuitRace %d, %d rows",
-                      s.start.timetrial ? "VuTimeTrialGame slot 12 0x48F560" : "VuRaceGame slot 12 0x489C60", ui_json_find( results, "CircuitRace" ).integer,
+                      s.start.slalom ? "VuSlalomGame slot 12 0x48CAF0" : s.start.timetrial ? "VuTimeTrialGame slot 12 0x48F560" : "VuRaceGame slot 12 0x489C60",
+                      ui_json_find( results, "CircuitRace" ).integer,
                       table.tag == 5 ? static_cast< int >( table.list.size( ) ) : -1 );
             for ( std::size_t k = 0; table.tag == 5 && k < table.list.size( ); ++k )
             {
