@@ -30,6 +30,19 @@ inline void pfx_boat_thrust_rate( pfx_fountain_node_t& node, const std::uint8_t*
         node.rate_scale = 0.0f;
 }
 
+// VuPfxBoatSpringConstraintInstance's slot 1 0x4CD980 (thiscall node; float
+// dt; retn 4): the target and target velocity are the boat's (node +0x14):
+// its transform's world translation (boat +0x50 -> +0x80 .. +0x88) and its
+// rigid body's linear velocity (boat +0x21C -> +0x140 .. +0x148), both read
+// once per call; all zero without a boat. Then per particle of the pattern's
+// list world/pfx.hxx's pfx_spring_particle. `boat_position` / `boat_velocity`
+// null for retail's null boat.
+inline void pfx_tick_boat_spring( float* p, const float* params, const float* boat_position, const float* boat_velocity, float dt )
+{
+    const float zero[ 3 ] = { 0.0f, 0.0f, 0.0f };
+    pfx_spring_particle( p, params, boat_position ? boat_position : zero, boat_velocity ? boat_velocity : zero, dt );
+}
+
 // 0x4CD5B0 whole: the rate, then VuPfxEmitFountain_emit 0x55D030 with dt.
 inline void pfx_boat_thrust_emit( pfx_fountain_node_t& node, const std::uint8_t* params, boat_view_t* boat, const std::uint8_t* records,
     pfx_rand_t& rand, const float* cameras, int camera_count, const float* system_position, const float* system_velocity, float dt,

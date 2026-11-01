@@ -2036,9 +2036,59 @@ inline bool verify_boat_thrust( )
     return failed == 0;
 }
 
+// pfx_tick_spring (world/pfx.hxx) and pfx_tick_boat_spring (world/spray.hxx) against the spring constraints' slot 1
+// 0x58E1C0 / 0x4CD980 (case pfx_springs): 12 linked particles per vector, every particle word after the tick.
+inline bool verify_pfx_springs( )
+{
+    int failed = 0, moved = 0;
+    const unsigned* s = g_golden_psp_words;
+    for ( std::size_t index = 0; index < g_golden_psp_count; ++index )
+    {
+        const bool boat = s[ 0 ] != 0u;
+        const bool present = s[ 1 ] != 0u;
+        const float dt = water_bits( s[ 2 ] );
+        float params[ 6 ], offset[ 3 ], pos[ 3 ], vel[ 3 ];
+        for ( int k = 0; k < 6; ++k )
+            params[ k ] = water_bits( s[ 3 + k ] );
+        for ( int k = 0; k < 3; ++k )
+        {
+            offset[ k ] = water_bits( s[ 9 + k ] );
+            pos[ k ] = water_bits( s[ 12 + k ] );
+            vel[ k ] = water_bits( s[ 15 + k ] );
+        }
+        s += 18;
+        int bad = 0;
+        for ( int i = 0; i < 12; ++i, s += 64 )
+        {
+            std::uint32_t w[ 32 ];
+            std::memcpy( w, s, sizeof( w ) );
+            float* p = reinterpret_cast< float* >( w );
+            if ( boat )
+                pfx_tick_boat_spring( p, params, present ? pos : nullptr, present ? vel : nullptr, dt );
+            else
+                pfx_tick_spring( p, params, offset, dt );
+            moved += std::memcmp( s, s + 32, 128 ) != 0 ? 1 : 0;
+            bad += std::memcmp( w, s + 32, 128 ) != 0 ? 1 : 0;
+        }
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "pfx_springs vector %d (%s): %d particles differ", static_cast< int >( index ), boat ? "boat" : "spring", bad );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "pfx_tick_spring / pfx_tick_boat_spring match VuPfxSpringConstraintInstance 0x58E1C0 and "
+                     "VuPfxBoatSpringConstraintInstance 0x4CD980 on %d vectors x 12 particles (%d moved), every word",
+            static_cast< int >( g_golden_psp_count ), moved );
+    else
+        LOG_ERROR( "pfx_springs FAILED %d of %d", failed, static_cast< int >( g_golden_psp_count ) );
+    return failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
+    ok = verify_pfx_springs( ) && ok;
     ok = verify_boat_thrust( ) && ok;
     ok = verify_water_point( ) && ok;
     ok = verify_wake_kernels96( ) && ok;
