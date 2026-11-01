@@ -315,6 +315,9 @@
     <ClInclude Include="workspace\core\world\field.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\world\front.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\world\frontcam.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
