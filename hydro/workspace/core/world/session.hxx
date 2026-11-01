@@ -16,6 +16,7 @@
 #include <workspace/core/world/collide.hxx>
 #include <workspace/core/world/dynamics.hxx>
 #include <workspace/core/world/kernel.hxx>
+#include <workspace/core/world/lens.hxx>
 #include <workspace/core/world/pfxmgr.hxx>
 #include <workspace/core/world/pfxsim.hxx>
 #include <workspace/core/world/dynprop.hxx>
@@ -155,6 +156,9 @@ struct race_session_t
     // agent's surface.hxx) from VuDBAsset/SurfaceDB; built when the session starts.
     surface_table_t surfaces;
     bool surfaces_built = false;
+    // The lens-water manager g 0x759048's emitter list (VuLensWaterManagerImpl vt+0x38 / +0x3C, render side - a
+    // hook): what each VuLensWaterEmitterEntity's slot 6 0x5E6720 handed it (world/lens.hxx). Nothing reads it yet.
+    std::vector< const void* > lens_emitters;
     // Counts of the stopped paths reached (UNKNOWN), logged once each.
     int stopped_decision = 0, stopped_build = 0, stopped_transform = 0, stopped_viewports = 0, stopped_fleet = 0;
     // The world's services (refreshed per frame) and each boat's Decision
@@ -834,6 +838,15 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
                 logic_switch_init( ls->value );
             return;
         }
+        // VuLensWaterEmitterEntity's slot 6 0x5E6720 (world/lens.hxx): its emitter IF to the lens-water manager.
+        if ( e.m_type == "VuLensWaterEmitterEntity" )
+        {
+            lens_water_hooks_t lh;
+            lh.user = &s;
+            lh.add = []( void* u, const void* emitter ) { static_cast< race_session_t* >( u )->lens_emitters.push_back( emitter ); };
+            lens_water_emitter_start( &e, lh );
+            return;
+        }
         if ( e.m_type != "VuPropEntity" )
         {
             ++unknown[ e.m_type.empty( ) ? std::string( "(UNKNOWN node)" ) : e.m_type ];
@@ -871,7 +884,8 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
         s.level_bodies.push_back( std::move( b ) );
     };
     walk( walk, tree );
-    LOG_INFO( "race: the level's gameInitialize: %d static bodies added to the dynamics world (VuPropEntity 0x546910), %d dynamic game props live (0x437580)", added, dynamic );
+    LOG_INFO( "race: the level's gameInitialize: %d static bodies added to the dynamics world (VuPropEntity 0x546910), %d dynamic game props live (0x437580), %d lens-water emitters (0x5E6720)", added, dynamic,
+              static_cast< int >( s.lens_emitters.size( ) ) );
     std::string rest;
     for ( const auto& u : unknown )
         rest += ( rest.empty( ) ? "" : ", " ) + u.first + " x" + std::to_string( u.second );
