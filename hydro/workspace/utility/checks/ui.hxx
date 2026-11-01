@@ -1095,6 +1095,8 @@ inline bool verify_ui_game_data( )
         env.random = &rng;
         env.player_name = "Player One";
         env.string_db = [ &log ]( const char* id ) { log.push_back( { "string", id } ); return std::string( "S" ) + id; };
+        const value_t champ = v.m_champ >= 0 ? ui_gd_document( v.m_champ ) : value_t{ };
+        env.championship = v.m_champ >= 0 ? &champ : nullptr;
         bool cleared = true;
         if ( v.m_direct )
             ui_race_game_data( game_data, root, env );
@@ -1139,7 +1141,7 @@ inline bool verify_ui_game_data( )
             LOG_ERROR( "ui game data: vector %d (%s) differs from retail's 0x4BF9B0 / 0x4C0A50", static_cast< int >( k ), v.m_label );
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "ui_game_config / ui_race_game_data match retail's VuFrontEndGameMode exit 0x4BF9B0 and race GameData 0x4C0A50 "
+        LOG_SUCCESS( "ui_game_config / the builders match retail's VuFrontEndGameMode exit 0x4BF9B0 and GameData 0x4C0A50 / 0x4C18D0 / 0x4C1E30 / 0x4C2300 / 0x4C2C50 "
                      "(picks 0x4C3380 / shuffle 0x50FF40, AI entry 0x4C31D0, player 0x4C3120) on %d vectors: the whole game-data "
                      "container, VuRandom's state, the hooks in order (%d boat entries)",
             static_cast< int >( g_golden_gd_vectors_count ), entries );
@@ -1161,13 +1163,20 @@ inline bool verify_ui_front_end_game_data( )
     const value_t boat_db = ui_gd_document( 0 );
     const value_t track_db = ui_gd_document( 1 );
     const value_t synthetic_db = ui_gd_document( 2 );
-    int failed = 0, checked = 0, races = 0;
+    int failed = 0, checked = 0, races = 0, outside = 0;
     for ( std::size_t k = 0; k < g_golden_gd_vectors_count; ++k )
     {
         const golden_gd_vector_t& v = g_golden_gd_vectors[ k ];
         if ( v.m_direct || std::strcmp( v.m_next, "Action" ) != 0 )
             continue;
         const value_t root = ui_gd_document( v.m_root );
+        // 0x4C2300 reads GameConfig.GameType, which the export does not take:
+        // states that hold one are outside its inputs.
+        if ( find( member( root, "GameConfig" ), "GameType" ) )
+        {
+            ++outside;
+            continue;
+        }
         static const value_t null{ };
         const value_t& players = member( member( root, "BoatConfig" ), "PlayerBoats" );
         const value_t& player = players.tag == 5 && !players.list.empty( ) ? players.list[ 0 ] : null;
@@ -1182,6 +1191,8 @@ inline bool verify_ui_front_end_game_data( )
         env.random = &rng;
         env.player_name = "Player One";
         env.string_db = []( const char* id ) { return std::string( "S" ) + id; };
+        const value_t champ = v.m_champ >= 0 ? ui_gd_document( v.m_champ ) : value_t{ };
+        env.championship = v.m_champ >= 0 ? &champ : nullptr;
         ui_game_config_t r;
         const value_t game_data = ui_front_end_game_data( ui_json_text( member( member( root, "GameConfig" ), "Mode" ) ),
                                                           ui_json_text( member( member( root, "GameConfig" ), "Track" ) ),
@@ -1199,8 +1210,9 @@ inline bool verify_ui_front_end_game_data( )
     }
     if ( failed == 0 )
         LOG_SUCCESS( "ui_front_end_game_data (mode, track, boat, skin) reproduces the GameData retail's exit 0x4BF9B0 leaves at gameutil +80 "
-                     "on %d front-end states (%d races / slaloms built; the rest a variant not recreated or no event), VuRandom's state too",
-            checked, races );
+                     "on %d front-end states (%d events built; the rest no event; %d states holding GameConfig.GameType outside its inputs), "
+                     "VuRandom's state too",
+            checked, races, outside );
     else
         LOG_ERROR( "the front end game data export FAILED %d of %d states against retail's", failed, checked );
     return failed == 0;
@@ -1576,7 +1588,14 @@ inline bool verify_ui_wiring( )
                 bad( "the resolved links", row );
             links += want.m_links;
             sent.clear( );
+            value_t game_root;   // the case's fresh null gameutil +80 per fire
+            wiring.m_root = &game_root;
             const ui_ret_t ret = wiring.fire( owner, plug, ui_params_t{ } );
+            wiring.m_root = nullptr;
+            std::string root_after;
+            vujb_dump( game_root, root_after );
+            if ( root_after != want.m_root )
+                bad( "the game-data root after", row );
             char text[ 20 ];
             std::snprintf( text, sizeof( text ), "%08X%08X", ret.m_words[ 0 ], ret.m_words[ 1 ] );
             if ( !ret.m_known || std::strcmp( text, want.m_ret ) != 0 )
@@ -1608,7 +1627,7 @@ inline bool verify_ui_wiring( )
     if ( failed == 0 )
         LOG_SUCCESS( "the UI wiring matches retail on %d Screens projects (ui_scripted_world: plugs.hxx + script_load; "
                      "c_ui_wiring::fire = 0x5023A0 -> Trigger 0x472800 -> the actions' slot 12 -> c_front_end): %d wired output plugs, "
-                     "%d links, VuRetVal, broadcasts hash + params, the front end's state + hooks after each fire",
+                     "%d links, VuRetVal, broadcasts hash + params, the game-data root, the front end's state + hooks after each fire",
             static_cast< int >( g_golden_wire_projects_count ), static_cast< int >( g_golden_wire_fires_count ), links );
     else
         LOG_ERROR( "the UI wiring FAILED %d checks against retail's", failed );
@@ -2130,9 +2149,173 @@ inline bool verify_ui_boat_player( )
     return failed == 0;
 }
 
+// ui_config_apply_options (hydro core/ui/select.hxx: 0x44B0D0, 0x44BD50,
+// 0x4FC230, VuGameConfigEntity's 0x45D0C0 / 0x45D4C0 / 0x45E210 / 0x45E2B0 /
+// 0x4471B0) against retail's walk on every VuGameConfigEntity of the five
+// GameConfig* screens (oracle case config_options; the options document is
+// retail's own slot 4 output - an input): per run the whole root after, the
+// pushed options' names in order, and every hook call in order with its
+// arguments (the hooks answer what retail's recorded answers were).
+inline bool verify_ui_config_options( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0, runs = 0, calls = 0;
+    auto bad = [ &failed ]( const char* what, int k )
+    {
+        if ( ++failed <= 8 )
+            LOG_ERROR( "ui config options: %s differs from retail (run %d)", what, k );
+    };
+    for ( std::size_t k = 0; k < g_golden_opt_entities_count; ++k )
+    {
+        const golden_opt_entity_t& want = g_golden_opt_entities[ k ];
+        const entity_t* have = nullptr;
+        for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+            if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, want.m_project ) == 0 && want.m_index >= 0 &&
+                 static_cast< std::size_t >( want.m_index ) < loaded.trees[ p ].size( ) )
+                have = loaded.trees[ p ][ static_cast< std::size_t >( want.m_index ) ].second;
+        if ( !have || have->m_type != "VuGameConfigEntity" || have->m_name != want.m_name )
+            bad( "the authored entity", static_cast< int >( k ) );
+        const std::vector< std::uint8_t > odoc = ui_unhex( want.m_options );
+        const value_t options = c_reader( odoc ).parse( );
+        for ( int r = 0; r < want.m_runs; ++r )
+        {
+            const golden_opt_run_t& run = g_golden_opt_runs[ want.m_first + r ];
+            const int row = want.m_first + r;
+            const std::vector< std::uint8_t > doc = ui_unhex( run.m_root );
+            value_t root = c_reader( doc ).parse( );
+            ui_config_entity_t e;
+            e.m_single_player = run.m_single != 0;
+            e.m_force_online = run.m_online != 0;
+            e.m_refresh = run.m_refresh != 0;
+            ui_config_env_t env;
+            env.m_root = &root;
+            env.m_busy = run.m_busy != 0;
+            env.m_op = run.m_op;
+            int at = 0;
+            bool hooks_same = true;
+            auto next = [ & ]( int kind ) -> const golden_opt_log_t*
+            {
+                if ( at >= run.m_logs || g_golden_opt_logs[ run.m_first_log + at ].m_kind != kind )
+                {
+                    hooks_same = false;
+                    return nullptr;
+                }
+                ++calls;
+                return &g_golden_opt_logs[ run.m_first_log + at++ ];
+            };
+            ui_profile_t p;
+            p.unlock = [ & ]( int slot, const std::string& a, const std::string& b, const std::string& c )
+            {
+                const golden_opt_log_t* g = next( 0 );
+                if ( !g )
+                    return false;
+                hooks_same = hooks_same && g->m_slot == slot && a == g->m_a && b == g->m_b && c == g->m_c;
+                return g->m_answer != 0;
+            };
+            p.license = [ & ]( )
+            {
+                const golden_opt_log_t* g = next( 1 );
+                return g && g->m_answer != 0;
+            };
+            p.next_choice = [ & ]( const value_t& option, std::string& out )
+            {
+                const golden_opt_log_t* g = next( 2 );
+                if ( !g )
+                    return false;
+                hooks_same = hooks_same && ui_json_text( member( option, "Name" ) ) == g->m_a;
+                if ( g->m_answer )
+                    out = g->m_b;
+                return g->m_answer != 0;
+            };
+            std::vector< const value_t* > pushed;
+            ui_config_apply_options( e, env, options, pushed, p );
+            ++runs;
+            std::string after;
+            vujb_dump( root, after );
+            bool names_same = static_cast< int >( pushed.size( ) ) == run.m_names;
+            for ( int n = 0; names_same && n < run.m_names; ++n )
+                names_same = ui_json_text( member( *pushed[ static_cast< std::size_t >( n ) ], "Name" ) ) == g_golden_opt_names[ run.m_first_name + n ];
+            if ( after != run.m_after )
+                bad( "the root after", row );
+            if ( !names_same )
+                bad( "the pushed options", row );
+            if ( !hooks_same || at != run.m_logs )
+                bad( "the hook calls", row );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_config_apply_options matches retail's option walk 0x44B0D0 / 0x44BD50 with VuGameConfigEntity's virtuals on %d entities "
+                     "(the GameConfig* screens): %d runs, the whole root, the option order, %d hook calls",
+            static_cast< int >( g_golden_opt_entities_count ), runs, calls );
+    else
+        LOG_ERROR( "the config option walk FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
+// ui_boat_config_take / _give / _release (hydro core/ui/select.hxx) against
+// retail's VuBoatConfigEntity 0x44E010 / 0x44E090 / slot 7 0x44D090 on every
+// VuBoatConfigEntity of the five BoatConfig* screens (oracle case
+// boat_config_release): the whole root after each, 0x44E090's container, one
+// touch removal per release.
+inline bool verify_ui_boat_config( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0, runs = 0;
+    auto bad = [ &failed ]( const char* what, int k )
+    {
+        if ( ++failed <= 8 )
+            LOG_ERROR( "ui boat config: %s differs from retail (run %d)", what, k );
+    };
+    for ( std::size_t k = 0; k < g_golden_bc_entities_count; ++k )
+    {
+        const golden_bc_entity_t& want = g_golden_bc_entities[ k ];
+        const entity_t* have = nullptr;
+        for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+            if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, want.m_project ) == 0 && want.m_index >= 0 &&
+                 static_cast< std::size_t >( want.m_index ) < loaded.trees[ p ].size( ) )
+                have = loaded.trees[ p ][ static_cast< std::size_t >( want.m_index ) ].second;
+        if ( !have || have->m_type != "VuBoatConfigEntity" || have->m_name != want.m_name )
+            bad( "the authored entity", static_cast< int >( k ) );
+        for ( int r = 0; r < want.m_runs; ++r )
+        {
+            const golden_bc_run_t& run = g_golden_bc_runs[ want.m_first + r ];
+            const int row = want.m_first + r;
+            const std::vector< std::uint8_t > doc = ui_unhex( run.m_root ), pdoc = ui_unhex( run.m_props );
+            value_t root = c_reader( doc ).parse( );
+            const value_t props = c_reader( pdoc ).parse( );
+            std::string text;
+            ui_boat_config_take( root, props );
+            vujb_dump( root, text );
+            if ( text != run.m_after_take )
+                bad( "the root after 0x44E010", row );
+            value_t out;
+            ui_boat_config_give( out, root, static_cast< std::size_t >( run.m_options ) );
+            text.clear( );
+            vujb_dump( out, text );
+            if ( text != run.m_given )
+                bad( "0x44E090's container", row );
+            const bool wrote = ui_boat_config_release( root, run.m_player, static_cast< std::size_t >( run.m_options ) );
+            text.clear( );
+            vujb_dump( root, text );
+            if ( !wrote || text != run.m_after || run.m_touches != 1 || run.m_other != 0 )
+                bad( "the root after 0x44D090 / its touch removal", row );
+            ++runs;
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_boat_config_take / _give / _release match retail's VuBoatConfigEntity 0x44E010 / 0x44E090 / onGameRelease 0x44D090 on "
+                     "%d entities (the BoatConfig* screens): %d runs, the whole root after each, the given container",
+            static_cast< int >( g_golden_bc_entities_count ), runs );
+    else
+        LOG_ERROR( "the boat config hand-offs FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_boat_config( ) && ok;
+    ok = verify_ui_config_options( ) && ok;
     ok = verify_ui_boat_player( ) && ok;
     ok = verify_ui_game_data( ) && ok;
     ok = verify_ui_set_game_mode( ) && ok;

@@ -34,6 +34,7 @@ enum class ui_action_kind_t
     pop,
     set,
     reload,
+    set_game_mode,  // VuSetGameModeUIAction (vtable 0x73E6E0), slot 12 0x472740
 };
 
 // The class's kind; false for a type that is not one of the four.
@@ -47,6 +48,8 @@ inline bool ui_action_kind_of( const std::string& cls, ui_action_kind_t& kind )
         kind = ui_action_kind_t::set;
     else if ( cls == "VuReloadScreenUIAction" )
         kind = ui_action_kind_t::reload;
+    else if ( cls == "VuSetGameModeUIAction" )
+        kind = ui_action_kind_t::set_game_mode;
     else
         return false;
     return true;
@@ -79,6 +82,12 @@ public:
         case ui_action_kind_t::reload:
             event = "OnReloadScreen";
             break;
+        case ui_action_kind_t::set_game_mode:
+            // 0x472740: no broadcast (ui_set_game_mode below; m_screen holds
+            // its +92 "Game Mode"). Without a game-data root nothing is written.
+            if ( m_root )
+                ui_json_set_string( ui_json_child( ui_json_child( *m_root, "GameConfig" ), "Mode" ), m_screen.c_str( ) );
+            return 0;
         }
         if ( m_broadcast )
             m_broadcast( fsm_hash( event ), p );
@@ -86,7 +95,8 @@ public:
     }
 
     ui_action_kind_t m_kind;
-    std::string m_screen;  // +92 "Screen" (push / set only)
+    std::string m_screen;  // +92 "Screen" (push / set), "Game Mode" (set game mode)
+    value_t* m_root = nullptr;  // gameutil +80 (set game mode only)
     // HOOK: VuEventManager_broadcast 0x505690 (immediate: each subscriber runs inside the call).
     std::function< void( std::uint32_t, const ui_params_t& ) > m_broadcast;
 };
@@ -97,8 +107,8 @@ public:
 // 0x472740: gameutil +80 (`root`) ["GameConfig"] ["Mode"] (0x4FC090 twice:
 // each made a map if it is not) = the text up to its first NUL (0x4FC640);
 // VuRetVal 0 (its type word only). No broadcast; the trigger's params are
-// never read. (Kept out of ui_action_kind_of: the wiring's dispatch does not
-// reach it yet.)
+// never read. (c_ui_action's set_game_mode kind runs the same write for the
+// wiring.)
 inline std::uint32_t ui_set_game_mode( value_t& root, const std::string& mode )
 {
     ui_json_set_string( ui_json_child( ui_json_child( root, "GameConfig" ), "Mode" ), mode.c_str( ) );
