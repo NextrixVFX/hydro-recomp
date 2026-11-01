@@ -73,13 +73,7 @@ inline void c_world::load_huds( const char* const* k_names )   // the game ctor'
                 hooks.m_broadcast_out = [ this, index ]( std::uint32_t hash, const ui_params_t& bp ) {
                     if ( m_hud_posting )
                         return;   // the world's own post into this HUD (hud_post) coming back out: already delivered
-                    if ( hash == fsm_hash( "OnStartLightsOut" ) )
-                        race_broadcast( "OnStartLightsOut", &bp, index );
-                    else
-                    {
-                        race_unwired( m_race, "a race HUD broadcast with no world subscriber recreated - not run" );
-                        hud_post( hash, bp, index );
-                    }
+                    race_broadcast_hash( hash, hash == fsm_hash( "OnStartLightsOut" ) ? "OnStartLightsOut" : nullptr, bp, index );
                 };
                 // m_string_db: VuStringDB's getString (slot 6 0x53B830, world/strings.hxx) on the world's string DB.
                 string_db_ready( );
@@ -228,10 +222,11 @@ inline void c_world::hud( int project, race_hud_verb_t verb, float dt )
     race_unwired( m_race, "the race HUD's VuHUDEntity tick vt+0x30 / draw vt+0x34 (the HUD's update and drawing - the UI agent's) - not run here" );
 }
 
-// VuEventManager_broadcast 0x505690 of an event the race's code subscribes to. "OnStartLightsOut" (VuStartLightsOutAction's
-// 0x405470, an empty VuParams): VuRaceGame's 0x48A780 (the condition StartLightsOut) and every VuHumanDriver's 0x40F680
-// (driver +0xC0 = 0x3E800000, 0.25) - the only two subscribers in a race (the string's six copies: the ghost / slalom / time
-// trial games' ctors hold the others). The handler tree's order is not modelled: the two writes are independent.
+// VuEventManager_broadcast 0x505690. The race's code subscribers are the session's bus (session.hxx
+// race_session_game_events / race_session_boat_events): e.g. "OnStartLightsOut" (VuStartLightsOutAction's 0x405470, an
+// empty VuParams) reaches the game's 0x48A780 (the condition StartLightsOut) and every VuHumanDriver's 0x40F680 (driver
+// +0xC0 = 0.25) in the bus's order - the two writes are independent, so that order (a SUBSTITUTION, world/bus.hxx) is not
+// observable there.
 //
 // The race HUDs are subscribers too (their entities' handlers, registered by their gameInitialize - so only a LIVE HUD
 // holds them): hud_post delivers the broadcast to every live HUD but the one it came from (whose binding already ran its
@@ -253,34 +248,24 @@ inline void c_world::hud_post( std::uint32_t hash, const ui_params_t& p, int ori
 inline void c_world::race_broadcast( const char* name, const ui_params_t* params, int origin )
 {
     const ui_params_t none{ };
-    const ui_params_t& p = params ? *params : none;
-    struct post_after_t   // the HUDs' delivery after the race's own subscribers, on every path out
-    {
-        c_world* w;
-        std::uint32_t hash;
-        const ui_params_t& p;
-        int origin;
-        ~post_after_t( ) { w->hud_post( hash, p, origin ); }
-    } post_after{ this, fsm_hash( name ), p, origin };
-    if ( std::strcmp( name, "OnStartLightsOut" ) == 0 )
-    {
-        race_rules_on_start_lights_out( m_race.rules );
-        for ( const race_start_boat_t& b : m_race.start_boats )
-            if ( b.cls.slot[ 0 ] && b.driver )
-            {
-                const std::uint32_t quarter = 0x3E800000u;
-                std::memcpy( b.driver + 0xC0, &quarter, 4 );
-            }
-        LOG_INFO( "race: OnStartLightsOut broadcast (sync %d) - the race starts on the next game tick", m_race.dynamics ? m_race.dynamics->syncs : -1 );
-        return;
-    }
-    if ( std::strcmp( name, k_buoy_hit_event ) == 0 )
-    {
-        // VuRaceGame's subscriber 0x48A7B0 (world/rules.hxx race_rules_on_buoy_hit) on the VuParams 0x4350B0 built.
-        race_rules_on_buoy_hit( m_race.rules, p.m_bytes, p.m_size );
-        return;
-    }
-    race_unwired( m_race, std::string( "a broadcast with no subscriber recreated: " ) + name );
+    race_broadcast_hash( fsm_hash( name ), name, params ? *params : none, origin );
+}
+
+// The bus (world/bus.hxx: the session's VuEventManager - every subscriber the race's code registered, in the bus's order),
+// then the live HUDs. A HUD's own broadcast (m_broadcast_out, name unknown: null) comes here by its hash too, so the race's
+// subscribers hear the HUDs' events (OnUserNext ...). Subscribers outside the race's code known by reading: the pause
+// menu's "OnSetAllowPause" 0x4BB900 (its ctor 0x4BAE80: +0x31 = the params' first record when it is a bool, else 0) - the
+// pause menu is not built here (logged).
+inline void c_world::race_broadcast_hash( std::uint32_t hash, const char* name, const ui_params_t& p, int origin )
+{
+    const int ran = race_bus_broadcast( m_race.bus, hash, p );
+    if ( hash == fsm_hash( "OnSetAllowPause" ) )
+        race_unwired( m_race, "OnSetAllowPause's subscriber 0x4BB900 (the pause menu, ctor 0x4BAE80 - not built) - not run" );
+    else if ( ran == 0 && name )
+        LOG_VERBOSE( "race: broadcast %s - no subscriber in the race's code (the HUDs' next)", name );
+    if ( name && std::strcmp( name, "OnStartLightsOut" ) == 0 )
+        LOG_INFO( "race: OnStartLightsOut broadcast (sync %d) - %d subscribers ran", m_race.dynamics ? m_race.dynamics->syncs : -1, ran );
+    hud_post( hash, p, origin );
 }
 
 // ui_hud_env_fill before each HUD call: the rules' boats (their 0x520 images), the human's index, the count, the

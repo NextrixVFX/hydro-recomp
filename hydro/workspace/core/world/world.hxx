@@ -571,6 +571,7 @@ private:
     void load_huds( const char* const* names = k_race_hud_projects );
     void hud( int project, race_hud_verb_t verb, float dt );
     void race_broadcast( const char* name, const ui_params_t* params = nullptr, int origin = -1 );
+    void race_broadcast_hash( std::uint32_t hash, const char* name, const ui_params_t& p, int origin );
     void hud_post( std::uint32_t hash, const ui_params_t& p, int origin );
     bool m_hud_posting = false;
     static void multi_delay_ticked( void* user, float dt );
