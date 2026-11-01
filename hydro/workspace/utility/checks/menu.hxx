@@ -946,7 +946,7 @@ inline bool verify_ui_screen_frame_records( )
         for ( const ui_frame_draw_t& d : frame.m_draws )
         {
             emitted += d.m_emitted ? 1 : 0;
-            if ( d.m_kind != ui_frame_kind_t::other && d.m_kind != ui_frame_kind_t::info )   // no m_info: the Info texts stay unrecreated
+            if ( d.m_emitted )   // the leaves these inputs do not cover (Info without m_info, ...) stay unrecreated
                 continue;
             std::uint32_t bits;
             std::memcpy( &bits, &d.m_alpha, 4 );

@@ -1,8 +1,10 @@
 #pragma once
 
+#include <workspace/core/ui/combo.hxx>
 #include <workspace/core/ui/compose.hxx>
 #include <workspace/core/ui/image.hxx>
 #include <workspace/core/ui/leave.hxx>
+#include <workspace/core/ui/leaves.hxx>
 
 #include <array>
 #include <cstdint>
@@ -34,9 +36,10 @@
 //            is per type and a HOOK input.
 //   image  - member 0x4077DE = slot 15 0x4401C0 -> slot 13 0x629300 (image.hxx).
 //   button - member 0x443280 (image.hxx ui_button_draw).
-// Everything else (VuInfoUITextEntity's own slot 14 0x446670, the config
-// selectors' 0x448F40, the combo boxes, the boat stats, ...) is `other`: NOT
-// recreated; m_target names the retail function.
+// Recreated too, each emitted only when inputs carries its runtime state:
+//   info (m_info), config (m_config: 0x448F40), combo_box (m_combo: 0x475B10),
+//   stat (m_stat: 0x44FB60), bar (m_bar: 0x4632E0).
+// Everything else is `other`: NOT recreated; m_target names the retail function.
 
 enum class ui_frame_kind_t
 {
@@ -45,7 +48,11 @@ enum class ui_frame_kind_t
     other,      // any other UI-drawn type: its draw NOT recreated
     button,     // 0x443280
     container,  // 0x62F7E0: walked into, never a leaf
-    info        // VuInfoUITextEntity: 0x627040 -> its slot 14 0x446670 (draw.hxx ui_info_text_draw; needs inputs->m_info)
+    info,       // VuInfoUITextEntity: 0x627040 -> its slot 14 0x446670 (draw.hxx ui_info_text_draw; needs inputs->m_info)
+    config,     // VuGameConfigEntity / VuBoatConfigEntity: 0x4077E8 -> slot 16 0x448F40 -> 0x448F50 (combo.hxx ui_config_draw; needs m_config)
+    combo_box,  // the settings combo entities: 0x4390BE -> slot 17 0x475B10 -> 0x4578D0 (combo.hxx ui_combo_draw; needs m_combo)
+    stat,       // VuBoatStatEntity 0x44FB60 (leaves.hxx ui_boat_stat_draw; needs m_stat)
+    bar         // VuLoadingProgressBarEntity 0x4632E0 (leaves.hxx ui_progress_bar_draw; needs m_bar)
 };
 
 struct ui_draw_target_t
@@ -95,8 +102,8 @@ inline const ui_draw_target_t k_ui_draw_targets[ ] = {
     { 0x0073C18Cu, 0x00627040u, 0x00627C60u, ui_frame_kind_t::text, 0x00446DE0u },   // Screens/Award (2 loaded)
     { 0x0073C25Cu, 0x00627040u, 0x00627C60u, ui_frame_kind_t::text, 0x00446DE0u },   // Screens/Award (2 loaded)
     { 0x0073C32Cu, 0x00627040u, 0x00627C60u, ui_frame_kind_t::text, 0x00446DE0u },   // Screens/Award (2 loaded)
-    { 0x0073C69Cu, 0x004077E8u, 0x00448F40u, ui_frame_kind_t::other, 0x00000000u },   // Screens/BoatConfig (5 loaded)
-    { 0x0073C808u, 0x0044FB60u, 0x0044FB60u, ui_frame_kind_t::other, 0x00000000u },   // Screens/BoatConfig (20 loaded)
+    { 0x0073C69Cu, 0x004077E8u, 0x00448F40u, ui_frame_kind_t::config, 0x00000000u },   // Screens/BoatConfig (5 loaded)
+    { 0x0073C808u, 0x0044FB60u, 0x0044FB60u, ui_frame_kind_t::stat, 0x00000000u },   // Screens/BoatConfig (20 loaded)
     { 0x0073C998u, 0x00451CA0u, 0x00451CA0u, ui_frame_kind_t::other, 0x00000000u },   // Screens/Championship (1 loaded)
     { 0x0073CC34u, 0x00627040u, 0x00627C60u, ui_frame_kind_t::text, 0x00443920u },   // Screens/SinglePlayer (1 loaded)
     { 0x0073CC74u, 0x00627040u, 0x00627C60u, ui_frame_kind_t::text, 0x00443920u },   // Screens/SinglePlayer (1 loaded)
@@ -104,22 +111,22 @@ inline const ui_draw_target_t k_ui_draw_targets[ ] = {
     { 0x0073CCF4u, 0x00627040u, 0x00627C60u, ui_frame_kind_t::text, 0x00443920u },   // Screens/SinglePlayer (1 loaded)
     { 0x0073CE3Cu, 0x004077E3u, 0x0045AF40u, ui_frame_kind_t::other, 0x00000000u },   // Screens/BoatConfig (11 loaded)
     { 0x0073CE74u, 0x004077E3u, 0x0045AA30u, ui_frame_kind_t::other, 0x00000000u },   // Screens/BoatConfig (11 loaded)
-    { 0x0073D1DCu, 0x004077E8u, 0x00448F40u, ui_frame_kind_t::other, 0x00000000u },   // Screens/GameConfigChampionship (5 loaded)
+    { 0x0073D1DCu, 0x004077E8u, 0x00448F40u, ui_frame_kind_t::config, 0x00000000u },   // Screens/GameConfigChampionship (5 loaded)
     { 0x0073D45Cu, 0x0045FB90u, 0x0045FB90u, ui_frame_kind_t::other, 0x00000000u },   // Screens/ControlsGamepad (2 loaded)
     { 0x0073D4F4u, 0x0045FB90u, 0x0045FB90u, ui_frame_kind_t::other, 0x00000000u },   // Screens/ControlsGamepad (14 loaded)
-    { 0x0073D724u, 0x004632E0u, 0x004632E0u, ui_frame_kind_t::other, 0x00000000u },   // Screens/LoadingChamp (7 loaded)
+    { 0x0073D724u, 0x004632E0u, 0x004632E0u, ui_frame_kind_t::bar, 0x00000000u },   // Screens/LoadingChamp (7 loaded)
     { 0x0073D8E4u, 0x004675A0u, 0x004675A0u, ui_frame_kind_t::other, 0x00000000u },   // Screens/MessageBox (1 loaded)
     { 0x0073DA38u, 0x0046A500u, 0x0046A500u, ui_frame_kind_t::other, 0x00000000u },   // Screens/RaceResults (2 loaded)
-    { 0x0073DE6Cu, 0x004390BEu, 0x00475B10u, ui_frame_kind_t::other, 0x00000000u },   // Screens/SettingsGraphics (1 loaded)
-    { 0x0073DED4u, 0x004390BEu, 0x00475B10u, ui_frame_kind_t::other, 0x00000000u },   // Screens/Settings (2 loaded)
-    { 0x0073DF3Cu, 0x004390BEu, 0x00475B10u, ui_frame_kind_t::other, 0x00000000u },   // Screens/Settings (2 loaded)
-    { 0x0073DFA4u, 0x004390BEu, 0x00475B10u, ui_frame_kind_t::other, 0x00000000u },   // Screens/Settings (2 loaded)
+    { 0x0073DE6Cu, 0x004390BEu, 0x00475B10u, ui_frame_kind_t::combo_box, 0x00000000u },   // Screens/SettingsGraphics (1 loaded)
+    { 0x0073DED4u, 0x004390BEu, 0x00475B10u, ui_frame_kind_t::combo_box, 0x00000000u },   // Screens/Settings (2 loaded)
+    { 0x0073DF3Cu, 0x004390BEu, 0x00475B10u, ui_frame_kind_t::combo_box, 0x00000000u },   // Screens/Settings (2 loaded)
+    { 0x0073DFA4u, 0x004390BEu, 0x00475B10u, ui_frame_kind_t::combo_box, 0x00000000u },   // Screens/Settings (2 loaded)
     { 0x0073DFF4u, 0x004700E0u, 0x004700E0u, ui_frame_kind_t::other, 0x00000000u },   // Screens/SettingsGraphics (1 loaded)
     { 0x0073E030u, 0x004700E0u, 0x004700E0u, ui_frame_kind_t::other, 0x00000000u },   // Screens/SettingsAudio (1 loaded)
     { 0x0073E06Cu, 0x004700E0u, 0x004700E0u, ui_frame_kind_t::other, 0x00000000u },   // Screens/SettingsAudio (1 loaded)
-    { 0x0073E0BCu, 0x004390BEu, 0x00475B10u, ui_frame_kind_t::other, 0x00000000u },   // Screens/ControlsGamepad (1 loaded)
+    { 0x0073E0BCu, 0x004390BEu, 0x00475B10u, ui_frame_kind_t::combo_box, 0x00000000u },   // Screens/ControlsGamepad (1 loaded)
     { 0x0073E10Cu, 0x004700E0u, 0x004700E0u, ui_frame_kind_t::other, 0x00000000u },   // Screens/ControlsTiltTouch (1 loaded)
-    { 0x0073E15Cu, 0x004390BEu, 0x00475B10u, ui_frame_kind_t::other, 0x00000000u },   // Screens/ControlsTiltTouch (1 loaded)
+    { 0x0073E15Cu, 0x004390BEu, 0x00475B10u, ui_frame_kind_t::combo_box, 0x00000000u },   // Screens/ControlsTiltTouch (1 loaded)
     { 0x0073F110u, 0x00477240u, 0x00477240u, ui_frame_kind_t::other, 0x00000000u },   // HUDs/GhostPreGameHUD (1 loaded)
     { 0x0073F2C8u, 0x0047A360u, 0x0047A360u, ui_frame_kind_t::other, 0x00000000u },   // Screens/Leaderboard (1 loaded)
     { 0x0073F408u, 0x0047DB40u, 0x0047DB40u, ui_frame_kind_t::other, 0x00000000u },   // Screens/GameConfigGhost (4 loaded)
@@ -188,6 +195,18 @@ struct ui_frame_inputs_t
     std::function< void( const entity_t&, std::uint8_t params[ 60 ] ) > m_params_tail;
     // VuInfoUITextEntity's ticker state +0x12C..+0x13C (its tick is NOT recreated). Null: its leaves stay unrecreated.
     std::function< ui_info_scroll_t( const entity_t& ) > m_info;
+    // The config selectors' runtime (the option vector + combo records slot 4 builds: select.hxx / expand.hxx). Null: unrecreated.
+    std::function< const ui_config_entity_t*( const entity_t& ) > m_config;
+    // A settings combo entity's record (+0x278; built by its own code - an input). Null: unrecreated.
+    std::function< const ui_config_combo_t*( const entity_t& ) > m_combo;
+    // The combo draws' fonts / VuStringDB / the seven textures per entity (combo.hxx). Null: none.
+    std::function< ui_combo_inputs_t( const entity_t& ) > m_combo_inputs;
+    // UNKNOWN as above: a combo block's label (0) / value (1) params' bytes 41..59.
+    std::function< void( const entity_t&, int which, std::uint8_t params[ 60 ] ) > m_combo_params_tail;
+    // VuBoatStatEntity's +0xB0 (leaves.hxx; its textures: m_texture which 0 off / 1 on). Null: unrecreated.
+    std::function< ui_boat_stat_t( const entity_t& ) > m_stat;
+    // VuLoadingProgressBarEntity's +0x84 / +0x88 (leaves.hxx). Null: unrecreated.
+    std::function< ui_progress_bar_t( const entity_t& ) > m_bar;
 };
 
 // A loaded entity's own / its first UI draw component's property bits.
@@ -329,9 +348,81 @@ inline bool ui_frame_emit( ui_gfx_sort_t& sort, const ui_impl_t& impl, const ui_
         }
         return ui_button_draw( sort, env, impl.m_crop, in.m_db, b, bi, d.m_alpha );
     }
+    if ( d.m_kind == ui_frame_kind_t::config || d.m_kind == ui_frame_kind_t::combo_box )
+    {
+        ui_combo_block_t b = ui_combo_block_of( e );
+        for ( int f = 0; f < 2; ++f )
+        {
+            std::uint8_t* params = f ? b.m_value_params : b.m_label_params;
+            std::memset( params, 0, 60 );
+            if ( in.m_combo_params_tail )
+                in.m_combo_params_tail( e, f, params );
+            const ui_slot_t* name = ui_property_value( e, f ? "ValueFont" : "HeadingFont" );
+            std::string asset;
+            if ( in.m_fontdb )
+                ui_font_params( *in.m_fontdb, name ? name->m_text : std::string( ), params, asset );
+        }
+        float scale[ 2 ] = { 100.0f, 100.0f }, position[ 2 ] = { 0.0f, 0.0f }, spacing = 0.0f;
+        ui_frame_take( e, "Screen Scale", scale, 8 );
+        ui_frame_take( e, "Position X", &position[ 0 ], 4 );
+        ui_frame_take( e, "Position Y", &position[ 1 ], 4 );
+        const ui_combo_inputs_t ci = in.m_combo_inputs ? in.m_combo_inputs( e ) : ui_combo_inputs_t( );
+        if ( d.m_kind == ui_frame_kind_t::config )
+        {
+            ui_frame_take( e, "Spacing", &spacing, 4 );
+            const ui_config_entity_t* ce = in.m_config( e );
+            return !ce || ui_config_draw( sort, env, *ce, b, scale, position, spacing, ui_frame_depth( e ), ci );
+        }
+        const ui_config_combo_t* c = in.m_combo( e );
+        return !c || ui_combo_draw( sort, env, b, *c, position, scale, ui_frame_depth( e ) * 0.005f + 0.5f, ci );   // 0x475B10
+    }
+    if ( d.m_kind == ui_frame_kind_t::stat )
+    {
+        ui_boat_stat_fields_t f;
+        ui_frame_take( e, "Screen Scale", f.m_screen_scale, 8 );
+        ui_frame_take( e, "Position X", &f.m_position[ 0 ], 4 );
+        ui_frame_take( e, "Position Y", &f.m_position[ 1 ], 4 );
+        ui_frame_take( e, "Spacing", &f.m_spacing, 4 );
+        f.m_depth = ui_frame_depth( e );
+        ui_boat_stat_draw( sort, env, f, in.m_stat( e ), in.m_texture ? in.m_texture( e, 0 ) : nullptr, in.m_texture ? in.m_texture( e, 1 ) : nullptr );
+        return true;
+    }
+    if ( d.m_kind == ui_frame_kind_t::bar )
+    {
+        ui_progress_bar_fields_t f;
+        ui_frame_take( e, "Screen Scale", f.m_screen_scale, 8 );
+        ui_frame_take( e, "Rect", f.m_rect, 16 );
+        ui_frame_take( e, "Color", &f.m_colour, 4 );
+        ui_frame_take( e, "Initially Visible", &f.m_initially_visible, 1 );
+        f.m_depth = ui_frame_depth( e );
+        ui_progress_bar_draw( sort, env, f, in.m_bar( e ), d.m_alpha );
+        return true;
+    }
     return true;
 }
 
+// Whether a leaf's draw is recreated AND given what it needs (else it counts unrecreated).
+inline bool ui_frame_ready( ui_frame_kind_t kind, const ui_frame_inputs_t* in )
+{
+    switch ( kind )
+    {
+    case ui_frame_kind_t::other:
+    case ui_frame_kind_t::container:
+        return false;
+    case ui_frame_kind_t::info:
+        return in && in->m_info;
+    case ui_frame_kind_t::config:
+        return in && in->m_config;
+    case ui_frame_kind_t::combo_box:
+        return in && in->m_combo;
+    case ui_frame_kind_t::stat:
+        return in && in->m_stat;
+    case ui_frame_kind_t::bar:
+        return in && in->m_bar;
+    default:
+        return true;
+    }
+}
 // `sort` holds the key words before the frame (VuGfxSort +0x70 / +0x74);
 // `layer` = the screen's +0x5C (4 from its ctor). With `inputs`, the text /
 // image / button leaves emit their records into `sort` in walk order.
@@ -365,7 +456,7 @@ inline ui_frame_t ui_screen_frame( const entity_t& screen, const ui_impl_t& impl
         d.m_depth = depth;
         d.m_kind = target ? target->m_kind : ui_frame_kind_t::other;
         d.m_target = target ? target->m_target : 0u;
-        if ( d.m_kind == ui_frame_kind_t::other || ( d.m_kind == ui_frame_kind_t::info && !( inputs && inputs->m_info ) ) )
+        if ( !ui_frame_ready( d.m_kind, inputs ) )
             ++frame.m_unrecreated;
         else if ( inputs )
         {
