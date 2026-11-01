@@ -80,9 +80,8 @@ inline std::string c_world::ref_target( const std::string& owner, const std::str
 
 // Transliterated from VuRotateMotionEntity_tick @0x5d1090. The angle
 // integration, the wrap constants and the Rodrigues matrix are exactly
-// the shipped arithmetic; the compose order comes from
-// VuMatrix_rotateAxisAngle_pre/_post, which differ ONLY in the argument
-// order given to VuMatrix_multiply.
+// the shipped arithmetic; the rotation is retail's own VuMatrix_rotateAxisAngle_pre
+// / _post (they differ ONLY in the operand order given to VuMatrix_multiply).
 inline void c_world::update_rotators( float dt )
 {
     for ( rotator_t& motion : m_rotators )
@@ -97,30 +96,16 @@ inline void c_world::update_rotators( float dt )
             - 3.1415927f;
         motion.angle = x < 0.0f ? -wrapped : wrapped;
 
-        const float c = std::cos( motion.angle );
-        const float s = std::sin( motion.angle );
-        const float t = 1.0f - c;
-        const float ax = motion.axis[ 0 ];
-        const float ay = motion.axis[ 1 ];
-        const float az = motion.axis[ 2 ];
-
-        float rotation[ 16 ]{};
-        rotation[ 0 ] = t * ax * ax + c;
-        rotation[ 1 ] = t * ax * ay + s * az;
-        rotation[ 2 ] = t * ax * az - s * ay;
-        rotation[ 4 ] = t * ax * ay - s * az;
-        rotation[ 5 ] = t * ay * ay + c;
-        rotation[ 6 ] = t * ay * az + s * ax;
-        rotation[ 8 ] = t * ax * az + s * ay;
-        rotation[ 9 ] = t * ay * az - s * ax;
-        rotation[ 10 ] = t * az * az + c;
-        rotation[ 15 ] = 1.0f;
-
-        float posed[ 16 ]{};
+        // 0x5D1143 .. 0x5D11A9: a copy of the base matrix (+0x88) rotated by the angle about the axis (+0x70) -
+        // Local (+0x84) through VuMatrix_rotateAxisAngle_pre 0x55A350, else _post 0x5D0BE0 (keymotion.hxx, case
+        // rotate_axis_angle).
+        float posed[ 16 ];
+        std::memcpy( posed, motion.base, 64 );
+        const float axis[ 3 ] = { motion.axis[ 0 ], motion.axis[ 1 ], motion.axis[ 2 ] };
         if ( motion.local )
-            math_multiply( posed, motion.base, rotation );
+            vu_matrix_rotate_axis_angle_pre( posed, axis, motion.angle );
         else
-            math_multiply( posed, rotation, motion.base );
+            vu_matrix_rotate_axis_angle_post( posed, axis, motion.angle );
 
         for ( std::size_t index = 0; index < motion.placements.size( ); ++index )
         {
