@@ -186,6 +186,9 @@
     <ClInclude Include="workspace\core\world\graph.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\world\grid.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\world\kernel.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
