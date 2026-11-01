@@ -463,6 +463,100 @@ inline std::uint32_t pfx_geom_draw_colour( const pfx_quad_particle_t& q, const f
     return c;
 }
 
+// The quad renderer's draw callback 0x58C340 (reached through 0x58BA20; thiscall renderer, the draw record): its CPU half -
+// the vertex fill, 4 vertices of 32 bytes per particle into the static 0x799898 (x y z, colour, u0 v0, u1 v1). The GPU half
+// is render side (hooks, not here): the shader / texture binds through g 0x75907C vt+0xB4 and the shader's +0x58 vt+0x10,
+// the index buffer 0x50B420( count ) on g 0x75902C, the draw vt+0xC4( 3, 0, 4n, 2n, ib +0x48, 0x799898, 32 ).
+// The record is the quad renderer's submit 0x58BD60's (render side, not recreated): +0x08 the pattern node (Tile Scroll
+// Speed U / V +0x80 / +0x84, Tile Scroll Loop Time +0x88, Tile Scale +0x8C, Max Stretch +0x90), rows +0x0C / +0x1C / +0x2C
+// and the translation +0x3C, +0x6C the count, +0x70 a size factor, +0x74 .. +0x80 the tint, then the particles at +0x8C,
+// 0x5C bytes each (+0 position, +0x10 velocity, +0x20 colour rgba, +0x30 scale, +0x34 the tile clock, +0x3C rotation, +0x44 a
+// z factor, +0x48 the stretch factor, +0x4C / +0x50 tile offsets u / v). The camera: g 0x7595D0 right, 0x7595E0 direction,
+// 0x7595F0 up (camera[ 0 .. 2 ], [ 4 .. 6 ], [ 8 .. 10 ]).
+// Per particle: x87 fsincos of the rotation (SUBSTITUTION: wave_x87_sin / cos - the host double, as Unicorn measures it);
+// A = right cos + up sin, B = up cos - right sin; the velocity through the rows, less its component along -direction
+// ((n.x w.x + w.y n.y) + w.z n.z), normalised when its square exceeds FLT_EPSILON (comiss / jbe), else kept; the position
+// through the rows plus the translation; colour bytes fistp( (c x tint) x 255 ) (alpha's product minss'ed with 1 first);
+// size = scale x the factor; the tile clock (float) fmod( (double) clock, (double) loop time ) (_CIfmod 0x631CBE; exact).
+// Corners (-1, -1) (1, -1) (1, 1) (-1, 1): o = A (cx size) + B (cy size); t = maxss( -Max Stretch, minss( Max Stretch,
+// ((w.y o.y + w.x o.x) + w.z o.z) x stretch ) ) on the UNNORMALISED projected velocity w; vertex = (N.x t + o.x) + P.x,
+// (N.y t + o.y) + P.y, P.z + (N.z t + o.z) x z factor; u0 = (cx + 1) 0.5, v0 = 0.5 - cy 0.5, u1 / v1 = (u0 / v0 + speed x
+// tile clock + offset) x Tile Scale. Returns the count (vertices written = 4 x count).
+struct pfx_quad_vertex_t
+{
+    float x, y, z;
+    std::uint32_t colour;
+    float u0, v0, u1, v1;
+};
+
+inline int pfx_quad_fill( const std::uint8_t* draw, const std::uint8_t* node, const float* camera, pfx_quad_vertex_t* out )
+{
+    auto f = []( const std::uint8_t* b, int off ) { float v; std::memcpy( &v, b + off, 4 ); return v; };
+    std::int32_t count;
+    std::memcpy( &count, draw + 0x6C, 4 );
+    const float D3 = f( draw, 0x0C ), D4 = f( draw, 0x10 ), D5 = f( draw, 0x14 );
+    const float D7 = f( draw, 0x1C ), D8 = f( draw, 0x20 ), D9 = f( draw, 0x24 );
+    const float D11 = f( draw, 0x2C ), D12 = f( draw, 0x30 ), D13 = f( draw, 0x34 );
+    const float D15 = f( draw, 0x3C ), D16 = f( draw, 0x40 ), D17 = f( draw, 0x44 );
+    const float* R = camera;
+    const float nx = -camera[ 4 ], ny = -camera[ 5 ], nz = -camera[ 6 ];
+    const float* U = camera + 8;
+    const float cx[ 4 ] = { -1.0f, 1.0f, 1.0f, -1.0f }, cy[ 4 ] = { -1.0f, -1.0f, 1.0f, 1.0f };
+    auto byte = []( float v ) { return static_cast< std::uint32_t >( _mm_cvtsd_si32( _mm_set_sd( static_cast< double >( v ) ) ) ) & 0xFFu; };
+    for ( int i = 0; i < count; ++i )
+    {
+        const std::uint8_t* p = draw + 0x8C + 0x5C * i;
+        const float a = f( p, 0x3C );
+        const float c = wave_x87_cos( a ), s = wave_x87_sin( a );
+        const float Ax = R[ 0 ] * c + U[ 0 ] * s, Ay = R[ 1 ] * c + U[ 1 ] * s, Az = R[ 2 ] * c + U[ 2 ] * s;
+        const float Bx = U[ 0 ] * c - R[ 0 ] * s, By = U[ 1 ] * c - R[ 1 ] * s, Bz = U[ 2 ] * c - R[ 2 ] * s;
+        const float vx = f( p, 0x10 ), vy = f( p, 0x14 ), vz = f( p, 0x18 );
+        const float wx0 = ( D3 * vx + D7 * vy ) + D11 * vz;
+        const float wy0 = ( D4 * vx + D8 * vy ) + D12 * vz;
+        const float wz0 = ( D5 * vx + D9 * vy ) + D13 * vz;
+        const float d = ( nx * wx0 + wy0 * ny ) + wz0 * nz;
+        const float wx = wx0 - nx * d, wy = wy0 - ny * d, wz = wz0 - nz * d;
+        const float len2 = ( wx * wx + wy * wy ) + wz * wz;
+        float Nx = wx, Ny = wy, Nz = wz;
+        if ( _mm_comigt_ss( _mm_set_ss( len2 ), _mm_set_ss( 1.1920929e-07f ) ) )
+        {
+            const float inv = 1.0f / _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( len2 ) ) );
+            Nx = inv * wx;
+            Ny = wy * inv;
+            Nz = wz * inv;
+        }
+        const float px = f( p, 0x00 ), py = f( p, 0x04 ), pz = f( p, 0x08 );
+        const float Px = ( ( D3 * px + D7 * py ) + D11 * pz ) + D15;
+        const float Py = ( ( D4 * px + D8 * py ) + D12 * pz ) + D16;
+        const float Pz = ( ( D5 * px + D9 * py ) + D13 * pz ) + D17;
+        const float alpha = _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( f( p, 0x2C ) * f( draw, 0x80 ) ), _mm_set_ss( 1.0f ) ) );
+        const std::uint32_t colour = byte( ( f( p, 0x20 ) * f( draw, 0x74 ) ) * 255.0f ) | byte( ( f( p, 0x24 ) * f( draw, 0x78 ) ) * 255.0f ) << 8 |
+                                     byte( ( f( p, 0x28 ) * f( draw, 0x7C ) ) * 255.0f ) << 16 | byte( alpha * 255.0f ) << 24;
+        const float size = f( p, 0x30 ) * f( draw, 0x70 );
+        const float tile = static_cast< float >( std::fmod( static_cast< double >( f( p, 0x34 ) ), static_cast< double >( f( node, 0x88 ) ) ) );
+        const float su = f( node, 0x80 ) * tile + f( p, 0x4C );
+        const float sv = f( node, 0x84 ) * tile + f( p, 0x50 );
+        const float ms = f( node, 0x90 ), scale = f( node, 0x8C );
+        for ( int k = 0; k < 4; ++k )
+        {
+            const float cys = cy[ k ] * size, cxs = cx[ k ] * size;
+            const float ox = Ax * cxs + Bx * cys, oy = Ay * cxs + By * cys, oz = Az * cxs + Bz * cys;
+            const float st = ( ( wy * oy + wx * ox ) + wz * oz ) * f( p, 0x48 );
+            const float t = _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( -ms ), _mm_min_ss( _mm_set_ss( ms ), _mm_set_ss( st ) ) ) );
+            pfx_quad_vertex_t& v = out[ 4 * i + k ];
+            v.x = ( Nx * t + ox ) + Px;
+            v.y = ( Ny * t + oy ) + Py;
+            v.z = Pz + ( Nz * t + oz ) * f( p, 0x44 );
+            v.colour = colour;
+            v.u0 = ( cx[ k ] + 1.0f ) * 0.5f;
+            v.v0 = 0.5f - cy[ k ] * 0.5f;
+            v.u1 = ( v.u0 + su ) * scale;
+            v.v1 = ( v.v0 + sv ) * scale;
+        }
+    }
+    return count;
+}
+
 inline const pfx_class_t* pfx_class_find( const char* name )
 {
     for ( const pfx_class_t& c : g_pfx_classes )

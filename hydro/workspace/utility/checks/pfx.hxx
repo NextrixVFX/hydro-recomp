@@ -2606,9 +2606,55 @@ inline bool verify_pfx_sort_layers( )
     return bad == 0;
 }
 
+// pfxclass.hxx pfx_quad_fill against retail's 0x58C340 (case pfx_quad_fill): every vertex word (position, colour, both uv
+// pairs) of 80 synthetic draw records; the GPU half's calls are the case's fakes, not compared.
+inline bool verify_pfx_quad_fill( )
+{
+    const unsigned* w = g_golden_pqf_words;
+    const unsigned n = *w++;
+    int bad = 0, verts = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        float cam[ 12 ] = { };
+        for ( int k = 0; k < 3; ++k )
+            for ( int j = 0; j < 3; ++j )
+                std::memcpy( &cam[ 4 * k + j ], w + 3 * k + j, 4 );
+        w += 9;
+        std::vector< std::uint8_t > node( 0x94, 0 );
+        std::memcpy( node.data( ) + 0x80, w, 20 );
+        w += 5;
+        const unsigned nr = *w++;
+        std::vector< std::uint8_t > rec( 4 * nr );
+        std::memcpy( rec.data( ), w, 4 * nr );
+        w += nr;
+        const unsigned nv = *w++;
+        std::vector< pfx_quad_vertex_t > out( nv / 8 );
+        const int count = pfx_quad_fill( rec.data( ), node.data( ), cam, out.data( ) );
+        if ( static_cast< unsigned >( count ) * 32u != nv )
+            ++bad;
+        else if ( nv && std::memcmp( out.data( ), w, 4 * nv ) != 0 )
+        {
+            int diff = 0;
+            for ( unsigned k = 0; k < nv; ++k )
+                diff += std::memcmp( reinterpret_cast< const std::uint8_t* >( out.data( ) ) + 4 * k, w + k, 4 ) ? 1 : 0;
+            if ( bad < 4 )
+                LOG_ERROR( "pfx_quad_fill vector %u: %d of %u vertex words differ", v, diff, nv );
+            ++bad;
+        }
+        verts += static_cast< int >( nv / 8 );
+        w += nv;
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "The quad renderer's vertex fill (0x58C340, CPU half) matches retail: %u draw records, %d vertices word for word", n, verts );
+    else
+        LOG_ERROR( "pfx_quad_fill FAILED %d", bad );
+    return bad == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_pfx_quad_fill( ) && ok;
     ok = verify_pfx_sort_layers( ) && ok;
     ok = verify_pfx_impl_teardown( ) && ok;
     ok = verify_pfx_entity_draw( ) && ok;
