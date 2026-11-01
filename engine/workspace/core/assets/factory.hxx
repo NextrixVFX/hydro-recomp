@@ -3,6 +3,7 @@
 #include <workspace/core/assets/package.hxx>
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -530,3 +531,461 @@ private:
     std::unordered_map< std::uint32_t, vu_asset_t* > m_loaded;
     std::vector< std::pair< std::uint32_t, std::string > > m_substitutes;
 };
+
+// ---- The asset rows' scalar-deleting dtors on retail's words (boat batch 26) ----
+//
+// Each is thiscall( object, flags ), retn 4, eax = this: the body, then operator delete( this ) when flags & 1. The
+// objects are retail images (asset_words_t: the caller's 32-bit memory); what the bodies call outside is a hook, in
+// retail's order (asset_dtor_hooks_t). A std::string member is reset as MSVC's dtor does: the heap text freed when
+// the capacity +0x14 is >= 16, then capacity 15, size +0x10 = 0, the first byte 0.
+//   0x515D70 VuAsset (body 0x515D00): +0 = VuAsset's vtable 0x74CA08, the +0x38 VuJsonContainer cleared (0x4FBB10), the
+//            strings +0x20 then +0x8. Every asset class's dtor ends in this body (21 callers).
+//   0x53FD10 VuBaseAssetProperty (body 0x53FD40): +0 = 0x74D6CC; a held asset (+0x64 non-null) released through
+//            g_vuassetfactoryimpl's slot 9 (0x4EDE70, c_asset_factory::release); the string +0x4C; then the property
+//            base's dtor 0x405260 (the entity framework's: a hook). +0x64 itself is not cleared.
+//   0x5F4AB0 VuSubstituteAssetEntity (body 0x5F4AE0): the strings +0x90, +0x78, +0x60, then a tail jump to VuEntity's
+//            dtor 0x500870 (a hook). No vtable store of its own.
+struct asset_words_t
+{
+    std::function< std::uint32_t( std::uint32_t ) > get;
+    std::function< void( std::uint32_t, std::uint32_t ) > put;
+};
+
+struct asset_dtor_hooks_t
+{
+    std::function< void( std::uint32_t ) > free_block;        // operator delete (0x64C150's import)
+    std::function< void( std::uint32_t ) > json_clear;        // 0x4FBB10 ( container )
+    std::function< void( std::uint32_t ) > factory_release;   // [0x759004] slot 9 0x4EDE70 ( asset )
+    std::function< void( ) > property_base_dtor;              // 0x405260 ( this )
+    std::function< void( ) > entity_dtor;                     // 0x500870 ( this )
+    std::function< void( std::uint32_t, std::uint32_t ) > object_delete;   // an object's slot 0 ( object, flags )
+    std::function< void( std::uint32_t ) > free_array;        // operator delete[] (0x64C148's import)
+    std::function< void( std::uint32_t ) > xml_node_dtor;     // TiXmlNode's dtor 0x5AA280 ( node )
+    std::function< void( std::uint32_t ) > aligned_free;      // _aligned_free (0x64C15C's import)
+    std::function< void( std::uint32_t ) > bt_free;           // the btAlignedFree pointer [0x7358AC] ( block )
+};
+
+enum class asset_dtor_kind_t
+{
+    asset,               // 0x515D70
+    asset_property,      // 0x53FD10
+    substitute_entity,   // 0x5F4AB0
+    animation,           // 0x515E10
+    project,             // 0x554E90
+    generic_data,        // 0x55C1E0
+    db,                  // 0x55C230
+    timed_event,         // 0x5C8C70
+    xml,                 // 0x5C78F0
+    collision_mesh,      // 0x518D60
+    fluids_mesh,         // 0x5226D0
+};
+
+inline void asset_string_reset( const asset_words_t& w, std::uint32_t at, const asset_dtor_hooks_t& h )
+{
+    if ( w.get( at + 0x14 ) >= 0x10u && h.free_block )
+        h.free_block( w.get( at ) );
+    w.put( at + 0x14, 0xFu );
+    w.put( at + 0x10, 0u );
+    w.put( at, w.get( at ) & 0xFFFFFF00u );
+}
+
+// 0x515D00: VuAsset's dtor body.
+inline void asset_base_dtor( const asset_words_t& w, std::uint32_t self, const asset_dtor_hooks_t& h )
+{
+    w.put( self, 0x74CA08u );
+    if ( h.json_clear )
+        h.json_clear( self + 0x38 );
+    asset_string_reset( w, self + 0x20, h );
+    asset_string_reset( w, self + 0x8, h );
+}
+
+// 0x53FD40: VuBaseAssetProperty's dtor body.
+inline void asset_property_dtor( const asset_words_t& w, std::uint32_t self, const asset_dtor_hooks_t& h )
+{
+    w.put( self, 0x74D6CCu );
+    if ( const std::uint32_t held = w.get( self + 0x64 ) )
+        if ( h.factory_release )
+            h.factory_release( held );
+    asset_string_reset( w, self + 0x4C, h );
+    if ( h.property_base_dtor )
+        h.property_base_dtor( );
+}
+
+// 0x5F4AE0: VuSubstituteAssetEntity's dtor body.
+inline void substitute_entity_dtor( const asset_words_t& w, std::uint32_t self, const asset_dtor_hooks_t& h )
+{
+    for ( std::uint32_t at : { 0x90u, 0x78u, 0x60u } )
+        asset_string_reset( w, self + at, h );
+    if ( h.entity_dtor )
+        h.entity_dtor( );
+}
+
+// The asset classes' own dtors (slot 1; each then VuAsset's body 0x515D00):
+//   0x515E10 VuAnimationAsset: +0 = 0x74C9E8; a +0x58 VuAnimation has its refcount +4 decremented - at 0 its slot 0
+//            ( 1 ) deletes it - and +0x58 = 0 (whatever the count; nothing when +0x58 is null).
+//   0x554E90 VuProjectAsset: +0 = 0x74EB64, the +0x58 container cleared.
+//   0x55C1E0 VuGenericDataAsset (also VuAssetListAsset / VuStringAsset / VuTemplateAsset / VuShaderAsset's slot 1):
+//            +0 = 0x74EDCC, the +0x58 document cleared twice (the member's clear, then its dtor's).
+//   0x55C230 VuDBAsset: +0 = 0x74EDEC, +0x68 cleared, then the generic data part (+0 = 0x74EDCC, +0x58 twice).
+//   0x5C8C70 VuTimedEventAsset: +0 = 0x7524D8; with +0x58 non-null its events [+0x58, +0x5C) - 0x30 bytes each -
+//            destroyed by 0x5C9D20 (per event the +0x20 container cleared, then the +4 string reset), the block freed
+//            and +0x58 / +0x5C / +0x60 = 0.
+//   0x5C78F0 VuXmlAsset (body 0x5C7850): +0 = 0x752458; the embedded TiXmlDocument's (+0x58) children - first +0x70,
+//            next each node's +0x28, read before the delete - deleted through their slot 0 ( 1 ); +0x70 / +0x74 = 0;
+//            +0x58 = 0x750F2C; the +0x8C TiXmlString's rep freed (operator delete[]) unless it is the null rep 0x759104
+//            (+0x8C is left as it was); TiXmlNode's dtor 0x5AA280 on +0x58 (TinyXML: a hook).
+//   0x518D60 VuCollisionMeshAsset: +0 = 0x74CC3C; its unload 0x51B140 (collision_mesh_unload_words - the word twin of
+//            boat meshes.hxx's); _aligned_free of +0x7C, +0x70, +0x64, +0x58 (the pointers are not cleared).
+//   0x5226D0 VuFluidsMeshAsset: +0 = 0x74CDDC; _aligned_free of +0x90, +0x84, +0x78.
+inline void asset_events_destroy( const asset_words_t& w, std::uint32_t first, std::uint32_t last, const asset_dtor_hooks_t& h )
+{
+    for ( std::uint32_t e = first; e != last; e += 0x30 )   // 0x5C9D20 (fastcall first, last)
+    {
+        if ( h.json_clear )
+            h.json_clear( e + 0x20 );
+        asset_string_reset( w, e + 4, h );
+    }
+}
+
+// 0x51B140: VuCollisionMeshAsset's unload (slot 6) - the four array counts +0x5C / +0x68 / +0x74 / +0x80 = 0; a +0xA8
+// VuOptimizedBvh deleted through its slot 0 ( 0 ), then +0xA8 READ AGAIN and, when still set, gNumAlignedFree 0x759050
+// += 1 and the btAlignedFree pointer [0x7358AC] called on it; +0xA8 = 0 (only when it was set at first).
+inline void collision_mesh_unload_words( const asset_words_t& w, std::uint32_t self, const asset_dtor_hooks_t& h )
+{
+    for ( std::uint32_t at : { 0x5Cu, 0x68u, 0x74u, 0x80u } )
+        w.put( self + at, 0u );
+    if ( const std::uint32_t bvh = w.get( self + 0xA8 ) )
+    {
+        if ( h.object_delete )
+            h.object_delete( bvh, 0u );
+        if ( const std::uint32_t again = w.get( self + 0xA8 ) )
+        {
+            w.put( 0x759050u, w.get( 0x759050u ) + 1u );
+            if ( h.bt_free )
+                h.bt_free( again );
+        }
+        w.put( self + 0xA8, 0u );
+    }
+}
+
+inline void asset_class_dtor( asset_dtor_kind_t kind, const asset_words_t& w, std::uint32_t self, const asset_dtor_hooks_t& h )
+{
+    auto clear = [ & ]( std::uint32_t at ) {
+        if ( h.json_clear )
+            h.json_clear( self + at );
+    };
+    switch ( kind )
+    {
+    case asset_dtor_kind_t::animation:
+        w.put( self, 0x74C9E8u );
+        if ( const std::uint32_t a = w.get( self + 0x58 ) )
+        {
+            const std::uint32_t refs = w.get( a + 4 ) - 1u;
+            w.put( a + 4, refs );
+            if ( refs == 0 && h.object_delete )
+                h.object_delete( a, 1u );
+            w.put( self + 0x58, 0u );
+        }
+        break;
+    case asset_dtor_kind_t::project:
+        w.put( self, 0x74EB64u );
+        clear( 0x58 );
+        break;
+    case asset_dtor_kind_t::db:
+        w.put( self, 0x74EDECu );
+        clear( 0x68 );
+        [[fallthrough]];
+    case asset_dtor_kind_t::generic_data:
+        w.put( self, 0x74EDCCu );
+        clear( 0x58 );
+        clear( 0x58 );
+        break;
+    case asset_dtor_kind_t::timed_event:
+        w.put( self, 0x7524D8u );
+        if ( const std::uint32_t first = w.get( self + 0x58 ) )
+        {
+            asset_events_destroy( w, first, w.get( self + 0x5C ), h );
+            if ( h.free_block )
+                h.free_block( w.get( self + 0x58 ) );
+            for ( std::uint32_t at : { 0x58u, 0x5Cu, 0x60u } )
+                w.put( self + at, 0u );
+        }
+        break;
+    case asset_dtor_kind_t::collision_mesh:
+        w.put( self, 0x74CC3Cu );
+        collision_mesh_unload_words( w, self, h );
+        for ( std::uint32_t at : { 0x7Cu, 0x70u, 0x64u, 0x58u } )
+            if ( h.aligned_free )
+                h.aligned_free( w.get( self + at ) );
+        break;
+    case asset_dtor_kind_t::fluids_mesh:
+        w.put( self, 0x74CDDCu );
+        for ( std::uint32_t at : { 0x90u, 0x84u, 0x78u } )
+            if ( h.aligned_free )
+                h.aligned_free( w.get( self + at ) );
+        break;
+    case asset_dtor_kind_t::xml:
+        w.put( self, 0x752458u );
+        for ( std::uint32_t n = w.get( self + 0x70 ); n != 0; )
+        {
+            const std::uint32_t next = w.get( n + 0x28 );
+            if ( h.object_delete )
+                h.object_delete( n, 1u );
+            n = next;
+        }
+        w.put( self + 0x70, 0u );
+        w.put( self + 0x74, 0u );
+        w.put( self + 0x58, 0x750F2Cu );
+        if ( w.get( self + 0x8C ) != 0x759104u && h.free_array )
+            h.free_array( w.get( self + 0x8C ) );
+        if ( h.xml_node_dtor )
+            h.xml_node_dtor( self + 0x58 );
+        break;
+    default:
+        break;
+    }
+    asset_base_dtor( w, self, h );
+}
+
+// 0x515D70 / 0x53FD10 / 0x5F4AB0 / 0x515E10 / 0x554E90 / 0x55C1E0 / 0x55C230 / 0x5C8C70 / 0x5C78F0 / 0x518D60 / 0x5226D0: the
+// scalar-deleting dtors.
+inline std::uint32_t asset_destroy( asset_dtor_kind_t kind, const asset_words_t& w, std::uint32_t self, std::uint32_t flags,
+                                    const asset_dtor_hooks_t& h )
+{
+    if ( kind == asset_dtor_kind_t::asset )
+        asset_base_dtor( w, self, h );
+    else if ( kind == asset_dtor_kind_t::asset_property )
+        asset_property_dtor( w, self, h );
+    else if ( kind == asset_dtor_kind_t::substitute_entity )
+        substitute_entity_dtor( w, self, h );
+    else
+        asset_class_dtor( kind, w, self, h );
+    if ( ( flags & 1u ) && h.free_block )
+        h.free_block( self );
+    return self;
+}
+// ---- The asset types' create functions on retail's words (boat batch 26) ----
+//
+// The record's create (+0xC of a registered type, cdecl, no arguments): operator new( size ) (the caller's `alloc`;
+// 0 answers 0), then the class's ctor on the block, eax = the block. Every ctor inlines VuAsset's: the strings +0x8 /
+// +0x20 empty (capacity 15, size 0, first byte 0), the +0x38 VuJsonContainer null (+0x38 / +0x40 / +0x44 = 0), +0x48 =
+// 0, refs +0x4C = 1, +0x50 = 0; then its own vtable at +0 and members.
+//   0x515E90 VuAnimationAsset  new 0x60; +0x58 = 0; ctor 0x515DB0: base, vtable 0x74C9E8, +0x58 = 0.
+//   0x554ED0 VuProjectAsset    new 0x70; ctor 0x554E10: base, vtable 0x74EB64, +0x58 / +0x60 / +0x64 / +0x68 = 0.
+//   0x55C280 VuDBAsset         new 0x78; VuGenericDataAsset's ctor 0x55C2C0 (base, vtable 0x74EDCC, +0x58 / +0x60 /
+//                              +0x64 = 0 - its document), then vtable 0x74EDEC, +0x68 / +0x70 / +0x74 = 0.
+//   0x5644E0 VuAssetListAsset / 0x5A9800 VuStringAsset / 0x5BB0E0 VuTemplateAsset: new 0x68; 0x55C2C0; vtable 0x74F194 /
+//                              0x750D38 / 0x751DF0.
+//   0x518EC0 VuCollisionMeshAsset new 0xB0; +0x58 / +0x64 / +0x70 / +0x7C / +0xA8 = 0; ctor 0x518F70: base, vtable
+//                              0x74CC3C, +0x58..+0x84 = 0, the aabb +0x88 = ( FLT_MAX x3, ? ) and +0x98 = ( -FLT_MAX x3, ? ),
+//                              +0xA8 = 0, the byte +0xAC = 0. "?": the ctor writes each aabb vector as two 8-byte copies of
+//                              a stack local whose fourth word it never writes ([ebp - 0x10]), so +0x94 / +0xA4 get
+//                              whatever the stack held there (asset_create_hooks_t::stack_word - the caller's answer).
+//   0x5C7920 VuXmlAsset        new 0xA0; +0x64 / +0x68 / +0x70..+0x80 / +0x8C = 0; ctor 0x5C79D0: base, vtable 0x752458,
+//                              TiXmlDocument's ctor 0x5AAB90 on +0x58 (TinyXML: a hook).
+//   0x5C8CD0 VuTimedEventAsset new 0x68; +0x58 / +0x5C / +0x60 = 0; ctor 0x5C8BB0: base, vtable 0x7524D8, the event vector
+//                              +0x58..+0x60 = 0, then 0x5C9810 resize( 0 ) - on the empty vector its size 0 equals 0:
+//                              nothing (the shrink / grow branches 0x5C98D0 / 0x5C9960 cannot run from here).
+// The other registered types' creates are not read.
+enum class asset_create_kind_t
+{
+    animation,        // 0x515E90
+    project,          // 0x554ED0
+    db,               // 0x55C280
+    asset_list,       // 0x5644E0
+    string,           // 0x5A9800
+    templ,            // 0x5BB0E0
+    collision_mesh,   // 0x518EC0
+    xml,              // 0x5C7920
+    timed_event,      // 0x5C8CD0
+};
+
+struct asset_create_hooks_t
+{
+    std::function< std::uint32_t( std::uint32_t ) > alloc;           // operator new ( size )
+    std::function< void( std::uint32_t ) > xml_document_ctor;        // 0x5AAB90 ( document )
+    std::function< std::uint32_t( ) > stack_word;                    // 0x518F70's unwritten [ebp - 0x10]
+};
+
+inline void asset_byte_zero( const asset_words_t& w, std::uint32_t at )
+{
+    w.put( at, w.get( at ) & 0xFFFFFF00u );
+}
+
+// VuAsset's ctor, inlined in every asset class's.
+inline void asset_base_init( const asset_words_t& w, std::uint32_t p )
+{
+    w.put( p + 0x1C, 0xFu );
+    w.put( p + 0x18, 0u );
+    asset_byte_zero( w, p + 0x8 );
+    w.put( p + 0x34, 0xFu );
+    w.put( p + 0x30, 0u );
+    asset_byte_zero( w, p + 0x20 );
+    for ( std::uint32_t at : { 0x38u, 0x40u, 0x44u, 0x48u } )
+        w.put( p + at, 0u );
+    w.put( p + 0x4C, 1u );
+    w.put( p + 0x50, 0u );
+}
+
+// 0x55C2C0: VuGenericDataAsset's ctor.
+inline void generic_data_asset_init( const asset_words_t& w, std::uint32_t p )
+{
+    asset_base_init( w, p );
+    w.put( p, 0x74EDCCu );
+    for ( std::uint32_t at : { 0x58u, 0x60u, 0x64u } )
+        w.put( p + at, 0u );
+}
+
+inline std::uint32_t asset_create( asset_create_kind_t kind, const asset_words_t& w, const asset_create_hooks_t& h )
+{
+    static constexpr std::uint32_t k_size[ ] = { 0x60u, 0x70u, 0x78u, 0x68u, 0x68u, 0x68u, 0xB0u, 0xA0u, 0x68u };
+    const std::uint32_t p = h.alloc ? h.alloc( k_size[ static_cast< int >( kind ) ] ) : 0u;
+    if ( p == 0 )
+        return 0;
+    switch ( kind )
+    {
+    case asset_create_kind_t::animation:
+        w.put( p + 0x58, 0u );
+        asset_base_init( w, p );
+        w.put( p, 0x74C9E8u );
+        w.put( p + 0x58, 0u );
+        break;
+    case asset_create_kind_t::project:
+        asset_base_init( w, p );
+        w.put( p, 0x74EB64u );
+        for ( std::uint32_t at : { 0x58u, 0x60u, 0x64u, 0x68u } )
+            w.put( p + at, 0u );
+        break;
+    case asset_create_kind_t::db:
+        generic_data_asset_init( w, p );
+        w.put( p, 0x74EDECu );
+        for ( std::uint32_t at : { 0x68u, 0x70u, 0x74u } )
+            w.put( p + at, 0u );
+        break;
+    case asset_create_kind_t::asset_list:
+        generic_data_asset_init( w, p );
+        w.put( p, 0x74F194u );
+        break;
+    case asset_create_kind_t::string:
+        generic_data_asset_init( w, p );
+        w.put( p, 0x750D38u );
+        break;
+    case asset_create_kind_t::templ:
+        generic_data_asset_init( w, p );
+        w.put( p, 0x751DF0u );
+        break;
+    case asset_create_kind_t::collision_mesh:
+    {
+        for ( std::uint32_t at : { 0x58u, 0x64u, 0x70u, 0x7Cu, 0xA8u } )
+            w.put( p + at, 0u );
+        asset_base_init( w, p );
+        w.put( p, 0x74CC3Cu );
+        for ( std::uint32_t at = 0x58u; at <= 0x84u; at += 4u )
+            w.put( p + at, 0u );
+        const std::uint32_t junk = h.stack_word ? h.stack_word( ) : 0u;
+        for ( std::uint32_t at : { 0x88u, 0x8Cu, 0x90u } )
+            w.put( p + at, 0x7F7FFFFFu );
+        w.put( p + 0x94, junk );
+        for ( std::uint32_t at : { 0x98u, 0x9Cu, 0xA0u } )
+            w.put( p + at, 0xFF7FFFFFu );
+        w.put( p + 0xA4, junk );
+        w.put( p + 0xA8, 0u );
+        asset_byte_zero( w, p + 0xAC );
+        break;
+    }
+    case asset_create_kind_t::xml:
+        for ( std::uint32_t at : { 0x64u, 0x68u, 0x70u, 0x74u, 0x78u, 0x7Cu, 0x80u, 0x8Cu } )
+            w.put( p + at, 0u );
+        asset_base_init( w, p );
+        w.put( p, 0x752458u );
+        if ( h.xml_document_ctor )
+            h.xml_document_ctor( p + 0x58 );
+        break;
+    case asset_create_kind_t::timed_event:
+        for ( std::uint32_t at : { 0x58u, 0x5Cu, 0x60u } )
+            w.put( p + at, 0u );
+        asset_base_init( w, p );
+        w.put( p, 0x7524D8u );
+        for ( std::uint32_t at : { 0x58u, 0x5Cu, 0x60u } )
+            w.put( p + at, 0u );
+        break;
+    }
+    return p;
+}
+
+inline std::uint32_t asset_create( asset_create_kind_t kind, const asset_words_t& w,
+                                   const std::function< std::uint32_t( std::uint32_t ) >& alloc )
+{
+    asset_create_hooks_t h;
+    h.alloc = alloc;
+    return asset_create( kind, w, h );
+}
+// ---- The asset properties' small virtuals on retail's words (boat batch 26) ----
+//
+// VuAssetNameProperty (the same slots in VuBaseAssetProperty / VuAssetProperty<...>): +0x48 points at a std::vector of
+// std::string (24 bytes each) - the asset names of its type.
+//   slot 1 0x423860 getType: 11.
+//   slot 12 0x423870 choice count: ( end - begin ) / 24 as a signed division (imul 0x2AAAAAAB, sar 2, + the sign bit).
+//   slot 13 0x423890( i ) choice i: the i-th string's c_str (its heap text when the capacity +0x14 is >= 16, else the
+//            string itself) - no bounds check.
+// VuDBEntryProperty: +0x48 the VuDBAsset (or null).
+//   slot 12 0x506BB0: null asset -> 0; else its +0x58 document's member "VuDBAsset" (0x4FBDF0: the caller's); type 6 (an
+//            object) -> its map's (+8) size (+4), else 0.
+//   slot 13 0x506BE0( i ): null asset -> 0; else that member's i-th key (0x4FC000: the caller's) as a c_str.
+//   slot 0 0x506B30( flags ): +0 = 0x74C4C0, the +0x48 asset released through [0x759004] slot 9 EVEN WHEN NULL, the
+//            property base's dtor 0x405260, delete with flags & 1; eax = this.
+struct asset_property_hooks_t
+{
+    std::function< std::uint32_t( std::uint32_t, const char* ) > json_member;    // 0x4FBDF0 ( container, key )
+    std::function< std::uint32_t( std::uint32_t, std::uint32_t ) > json_key;     // 0x4FC000 ( container, index )
+};
+
+inline std::uint32_t asset_string_c_str( const asset_words_t& w, std::uint32_t s )
+{
+    return w.get( s + 0x14 ) >= 0x10u ? w.get( s ) : s;
+}
+
+inline std::uint32_t asset_name_property_type( )
+{
+    return 11u;
+}
+
+inline std::int32_t asset_name_property_count( const asset_words_t& w, std::uint32_t self )
+{
+    const std::uint32_t v = w.get( self + 0x48 );
+    return static_cast< std::int32_t >( w.get( v + 4 ) - w.get( v ) ) / 24;
+}
+
+inline std::uint32_t asset_name_property_choice( const asset_words_t& w, std::uint32_t self, std::int32_t i )
+{
+    return asset_string_c_str( w, w.get( w.get( self + 0x48 ) ) + 24u * static_cast< std::uint32_t >( i ) );
+}
+
+inline std::uint32_t db_entry_property_count( const asset_words_t& w, std::uint32_t self, const asset_property_hooks_t& h )
+{
+    const std::uint32_t a = w.get( self + 0x48 );
+    if ( a == 0 || !h.json_member )
+        return 0;
+    const std::uint32_t c = h.json_member( a + 0x58, "VuDBAsset" );
+    return w.get( c ) == 6u ? w.get( w.get( c + 8 ) + 4 ) : 0u;
+}
+
+inline std::uint32_t db_entry_property_choice( const asset_words_t& w, std::uint32_t self, std::uint32_t i, const asset_property_hooks_t& h )
+{
+    const std::uint32_t a = w.get( self + 0x48 );
+    if ( a == 0 || !h.json_member || !h.json_key )
+        return 0;
+    return asset_string_c_str( w, h.json_key( h.json_member( a + 0x58, "VuDBAsset" ), i ) );
+}
+
+inline std::uint32_t db_entry_property_destroy( const asset_words_t& w, std::uint32_t self, std::uint32_t flags, const asset_dtor_hooks_t& h )
+{
+    w.put( self, 0x74C4C0u );
+    if ( h.factory_release )
+        h.factory_release( w.get( self + 0x48 ) );
+    if ( h.property_base_dtor )
+        h.property_base_dtor( );
+    if ( ( flags & 1u ) && h.free_block )
+        h.free_block( self );
+    return self;
+}

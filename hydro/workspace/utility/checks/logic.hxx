@@ -1162,3 +1162,31 @@ inline bool verify_force_affector( )
         LOG_ERROR( "force_affector FAILED %d", bad );
     return bad == 0;
 }
+
+// keymotion.hxx vu_matrix_rotate_axis_angle_pre / _post against retail's 0x55A350 / 0x5D0BE0 (case rotate_axis_angle):
+// both results' 16 words per vector.
+inline bool verify_rotate_axis_angle( )
+{
+    const unsigned* w = g_golden_raa_words;
+    const unsigned n = *w++;
+    int bad = 0;
+    for ( unsigned v = 0; v < n; ++v, w += 52 )
+    {
+        float m[ 16 ], axis[ 3 ], angle;
+        std::memcpy( axis, w + 16, 12 );
+        std::memcpy( &angle, w + 19, 4 );
+        std::memcpy( m, w, 64 );
+        vu_matrix_rotate_axis_angle_pre( m, axis, angle );
+        const bool pre = std::memcmp( m, w + 20, 64 ) == 0;
+        std::memcpy( m, w, 64 );
+        vu_matrix_rotate_axis_angle_post( m, axis, angle );
+        const bool post = std::memcmp( m, w + 36, 64 ) == 0;
+        if ( ( !pre || !post ) && bad++ < 4 )
+            LOG_ERROR( "rotate_axis_angle vector %u: pre %s, post %s", v, pre ? "ok" : "differs", post ? "ok" : "differs" );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuMatrix_rotateAxisAngle_pre / _post (0x55A350 / 0x5D0BE0) match retail: %u matrices, both results word for word", n );
+    else
+        LOG_ERROR( "rotate_axis_angle FAILED %d", bad );
+    return bad == 0;
+}

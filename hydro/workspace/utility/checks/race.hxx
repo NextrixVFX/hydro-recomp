@@ -3237,6 +3237,13 @@ inline bool verify_race_all( )
     ok = verify_package_filter( ) && ok;
     ok = verify_asset_package( ) && ok;
     ok = verify_powerup_dtors( ) && ok;
+    ok = verify_asset_dtors( ) && ok;
+    ok = verify_asset_creates( ) && ok;
+    ok = verify_asset_dtors2( ) && ok;
+    ok = verify_asset_props( ) && ok;
+    ok = verify_asset_xml_dtor( ) && ok;
+    ok = verify_asset_creates2( ) && ok;
+    ok = verify_asset_dtors3( ) && ok;
     ok = verify_compound_remove( ) && ok;
     ok = verify_hull_scaling( ) && ok;
     ok = verify_simplex_ctor( ) && ok;
