@@ -239,3 +239,46 @@ inline bool verify_race_game_fsm( )
         LOG_ERROR( "race game fsm FAILED %d checks", failed );
     return failed == 0;
 }
+
+// checkpoint_buoy_contact (core/world rules.hxx) against VuCheckpointBuoyEntity's
+// contact callback 0x4350B0 run real (oracle case buoy_hit; the base 0x437F40
+// and the broadcast 0x505690 intercepted): per contact whether the base ran
+// first, whether a broadcast was made, on the event manager g 0x759028, its
+// hash (0x505650's FNV-1a of the name), the params' two words and the size -
+// one failure per differing contact.
+inline bool verify_buoy_hit( )
+{
+    int failed = 0, broadcasts = 0;
+    const std::uint32_t hash = boat_fnv_range( reinterpret_cast< const std::uint8_t* >( k_buoy_hit_event ),
+                                               static_cast< std::uint32_t >( std::strlen( k_buoy_hit_event ) ), 0x811C9DC5u );
+    for ( std::size_t k = 0; k < g_golden_buoy_hit_count; ++k )
+    {
+        const golden_buoy_hit_t& g = g_golden_buoy_hit[ k ];
+        buoy_contact_t c;
+        c.group = static_cast< std::uint16_t >( g.m_group );
+        c.owner = g.m_owner != 0;
+        c.owner_is_boat = g.m_rtti == 1 || g.m_rtti == 2;
+        c.driver_vtable = g.m_vtable;
+        c.index = g.m_index;
+        int base = 0;
+        std::uint8_t params[ 0x84 ] = { };
+        std::int32_t size = 0;
+        const int r = checkpoint_buoy_contact( c, [ & ]( ) { ++base; }, params, size );
+        std::uint32_t p0 = 0, p1 = 0;
+        std::memcpy( &p0, params, 4 );
+        std::memcpy( &p1, params + 4, 4 );
+        const bool same = r >= 0 && base == g.m_base && r == g.m_broadcast &&
+                          ( r == 0 || ( g.m_manager == 1 && hash == g.m_hash && p0 == g.m_p0 && p1 == g.m_p1 && size == g.m_size ) );
+        broadcasts += r == 1 ? 1 : 0;
+        if ( !same && ++failed <= 10 )
+            LOG_ERROR( "buoy hit: contact %d (group 0x%X owner %d rtti %d vtable 0x%X index %d): ours %d base %d hash 0x%X %08X %08X size %d, retail %d %d 0x%X %08X %08X %d",
+                       static_cast< int >( k ), g.m_group, g.m_owner, g.m_rtti, g.m_vtable, g.m_index, r, base, hash, p0, p1, size,
+                       g.m_broadcast, g.m_base, g.m_hash, g.m_p0, g.m_p1, g.m_size );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "checkpoint_buoy_contact matches VuCheckpointBuoyEntity's 0x4350B0: %d contacts, %d OnCheckPointBuoyHit broadcasts (hash, params, size)",
+                     static_cast< int >( g_golden_buoy_hit_count ), broadcasts );
+    else
+        LOG_ERROR( "buoy hit FAILED %d contacts", failed );
+    return failed == 0;
+}

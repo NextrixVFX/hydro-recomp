@@ -1,5 +1,6 @@
 #pragma once
 
+#include <workspace/core/boat/manager.hxx>
 #include <workspace/core/boat/track.hxx>
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/entity/property.hxx>
@@ -677,6 +678,55 @@ inline void race_rules_on_buoy_hit( race_rules_t& r, const std::uint8_t* params,
             std::memcpy( &value, params + 4, 4 );
     }
     r.buoys |= 1u << ( static_cast< std::uint32_t >( value ) & 31u );
+}
+
+// ---- VuCheckpointBuoyEntity's contact callback 0x4350B0 (the broadcaster) ---
+//
+// VuRigidBodyContactCallback slot 0 (vtable 0x73A24C; thiscall on the
+// entity's +0xB4 part - the pointer VuDynamicGamePropEntity's gameInitialize
+// 0x437580 stores in its body's +0x2C4; the contact; retn 4). First the base
+// callback 0x437F40 (VuDynamicGamePropEntity's own contact response - NOT
+// recreated: the caller's `base` hook). Then the contact's other body (+8):
+// its word +0x2CA must EQUAL 0x10 (cmp word / jne - not a bit test), its
+// owner +0x2C0 non-null and its vt+4 RTTI chain must reach VuBoatEntity
+// 0x73628C; the owner's driver (+0x220) vt+0x38 (0x404BD0, true in every
+// driver vtable) and vt+0x30 (boat_driver_kind's human) must both answer
+// true. Then a VuParams on the stack (size +0x80 = 0) gets 0x434E50's int:
+// a 4-byte tag 0 and the entity's +0x184 (the part's +0xD0: the buoy's
+// index), size 8; and VuEventManager g 0x759028's 0x505650 broadcasts it as
+// "OnCheckPointBuoyHit" (its FNV-1a hash -> 0x505690). The handler is
+// VuRaceGame's 0x48A7B0 (race_rules_on_buoy_hit).
+// Answers 1 (the broadcast: `params` filled, `size` 8), 0 (none), -1 for a
+// driver vtable that is not one of the five (UNKNOWN - no answer made up).
+inline constexpr const char* k_buoy_hit_event = "OnCheckPointBuoyHit";
+
+struct buoy_contact_t
+{
+    std::uint16_t group = 0;         // the other body's +0x2CA
+    bool owner = false;              // its +0x2C0 non-null
+    bool owner_is_boat = false;      // the owner's vt+4 RTTI chain reaches 0x73628C
+    std::uint32_t driver_vtable = 0; // the owner's +0x220 driver's vtable
+    std::int32_t index = 0;          // the buoy entity's +0x184
+};
+
+inline int checkpoint_buoy_contact( const buoy_contact_t& c, const std::function< void( ) >& base, std::uint8_t ( &params )[ 0x84 ], std::int32_t& size )
+{
+    if ( base )
+        base( );
+    size = 0;
+    if ( c.group != 0x10 || !c.owner || !c.owner_is_boat )
+        return 0;
+    boat_driver_kind_t kind;
+    if ( !boat_driver_kind( c.driver_vtable, kind ) )
+        return -1;
+    if ( !kind.human )   // vt+0x38 is true for all five
+        return 0;
+    const std::int32_t tag = 0;
+    std::memcpy( params, &tag, 4 );
+    std::memcpy( params + 4, &c.index, 4 );
+    size = 8;
+    std::memcpy( params + 0x80, &size, 4 );
+    return 1;
 }
 
 // Slot 7 0x489A40(dt): evaluate 0x555AD0, the current state's tick, +0x71C +=
