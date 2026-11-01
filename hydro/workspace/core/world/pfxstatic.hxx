@@ -20,10 +20,8 @@
 // verified world/pfxsim.hxx / pfxload.hxx functions (pfx_static_runtime_ops
 // binds them) and platform hooks (the draw manager, the tick manager).
 //
-// NOT recreated: the motion handler 0x5EB4C0 (the VuMotionComponentIF at
-// +0x5C: the matrix into the transform, its euler through atan2 / asinf, then
-// the transform's 0x534830 / 0x534C00 - the world agent's setWorldTransform
-// family, not exported yet).
+// The motion handler 0x5EB4C0 (the VuMotionComponentIF at +0x5C) is world/
+// watchers.hxx's pfx_static_motion (it needs world/race.hxx's entity_set_world).
 
 #include <workspace/core/entity/pfx.hxx>
 #include <workspace/core/world/pfxmgr.hxx>
