@@ -577,6 +577,74 @@ inline bool verify_lens_water( )
     return bad == 0;
 }
 
+// lens.hxx lens_water_drop_fill / lens_water_draw_scales against retail's 0x515060 (case lens_drop_fill): every vertex
+// word of 150 synthetic drop arrays (0 .. 256 drops; the 4 words after the last vertex must stay the 0xA5 fill), the
+// shader constants, the draw call's arguments, and no device slot outside the read ones.
+inline bool verify_lens_drop_fill( )
+{
+    logic_check_t c{ g_golden_ldf_words };
+    const unsigned n = c.next( );
+    int bad = 0, verts = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const float aspect = control_f( c.next( ) );
+        const std::int32_t width = static_cast< std::int32_t >( c.next( ) ), height = static_cast< std::int32_t >( c.next( ) );
+        const std::uint32_t has40 = c.next( );
+        const unsigned count = c.next( );
+        std::vector< std::uint32_t > drops( 9 * count );
+        for ( auto& x : drops )
+            x = c.next( );
+        const unsigned nv = c.next( );
+        std::vector< lens_water_vertex_t > out( 6 * count + 1 );
+        std::memset( out.data( ), 0xA5, out.size( ) * sizeof( lens_water_vertex_t ) );
+        lens_water_drop_fill( static_cast< int >( count ), reinterpret_cast< const float* >( drops.data( ) ), out.data( ) );
+        int diff = nv == 24 * count + 4 ? 0 : 1000;
+        const std::uint8_t* got = reinterpret_cast< const std::uint8_t* >( out.data( ) );
+        for ( unsigned k = 0; k < nv; ++k )
+        {
+            const std::uint32_t want = c.next( );
+            diff += k < 24 * count + 4 && std::memcmp( got + 4 * k, &want, 4 ) == 0 ? 0 : 1;
+        }
+        if ( diff )
+        {
+            if ( bad < 4 )
+                LOG_ERROR( "lens_drop_fill vector %u: %d of %u vertex words differ", v, diff, nv );
+            ++bad;
+        }
+        verts += static_cast< int >( 6 * count );
+        float s[ 3 ];
+        lens_water_draw_scales( aspect, width, height, s );
+        const unsigned n10 = c.next( );
+        bad += n10 == 1 && c.next( ) == control_w( s[ 0 ] ) ? 0 : 1;
+        const unsigned n20 = c.next( );
+        if ( has40 )
+        {
+            bad += n20 == 2 ? 0 : 1;
+            const std::uint32_t a = c.next( ), b = c.next( );
+            bad += a == control_w( s[ 1 ] ) && b == control_w( s[ 2 ] ) ? 0 : 1;
+        }
+        else
+            bad += n20 == 0 ? 0 : 1;
+        const unsigned nd = c.next( );
+        std::uint32_t d[ 7 ] = { };
+        for ( unsigned k = 0; k < nd; ++k )
+        {
+            const std::uint32_t x = c.next( );
+            if ( k < 7 )
+                d[ k ] = x;
+        }
+        // vt+0xC4( 3, 0, 6 count, 4 count, manager +0x2478 (the case's 0x1B2B3B4B), 0x799898, 0x10 )
+        bad += nd == 7 && d[ 0 ] == 3u && d[ 1 ] == 0u && d[ 2 ] == 6u * count && d[ 3 ] == 4u * count && d[ 4 ] == 0x1B2B3B4Bu &&
+               d[ 5 ] == 0x799898u && d[ 6 ] == 0x10u ? 0 : 1;
+        bad += c.next( ) == 0u ? 0 : 1;
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "The lens-water drop draw's vertex fill (0x515060, CPU half) matches retail: %u drop arrays, %d vertices word for word", n, verts );
+    else
+        LOG_ERROR( "lens_drop_fill FAILED %d", bad );
+    return bad == 0;
+}
+
 // VuAudioEmitterEntity + 0x50FBB0 + VuAnimatedPropEntity's PlayAudioEvent (world/sound.hxx) against retail (case
 // audio_emitter): every step replayed with hooks that log what the case's FMOD recorder logged (getEvent answering FMOD_OK
 // and the next handle 0xE001.. unless the name holds "bad": 74 and 0xBAD0 + the low byte), compared entry for entry; the

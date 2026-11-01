@@ -2738,6 +2738,7 @@ inline bool verify_water_all( )
     ok = verify_logic_types( ) && ok;
     ok = verify_control_entity( ) && ok;
     ok = verify_lens_water( ) && ok;
+    ok = verify_lens_drop_fill( ) && ok;
     ok = verify_audio_emitter( ) && ok;
     ok = verify_force_affector( ) && ok;
     ok = verify_settings_triggers( ) && ok;
