@@ -908,6 +908,161 @@ inline bool verify_timetrial_split( )
     return failed == 0;
 }
 
+// The course system (world/slalom.hxx slalom_course_start / slalom_gates_tick / slalom_recovered) against retail's
+// VuSlalomGame slot 5 0x48C660, the gates tick 0x48E6E0 (0x43FC70 / 0x48E910 / 0x48EA40 / 0x48EBB0) and OnBoatRecovered
+// 0x48DB70 run whole (oracle case slalom_gates: 40 courses of 0..8 drawn gates, 160 frames of a boat steered along them,
+// drawn recoveries, ConstantDB drawn and broken). Compared after the start and every frame: +0x73C / +0x740, +0x748 /
+// +0x74C, every gate's +0xE8, the boat's +0x310 / +0x344 / +0x348 / +0x4B0 / +0x4B4 / +0x4D0 / +0x4DC, and the platform
+// calls (the FMOD sounds by name and position, the broadcasts by hash) - one failure per differing snapshot.
+inline bool verify_slalom_gates( )
+{
+    const unsigned* w = g_golden_sg_words;
+    const auto next = [ & ] { return *w++; };
+    std::size_t s = 0;
+    int failed = 0, snaps = 0, sounds = 0;
+    const unsigned nv = next( );
+    struct log_t
+    {
+        std::vector< unsigned > calls;
+    };
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned ng = next( );
+        std::vector< std::array< float, 16 > > worlds( ng );
+        std::vector< slalom_gate_t > gates( ng );
+        std::vector< unsigned > connected( ng );
+        for ( unsigned k = 0; k < ng; ++k )
+        {
+            for ( float& x : worlds[ k ] )
+            {
+                const unsigned b = next( );
+                std::memcpy( &x, &b, 4 );
+            }
+            const unsigned d = next( );
+            std::memcpy( &gates[ k ].diameter, &d, 4 );
+            gates[ k ].allow_recovery = static_cast< std::uint8_t >( next( ) );
+            connected[ k ] = next( );
+            gates[ k ].world = worlds[ k ].data( );
+            gates[ k ].prev = nullptr;
+        }
+        for ( unsigned k = 0; k < ng; ++k )
+            gates[ k ].next = connected[ k ] && k + 1 < ng ? &gates[ k + 1 ] : nullptr;
+        slalom_course_t c;
+        c.first = c.current = ng ? &gates[ 0 ] : nullptr;
+        std::vector< std::uint8_t > boat( 0x600, 0 );
+        const auto put = [ & ]( int at ) { const unsigned b = next( ); std::memcpy( boat.data( ) + at, &b, 4 ); };
+        put( 0x190 ), put( 0x194 ), put( 0x198 ), put( 0x1A0 ), put( 0x310 ), put( 0x4B0 ), put( 0x4B4 ), put( 0x4D0 );
+        float world[ 16 ];
+        for ( float& x : world )
+        {
+            const unsigned b = next( );
+            std::memcpy( &x, &b, 4 );
+        }
+        std::memcpy( boat.data( ) + 0x4DC, world, 64 );
+        const std::string cls = g_golden_sg_text[ s++ ];
+        const std::string hex = g_golden_sg_text[ s++ ];
+        std::vector< std::uint8_t > bytes;
+        for ( std::size_t k = 0; k + 1 < hex.size( ); k += 2 )
+            bytes.push_back( static_cast< std::uint8_t >( std::stoul( hex.substr( k, 2 ), nullptr, 16 ) ) );
+        const value_t cdb = c_reader( bytes ).parse( );
+        log_t log;
+        slalom_hooks_t h;
+        h.user = &log;
+        h.sound = []( void* u, const char* name, const float* p ) {
+            auto& l = static_cast< log_t* >( u )->calls;
+            unsigned pw[ 3 ];
+            std::memcpy( pw, p, 12 );
+            l.insert( l.end( ), { 0u, std::strstr( name, "slalom_miss" ) ? 0u : 1u, pw[ 0 ], pw[ 1 ], pw[ 2 ] } );
+        };
+        h.broadcast = []( void* u, const char* name ) {
+            std::uint32_t x = 0x811C9DC5u;
+            for ( const char* p = name; *p; ++p )
+                x = ( x ^ static_cast< std::uint8_t >( *p ) ) * 0x1000193u;
+            static_cast< log_t* >( u )->calls.insert( static_cast< log_t* >( u )->calls.end( ), { 1u, x, 0u, 0u, 0u } );
+        };
+        const auto index = [ & ]( const slalom_gate_t* g ) { return g ? static_cast< unsigned >( g - gates.data( ) ) : 0xFFFFFFFFu; };
+        const auto snap = [ & ]( unsigned frame ) {
+            ++snaps;
+            bool bad = next( ) != index( c.current );
+            bad = ( next( ) != index( c.recover ) ) || bad;
+            unsigned pb, bb;
+            std::memcpy( &pb, &c.penalty, 4 );
+            std::memcpy( &bb, &c.boost_add, 4 );
+            bad = ( next( ) != pb ) || bad;
+            bad = ( next( ) != bb ) || bad;
+            for ( unsigned k = 0; k < ng; ++k )
+                bad = ( next( ) != index( gates[ k ].prev ) ) || bad;
+            const auto word = [ & ]( int at ) { unsigned x; std::memcpy( &x, boat.data( ) + at, 4 ); return x; };
+            bad = ( next( ) != word( 0x310 ) ) || bad;
+            bad = ( next( ) != boat[ 0x344 ] ) || bad;
+            for ( int k = 0; k < 16; ++k )
+                bad = ( next( ) != word( 0x348 + 4 * k ) ) || bad;
+            bad = ( next( ) != word( 0x4B0 ) ) || bad;
+            bad = ( next( ) != word( 0x4B4 ) ) || bad;
+            bad = ( next( ) != word( 0x4D0 ) ) || bad;
+            for ( int k = 0; k < 16; ++k )
+                bad = ( next( ) != word( 0x4DC + 4 * k ) ) || bad;
+            const unsigned nc = next( );
+            std::size_t at = 0;
+            bad = ( log.calls.size( ) != 5u * nc ) || bad;
+            for ( unsigned k = 0; k < nc; ++k )
+            {
+                const unsigned kind = next( ), value = next( ), has = next( );
+                const unsigned p[ 3 ] = { next( ), next( ), next( ) };
+                if ( at + 5 > log.calls.size( ) )
+                {
+                    bad = true;
+                    continue;
+                }
+                bad = ( log.calls[ at ] != kind || log.calls[ at + 1 ] != value ) || bad;
+                if ( has )
+                    bad = ( log.calls[ at + 2 ] != p[ 0 ] || log.calls[ at + 3 ] != p[ 1 ] || log.calls[ at + 4 ] != p[ 2 ] ) || bad;
+                sounds += kind == 0 ? 1 : 0;
+                at += 5;
+            }
+            log.calls.clear( );
+            if ( bad && ++failed <= 8 )
+                LOG_ERROR( "slalom gates: vector %u frame %d differs from retail's (+0x73C %d, +0x740 %d, +0x310 0x%X)", v, static_cast< int >( frame ) - 1,
+                           static_cast< int >( index( c.current ) ), static_cast< int >( index( c.recover ) ), word( 0x310 ) );
+        };
+        slalom_course_start( c, member( member( cdb, "VuDBAsset" ), "Slalom" ), cls, boat.data( ), world );
+        snap( 0 );
+        const unsigned nf = next( );
+        float last[ 16 ];
+        std::memcpy( last, world, 64 );
+        for ( unsigned f = 0; f < nf; ++f )
+        {
+            const unsigned kind = next( );
+            for ( float& x : world )
+            {
+                const unsigned b = next( );
+                std::memcpy( &x, &b, 4 );
+            }
+            if ( kind == 1 )
+                slalom_recovered( c, boat.data( ), world );
+            else if ( kind == 0 )
+            {
+                std::memcpy( boat.data( ) + 0x4DC, last, 64 );   // VuGame's tick after slot 7 (the frame before)
+                slalom_gates_tick( c, boat.data( ), world, h );
+            }
+            std::memcpy( last, world, 64 );
+            snap( f + 1 );
+        }
+    }
+    if ( static_cast< std::size_t >( w - g_golden_sg_words ) != g_golden_sg_count )
+    {
+        LOG_ERROR( "slalom gates: the words stream desynchronised (%d of %d read)", static_cast< int >( w - g_golden_sg_words ), static_cast< int >( g_golden_sg_count ) );
+        return false;
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "slalom_course_start / slalom_gates_tick / slalom_recovered match VuSlalomGame's 0x48C660 / 0x48E6E0 / 0x48DB70 on %u courses, "
+                     "%d snapshots (%d FMOD sounds), bit for bit",
+                     nv, snaps, sounds );
+    else
+        LOG_ERROR( "the slalom gates FAILED on %d of %d snapshots", failed, snaps );
+    return failed == 0;
+}
+
 // race_place_timetrial (world/start.hxx) against retail's VuTimeTrialGame slot 13 0x490CA0 run whole (oracle case
 // timetrial_place: 0..2 game boats, 0..3 grid entries, ConstantDB TimeTrial InitialBoostEnergy as float / int / int64 /
 // string / absent / broken). Compared: whether boat [0]'s transform got setWorldTransform (0x5344A0) and with which
@@ -1265,6 +1420,7 @@ inline bool verify_session_all( )
     ok = verify_timetrial_place( ) && ok;
     ok = verify_breakable_properties( ) && ok;
     ok = verify_slalom_gate_properties( ) && ok;
+    ok = verify_slalom_gates( ) && ok;
     ok = verify_breakable_contact( ) && ok;
     ok = verify_breakable_dynamic_contact( ) && ok;
     ok = verify_mine_explode( ) && ok;
