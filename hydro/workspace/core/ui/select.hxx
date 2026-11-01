@@ -127,15 +127,7 @@ inline int ui_json_size( const value_t& v )
 
 // 0x4FCAB0 (a map's member by a VuString key, the whole string; inserted null
 // when absent) after 0x4FC6B0.
-inline value_t& ui_json_child_s( value_t& v, const std::string& key )   // (not forwarded: see ui_json_child)
-{
-    ui_json_make_map( v );
-    for ( auto& field : v.object )
-        if ( field.first == key )
-            return field.second;
-    v.object.emplace_back( key, value_t{ } );
-    return v.object.back( ).second;
-}
+inline value_t& ui_json_child_s( value_t& v, const std::string& key ) { return json_member( v, key ); }   // forwards (batch 26)
 
 // 0x4FC450 asInt (1 the int, 2 cvttss2si, 7 the low dword, else 0).
 inline int ui_json_as_int( const value_t& v )

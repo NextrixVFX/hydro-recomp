@@ -55,20 +55,9 @@ inline value_t& ui_json_make_map( value_t& v )
 // 0x4FC090 (the key through strlen) -> 0x4FC6B0, then the map's operator[]
 // 0x4FC970: the member, a fresh null one inserted when absent. The reference
 // lives until the parent map's next insertion.
-// NOT forwarded to json.hxx json_member (batch 25): that one inserts at the
-// sorted position by a scan that assumes the object vector is sorted - a value_t
-// parsed from VUJB keeps the file's order, so on an unsorted object it can miss
-// the existing key and insert a duplicate (forwarding failed 10 ui checks).
-inline value_t& ui_json_child( value_t& v, const char* key )
-{
-    ui_json_make_map( v );
-    const std::string k( key );
-    for ( auto& field : v.object )
-        if ( field.first == k )
-            return field.second;
-    v.object.emplace_back( k, value_t{ } );
-    return v.object.back( ).second;
-}
+// Forwards to engine entity/json.hxx json_member (batch 26: its full-key-scan fix
+// from water batch 27; the batch-25 duplicate-key defect is gone).
+inline value_t& ui_json_child( value_t& v, const char* key ) { return json_member( v, std::string( key ) ); }
 
 // 0x4FC640: cleared, tag 4, the text up to its first NUL (strlen).
 inline void ui_json_set_string( value_t& v, const char* text )
