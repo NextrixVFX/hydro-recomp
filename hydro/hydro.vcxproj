@@ -250,6 +250,7 @@
     <ClInclude Include="workspace\utility\checks\leaves.hxx" />
     <ClInclude Include="workspace\utility\checks\logic.hxx" />
     <ClInclude Include="workspace\utility\checks\menu.hxx" />
+    <ClInclude Include="workspace\utility\checks\package.hxx" />
     <ClInclude Include="workspace\utility\checks\pfx.hxx" />
     <ClInclude Include="workspace\utility\checks\race.hxx" />
     <ClInclude Include="workspace\utility\checks\rays.hxx" />

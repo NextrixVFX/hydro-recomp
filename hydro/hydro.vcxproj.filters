@@ -474,6 +474,9 @@
     <ClInclude Include="workspace\utility\checks\menu.hxx">
       <Filter>workspace\utility\checks</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\utility\checks\package.hxx">
+      <Filter>workspace\utility\checks</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\utility\checks\pfx.hxx">
       <Filter>workspace\utility\checks</Filter>
     </ClInclude>
