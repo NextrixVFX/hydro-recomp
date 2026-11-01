@@ -2302,9 +2302,107 @@ inline bool verify_static_pfx_entity( )
     return bad == 0;
 }
 
+// pfx_asset_load / pfx_asset_unload (world/pfxmgr.hxx) against VuPfxAsset's slot 5 0x5CAB30 / slot 6 0x5CAB80 (case
+// pfx_unload): the race's two documents loaded into two assets, then four unloads (Hydroelectric; Generic with both
+// globals null; Generic; Generic again). Compared per unload: the events in order (releaseAll 0x52BB60 - here: the one
+// effect created before each unload with the manager present, released through ops.release -, 0x563C00's entries, the
+// geom model resets, the texture releases by path and offset), the document cleared (retail's +0 / +8 / +0xC), the
+// projects left.
+inline bool verify_pfx_unload( )
+{
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) )
+    {
+        LOG_ERROR( "pfx_unload: Base.apf did not open" );
+        return false;
+    }
+    static pfx_runtime_t rt;
+    pfx_runtime_init( rt );
+    pfx_library_t lib;
+    std::map< std::string, pfx_asset_t > assets;
+    for ( const char* name : { "Hydroelectric", "Generic" } )
+    {
+        std::vector< std::uint8_t > blob;
+        pfx_asset_t& a = assets[ name ];
+        a.name = name;
+        if ( !archive.read( ( std::string( "VuPfxAsset/" ) + name ).c_str( ), blob ) || !pfx_asset_load( &rt, &lib, a, blob ) )
+        {
+            LOG_ERROR( "pfx_unload: %s did not load", name );
+            return false;
+        }
+    }
+    struct log_t
+    {
+        std::map< std::uint32_t, std::string > path_of;
+        std::vector< std::tuple< int, std::string, std::uint32_t > > events;
+    } log;
+    pfx_release_hooks_t hooks;
+    hooks.user = &log;
+    hooks.destroyed = []( void* u, std::uint32_t node ) {
+        log_t& l = *static_cast< log_t* >( u );
+        l.events.emplace_back( 0, l.path_of[ node ], 0u );
+    };
+    hooks.model = []( void* u, std::uint32_t node ) {
+        log_t& l = *static_cast< log_t* >( u );
+        l.events.emplace_back( 1, l.path_of[ node ], 0u );
+    };
+    hooks.texture = []( void* u, std::uint32_t node, std::uint32_t offset ) {
+        log_t& l = *static_cast< log_t* >( u );
+        l.events.emplace_back( 2, l.path_of[ node ], offset );
+    };
+    pfx_manager_ops_t ops;
+    ops.user = &log;
+    ops.create = []( void*, const char* ) { return 1u; };
+    ops.release = []( void* u, std::uint32_t ) { static_cast< log_t* >( u )->events.emplace_back( 3, std::string( "manager" ), 0u ); };
+    pfx_manager_t manager;
+    pfx_manager_init( manager, ops );
+    int failed = 0, events = 0;
+    for ( std::size_t i = 0; i < g_golden_pul_op_count; ++i )
+    {
+        const golden_pfx_unload_op_t& op = g_golden_pul_ops[ i ];
+        log.path_of.clear( );
+        std::vector< std::pair< std::string, std::uint32_t > > rows;
+        for ( const auto& pr : lib.projects )
+            pfx_load_rows( rt, lib, pr.second, pr.first, rows );
+        for ( const auto& r : rows )
+            log.path_of[ r.second ] = r.first;
+        log.events.clear( );
+        if ( op.globals )
+            pfx_manager_create( manager, "effect", ops );
+        pfx_asset_unload( assets[ op.name ], op.globals ? &manager : nullptr, ops, op.globals ? &rt : nullptr, op.globals ? &lib : nullptr, hooks );
+        int bad = log.events.size( ) != op.count;
+        for ( unsigned e = 0; e < op.count && e < log.events.size( ); ++e )
+        {
+            const golden_pfx_unload_event_t& g = g_golden_pul_events[ op.first + e ];
+            bad += std::get< 0 >( log.events[ e ] ) != g.kind || std::get< 1 >( log.events[ e ] ) != g.path || std::get< 2 >( log.events[ e ] ) != g.offset;
+        }
+        bad += ( op.doc[ 0 ] | op.doc[ 1 ] | op.doc[ 2 ] ) != 0u || assets[ op.name ].document.kind != value_t::kind_t::none;
+        std::string left;
+        for ( const auto& pr : lib.projects )
+            left += ( left.empty( ) ? "" : "," ) + pr.first;
+        bad += left != op.projects;
+        events += static_cast< int >( op.count );
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "pfx_unload: unload %d (%s): %d differences (%d events, retail %u)", static_cast< int >( i ), op.name, bad,
+                static_cast< int >( log.events.size( ) ), op.count );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "pfx_asset_unload matches VuPfxAsset's unload 0x5CAB80 (0x4FBB10, releaseAll 0x52BB60, removeProject 0x51D9C0): %d unloads, "
+                     "%d events in order, documents cleared, the projects left",
+            static_cast< int >( g_golden_pul_op_count ), events );
+    else
+        LOG_ERROR( "pfx_unload FAILED %d", failed );
+    return failed == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_pfx_unload( ) && ok;
     ok = verify_ocean_infinite( ) && ok;
     ok = verify_ocean_infinite96( ) && ok;
     ok = verify_ocean_field_menu( ) && ok;
