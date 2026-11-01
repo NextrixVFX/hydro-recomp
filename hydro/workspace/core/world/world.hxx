@@ -22,6 +22,7 @@
 #include <workspace/core/world/grid.hxx>
 #include <workspace/core/world/livery.hxx>
 #include <workspace/core/world/race.hxx>
+#include <workspace/core/world/strings.hxx>
 #include <workspace/core/world/session.hxx>
 #include <workspace/core/world/build.hxx>
 #include <workspace/core/world/drive.hxx>
@@ -553,6 +554,28 @@ private:
 
     // update_delays: graph.hxx
     void update_delays( float dt );
+
+    // VuStringDBImpl's init (slot 5 0x53B700), once: the languages = the factory's getAssetNames("VuStringAsset")
+    // (the pack's names; only their membership is read), then setLanguage (slot 11 0x53B9C0) with the PLATFORM's
+    // language (g_vumetrosys vt+0x48 - a hook: --language, else "en-us"; the dev config's override is compiled out
+    // of retail). The asset: the pack's VuStringAsset/<language> through VuDBAsset's read 0x5C1270.
+    void string_db_ready( )
+    {
+        if ( m_string_db_ready )
+            return;
+        m_string_db_ready = true;
+        for ( const std::string& n : m_archive.names( "VuStringAsset/" ) )
+            m_string_db.languages.push_back( n );
+        const char* lang = c_engine::option( "language" );
+        const bool ok = string_db_set_language( m_string_db, lang ? lang : "en-us", [ this ]( const std::string& l ) -> const value_t* {
+            std::vector< std::uint8_t > blob;
+            if ( !m_archive.read( ( "VuStringAsset/" + l ).c_str( ), blob ) || !pfx_asset_document( blob, m_string_asset ) )
+                return nullptr;
+            return &m_string_asset;
+        } );
+        LOG_INFO( "VuStringDB: language %s (the platform's answer: %s), %u strings%s", m_string_db.language.c_str( ), lang ? "--language" : "en-us, a hook",
+                  static_cast< unsigned >( m_string_db.strings.size( ) ), ok ? "" : " - the asset did not load (UNKNOWN)" );
+    }
 
     // The race HUD projects and their countdown (world/huds.hxx).
     void load_huds( );
@@ -1603,6 +1626,10 @@ private:
     // Their game environment: the gameutil +0x50 root (load_scene's), no SKU (the asset manager's vt+0x7C: a platform
     // answer, not supplied) and no entity repository (find / word: not wired) - those filters count unrecreated.
     value_t m_game_util;
+    // VuStringDBImpl (world/strings.hxx), the HUD's m_string_db; m_string_asset the loaded document.
+    string_db_t m_string_db;
+    value_t m_string_asset;
+    bool m_string_db_ready = false;
     logic_game_t m_logic_game;
     int m_logic_unrecreated = 0;
     // UpdateBranchProbabilities events reached without their VuParams (UNKNOWN, graph.hxx).

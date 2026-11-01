@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/world/race.hxx>
+#include <workspace/core/world/strings.hxx>
 
 // The world area's second checks file (checks/world.hxx is at its size limit): the race session's
 // pieces from world batch 24 on. Included at the end of checks/world.hxx; verify_session_all runs
@@ -113,10 +114,77 @@ inline bool verify_prop_contact( )
     return failed == 0;
 }
 
+// string_db_reload / string_db_get (world/strings.hxx) against retail's VuStringDBImpl (case string_db): per load
+// (four real languages from the pack, two hand-built documents; g 0x7359FC seeded two ways) the result, the
+// word-wrap flags, g 0x73579A, the map's entry count and digest (FNV-1a over the entries by hash) and getString on
+// the probe keys.
+inline bool verify_string_db( )
+{
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) )
+    {
+        LOG_ERROR( "string db: the pack is not readable" );
+        return false;
+    }
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_string_db_count; ++k )
+    {
+        const golden_string_db_t& want = g_golden_string_db[ k ];
+        value_t doc;
+        bool have = false;
+        if ( want.document )
+        {
+            const unsigned char* raw = reinterpret_cast< const unsigned char* >( want.document );
+            doc = c_reader( std::vector< std::uint8_t >( raw, raw + want.document_bytes ) ).parse( );
+            have = true;
+        }
+        else
+        {
+            std::vector< std::uint8_t > blob;
+            have = archive.read( ( std::string( "VuStringAsset/" ) + want.language ).c_str( ), blob ) && pfx_asset_document( blob, doc );
+        }
+        string_db_t db;
+        db.language = want.language;
+        db.wrap_flags = want.flags_in;
+        const bool r = string_db_reload( db, [ & ]( const std::string& ) -> const value_t* { return have ? &doc : nullptr; } );
+        std::uint32_t h = 0x811C9DC5u;
+        const auto mix = [ &h ]( std::uint8_t b ) { h = ( h ^ b ) * 0x1000193u; };
+        for ( const auto& e : db.strings )
+        {
+            for ( int b = 0; b < 4; ++b )
+                mix( static_cast< std::uint8_t >( e.first >> ( 8 * b ) ) );
+            for ( const char c : e.second )
+                mix( static_cast< std::uint8_t >( c ) );
+            mix( 0 );
+        }
+        bool bad = ( r ? 1 : 0 ) != want.result || db.wrap_flags != want.flags || db.flag_73579a != want.flag_73579a ||
+                   static_cast< int >( db.strings.size( ) ) != want.count || h != want.digest;
+        for ( int g = 0; g < want.gets; ++g )
+            if ( string_db_get( db, want.get[ g ].key ) != want.get[ g ].value )
+            {
+                bad = true;
+                LOG_ERROR( "string db %s: getString('%s') = '%s', retail '%s'", want.language, want.get[ g ].key, string_db_get( db, want.get[ g ].key ).c_str( ),
+                           want.get[ g ].value );
+            }
+        if ( bad && ++failed <= 8 )
+            LOG_ERROR( "string db %s (flags in 0x%08X): result %d flags 0x%08X 0x73579A %d entries %d digest 0x%08X, retail %d 0x%08X %d %d 0x%08X",
+                       want.language, want.flags_in, r ? 1 : 0, db.wrap_flags, db.flag_73579a, static_cast< int >( db.strings.size( ) ), h, want.result,
+                       want.flags, want.flag_73579a, want.count, want.digest );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "string_db_reload / string_db_get match VuStringDBImpl's reload 0x53BB40 / loader 0x53D210 / getString 0x53B830 on %d loads "
+                     "(the map, the word-wrap flags, the probes), bit for bit", static_cast< int >( g_golden_string_db_count ) );
+    else
+        LOG_ERROR( "the string db FAILED on %d of %d loads", failed, static_cast< int >( g_golden_string_db_count ) );
+    return failed == 0;
+}
+
 inline bool verify_session_all( )
 {
     bool ok = true;
     ok = verify_logic_properties( ) && ok;
+    ok = verify_string_db( ) && ok;
     ok = verify_prop_contact( ) && ok;
     return ok;
 }

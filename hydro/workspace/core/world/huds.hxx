@@ -82,7 +82,9 @@ inline void c_world::load_huds( )
                         hud_post( hash, bp, index );
                     }
                 };
-                // m_string_db (VuStringDB slot 6, the toast's template) is not wired: no string DB here (UNKNOWN on use).
+                // m_string_db: VuStringDB's getString (slot 6 0x53B830, world/strings.hxx) on the world's string DB.
+                string_db_ready( );
+                hooks.m_string_db = [ this ]( const char* key ) { return string_db_get( m_string_db, key ? key : "" ); };
                 h.ui = std::make_unique< c_ui_race_hud >( *h.ui_tree, hooks );
             }
             else
