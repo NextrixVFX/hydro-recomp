@@ -5,6 +5,7 @@
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/entity/property.hxx>
 #include <workspace/core/ui/fsm.hxx>
+#include <workspace/core/ui/split.hxx>
 
 #include <array>
 #include <cmath>
@@ -426,6 +427,10 @@ struct race_rules_t
     // 0x482F10 around slot 7): +0x0C the post-race flow, +0x67C the split / leaderboard display.
     c_fsm event;                     // +0x0C
     c_fsm split;                     // +0x67C
+    // The split / result display's fields (VuRaceGame slot 15 0x48B180 - core/ui split.hxx ui_race_checkpoint): +0x4C the
+    // laps (set from the rules' game), +0x6C4 / +0x6C8 the personal best (the game's vt+0x38 from SAVES - a platform
+    // hook: none here, so 0 / the null container), +0x6D8 / +0x6DC / +0x72C written by the crossings.
+    ui_race_split_t split_display;
     std::function< void( std::uint32_t address, const char* what ) > unrecreated;   // a VuGame state handler reached
     vugame_screen_hooks_t screen_hooks;   // what the Results / Awards handlers call that is not theirs
     bool results_screen = false;     // +0x84 non-null (Results' enter 0x484110 - not recreated: never set here)

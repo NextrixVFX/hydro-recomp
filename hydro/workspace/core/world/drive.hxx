@@ -1209,8 +1209,20 @@ inline void race_session_game_mode( void* user, float dt )
         LOG_INFO( "race: %s crossed checkpoint %d (waypoint %d) - lap %d, sync %d", s.boats[ static_cast< std::size_t >( boat ) ]->name.c_str( ),
                   track_checkpoint_index( tm, w ), w, rules_i32( s.rules_boats[ static_cast< std::size_t >( boat ) ].boat, 0x4AC ),
                   s.dynamics ? s.dynamics->syncs : -1 );
-        race_unwired( s, "VuRaceGame slot 15 0x48B180 on a checkpoint (the split / result display: VuGame +0x67C's ShowSplit / ShowResult, "
-                         "+0x6D8 / +0x6DC - the HUD's) - not recreated" );
+        // VuRaceGame slot 15 0x48B180 (core/ui split.hxx ui_race_checkpoint): the boat's driver slot 12 (human), lap +0x4AC,
+        // race time +0x4B4; the checkpoint's +0x8A finish byte; the game's +0x4C laps; the +0x67C machine (rules.hxx).
+        const race_rules_boat_t& rb = s.rules_boats[ static_cast< std::size_t >( boat ) ];
+        ui_race_split_boat_t sb;
+        sb.m_human = rb.human;
+        sb.m_lap = rules_i32( rb.boat, 0x4AC );
+        sb.m_race_time = rules_f( rb.boat, 0x4B4 );
+        s.rules.split_display.m_laps = s.rules_game.laps;
+        const bool finish = w >= 0 && static_cast< std::size_t >( w ) < tm.waypoints.size( ) && tm.waypoints[ static_cast< std::size_t >( w ) ].p.finish;
+        if ( !ui_race_checkpoint( s.rules.split_display, s.rules.split, sb, finish ) )
+            race_unwired( s, "VuRaceGame slot 15 0x48B180: the +0x67C machine has no ShowSplit / ShowResult condition - UNKNOWN" );
+        else if ( sb.m_human && sb.m_lap >= 1 )
+            LOG_INFO( "race: %s split display - split delta %.3f, result delta %.3f, %d splits", s.boats[ static_cast< std::size_t >( boat ) ]->name.c_str( ),
+                      s.rules.split_display.m_split_delta, s.rules.split_display.m_result_delta, static_cast< int >( s.rules.split_display.m_splits.size( ) ) );
     };
     h.finished = [ & ]( int boat )
     {
