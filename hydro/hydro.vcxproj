@@ -113,6 +113,7 @@
     <ClInclude Include="workspace\core\assets\scene.hxx" />
     <ClInclude Include="workspace\core\assets\skin.hxx" />
     <ClInclude Include="workspace\core\assets\texture.hxx" />
+    <ClInclude Include="workspace\core\boat\ai.hxx" />
     <ClInclude Include="workspace\core\boat\construct.hxx" />
     <ClInclude Include="workspace\core\boat\driver.hxx" />
     <ClInclude Include="workspace\core\boat\entity.hxx" />
