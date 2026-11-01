@@ -523,8 +523,8 @@ inline bool verify_ui_screen_frame( )
     }
     if ( failed == 0 )
         LOG_SUCCESS( "ui_screen_frame (the export) reproduces retail's screen-level draws on %d Screens/* roots: %d leaf draws through %d "
-                     "container walks - %d text (ui_text_draw), %d whose draw is NOT recreated (images, buttons, other types)",
-            screens, leaves, containers, texts, unrecreated );
+                     "container walks - %d text (ui_text_draw), %d image / button (image.hxx), %d whose draw is NOT recreated (other types)",
+            screens, leaves, containers, texts, leaves - texts - unrecreated, unrecreated );
     else
         LOG_ERROR( "the screen frame export FAILED %d checks against retail's", failed );
     return failed == 0;
@@ -843,9 +843,137 @@ inline bool verify_ui_button_draw( )
     return failed == 0;
 }
 
+// ui_screen_frame WITH inputs (the export's records) against retail's screen
+// draw 0x629D60 run with the text / image / button leaf draws live (oracle case
+// screen_frame) on every Screens/* root under two environments: the sort's new
+// commands (words + records, one sort per buffer through all runs), the leaves
+// left `other` (retail's stubbed draws: entity, alpha) and the key after. The
+// inputs mirror the case's hooks: a text's text = its name, a button's String
+// ID answer = its name, the asset font everywhere, an image's texture A when its
+// name length is odd, a button's A / B / none; params 41..59 retail's.
+inline bool verify_ui_screen_frame_records( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    ui_gfx_sort_t sort;
+    sort.m_buffers[ 0 ].m_capacity = 0x300000;
+    sort.m_buffers[ 1 ].m_used = 0x35;
+    sort.m_buffers[ 1 ].m_capacity = 0x100000;
+    for ( auto& b : sort.m_buffers )
+        b.m_memory.resize( static_cast< std::size_t >( b.m_capacity ) );
+    const ui_texture_t texture_a = { g_golden_frm_textures[ 0 ].m_handle, g_golden_frm_textures[ 0 ].m_width, g_golden_frm_textures[ 0 ].m_height };
+    const ui_texture_t texture_b = { g_golden_frm_textures[ 1 ].m_handle, g_golden_frm_textures[ 1 ].m_width, g_golden_frm_textures[ 1 ].m_height };
+    int failed = 0, runs = 0, commands = 0, stubs = 0, emitted = 0;
+    for ( std::size_t r = 0; r < g_golden_frm_runs_count; ++r )
+    {
+        const golden_frm_run_t& run = g_golden_frm_runs[ r ];
+        const golden_frm_env_t& fe = g_golden_frm_envs[ run.m_env ];
+        const golden_txt_env_t& e = g_golden_txt_envs[ fe.m_txt ];
+        std::size_t project = g_golden_ui_projects_count;
+        for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+            if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, run.m_project ) == 0 )
+                project = p;
+        if ( project == g_golden_ui_projects_count || loaded.trees[ project ].empty( ) )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "ui screen frame records: %s not loaded", run.m_project );
+            continue;
+        }
+        const auto& tree = loaded.trees[ project ];
+        const auto index_of = [ &tree ]( const entity_t* who )
+        {
+            for ( std::size_t k = 0; k < tree.size( ); ++k )
+                if ( tree[ k ].second == who )
+                    return static_cast< int >( k );
+            return -1;
+        };
+        ui_frame_inputs_t in;
+        for ( int m = 0; m < 2; ++m )
+        {
+            in.m_env.m_material[ m ] = 0x5D001000u + 0x800u * static_cast< std::uint32_t >( m );   // TxtWorld's font materials
+            in.m_env.m_material_key[ m ] = g_golden_txt_material_keys[ m ];
+        }
+        in.m_env.m_texture_material = g_golden_img_materials[ 0 ][ 0 ];
+        in.m_env.m_texture_material_key = g_golden_img_materials[ 0 ][ 1 ];
+        in.m_env.m_rect_material = g_golden_img_materials[ 1 ][ 0 ];
+        in.m_env.m_rect_material_key = g_golden_img_materials[ 1 ][ 1 ];
+        in.m_db.m_present = true;
+        in.m_db.m_slot12 = e.m_sdb_answer != 0;
+        in.m_fontdb = &ui_font_db( 0 );
+        in.m_text = []( const entity_t& who ) { return who.m_name; };
+        in.m_font = []( const entity_t& ) { ui_text_font_t f; f.m_asset = true; f.m_asset_font = 0x0F0E0D0Cu; return f; };
+        in.m_texture = [ & ]( const entity_t& who, int which ) -> const ui_texture_t*
+        {
+            if ( ui_frame_kind_of( who ) == ui_frame_kind_t::image )
+                return who.m_name.size( ) % 2 ? &texture_a : nullptr;
+            return which == 0 ? &texture_a : which == 1 ? &texture_b : nullptr;
+        };
+        in.m_params_tail = [ & ]( const entity_t& who, std::uint8_t params[ 60 ] )
+        {
+            const int at = index_of( &who );
+            for ( int t = 0; t < run.m_tails; ++t )
+                if ( g_golden_frm_tails[ run.m_first_tail + t ].m_index == at )
+                {
+                    const std::vector< std::uint8_t > tail = ui_unhex( g_golden_frm_tails[ run.m_first_tail + t ].m_tail );
+                    std::memcpy( params + 41, tail.data( ), 19 );
+                }
+        };
+        ui_impl_t impl;
+        const std::vector< std::uint8_t > crop = ui_unhex( run.m_crop );
+        std::memcpy( impl.m_crop.m_matrix, crop.data( ), 64 );
+        std::memcpy( &impl.m_float, &fe.m_float, 4 );
+        std::memcpy( &impl.m_aspect, &fe.m_aspect, 4 );
+        float alpha;
+        std::memcpy( &alpha, &fe.m_alpha, 4 );
+        sort.m_index = e.m_index;
+        sort.m_key_lo = e.m_key_lo;
+        sort.m_key_hi = fe.m_key_hi;
+        std::vector< ui_gfx_command_t >& list = sort.m_commands[ e.m_index ];
+        const std::size_t before = list.size( );
+        const ui_frame_t frame = ui_screen_frame( *tree[ 0 ].second, impl, sort, alpha, 4, &in );
+        bool same = frame.m_unknown == 0 && list.size( ) - before == static_cast< std::size_t >( run.m_commands ) &&
+                    sort.m_key_lo == run.m_key[ 0 ] && sort.m_key_hi == run.m_key[ 1 ];
+        for ( int c = 0; same && c < run.m_commands; ++c )
+        {
+            const golden_txt_command_t& want = g_golden_frm_commands[ run.m_first + c ];
+            const ui_gfx_command_t& have = list[ before + static_cast< std::size_t >( c ) ];
+            const std::vector< std::uint8_t > record = ui_unhex( want.m_record );
+            const auto& memory = sort.m_buffers[ e.m_index ].m_memory;
+            same = std::memcmp( have.m_words, want.m_words, sizeof( have.m_words ) ) == 0 && have.m_words[ 3 ] + record.size( ) <= memory.size( ) &&
+                   std::memcmp( memory.data( ) + have.m_words[ 3 ], record.data( ), record.size( ) ) == 0;
+            ++commands;
+        }
+        int s = 0;
+        for ( const ui_frame_draw_t& d : frame.m_draws )
+        {
+            emitted += d.m_emitted ? 1 : 0;
+            if ( d.m_kind != ui_frame_kind_t::other )
+                continue;
+            std::uint32_t bits;
+            std::memcpy( &bits, &d.m_alpha, 4 );
+            same = same && s < run.m_stubs && g_golden_frm_stubs[ run.m_first_stub + s ].m_index == index_of( d.m_entity ) &&
+                   g_golden_frm_stubs[ run.m_first_stub + s ].m_alpha == bits;
+            ++s;
+        }
+        same = same && s == run.m_stubs;
+        stubs += s;
+        ++runs;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui screen frame records: %s env %d: %d commands (retail %d), %d other leaves (retail %d), unknown %d - or a word / record / "
+                       "leaf / key differs", run.m_project, run.m_env, static_cast< int >( list.size( ) - before ), run.m_commands, s, run.m_stubs, frame.m_unknown );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_screen_frame's records (the export with inputs) match retail's screen draw 0x629D60 with the text / image / button draws live "
+                     "on %d runs over the Screens/* roots: %d leaf draws emitted, %d commands and records byte for byte, %d unrecreated leaves in order",
+            runs, emitted, commands, stubs );
+    else
+        LOG_ERROR( "the screen frame's records FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_menu_all( )
 {
     bool ok = true;
+    ok = verify_ui_screen_frame_records( ) && ok;
     ok = verify_ui_button_draw( ) && ok;
     ok = verify_ui_image_draw( ) && ok;
     ok = verify_ui_screen_frame( ) && ok;
