@@ -305,3 +305,62 @@ inline bool verify_simplex_ctor( )
     LOG_ERROR( "simplex_ctor FAILED %d of %u blocks", failed, nv );
     return false;
 }
+// verify_boat_contact: boat_contact_handler (boat events.hxx: 0x41E620 with
+// 0x4AD340 / 0x534DA0 / applyImpulse) on the case's images - the body after,
+// boat +0x468 / +0x389, and 0x41E2E0's arguments (read back from a driver
+// whose +0xC8 / +0xCC start at -FLT_MAX, so maxss gives the argument).
+inline bool verify_boat_contact( )
+{
+    const unsigned* g = g_golden_boat_contact_words;
+    const unsigned nv = *g++;
+    int failed = 0, raised = 0, impulses = 0, hits = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        std::vector< std::uint8_t > body( 0x2D4 ), other( 0x2D4 ), boat( 0x500 ), driver( 0x100 );
+        std::memcpy( body.data( ), g, 0x2D4 );
+        g += 0x2D4 / 4;
+        std::memcpy( other.data( ), g, 0x2D4 );
+        g += 0x2D4 / 4;
+        float point[ 4 ], normal[ 4 ];
+        std::memcpy( point, g, 16 );
+        std::memcpy( normal, g + 4, 16 );
+        g += 8;
+        std::memcpy( boat.data( ) + 0x134, g++, 4 );
+        std::memcpy( boat.data( ) + 0x140, g++, 4 );
+        const bool answer = *g++ != 0;
+        boat[ 0x468 ] = static_cast< std::uint8_t >( *g++ );
+        boat[ 0x389 ] = static_cast< std::uint8_t >( *g++ );
+        const std::vector< std::uint8_t > before = body;
+        const unsigned* after = g;
+        g += 0x2D4 / 4;
+        const unsigned b468 = *g++, b389 = *g++, nlog = *g++;
+        std::vector< unsigned > glog( g, g + 3 * nlog );
+        g += 3 * nlog;
+        const std::uint32_t lowest = 0xFF7FFFFFu;
+        std::memcpy( driver.data( ) + 0xC8, &lowest, 4 );
+        std::memcpy( driver.data( ) + 0xCC, &lowest, 4 );
+        boat_contact_handler( boat.data( ), body.data( ), other.data( ), point, normal, answer, true, driver.data( ) );
+        std::vector< unsigned > log;
+        unsigned c8, cc;
+        std::memcpy( &c8, driver.data( ) + 0xC8, 4 );
+        std::memcpy( &cc, driver.data( ) + 0xCC, 4 );
+        if ( c8 != lowest || cc != lowest )
+            log = { 1u, c8, cc };
+        raised += nlog ? 1 : 0;
+        impulses += std::memcmp( before.data( ), after, 0x2D4 ) != 0 ? 1 : 0;
+        hits += b468 == 1 ? 1 : 0;
+        const bool same = std::memcmp( body.data( ), after, 0x2D4 ) == 0 && boat[ 0x468 ] == b468 && boat[ 0x389 ] == b389 && log == glog;
+        if ( !same && ++failed <= 6 )
+            LOG_ERROR( "boat_contact %u: body %d, +0x468 %u (%u), +0x389 %u (%u), %d raise (%d)", v,
+                       std::memcmp( body.data( ), after, 0x2D4 ) == 0 ? 1 : 0, boat[ 0x468 ], b468, boat[ 0x389 ], b389,
+                       static_cast< int >( log.size( ) / 3 ), static_cast< int >( nlog ) );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuBoatEntity's contact handler 0x41E620 (0x4AD340, 0x534DA0, applyImpulse 0x4221C0, 0x41E2E0) matches retail: %u contacts, "
+                     "%d rumbles, %d impulses, %d +0x468 sets", nv, raised, impulses, hits );
+        return true;
+    }
+    LOG_ERROR( "boat_contact FAILED %d of %u contacts", failed, nv );
+    return false;
+}
