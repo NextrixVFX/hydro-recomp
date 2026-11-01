@@ -429,6 +429,9 @@
     <ClInclude Include="workspace\core\world\settings.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\world\slalom.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\world\sound.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>

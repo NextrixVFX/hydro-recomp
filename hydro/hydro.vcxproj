@@ -235,6 +235,7 @@
     <ClInclude Include="workspace\core\world\rules.hxx" />
     <ClInclude Include="workspace\core\world\session.hxx" />
     <ClInclude Include="workspace\core\world\settings.hxx" />
+    <ClInclude Include="workspace\core\world\slalom.hxx" />
     <ClInclude Include="workspace\core\world\sound.hxx" />
     <ClInclude Include="workspace\core\world\spray.hxx" />
     <ClInclude Include="workspace\core\world\start.hxx" />
