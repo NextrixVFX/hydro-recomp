@@ -134,6 +134,7 @@
     <ClInclude Include="workspace\core\boat\sections.hxx" />
     <ClInclude Include="workspace\core\boat\state.hxx" />
     <ClInclude Include="workspace\core\boat\steer.hxx" />
+    <ClInclude Include="workspace\core\boat\surface.hxx" />
     <ClInclude Include="workspace\core\boat\tick.hxx" />
     <ClInclude Include="workspace\core\boat\track.hxx" />
     <ClInclude Include="workspace\core\boat\update.hxx" />

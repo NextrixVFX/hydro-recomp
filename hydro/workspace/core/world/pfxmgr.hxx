@@ -36,6 +36,7 @@ struct pfx_manager_entry_t
     std::uint32_t w20 = 0;
     std::uint32_t aabb[ 8 ]{};
     bool aabb_known = false;   // false: +0x30 / +0x40 UNKNOWN
+    std::uint32_t refs = 1;    // the VuEntity's refcount (+4)
 };
 
 struct pfx_manager_t
@@ -62,6 +63,8 @@ struct pfx_manager_ops_t
     void ( *draw_remove )( void* user, int entry ) = nullptr;
     void ( *draw_update )( void* user, int entry ) = nullptr;
     void ( *register_tick )( void* user ) = nullptr;
+    void ( *unregister_tick )( void* user ) = nullptr;   // the dtor's: g 0x759008 vt+0x28
+    void ( *destroy )( void* user, int entry ) = nullptr;   // an entry's slot 0 0x405000: VuEntity's dtor 0x500870 + delete
 };
 
 // The two list shapes' operations on entry indices (links next / prev).
@@ -200,6 +203,26 @@ inline void pfx_manager_release_all( pfx_manager_t& m, const pfx_manager_ops_t& 
 {
     while ( m.active_count != 0 )
         pfx_manager_release( m, m.active_last, ops );
+}
+
+// VuPfxManager's dtor 0x52B810: the "Final" tick's unregister (hook), releaseAll
+// 0x52BB60, then while the free list is not empty its LAST entry unlinked and
+// its refcount (+4) released - at 0 its slot 0 0x405000 (VuEntity's dtor
+// 0x500870, then operator delete: hook `destroy`) - and the handle table freed
+// (here: the entries stay, unlinked, for the caller to inspect).
+inline void pfx_manager_destroy( pfx_manager_t& m, const pfx_manager_ops_t& ops )
+{
+    if ( ops.unregister_tick != nullptr )
+        ops.unregister_tick( ops.user );
+    pfx_manager_release_all( m, ops );
+    while ( m.free_count != 0 )
+    {
+        const int e = m.free_last;
+        pfx_manager_unlink( m, m.free_first, m.free_last, m.free_count, e );
+        if ( --m.entries[ e ].refs == 0u && ops.destroy != nullptr )
+            ops.destroy( ops.user, e );
+    }
+    m.table.clear( );
 }
 
 // 0x52BC30 one entry: the instance's tick; with particles (slot 8) the draw

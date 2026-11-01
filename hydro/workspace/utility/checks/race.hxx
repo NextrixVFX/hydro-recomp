@@ -8,6 +8,7 @@
 #include <workspace/core/boat/manager.hxx>
 #include <workspace/core/boat/powerup.hxx>
 #include <workspace/core/boat/meshes.hxx>
+#include <workspace/core/boat/surface.hxx>
 
 #include <algorithm>
 #include <array>
@@ -1701,6 +1702,415 @@ inline bool verify_trigger_apply( )
     return false;
 }
 
+// The PowerUpDB reads against retail (oracle case powerup_db), on the real VuDBAsset/PowerUpDB and three synthetic
+// documents parsed here by c_reader: 0x43C1F0 (powerup_load_db with its tail), 0x43DA90 (powerup_boost_load_energy),
+// 0x43D960 (powerup_boost_enable) and 0x43B9D0 (powerup_disabled_in_games + powerup_game_initialize). Per run: the
+// three strings, the seven floats' bits, +0x128 / +0x129 / +0x140, the body, +0x130 / +0x134, the call log; the
+// layout bounds' lanes 0-2 / 4-6 (3 and 7 are stale stack in retail); the map after gameInitialize.
+inline bool verify_powerup_db( )
+{
+    const unsigned* g = g_golden_powerup_db_words;
+    auto text = [ &g ]( ) {
+        const unsigned n = *g++;
+        std::string s( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        return s;
+    };
+    auto bits = []( float x ) { std::uint32_t u; std::memcpy( &u, &x, 4 ); return u; };
+    auto real = []( unsigned u ) { float x; std::memcpy( &x, &u, 4 ); return x; };
+    std::vector< value_t > docs( *g++ );
+    for ( value_t& d : docs )
+    {
+        const unsigned n = *g++;
+        const std::uint8_t* raw = reinterpret_cast< const std::uint8_t* >( g );
+        d = c_reader( std::vector< std::uint8_t >( raw, raw + n ) ).parse( );
+        g += ( n + 3 ) / 4;
+    }
+    const unsigned nv = *g++;
+    static const value_t null{};
+    int failed = 0, runs = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned doc = *g++;
+        const std::string type = text( );
+        const bool asset = *g++ != 0;
+        const unsigned flags = *g++, enabled = *g++;
+        unsigned floats[ 7 ];
+        for ( unsigned& f : floats )
+            f = *g++;
+        const bool has_body = g[ 0 ] != 0, has_shape = g[ 1 ] != 0;
+        g += 2;
+        const unsigned b128 = *g++, b129 = *g++, b138 = *g++, b140 = *g++;
+        std::string pre[ 3 ];
+        for ( std::string& s : pre )
+            s = text( );
+        const std::int32_t humans = static_cast< std::int32_t >( *g++ );
+        std::vector< std::uint32_t > ids( *g++ );
+        for ( std::uint32_t& id : ids )
+            id = respawn_fnv( text( ).c_str( ) );
+        const std::string mode = text( );
+        const value_t& root = doc < docs.size( ) ? docs[ doc ] : null;
+        const value_t& entry = asset ? powerup_db_entry( root, type ) : null;
+        const value_t& mp = asset ? powerup_db_entry( root, "MPBoost" ) : null;
+        for ( int run = 0; run < 4; ++run, ++runs )
+        {
+            std::string want_s[ 3 ];
+            for ( std::string& s : want_s )
+                s = text( );
+            unsigned want[ 13 ];
+            for ( unsigned& w : want )
+                w = *g++;
+            std::vector< std::vector< unsigned > > glog( *g++ );
+            for ( auto& e : glog )
+            {
+                e.assign( g + 1, g + 1 + *g );
+                g += 1 + e.size( );
+            }
+            unsigned want_bounds[ 8 ] = { };
+            std::vector< unsigned > want_map;
+            if ( run == 0 )
+                for ( unsigned& b : want_bounds )
+                    b = *g++;
+            if ( run == 3 )
+            {
+                want_map.assign( g + 1, g + 1 + 3 * *g );
+                g += 1 + want_map.size( );
+            }
+            powerup_t p;
+            p.static_pfx = pre[ 0 ];
+            p.apply_pfx = pre[ 1 ];
+            p.audio_event = pre[ 2 ];
+            float* fields[ 6 ] = { &p.radius, &p.recover_time, &p.spring, &p.damping, &p.scale_initial, &p.scale_initial_velocity };
+            for ( int k = 0; k < 6; ++k )
+                *fields[ k ] = real( floats[ k ] );
+            float energy = real( floats[ 6 ] );
+            p.initially_enabled = static_cast< std::uint8_t >( enabled );
+            p.in_world = static_cast< std::uint8_t >( b128 );
+            p.active = static_cast< std::uint8_t >( b129 );
+            p.scale = p.scale_velocity = real( 0xCDCDCDCDu );
+            std::uint8_t multiplayer = static_cast< std::uint8_t >( b140 );
+            bool body = has_body;
+            float bounds[ 8 ];
+            for ( float& b : bounds )
+                b = real( 0xCDCDCDCDu );
+            std::vector< std::vector< unsigned > > log;
+            if ( run == 0 )
+            {
+                powerup_db_hooks_t h;
+                h.remove_from_world = [ & ]( ) { log.push_back( { 4u } ); };
+                h.destroy_body = [ & ]( ) {
+                    if ( has_shape )
+                        log.push_back( { 6u, 1u } );
+                    log.push_back( { 7u, 1u } );
+                    body = false;
+                };
+                h.create_body = [ & ]( ) { log.push_back( { 1u } ); };
+                h.add_to_world = [ & ]( ) { log.push_back( { 3u } ); };
+                h.load_extra = [ & ]( ) { log.push_back( { 5u } ); };
+                powerup_load_db( p, entry, bounds, flags, has_body, h );
+            }
+            else if ( run == 1 )
+                powerup_boost_load_energy( energy, entry );
+            else if ( run == 2 )
+            {
+                powerup_world_hooks_t h;
+                h.create_pfx = [ & ]( const std::string& name, std::uint8_t, float ) {
+                    log.push_back( { 8u, respawn_fnv( name.c_str( ) ) } );
+                    return 0u;
+                };
+                h.add_body = [ & ]( ) { log.push_back( { 9u, 1u } ); };
+                powerup_boost_enable( p, static_cast< std::uint8_t >( b138 ), multiplayer, humans, mp, h );
+            }
+            else
+            {
+                powerup_init_hooks_t h;
+                h.create_body = [ & ]( ) { log.push_back( { 1u } ); };
+                h.register_tick = [ & ]( ) { log.push_back( { 2u, 1u } ); };
+                h.enable = [ & ]( ) { log.push_back( { 3u } ); };
+                powerup_game_initialize( p, mode, powerup_disabled_in_games( entry ), ids, h );
+            }
+            const unsigned mine[ 13 ] = { bits( p.radius ), bits( p.recover_time ), bits( p.spring ), bits( p.damping ), bits( p.scale_initial ),
+                bits( p.scale_initial_velocity ), bits( energy ), p.in_world, p.active, multiplayer, body ? 1u : 0u, bits( p.scale_velocity ),
+                bits( p.scale ) };
+            bool same = log == glog && p.static_pfx == want_s[ 0 ] && p.apply_pfx == want_s[ 1 ] && p.audio_event == want_s[ 2 ];
+            for ( int k = 0; k < 13; ++k )
+                same = same && mine[ k ] == want[ k ];
+            if ( run == 0 )
+                for ( int k : { 0, 1, 2, 4, 5, 6 } )
+                    same = same && bits( bounds[ k ] ) == want_bounds[ k ];
+            if ( run == 3 )
+            {
+                std::vector< unsigned > map;
+                for ( const auto& e : p.last_pickup )
+                {
+                    std::uint32_t w[ 2 ];
+                    std::memcpy( w, &e.second, 8 );
+                    map.insert( map.end( ), { e.first, w[ 0 ], w[ 1 ] } );
+                }
+                same = same && map == want_map;
+            }
+            if ( !same && ++failed <= 8 )
+                LOG_ERROR( "powerup_db vector %u (document %u, \"%s\") run %d: radius 0x%X (retail 0x%X), +0x129 %u (%u), %zu calls (%zu)", v,
+                           doc, type.c_str( ), run, mine[ 0 ], want[ 0 ], mine[ 8 ], want[ 8 ], log.size( ), glog.size( ) );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "The PowerUpDB reads 0x43C1F0 / 0x43DA90 / 0x43D960 / 0x43B9D0 match retail on the real PowerUpDB and 3 synthetic "
+                     "documents: %u vectors, %d runs", nv, runs );
+        return true;
+    }
+    LOG_ERROR( "powerup_db FAILED %d of %d runs", failed, runs );
+    return false;
+}
+
+// The surface-type table against retail (oracle case surface_table): surface_table_build on the documents parsed
+// here (the real SurfaceDB, synthetic ones, an empty / non-object VuDBAsset, none) - the map in order (name, id), the
+// types (friction bits, colour) - then surface_count, surface_name for n = -1 .. count + 1 and surface_id on every name
+// and some misses; the factory's create / release only when there is an asset.
+inline bool verify_surface_table( )
+{
+    const unsigned* g = g_golden_surface_table_words;
+    auto text = [ &g ]( ) {
+        const unsigned n = *g++;
+        std::string s( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        return s;
+    };
+    std::vector< value_t > docs( *g++ );
+    for ( value_t& d : docs )
+    {
+        const unsigned n = *g++;
+        const std::uint8_t* raw = reinterpret_cast< const std::uint8_t* >( g );
+        d = c_reader( std::vector< std::uint8_t >( raw, raw + n ) ).parse( );
+        g += ( n + 3 ) / 4;
+    }
+    const unsigned nv = *g++;
+    int failed = 0, compared = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const std::int32_t doc = static_cast< std::int32_t >( *g++ );
+        const unsigned vtable = *g++;
+        surface_table_t t;
+        const value_t* root = doc >= 0 && static_cast< std::size_t >( doc ) < docs.size( ) ? &docs[ doc ] : nullptr;
+        bool same = surface_table_build( t, root ) && vtable == 0x74FA94u;
+        const unsigned nm = *g++;
+        same = same && nm == t.ids.size( );
+        for ( unsigned k = 0; k < nm; ++k, ++compared )
+        {
+            const std::string name = text( );
+            const unsigned id = *g++;
+            same = same && k < t.ids.size( ) && t.ids[ k ].first == name && t.ids[ k ].second == id;
+        }
+        const unsigned nt = *g++;
+        same = same && nt == t.types.size( );
+        for ( unsigned k = 0; k < nt; ++k, g += 2, ++compared )
+        {
+            std::uint32_t f = 0;
+            if ( k < t.types.size( ) )
+                std::memcpy( &f, &t.types[ k ].friction, 4 );
+            same = same && k < t.types.size( ) && f == g[ 0 ] && t.types[ k ].color == g[ 1 ];
+        }
+        const unsigned want_count = *g++;
+        same = same && static_cast< unsigned >( surface_count( t ) ) == want_count;
+        const unsigned nn = *g++;
+        for ( unsigned k = 0; k < nn; ++k, ++compared )
+        {
+            const std::string* mine = surface_name( t, static_cast< std::int32_t >( k ) - 1 );
+            if ( *g++ )
+            {
+                const std::string want = text( );
+                same = same && mine && *mine == want;
+            }
+            else
+                same = same && !mine;
+        }
+        const unsigned np = *g++;
+        for ( unsigned k = 0; k < np; ++k, ++compared )
+        {
+            const std::string name = text( );
+            const unsigned want = *g++;
+            same = same && surface_id( t, name.c_str( ) ) == want;
+        }
+        const unsigned nl = *g++;
+        same = same && nl == ( root ? 2u : 0u );
+        for ( unsigned k = 0; k < nl; ++k, g += 2 )
+            same = same && g[ 0 ] == k + 1 && g[ 1 ] == 1;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "surface_table vector %u (document %d): %zu names (retail %u), %zu types (%u)", v, doc, t.ids.size( ), nm, t.types.size( ), nt );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "The surface-type table (VuDynamicsContactManagerImpl 0x574EC0 + slots 0 / 1 / 2) matches retail on the real SurfaceDB "
+                     "and synthetic documents: %u vectors, %d values", nv, compared );
+        return true;
+    }
+    LOG_ERROR( "surface_table FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+
+// VuPowerUpHiddenPackageEntity slots 6 / 13 / 15 against retail (oracle case hidden_package): the name from the
+// long name, the enable gate, the apply (driver answers RUN in retail; boat_driver_kind's here) - +0x138 / +0x128,
+// the return and the hooks' order and arguments, the OnPackageFound params word for word.
+inline bool verify_hidden_package( )
+{
+    const unsigned* g = g_golden_hidden_package_words;
+    auto text = [ &g ]( ) {
+        const unsigned n = *g++;
+        std::string s( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        return s;
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned slot = *g++, kind = *g++;
+        const std::string name = text( ), long_name = text( ), level = text( );
+        const unsigned found = *g++, first = *g++, a = *g++, b = *g++, b128 = *g++, b129 = *g++, ret = *g++;
+        const std::string after_name = text( );
+        const unsigned after128 = *g++;
+        std::vector< std::vector< unsigned > > glog( *g++ );
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        powerup_t p;
+        p.in_world = static_cast< std::uint8_t >( b128 );
+        p.active = static_cast< std::uint8_t >( b129 );
+        std::string package = name;
+        std::vector< std::vector< unsigned > > log;
+        unsigned mine_ret = 0;
+        powerup_package_hooks_t h;
+        h.is_found = [ & ]( const std::string& n ) { log.push_back( { 3u, n == name ? 1u : 0u } ); return found != 0; };
+        h.set_found = [ & ]( const std::string& n ) { log.push_back( { 2u, n == name ? 1u : 0u } ); };
+        h.level = [ & ]( ) { return level; };
+        h.first = [ & ]( const std::string& l, std::int32_t& x ) {
+            log.push_back( { 4u, l == level ? 1u : 0u, static_cast< unsigned >( x ) } );
+            x = static_cast< std::int32_t >( a );
+            return first != 0;
+        };
+        h.second = [ & ]( const std::string& l, std::int32_t& x ) {
+            log.push_back( { 5u, l == level ? 1u : 0u } );
+            x = static_cast< std::int32_t >( b );
+        };
+        h.broadcast = [ & ]( const std::vector< std::uint32_t >& params ) {
+            std::vector< unsigned > e = { 6u, 1u, static_cast< unsigned >( 4 * params.size( ) ) };
+            e.insert( e.end( ), params.begin( ), params.end( ) );
+            log.push_back( e );
+        };
+        h.remove_from_world = [ & ]( ) { log.push_back( { 8u } ); };
+        if ( slot == 6 )
+        {
+            package = powerup_package_name( long_name );
+            log.push_back( { 1u } );
+        }
+        else if ( slot == 13 )
+        {
+            powerup_world_hooks_t w;
+            w.create_pfx = [ & ]( const std::string&, std::uint8_t, float ) { log.push_back( { 7u } ); return 0u; };
+            w.add_body = [ & ]( ) { log.push_back( { 9u } ); };
+            powerup_package_enable( p, package, h, w );
+        }
+        else
+        {
+            boat_driver_kind_t k;
+            const bool human = boat_driver_kind( kind, k ) && k.human;
+            mine_ret = powerup_package_apply( true, human, package, h ) ? 1u : 0u;
+        }
+        const bool same = log == glog && package == after_name && p.in_world == after128 && mine_ret == ret;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "hidden_package vector %u (slot %u): \"%s\" (retail \"%s\"), %zu calls (%zu), return %u (%u)", v, slot, package.c_str( ),
+                       after_name.c_str( ), log.size( ), glog.size( ), mine_ret, ret );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuPowerUpHiddenPackageEntity slots 6 0x43DD20 / 13 0x43DE20 / 15 0x43DE80 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "hidden_package FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+
+// VuBoatManager's draw 0x4AB300 / slot 5 0x4AAD70 / slot 3 0x4AAF10 against retail (oracle case boat_manager_game):
+// the sort word, the driver draw's boat, the hook order and arguments, the trigger's name and reference count.
+inline bool verify_boat_manager_game( )
+{
+    const unsigned* g = g_golden_boat_manager_game_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    std::vector< std::uint8_t > images( 8 * 0x400, 0 );
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++, n = *g++, b5c = *g++, b2b8 = *g++, vp = *g++;
+        std::vector< unsigned > flags( *g++ );
+        for ( unsigned& f : flags )
+            f = *g++;
+        const unsigned w70 = *g++, w74 = *g++, refs = *g++, ret = *g++, a70 = *g++, a74 = *g++, refs_after = *g++;
+        const unsigned nn = *g++;
+        const std::string name( reinterpret_cast< const char* >( g ), nn );
+        g += ( nn + 3 ) / 4;
+        std::vector< std::vector< unsigned > > glog( *g++ );
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        std::vector< std::vector< unsigned > > log;
+        std::uint32_t sort = w74;
+        std::int32_t references = static_cast< std::int32_t >( refs );
+        std::string trigger_name;
+        unsigned mine_ret = 0;
+        if ( fn == 0 )
+        {
+            boat_manager_t m;
+            for ( unsigned j = 0; j < n && j < 8; ++j )
+            {
+                images[ 0x400 * j + 0x32F ] = static_cast< std::uint8_t >( flags[ j ] );
+                m.all.boats.push_back( images.data( ) + 0x400 * j );
+            }
+            m.debug_camera = static_cast< std::uint8_t >( b5c );
+            m.draw_hud = static_cast< std::uint8_t >( b2b8 );
+            m.viewport = static_cast< std::int32_t >( vp );
+            boat_manager_draw( m, sort, [ & ]( const void* boat ) {
+                log.push_back( { 1u, static_cast< unsigned >( ( static_cast< const std::uint8_t* >( boat ) - images.data( ) ) / 0x400 ), 1u } );
+            } );
+        }
+        else
+        {
+            boat_manager_game_hooks_t h;
+            h.register_tick = [ & ]( ) { log.push_back( { 2u, 1u, 1u } ); };
+            h.register_draw = [ & ]( ) { log.push_back( { 3u, 1u } ); };
+            h.create_trigger = [ & ]( ) { log.push_back( { 4u, 1u } ); log.push_back( { 5u } ); };
+            h.name_trigger = [ & ]( const std::string& s ) { trigger_name = s; };
+            h.load_trigger = [ & ]( ) { log.push_back( { 6u, 1u } ); };
+            h.hash_trigger = [ & ]( std::uint32_t x ) { log.push_back( { 7u, 1u, x } ); };
+            h.add_trigger = [ & ]( ) { log.push_back( { 8u, 1u } ); };
+            h.remove_trigger = [ & ]( ) { log.push_back( { 9u, 1u } ); };
+            h.delete_trigger = [ & ]( ) { log.push_back( { 10u, 1u } ); };
+            h.unregister_component = [ & ]( ) { log.push_back( { 11u, 1u } ); };
+            h.unregister_draw = [ & ]( ) { log.push_back( { 12u, 1u } ); };
+            h.unregister_tick = [ & ]( ) { log.push_back( { 13u, 1u } ); };
+            if ( fn == 5 )
+                mine_ret = boat_manager_game_initialize( h ) ? 1u : 0u;
+            else
+                boat_manager_game_release( references, h );
+        }
+        const bool same = log == glog && sort == a74 && a70 == w70 && mine_ret == ret &&
+                          static_cast< unsigned >( references ) == refs_after && ( fn != 5 || trigger_name == name );
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "boat_manager_game vector %u (function %u): sort 0x%X (retail 0x%X), %zu calls (%zu)", v, fn, sort, a74, log.size( ), glog.size( ) );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuBoatManager's draw 0x4AB300 / slot 5 0x4AAD70 / slot 3 0x4AAF10 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "boat_manager_game FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -1722,5 +2132,9 @@ inline bool verify_race_all( )
     ok = verify_powerup_contact( ) && ok;
     ok = verify_powerup_world( ) && ok;
     ok = verify_trigger_apply( ) && ok;
+    ok = verify_powerup_db( ) && ok;
+    ok = verify_surface_table( ) && ok;
+    ok = verify_hidden_package( ) && ok;
+    ok = verify_boat_manager_game( ) && ok;
     return ok;
 }

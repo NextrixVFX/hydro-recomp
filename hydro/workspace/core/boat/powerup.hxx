@@ -388,11 +388,108 @@ inline void powerup_load_db( powerup_t& p, const value_t& entry )
     powerup_db_number( member( entry, "ScaleInitialVelocity" ), p.scale_initial_velocity );
 }
 
+// 0x43C1F0's tail, after the nine fields. What it calls that is not this
+// code's: the power-up's own vt+0x30 (slot 12) / vt+0x34 (slot 13) / vt+0x38
+// (slot 14), the body's destruction (+0x114: its +0xCC shape's vt+0(1) when
+// set, the body's vt+4(1), +0x114 = 0 - the dynamics') and the body's build
+// 0x43C700 (a btSphereShape of Radius: the dynamics').
+struct powerup_db_hooks_t
+{
+    std::function< void( ) > remove_from_world;   // vt+0x30
+    std::function< void( ) > destroy_body;        // only when +0x114 is set
+    std::function< void( ) > create_body;         // 0x43C700
+    std::function< void( ) > add_to_world;        // vt+0x34
+    std::function< void( ) > load_extra;          // vt+0x38 (the boost's 0x43DA90)
+};
+
+// The whole of 0x43C1F0 (the PowerUpDB entry already resolved: entry =
+// powerup_db_entry(root, Type), or the null container when the Type
+// property has no asset). bounds = the 3d layout component +0x64's +0x18..
+// +0x37 (8 floats): lanes 0-2 = -Radius, 4-6 = +Radius (movss / xorps of
+// the sign mask 0x6F7CD0, the pairs stored by movq); lanes 3 and 7 receive
+// two stack dwords retail never wrote (UNKNOWN: left untouched here). Then,
+// with the entity's +0x14 bit 2 (in a game): +0x128 read, slot 12, the body
+// destroyed when there is one, rebuilt (0x43C700), slot 13 when +0x128 was
+// set; finally slot 14 always.
+inline void powerup_load_db( powerup_t& p, const value_t& entry, float* bounds, std::uint32_t entity_flags, bool has_body,
+    const powerup_db_hooks_t& hooks )
+{
+    powerup_load_db( p, entry );
+    const float r = p.radius;
+    float n;
+    std::uint32_t u;
+    std::memcpy( &u, &r, 4 );
+    u ^= 0x80000000u;
+    std::memcpy( &n, &u, 4 );
+    bounds[ 0 ] = n;
+    bounds[ 1 ] = n;
+    bounds[ 2 ] = n;
+    bounds[ 4 ] = r;
+    bounds[ 5 ] = r;
+    bounds[ 6 ] = r;
+    if ( entity_flags & 4u )
+    {
+        const bool was_in_world = p.in_world != 0;
+        if ( hooks.remove_from_world )
+            hooks.remove_from_world( );
+        if ( has_body && hooks.destroy_body )
+            hooks.destroy_body( );
+        if ( hooks.create_body )
+            hooks.create_body( );
+        if ( was_in_world && hooks.add_to_world )
+            hooks.add_to_world( );
+    }
+    if ( hooks.load_extra )
+        hooks.load_extra( );
+}
+
 // VuPowerUpBoostEntity slot 14 0x43DA90: the same entry's "BoostEnergy" into
 // +0x13C (1 / 2 / 7 as above).
 inline void powerup_boost_load_energy( float& energy, const value_t& entry )
 {
     powerup_db_number( member( entry, "BoostEnergy" ), energy );
+}
+
+// The "DisabledInGames" list as gameInitialize 0x43B9D0 walks it: the
+// entry's member (0x4FBDF0), its size 0x4FBC40 (the element count of an
+// array - tag 5 - else 0), each element's text when it is a string (tag 4),
+// else the function-local static empty string 0x819950 (built on first use,
+// its guard 0x81994C bit 0). Feed the result to powerup_game_initialize.
+inline std::vector< std::string > powerup_disabled_in_games( const value_t& entry )
+{
+    std::vector< std::string > out;
+    const value_t& list = member( entry, "DisabledInGames" );
+    if ( list.tag != 5 )
+        return out;
+    for ( const value_t& e : list.list )
+        out.push_back( e.tag == 4 ? e.text : std::string( ) );
+    return out;
+}
+
+// VuPowerUpBoostEntity slot 13 0x43D960 (the "Enable" plug): when
+// Randomize for Multiplayer (+0x138) and the boat manager's human count
+// (+0x28, signed: jle 1) > 1, the PowerUpDB's "MPBoost" entry (root
+// ["VuDBAsset"]["MPBoost"] through 0x4FBDF0 twice; the null container
+// without an asset) overrides StaticPfx / ApplyPfx / AudioEvent where they
+// are text, and +0x140 = 1. Then the base slot 13 inlined (0x43BD40's body:
+// powerup_add_to_world).
+inline void powerup_boost_enable( powerup_t& p, std::uint8_t randomize, std::uint8_t& multiplayer, std::int32_t humans,
+    const value_t& mp_entry, const powerup_world_hooks_t& hooks )
+{
+    if ( randomize && humans > 1 )
+    {
+        const value_t& static_pfx = member( mp_entry, "StaticPfx" );
+        if ( static_pfx.tag == 4 )
+            p.static_pfx = static_pfx.text;
+        const value_t& apply_pfx = member( mp_entry, "ApplyPfx" );
+        if ( apply_pfx.tag == 4 )
+            p.apply_pfx = apply_pfx.text;
+        const value_t& audio = member( mp_entry, "AudioEvent" );
+        if ( audio.tag == 4 )
+            p.audio_event = audio.text;
+        multiplayer = 1;
+    }
+    powerup_add_to_world( p, hooks );
 }
 // ---- VuPowerUpTriggerEntity (ctor 0x43E160, vtable 0x73AFE4) --------------
 //
@@ -408,5 +505,73 @@ inline bool powerup_trigger_apply( bool driver_30, bool driver_38, const std::fu
         return false;
     if ( driver_38 && fire )
         fire( );
+    return true;
+}
+// ---- VuPowerUpHiddenPackageEntity (create 0x43DC00, vtable 0x73AF5C) -------
+//
+// The base power-up (0x150 bytes) plus +0x138 the package's name (a
+// std::string, "TestPackage" at creation). The hidden package manager
+// g_vuhiddenpackagemanagerimpl 0x758FD0 is the profile's progress (a
+// platform service: hooks).
+
+// Slot 6 0x43DD20 (gameInitialize): the entity's long name (0x500BF0), its
+// first '/' (0x43E030: std::string::find of one char from 0 - the position
+// argument is ignored; npos when absent or empty), the name = the long
+// name from that position + 1 (0x43DFF0 substr; npos + 1 = 0: the whole
+// name) into +0x138; then the base gameInitialize 0x43B9D0.
+inline std::string powerup_package_name( const std::string& long_name )
+{
+    const std::size_t slash = long_name.find( '/' );
+    return long_name.substr( slash == std::string::npos ? 0 : slash + 1 );
+}
+
+struct powerup_package_hooks_t
+{
+    std::function< bool( const std::string& name ) > is_found;   // manager vt+0x1C
+    std::function< void( const std::string& name ) > set_found;  // manager vt+0x18
+    std::function< std::string( ) > level;                       // 0x4D3410 on g_vugameutil 0x758FF8
+    std::function< bool( const std::string& level, std::int32_t& value ) > first;    // manager vt+0x20
+    std::function< void( const std::string& level, std::int32_t& value ) > second;  // manager vt+0x24
+    // g_vueventmanager 0x759028's 0x505650("OnPackageFound", params): the
+    // VuParams bytes (0x434E50 twice: tag 0 = int, then the value).
+    std::function< void( const std::vector< std::uint32_t >& params ) > broadcast;
+    std::function< void( ) > remove_from_world;                  // vt+0x30 (slot 12)
+};
+
+// Slot 13 0x43DE20 (the "Enable" plug): not when the manager already has
+// the package (vt+0x1C(+0x138) true); else the base slot 13 inlined
+// (powerup_add_to_world).
+inline void powerup_package_enable( powerup_t& p, const std::string& name, const powerup_package_hooks_t& package,
+    const powerup_world_hooks_t& hooks )
+{
+    if ( package.is_found && package.is_found( name ) )
+        return;
+    powerup_add_to_world( p, hooks );
+}
+
+// Slot 15 0x43DE80 (thiscall boat; retn 4): the boat's driver vt+0x38 and
+// then vt+0x30 (the local human) - either false: 0. Else the package marked
+// found (vt+0x18), the level's name (0x4D3410), a = 0 and vt+0x20(level, a);
+// when it answers true: b from vt+0x24(level, b) (its initial value is
+// stack the function never writes: UNKNOWN - 0 here), the params (0, b, 0,
+// a) broadcast as "OnPackageFound"; then slot 12; 1.
+inline bool powerup_package_apply( bool driver_38, bool driver_30, const std::string& name, const powerup_package_hooks_t& hooks )
+{
+    if ( !driver_38 || !driver_30 )
+        return false;
+    if ( hooks.set_found )
+        hooks.set_found( name );
+    const std::string level = hooks.level ? hooks.level( ) : std::string( );
+    std::int32_t a = 0;
+    if ( hooks.first && hooks.first( level, a ) )
+    {
+        std::int32_t b = 0;
+        if ( hooks.second )
+            hooks.second( level, b );
+        if ( hooks.broadcast )
+            hooks.broadcast( { 0u, static_cast< std::uint32_t >( b ), 0u, static_cast< std::uint32_t >( a ) } );
+    }
+    if ( hooks.remove_from_world )
+        hooks.remove_from_world( );
     return true;
 }

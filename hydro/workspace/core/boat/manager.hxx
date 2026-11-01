@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <string>
 #include <vector>
 
 // VuBoatManager (g_vu_boat_manager 0x758FB8; ctor 0x4AAAA0, vtable 0x74533C
@@ -250,3 +251,85 @@ inline bool boat_manager_viewport_tick( const boat_manager_t& m, boat_viewport_t
         hooks.trigger( count != 0 );
     return true;
 }
+
+// ---- Slots 5 / 3, the draw (boat batch 11) --------------------------------
+//
+// The draw 0x4AB300 (VuMethod0<VuBoatManager, void>, registered with the draw
+// manager by slot 5): with boats (+0x10, the +0x0C list's size), no debug
+// camera (+0x5C) and Draw HUD (+0x2B8): g_vugfxsort 0x759074's +0x74 word
+// rewritten (boat_manager_sort_bits; its +0x70 read and stored back
+// unchanged), then - unless the viewport boat (the +0x0C list's [+0x58])
+// has its +0x32F byte - that boat's driver (+0x220) vt+0x58 with
+// g_vuviewportmanager 0x759060 +0x18 (the driver's own draw: a hook).
+inline std::uint32_t boat_manager_sort_bits( std::uint32_t w )
+{
+    w &= 0x07FFFFFFu;
+    w |= 0x18000000u;
+    w &= 0xFCFFFFFFu;
+    w &= 0xFF7FFFFFu;
+    w &= 0xFFC3FFFFu;
+    w |= 0x00240000u;
+    return w;
+}
+
+inline void boat_manager_draw( const boat_manager_t& m, std::uint32_t& sort_word, const std::function< void( const void* boat ) >& driver_draw )
+{
+    if ( m.all.boats.empty( ) || m.debug_camera || !m.draw_hud )
+        return;
+    sort_word = boat_manager_sort_bits( sort_word );
+    if ( m.viewport < 0 || static_cast< std::size_t >( m.viewport ) >= m.all.boats.size( ) )
+        return;   // retail reads past its list: UNKNOWN
+    const void* boat = m.all.boats[ static_cast< std::size_t >( m.viewport ) ];
+    if ( static_cast< const std::uint8_t* >( boat )[ 0x32F ] )
+        return;
+    if ( driver_draw )
+        driver_draw( boat );
+}
+
+// What slots 5 / 3 call - the tick / draw managers, the entity framework,
+// the system-component registry: all hooks, in retail's order.
+struct boat_manager_game_hooks_t
+{
+    std::function< void( ) > register_tick;      // g 0x759008 vt+0x20(VuMethod1 -> 0x4AB0A0, "Viewports")
+    std::function< void( ) > register_draw;      // g 0x759024 vt+0x1C(VuMethod0 -> 0x4AB300)
+    std::function< void( ) > create_trigger;     // operator new(0x60), 0x405550, 0x4AB6C0: VuActiveCameraTriggerEntity -> +0x2BC
+    std::function< void( const std::string& ) > name_trigger;  // its +0x18 (0x401DB0)
+    std::function< void( ) > load_trigger;       // its vt+0x2C(the null container 0x7593A0)
+    std::function< void( std::uint32_t ) > hash_trigger;       // 0x500A60(0x811C9DC5)
+    std::function< void( ) > add_trigger;        // 0x500B10
+    std::function< void( ) > remove_trigger;     // 0x500B80
+    std::function< void( ) > delete_trigger;     // its vt+0(1), when its +4 count drops to 0
+    std::function< void( ) > unregister_component; // g 0x75906C 0x539020(this + 4)
+    std::function< void( ) > unregister_draw;    // g 0x759024 vt+0x20(this)
+    std::function< void( ) > unregister_tick;    // g 0x759008 vt+0x28(this)
+};
+
+// Slot 5 0x4AAD70 (gameInitialize): returns 1.
+inline bool boat_manager_game_initialize( const boat_manager_game_hooks_t& h )
+{
+    if ( h.register_tick ) h.register_tick( );
+    if ( h.register_draw ) h.register_draw( );
+    if ( h.create_trigger ) h.create_trigger( );
+    if ( h.name_trigger ) h.name_trigger( "ActiveCameraTrigger" );
+    if ( h.load_trigger ) h.load_trigger( );
+    if ( h.hash_trigger ) h.hash_trigger( 0x811C9DC5u );
+    if ( h.add_trigger ) h.add_trigger( );
+    return true;
+}
+
+// Slot 3 0x4AAF10 (gameRelease). references = the trigger's +4 count (dec;
+// deleted when it reaches 0).
+inline void boat_manager_game_release( std::int32_t& references, const boat_manager_game_hooks_t& h )
+{
+    if ( h.remove_trigger ) h.remove_trigger( );
+    if ( --references == 0 && h.delete_trigger )
+        h.delete_trigger( );
+    if ( h.unregister_component ) h.unregister_component( );
+    if ( h.unregister_draw ) h.unregister_draw( );
+    if ( h.unregister_tick ) h.unregister_tick( );
+}
+
+// The dtor 0x4AACE0 -> 0x4AAD10: aligned_free of the five lists' blocks
+// (+0x0C .. +0x3C) and - when +0x54 owns it - the +0x48 array's; the
+// VuSystemComponent vtable back. boat_manager_list_t's std::vector owns its
+// block here (SUBSTITUTION for the VuArray's aligned block): nothing to call.

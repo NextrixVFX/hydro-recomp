@@ -7,6 +7,8 @@
 
 #include <cstring>
 #include <map>
+#include <memory>
+#include <tuple>
 #include <vector>
 
 // The water area's particle checks (included by checks/water.hxx before verify_water_all, which runs
@@ -346,14 +348,142 @@ inline bool verify_pfx_lifecycle( )
 // +0x9C, pattern +0x38 / +0x48, and a directional fountain particle's +0x24 / a geom fountain particle's +0x50 - here
 // every particle's +0x24 and +0x50 are skipped, as the case cannot tell which fountain made a particle) and the
 // VuRand's 34 words; no unrecreated path may be reached.
+//
+// With `boats` (case pfx_boats): the boat processes on the heap - the frame's boats / fluids from the table, the binds
+// (operation 8: pfx_bind_thrust / pfx_bind_hull / pfx_bind_spring) and every operation's recorded hook calls replayed in
+// order (prepare: the fluids and the matrix compared; the one-point query: the point compared, the answer handed back;
+// the snap: the point compared, the height handed back) - a call out of order or left over is a difference. Every
+// particle's +0x14 is skipped too: a hull particle from a picked sample takes retail's stale stack word there (spray.hxx).
 struct pfx_check_run_t
 {
     std::map< std::uint32_t, std::vector< std::uint32_t > > kids;
     pfx_frame_t frame;
     std::uint32_t r = 0;
+    // the boats
+    std::vector< pfx_frame_boat_t > boats;
+    std::vector< pfx_frame_fluids_t > fluids;
+    std::vector< std::unique_ptr< fluids_mesh_t > > meshes;
+    std::vector< std::unique_ptr< fluid_solver_t > > solvers;
+    std::vector< std::unique_ptr< solver_rigid_t > > bodies;
+    std::vector< std::unique_ptr< boat_view_t > > views;
+    std::vector< std::unique_ptr< pfx_hull_boat_t > > hulls;
+    std::vector< std::vector< std::uint8_t > > records;
+    const unsigned* calls = nullptr;
+    unsigned left = 0;
+    int bad = 0;
+    int made[ 4 ]{};
+    const unsigned* next( unsigned type )
+    {
+        if ( left == 0u || calls[ 1 ] != type )
+        {
+            ++bad;
+            return nullptr;
+        }
+        const unsigned* c = calls + 2;
+        ++made[ type & 3u ];
+        calls += 1 + calls[ 0 ];
+        --left;
+        return c;
+    }
 };
 
-inline bool pfx_check_run( const unsigned* s, const char* tag )
+// The boat table (g_golden_pbt_boats) into the frame's entries.
+inline void pfx_check_boats( pfx_check_run_t& run, const unsigned* b, std::size_t count )
+{
+    for ( std::size_t k = 0; k < count; ++k )
+    {
+        pfx_frame_boat_t e;
+        e.address = b[ 0 ];
+        const std::uint32_t fluids = b[ 1 ];
+        run.bodies.push_back( std::make_unique< solver_rigid_t >( ) );
+        solver_rigid_t& body = *run.bodies.back( );
+        const unsigned* m = b + 13;   // the matrix
+        const unsigned* bodies = b + 13 + 16 + 4 + 2 + 16;
+        for ( int i = 0; i < 4; ++i )
+            body.linear_velocity[ i ] = water_bits( bodies[ 4 + i ] );
+        run.views.push_back( std::make_unique< boat_view_t >( boat_view_t{ water_bits( b[ 2 ] ), b[ 3 ], static_cast< std::uint8_t >( b[ 4 ] ),
+            static_cast< std::uint8_t >( b[ 5 ] ), { }, 0, 0, 0, body } ) );
+        boat_view_t& v = *run.views.back( );
+        for ( int i = 0; i < 3; ++i )
+            v.o50_60[ i ] = water_bits( m[ 4 + i ] );
+        v.o22C_04 = water_bits( b[ 6 ] );
+        v.o22C_0C = water_bits( b[ 7 ] );
+        v.o22C0_470 = water_bits( b[ 8 ] );
+        run.records.emplace_back( 32, std::uint8_t( 0 ) );
+        for ( int i = 0; i < 4; ++i )
+            run.records.back( )[ 8 * i ] = static_cast< std::uint8_t >( b[ 9 + i ] );
+        e.view = &v;
+        e.records = run.records.back( ).data( );
+        for ( int i = 0; i < 3; ++i )
+        {
+            e.position[ i ] = water_bits( m[ 12 + i ] );
+            e.velocity[ i ] = water_bits( bodies[ 4 + i ] );
+        }
+        run.hulls.push_back( std::make_unique< pfx_hull_boat_t >( ) );
+        pfx_hull_boat_t& h = *run.hulls.back( );
+        std::memcpy( h.transform, m, 64 );
+        std::memcpy( h.offset, m + 16, 16 );
+        h.part_flag = static_cast< std::uint8_t >( m[ 20 ] );
+        h.part_count = static_cast< std::int32_t >( m[ 21 ] );
+        std::memcpy( h.part_matrix, m + 22, 64 );
+        pfx_hull_body_t* hb[ 2 ] = { &h.body, &h.part_body };
+        for ( int j = 0; j < 2; ++j )
+        {
+            std::memcpy( hb[ j ]->position, bodies + 12 * j, 12 );
+            std::memcpy( hb[ j ]->linear, bodies + 12 * j + 4, 12 );
+            std::memcpy( hb[ j ]->angular, bodies + 12 * j + 8, 12 );
+        }
+        e.hull = &h;
+        run.boats.push_back( e );
+        const unsigned* t = bodies + 24;
+        const unsigned ntri = t[ 0 ], nedge = t[ 1 ];
+        run.meshes.push_back( std::make_unique< fluids_mesh_t >( ) );
+        run.meshes.back( )->triangles.assign( t + 2, t + 2 + 15 * ntri );
+        run.solvers.push_back( std::make_unique< fluid_solver_t >( ) );
+        fluid_solver_t& sv = *run.solvers.back( );
+        sv.mesh = run.meshes.back( ).get( );
+        sv.edges.resize( nedge );
+        std::memcpy( sv.edges.data( ), t + 2 + 15 * ntri, 40u * nedge );
+        run.fluids.push_back( { fluids, &sv } );
+        b = t + 2 + 15 * ntri + 10 * nedge;
+    }
+    run.frame.boats = run.boats.data( );
+    run.frame.boat_count = static_cast< int >( run.boats.size( ) );
+    run.frame.fluids = run.fluids.data( );
+    run.frame.fluids_count = static_cast< int >( run.fluids.size( ) );
+    run.frame.user = &run;
+    run.frame.prepare = []( void* u, fluid_solver_t& solver, const float* matrix ) {
+        pfx_check_run_t& c = *static_cast< pfx_check_run_t* >( u );
+        const unsigned* r = c.next( 1u );
+        if ( r == nullptr )
+            return;
+        if ( r[ 0 ] >= c.solvers.size( ) || c.solvers[ r[ 0 ] ].get( ) != &solver || std::memcmp( r + 1, matrix, 64 ) != 0 )
+            ++c.bad;
+    };
+    run.frame.point = []( void* u, const float* point, float* out ) {
+        pfx_check_run_t& c = *static_cast< pfx_check_run_t* >( u );
+        const unsigned* r = c.next( 2u );
+        if ( r == nullptr )
+            return false;
+        if ( std::memcmp( r, point, 12 ) != 0 )
+            ++c.bad;
+        std::memcpy( out, r + 3, 32 );
+        return true;
+    };
+    run.frame.water = true;
+    run.frame.snap = []( void* u, const float* point, water_vertex_t& out ) {
+        pfx_check_run_t& c = *static_cast< pfx_check_run_t* >( u );
+        const unsigned* r = c.next( 3u );
+        if ( r == nullptr )
+            return false;
+        if ( std::memcmp( r, point, 12 ) != 0 )   // the w word is the particle's +0x14 (skipped above); the height never reads it
+            ++c.bad;
+        std::memcpy( &out.height, r + 4, 4 );
+        return true;
+    };
+}
+
+inline bool pfx_check_run( const unsigned* s, const char* tag, const unsigned* boats = nullptr, std::size_t boat_count = 0 )
 {
     const std::uint32_t res = s[ 0 ];
     const std::uint32_t blocks[ 4 ] = { s[ 1 ], s[ 2 ], s[ 3 ], s[ 4 ] };
@@ -364,6 +494,8 @@ inline bool pfx_check_run( const unsigned* s, const char* tag )
         pairs[ k ] = ( pairs[ k ] + 15u ) & 0xFFFFFFF0u;
     pfx_check_run_t run;
     run.r = res;
+    if ( boats != nullptr )
+        pfx_check_boats( run, boats, boat_count );
     const unsigned* box = s + 13;
     for ( int k = 0; k < 3; ++k )
     {
@@ -439,7 +571,7 @@ inline bool pfx_check_run( const unsigned* s, const char* tag )
             {
                 const std::uint32_t in = o % pairs[ 2 * b + 1 ];
                 if ( ( b == 0 && ( in == 0x8Cu || in == 0x9Cu ) ) || ( b == 1 && ( in == 0x38u || in == 0x48u ) ) ||
-                     ( b == 3 && ( in == 0x24u || in == 0x50u ) ) )
+                     ( b == 3 && ( in == 0x24u || in == 0x50u || ( boats != nullptr && in == 0x14u ) ) ) )
                     continue;
                 one( h[ blocks[ b ] + o ], *want, names[ b ], o );
             }
@@ -460,6 +592,13 @@ inline bool pfx_check_run( const unsigned* s, const char* tag )
     {
         const unsigned code = *s++;
         int bad = 0;
+        if ( boats != nullptr )
+        {
+            static const unsigned operands[ 9 ] = { 2, 1, 0, 2, 2, 1, 0, 7, 3 };
+            const unsigned* cl = s + operands[ code < 9u ? code : 6u ];
+            run.left = cl[ 0 ];
+            run.calls = cl + 1;
+        }
         switch ( code )
         {
         case 0: bad += pfx_system_instance_create( h, res, addr[ s[ 0 ] ], hooks ) != s[ 1 ] ? 1 : 0; s += 2; break;
@@ -482,7 +621,32 @@ inline bool pfx_check_run( const unsigned* s, const char* tag )
             }
             s += 7;
             break;
+        case 8:
+        {
+            const int bi = static_cast< int >( s[ 2 ] );
+            const std::uint32_t boat = bi >= 0 ? run.boats[ static_cast< std::size_t >( bi ) ].address : 0u;
+            const std::uint32_t fluids = bi >= 0 ? run.fluids[ static_cast< std::size_t >( bi ) ].address : 0u;
+            if ( s[ 1 ] == 0u )
+                pfx_bind_thrust( h, s[ 0 ], boat );
+            else if ( s[ 1 ] == 1u )
+                pfx_bind_hull( h, s[ 0 ], boat, fluids );
+            else
+                pfx_bind_spring( h, s[ 0 ], boat );
+            s += 3;
+            break;
+        }
         default: pfx_impl_tick( h, res ); break;
+        }
+        if ( boats != nullptr )
+        {
+            bad += run.bad + ( run.left != 0u ? 1 : 0 );   // the operation's calls all consumed, none differing
+            if ( run.bad != 0 || run.left != 0u )
+                LOG_ERROR( "%s step %d: %d hook calls differ, %u not made (next type %u)", tag, static_cast< int >( i ), run.bad, run.left,
+                    run.left != 0u ? run.calls[ 1 ] : 0u );
+            run.bad = 0;
+            const unsigned ncalls = *s++;
+            for ( unsigned c = 0; c < ncalls; ++c )
+                s += 1 + s[ 0 ];
         }
         bad += compare( s, static_cast< int >( i ) );
         const int live = static_cast< int >( pairs[ 6 ] - h[ res + 0x3C ] );
@@ -505,6 +669,9 @@ inline bool pfx_check_run( const unsigned* s, const char* tag )
             tag, static_cast< int >( nops ), particles, compared );
     else
         LOG_ERROR( "%s FAILED %d of %d steps", tag, failed, static_cast< int >( nops ) + 1 );
+    if ( failed == 0 && boats != nullptr )
+        LOG_INFO( "%s: the boat hooks replayed in order - %d VuFluidSolver_prepare, %d one-point queries, %d water snaps", tag, run.made[ 1 ],
+            run.made[ 2 ], run.made[ 3 ] );
     return failed == 0;
 }
 
@@ -513,6 +680,10 @@ inline bool verify_pfx_run( ) { return pfx_check_run( g_golden_prn_words, "pfx_r
 // The trail pattern's tick 0x58F0C0 (pfxsim.hxx pfx_heap_trail_tick) in the same end-to-end run (case pfx_trail: pfx_run's
 // harness with trail patterns and their generic processes among the quad / geom ones).
 inline bool verify_pfx_trail( ) { return pfx_check_run( g_golden_ptr_words, "pfx_trail" ); }
+
+// The boat processes on the heap (pfxsim.hxx pfx_process_tick: thrust 0x4CD5B0, hull 0x4CE760, boat spring 0x4CD980, the
+// fountains' water snap; the binds 0x41A69B / 0x41A083 / 0x43BFD6) in the same end-to-end run (case pfx_boats).
+inline bool verify_pfx_boats( ) { return pfx_check_run( g_golden_pbt_words, "pfx_boats", g_golden_pbt_boats, g_golden_pbt_boat_count ); }
 
 // The water classes' getType slots (world/surface.hxx g_water_types) against retail (case water_types): per slot the
 // descriptor it returns and the chain of names its descriptor walks to.
@@ -687,8 +858,13 @@ inline bool verify_pfx_load( )
 // instances; after each the manager's words, every entry's words and the hook log (draw add / remove / update, the
 // instance tick / release, the create request) in order. The draw component's +0x30 / +0x40 before its first AABB
 // copy are UNKNOWN (not compared).
-inline bool verify_pfx_manager( )
+inline bool pfx_check_manager( const unsigned* golden, std::size_t golden_size, const char* const* golden_names, std::size_t golden_name_count,
+    const char* tag )
 {
+    static const char* const* names_p;
+    static std::size_t names_n;
+    names_p = golden_names;
+    names_n = golden_name_count;
     struct script_t
     {
         std::vector< std::vector< std::uint32_t > > insts;   // state, count, AABB 8
@@ -698,8 +874,8 @@ inline bool verify_pfx_manager( )
     pfx_manager_ops_t ops;
     ops.user = &s;
     static auto name_index = []( const char* p ) -> std::uint32_t {
-        for ( std::uint32_t i = 0; i < sizeof( g_golden_pmg_names ) / sizeof( g_golden_pmg_names[ 0 ] ); ++i )
-            if ( std::strcmp( g_golden_pmg_names[ i ], p ) == 0 )
+        for ( std::uint32_t i = 0; i < names_n; ++i )
+            if ( std::strcmp( names_p[ i ], p ) == 0 )
                 return i;
         return 0xFFFFu;
     };
@@ -721,7 +897,9 @@ inline bool verify_pfx_manager( )
     ops.draw_remove = []( void* u, int e ) { static_cast< script_t* >( u )->log.insert( static_cast< script_t* >( u )->log.end( ), { 2u, static_cast< std::uint32_t >( e ) } ); };
     ops.draw_update = []( void* u, int e ) { static_cast< script_t* >( u )->log.insert( static_cast< script_t* >( u )->log.end( ), { 3u, static_cast< std::uint32_t >( e ) } ); };
     ops.register_tick = []( void* u ) { static_cast< script_t* >( u )->log.push_back( 0u ); };
-    const unsigned* w = g_golden_pmg_words;
+    ops.unregister_tick = []( void* u ) { static_cast< script_t* >( u )->log.push_back( 7u ); };
+    ops.destroy = []( void* u, int e ) { static_cast< script_t* >( u )->log.insert( static_cast< script_t* >( u )->log.end( ), { 8u, static_cast< std::uint32_t >( e ) } ); };
+    const unsigned* w = golden;
     std::size_t at = 0;
     pfx_manager_t m;
     int failed = 0, compared = 0;
@@ -754,7 +932,7 @@ inline bool verify_pfx_manager( )
         {
             const std::uint32_t code = w[ at++ ];
             want.push_back( code );
-            const int args = code == 0 ? 0 : code == 6 ? 2 : 1;
+            const int args = code == 0 || code == 7 ? 0 : code == 6 ? 2 : 1;
             for ( int j = 0; j < args; ++j )
                 want.push_back( w[ at++ ] );
         }
@@ -763,7 +941,7 @@ inline bool verify_pfx_manager( )
         if ( bad )
         {
             if ( failed < 6 )
-                LOG_ERROR( "pfx_manager: %s (step %d) differs from retail (%d)", what, step, bad );
+                LOG_ERROR( "%s: %s (step %d) differs from retail (%d)", tag, what, step, bad );
             ++failed;
         }
     };
@@ -784,7 +962,7 @@ inline bool verify_pfx_manager( )
                 at += 10;
                 s.answer = answer + 1u;
             }
-            const int e = pfx_manager_create( m, g_golden_pmg_names[ name ], ops );
+            const int e = pfx_manager_create( m, golden_names[ name ], ops );
             failed += ix( e ) != ret ? 1 : 0;
         }
         else if ( code == 1 )
@@ -797,6 +975,8 @@ inline bool verify_pfx_manager( )
             pfx_manager_release( m, static_cast< int >( w[ at++ ] ), ops );
         else if ( code == 3 )
             pfx_manager_release_all( m, ops );
+        else if ( code == 5 )
+            pfx_manager_destroy( m, ops );
         else if ( code == 4 )
             for ( auto& inst : s.insts )
             {
@@ -805,24 +985,297 @@ inline bool verify_pfx_manager( )
             }
         check_state( "operation", static_cast< int >( i ) );
     }
-    if ( at != g_golden_pmg_size )
+    if ( at != golden_size )
     {
-        LOG_ERROR( "pfx_manager: golden layout read %d of %d words", static_cast< int >( at ), static_cast< int >( g_golden_pmg_size ) );
+        LOG_ERROR( "%s: golden layout read %d of %d words", tag, static_cast< int >( at ), static_cast< int >( golden_size ) );
         return false;
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "VuPfxManager matches retail's 0x52B7B0 / 0x52BCD0 / 0x52BBF0 / 0x52BC30 / 0x52BD50 / 0x52BB60 over %d operations: "
-                     "%d words and hook logs exact",
-            static_cast< int >( nops ), compared );
+        LOG_SUCCESS( "%s: VuPfxManager matches retail's 0x52B7B0 / 0x52BCD0 / 0x52BBF0 / 0x52BC30 / 0x52BD50 / 0x52BB60%s over %d "
+                     "operations: %d words and hook logs exact",
+            tag, std::strcmp( tag, "pfx_manager" ) == 0 ? "" : " / the dtor 0x52B810", static_cast< int >( nops ), compared );
     else
-        LOG_ERROR( "pfx_manager FAILED %d of %d steps", failed, static_cast< int >( nops ) + 1 );
+        LOG_ERROR( "%s FAILED %d of %d steps", tag, failed, static_cast< int >( nops ) + 1 );
+    return failed == 0;
+}
+
+inline bool verify_pfx_manager( )
+{
+    return pfx_check_manager( g_golden_pmg_words, g_golden_pmg_size, g_golden_pmg_names, sizeof( g_golden_pmg_names ) / sizeof( g_golden_pmg_names[ 0 ] ),
+        "pfx_manager" );
+}
+
+// VuPfxManager's dtor 0x52B810 (pfxmgr.hxx pfx_manager_destroy; case pfx_manager_dtor: nine effects, a plan, two ticks, a
+// release, then the dtor - the unregister, releaseAll, every free entry's release / slot 0 0x405000 in order).
+inline bool verify_pfx_manager_dtor( )
+{
+    return pfx_check_manager( g_golden_pmd_words, g_golden_pmd_size, g_golden_pmd_names, sizeof( g_golden_pmd_names ) / sizeof( g_golden_pmd_names[ 0 ] ),
+        "pfx_manager_dtor" );
+}
+
+// water_point_height (world/query.hxx) against VuWater's base-mode one-point query 0x529140 - the fountain's water snap -
+// on Hydroelectric's built water (case water_snap): every out word (+0x1C, retail's stale stack, skipped; +0x24 must stay
+// as the caller had it), the slot 3 calls in order (wave, tag, ctx+0x60, ctx+0x64), kernels water_view_kernel.
+inline bool verify_water_snap( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "water_snap: the document did not load" );
+        return false;
+    }
+    water_built_t built{};
+    water_build_world( *tree, built, []( entity_t& e ) { return entity_transform( e ); } );
+    water_view_t view{};
+    water_view_build( built, view );
+    struct logged_t
+    {
+        const water_view_t* view;
+        std::vector< std::uint32_t > log;
+    } logged{ &view, {} };
+    const water_kernel_fn kernel = []( void* user, int wave, water_query_t& ctx ) {
+        logged_t& l = *static_cast< logged_t* >( user );
+        l.log.insert( l.log.end( ), { static_cast< std::uint32_t >( wave ), ctx.tag, ctx.flag96, ctx.flag100 } );
+        return water_view_kernel( const_cast< water_view_t* >( l.view ), wave, ctx );
+    };
+    int failed = 0, found = 0, calls = 0, skipped = 0, moved = 0;
+    for ( std::size_t index = 0; index < g_golden_wsn_count; ++index )
+    {
+        const unsigned* s = g_golden_wsn_words + g_golden_wsn_offsets[ index ];
+        view.water.skip_waves = s[ 0 ] != 0u;
+        skipped += s[ 0 ] ? 1 : 0;
+        float point[ 4 ];
+        std::memcpy( point, s + 1, 16 );
+        std::uint32_t out[ 11 ];
+        std::memset( out, 0x77, sizeof( out ) );
+        logged.log.clear( );
+        const bool reached = water_point_height( view.water, point, kernel, &logged, *reinterpret_cast< water_vertex_t* >( out ) );
+        const char* what = reached ? nullptr : "a path not recreated was reached";
+        for ( int k = 0; k < 11; ++k )
+            if ( !what && k != 7 && out[ k ] != s[ 5 + k ] )
+                what = "an out word";
+        found += s[ 5 + 8 ] != 0xFEFFFFFFu ? 1 : 0;
+        moved += ( s[ 5 + 4 ] | s[ 5 + 5 ] | s[ 5 + 6 ] ) != 0u ? 1 : 0;
+        const unsigned n = s[ 16 ];
+        calls += static_cast< int >( n );
+        if ( !what && logged.log.size( ) != 4 * n )
+            what = "the number of slot 3 calls";
+        for ( unsigned k = 0; k < 4 * n && !what; ++k )
+            if ( logged.log[ k ] != s[ 17 + k ] )
+                what = "a slot 3 call";
+        if ( what )
+        {
+            ++failed;
+            LOG_ERROR( "water_snap: query %d: %s", static_cast< int >( index ), what );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_point_height matches VuWater's base-mode one-point query 0x529140 (0x52AEC0 / 0x413500(0) / 0x52B0E0) on %d "
+                     "queries: %d on a surface, %d displaced by waves, %d slot 3 calls, %d with waves skipped - every out word but the stale "
+                     "+0x1C",
+            static_cast< int >( g_golden_wsn_count ), found, moved, calls, skipped );
+    else
+        LOG_ERROR( "water_snap FAILED %d of %d", failed, static_cast< int >( g_golden_wsn_count ) );
+    return failed == 0;
+}
+
+// pfx_reload_project / pfx_remove_project and the node dtors (world/pfxload.hxx) against VuPfxImpl's 0x51D870 / 0x51D9C0
+// and retail's node slot 0s (case pfx_reload): the race's two documents loaded, three nodes held (refcount 2), then reload
+// Generic with Hydroelectric's document, remove Hydroelectric, reload / remove a missing name. Compared: each return, the
+// events in order (0x563C00's entries, the geom model resets, the texture asset releases: by the node's path before the
+// operation and the offset), every remaining node (path, vtable, +4, child count), the held nodes' refcounts.
+inline bool verify_pfx_reload( )
+{
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) )
+    {
+        LOG_ERROR( "pfx_reload: Base.apf did not open" );
+        return false;
+    }
+    static pfx_runtime_t rt;
+    pfx_runtime_init( rt );
+    pfx_library_t lib;
+    std::map< std::string, value_t > docs;
+    for ( const char* asset : { "VuPfxAsset/Hydroelectric", "VuPfxAsset/Generic" } )
+    {
+        std::vector< std::uint8_t > blob;
+        const std::string name = std::string( asset ).substr( 11 );
+        if ( !archive.read( asset, blob ) || !pfx_asset_document( blob, docs[ asset ] ) || pfx_add_project( rt, lib, name, docs[ asset ] ) == 0u )
+        {
+            LOG_ERROR( "pfx_reload: %s did not load", asset );
+            return false;
+        }
+    }
+    auto paths = [ & ]( ) {
+        std::vector< std::pair< std::string, std::uint32_t > > rows;
+        for ( const auto& pr : lib.projects )
+            pfx_load_rows( rt, lib, pr.second, pr.first, rows );
+        return rows;
+    };
+    std::map< std::string, std::uint32_t > held;
+    for ( const auto& r : paths( ) )
+        for ( std::size_t i = 0; i < g_golden_prl_ref_count; ++i )
+            if ( r.first == g_golden_prl_refs[ i ].path )
+            {
+                rt.heap[ r.second + 4 ] = 2u;
+                held[ r.first ] = r.second;
+            }
+    struct log_t
+    {
+        std::map< std::uint32_t, std::string > path_of;
+        std::vector< std::tuple< int, std::string, std::uint32_t > > events;
+    } log;
+    pfx_release_hooks_t hooks;
+    hooks.user = &log;
+    hooks.destroyed = []( void* u, std::uint32_t node ) {
+        log_t& l = *static_cast< log_t* >( u );
+        l.events.emplace_back( 0, l.path_of[ node ], 0u );
+    };
+    hooks.model = []( void* u, std::uint32_t node ) {
+        log_t& l = *static_cast< log_t* >( u );
+        l.events.emplace_back( 1, l.path_of[ node ], 0u );
+    };
+    hooks.texture = []( void* u, std::uint32_t node, std::uint32_t offset ) {
+        log_t& l = *static_cast< log_t* >( u );
+        l.events.emplace_back( 2, l.path_of[ node ], offset );
+    };
+    int failed = 0, events = 0;
+    for ( std::size_t i = 0; i < g_golden_prl_op_count; ++i )
+    {
+        const golden_pfx_reload_op_t& op = g_golden_prl_ops[ i ];
+        log.path_of.clear( );
+        for ( const auto& r : paths( ) )
+            log.path_of[ r.second ] = r.first;
+        log.events.clear( );
+        unsigned ret = 0;
+        if ( op.remove )
+            pfx_remove_project( rt, lib, op.name, hooks );
+        else
+            ret = pfx_reload_project( rt, lib, op.name, docs[ op.doc ], pfx_load_hooks_t( ), hooks ) ? 1u : 0u;
+        int bad = ret != op.ret || log.events.size( ) != op.count;
+        for ( unsigned e = 0; e < op.count && e < log.events.size( ); ++e )
+        {
+            const golden_pfx_reload_event_t& g = g_golden_prl_events[ op.first + e ];
+            bad += std::get< 0 >( log.events[ e ] ) != g.kind || std::get< 1 >( log.events[ e ] ) != g.path || std::get< 2 >( log.events[ e ] ) != g.offset;
+        }
+        events += static_cast< int >( op.count );
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "pfx_reload: %s %s: %d differences (%d events, retail %u)", op.remove ? "remove" : "reload", op.name, bad,
+                static_cast< int >( log.events.size( ) ), op.count );
+        }
+    }
+    const auto rows = paths( );
+    int row_bad = rows.size( ) != g_golden_prl_row_count;
+    for ( std::size_t i = 0; i < rows.size( ) && i < g_golden_prl_row_count; ++i )
+    {
+        const golden_pfx_reload_row_t& g = g_golden_prl_rows[ i ];
+        const std::uint32_t a = rows[ i ].second;
+        row_bad += rows[ i ].first != g.path || rt.heap[ a ] != g.vtable || rt.heap[ a + 4 ] != g.w4 || rt.heap[ a + 0x10 ] != g.count;
+    }
+    for ( std::size_t i = 0; i < g_golden_prl_ref_count; ++i )
+        row_bad += held.count( g_golden_prl_refs[ i ].path ) == 0 || rt.heap[ held[ g_golden_prl_refs[ i ].path ] + 4 ] != g_golden_prl_refs[ i ].refs;
+    if ( row_bad )
+    {
+        ++failed;
+        LOG_ERROR( "pfx_reload: %d differences in the nodes after (%d nodes, retail %d)", row_bad, static_cast< int >( rows.size( ) ),
+            static_cast< int >( g_golden_prl_row_count ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "pfx_reload_project / pfx_remove_project and the node dtors match VuPfxImpl 0x51D870 / 0x51D9C0 and 0x563C00 et al.: "
+                     "%d operations, %d destruction events in order, %d nodes after, %d held refcounts",
+            static_cast< int >( g_golden_prl_op_count ), events, static_cast< int >( rows.size( ) ), static_cast< int >( g_golden_prl_ref_count ) );
+    else
+        LOG_ERROR( "pfx_reload FAILED %d", failed );
+    return failed == 0;
+}
+
+// water_entity_release (world/surface.hxx) against the wave entities' slot 7s 0x5D3690 / 0x5D3F10 / 0x5D6710 / 0x5D5E90 /
+// 0x5D8D30 on Hydroelectric's built water (case water_release): every such entity in order, every third with its wave's
+// refcount first forced to 1. Compared per release: which wave's dtor ran, the wave list node by node, the pool count and
+// free node, every wave's refcount (gone ones excepted).
+inline bool verify_water_release( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "water_release: the document did not load" );
+        return false;
+    }
+    water_built_t b{};
+    water_build_world( *tree, b, []( entity_t& e ) { return entity_transform( e ); } );
+    const unsigned* s = g_golden_wrl_words;
+    const unsigned n = *s++;
+    int failed = 0, destroyed = 0, forced = 0;
+    for ( unsigned r = 0; r < n; ++r )
+    {
+        const int wave = static_cast< int >( *s++ );
+        const unsigned force = *s++;
+        s++;   // the entity's word after: 0 (the caller's store)
+        forced += force ? 1 : 0;
+        if ( force )
+            b.waves[ static_cast< std::size_t >( wave ) ].word[ 1 ] = 1u;
+        std::vector< std::uint8_t > before = b.wave_gone;
+        before.resize( b.waves.size( ), 0 );
+        const int unread = b.unread_dtors;
+        water_entity_release( b, wave );
+        b.wave_gone.resize( b.waves.size( ), 0 );
+        int bad = b.unread_dtors != unread;
+        std::vector< unsigned > events;
+        for ( std::size_t k = 0; k < b.waves.size( ); ++k )
+            if ( b.wave_gone[ k ] && !before[ k ] )
+                events.push_back( static_cast< unsigned >( k ) );
+        const unsigned ne = *s++;
+        bad += events.size( ) != ne;
+        for ( unsigned k = 0; k < ne; ++k, ++s )
+            bad += k < events.size( ) && events[ k ] != *s ? 1 : 0;
+        destroyed += static_cast< int >( ne );
+        const unsigned nl = *s++;
+        int e = b.hold.list;
+        for ( unsigned k = 0; k < nl; ++k, s += 2 )
+        {
+            bad += static_cast< unsigned >( e ) != s[ 0 ];
+            if ( e < 0 )
+                break;
+            bad += static_cast< unsigned >( b.hold.pool[ e ].leaf ) != s[ 1 ];
+            e = b.hold.pool[ e ].next;
+        }
+        bad += e != -1;
+        bad += static_cast< unsigned >( b.hold.pool_count ) != *s++;
+        bad += static_cast< unsigned >( b.hold.pool_free ) != *s++;
+        const unsigned nr = *s++;
+        for ( unsigned k = 0; k < nr; ++k, ++s )
+            if ( *s != 0xFFFFFFFFu )
+                bad += k >= b.waves.size( ) || b.wave_gone[ k ] || b.waves[ k ].word[ 1 ] != *s;
+            else
+                bad += k < b.wave_gone.size( ) && !b.wave_gone[ k ];
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "water_release: release %u (wave %d): %d differences", r, wave, bad );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_entity_release matches the wave entities' slot 7 0x5D3690 / 0x5D3F10 / 0x5D6710 / 0x5D5E90 / 0x5D8D30 on "
+                     "Hydroelectric's built water: %u releases (%d with the refcount forced), %d dtors in order, the list, the pool and every "
+                     "refcount after each",
+            n, forced, destroyed );
+    else
+        LOG_ERROR( "water_release FAILED %d of %u", failed, n );
     return failed == 0;
 }
 
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_water_release( ) && ok;
+    ok = verify_pfx_reload( ) && ok;
+    ok = verify_water_snap( ) && ok;
+    ok = verify_pfx_boats( ) && ok;
     ok = verify_pfx_manager( ) && ok;
+    ok = verify_pfx_manager_dtor( ) && ok;
     ok = verify_pfx_load( ) && ok;
     ok = verify_water_types( ) && ok;
     ok = verify_pfx_run( ) && ok;
