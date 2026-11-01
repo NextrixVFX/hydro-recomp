@@ -2498,9 +2498,12 @@ inline bool verify_water_template_maps( )
     return bad == 0;
 }
 
+#include <workspace/utility/checks/pfx.hxx>
+
 inline bool verify_water_all( )
 {
     bool ok = true;
+    ok = verify_pfx_all( ) && ok;
     ok = verify_water_template_maps( ) && ok;
     ok = verify_pfx_system_instance( ) && ok;
     ok = verify_pfx_classes( ) && ok;
