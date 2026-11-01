@@ -2293,3 +2293,43 @@ inline bool verify_lens_water_tick( )
         LOG_ERROR( "lens_water_tick FAILED %d", bad );
     return bad == 0;
 }
+// lens.hxx lens_water_add_emitter / lens_water_remove_emitter against retail's slots 14 0x513640 (VuArray resize
+// 0x415690) and 15 0x513670 (remove-swap 0x5154A0) (case lens_emitters): 600 ops - count, capacity and the block's
+// words up to the count (and the swapped-out word just past it after a remove) after each.
+inline bool verify_lens_emitters( )
+{
+    logic_check_t c{ g_golden_lem_words };
+    const unsigned n = c.next( );
+    lens_water_manager_t m;
+    int bad = 0, peak = 0, swaps = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = c.next( ), value = c.next( );
+        if ( kind == 1u )
+            lens_water_add_emitter( m, value );
+        else
+            lens_water_remove_emitter( m, value );
+        const unsigned count = c.next( ), capacity = c.next( ), nw = c.next( );
+        bool ok = count == static_cast< unsigned >( m.emitter_count ) && capacity == static_cast< unsigned >( m.emitter_capacity );
+        if ( nw > count )
+            ++swaps;
+        for ( unsigned k = 0; k < nw; ++k )
+        {
+            const unsigned want = c.next( );
+            ok = k < m.emitters.size( ) && m.emitters[ k ] == want && ok;
+        }
+        if ( m.emitter_count > peak )
+            peak = m.emitter_count;
+        if ( !ok )
+        {
+            if ( bad < 4 )
+                LOG_ERROR( "lens_emitters op %u (kind %u) differs", v, kind );
+            ++bad;
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuLensWaterManagerImpl's emitter list matches retail (slots 14 0x513640 / 15 0x513670, 0x415690, 0x5154A0): %u ops, up to %d emitters, %d swapped-out words", n, peak, swaps );
+    else
+        LOG_ERROR( "lens_emitters FAILED %d", bad );
+    return bad == 0;
+}

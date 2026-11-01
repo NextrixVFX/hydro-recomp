@@ -2740,6 +2740,7 @@ inline bool verify_water_all( )
     ok = verify_lens_water( ) && ok;
     ok = verify_lens_drop_fill( ) && ok;
     ok = verify_lens_water_tick( ) && ok;
+    ok = verify_lens_emitters( ) && ok;
     ok = verify_json_access( ) && ok;
     ok = verify_json_text( ) && ok;
     ok = verify_json_member( ) && ok;
