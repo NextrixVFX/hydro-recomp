@@ -194,6 +194,7 @@
     <ClInclude Include="workspace\core\world\control.hxx" />
     <ClInclude Include="workspace\core\world\drive.hxx" />
     <ClInclude Include="workspace\core\world\dynamics.hxx" />
+    <ClInclude Include="workspace\core\world\dynprop.hxx" />
     <ClInclude Include="workspace\core\world\effects.hxx" />
     <ClInclude Include="workspace\core\world\entities.hxx" />
     <ClInclude Include="workspace\core\world\field.hxx" />
