@@ -148,12 +148,15 @@
     <ClInclude Include="workspace\core\ui\button.hxx" />
     <ClInclude Include="workspace\core\ui\compose.hxx" />
     <ClInclude Include="workspace\core\ui\config.hxx" />
+    <ClInclude Include="workspace\core\ui\dock.hxx" />
     <ClInclude Include="workspace\core\ui\draw.hxx" />
     <ClInclude Include="workspace\core\ui\entity.hxx" />
+    <ClInclude Include="workspace\core\ui\expand.hxx" />
     <ClInclude Include="workspace\core\ui\flow.hxx" />
     <ClInclude Include="workspace\core\ui\fsm.hxx" />
     <ClInclude Include="workspace\core\ui\gauge.hxx" />
     <ClInclude Include="workspace\core\ui\hud.hxx" />
+    <ClInclude Include="workspace\core\ui\leave.hxx" />
     <ClInclude Include="workspace\core\ui\map.hxx" />
     <ClInclude Include="workspace\core\ui\schema.hxx" />
     <ClInclude Include="workspace\core\ui\screen.hxx" />

@@ -180,10 +180,16 @@
     <ClInclude Include="workspace\core\ui\config.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\ui\dock.hxx">
+      <Filter>workspace\core\ui</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\ui\draw.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\ui\entity.hxx">
+      <Filter>workspace\core\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\ui\expand.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\ui\flow.hxx">
@@ -196,6 +202,9 @@
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\ui\hud.hxx">
+      <Filter>workspace\core\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\ui\leave.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\ui\map.hxx">
