@@ -1192,9 +1192,85 @@ inline bool verify_pfx_reload( )
     return failed == 0;
 }
 
+// water_entity_release (world/surface.hxx) against the wave entities' slot 7s 0x5D3690 / 0x5D3F10 / 0x5D6710 / 0x5D5E90 /
+// 0x5D8D30 on Hydroelectric's built water (case water_release): every such entity in order, every third with its wave's
+// refcount first forced to 1. Compared per release: which wave's dtor ran, the wave list node by node, the pool count and
+// free node, every wave's refcount (gone ones excepted).
+inline bool verify_water_release( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "water_release: the document did not load" );
+        return false;
+    }
+    water_built_t b{};
+    water_build_world( *tree, b, []( entity_t& e ) { return entity_transform( e ); } );
+    const unsigned* s = g_golden_wrl_words;
+    const unsigned n = *s++;
+    int failed = 0, destroyed = 0, forced = 0;
+    for ( unsigned r = 0; r < n; ++r )
+    {
+        const int wave = static_cast< int >( *s++ );
+        const unsigned force = *s++;
+        s++;   // the entity's word after: 0 (the caller's store)
+        forced += force ? 1 : 0;
+        if ( force )
+            b.waves[ static_cast< std::size_t >( wave ) ].word[ 1 ] = 1u;
+        std::vector< std::uint8_t > before = b.wave_gone;
+        before.resize( b.waves.size( ), 0 );
+        const int unread = b.unread_dtors;
+        water_entity_release( b, wave );
+        b.wave_gone.resize( b.waves.size( ), 0 );
+        int bad = b.unread_dtors != unread;
+        std::vector< unsigned > events;
+        for ( std::size_t k = 0; k < b.waves.size( ); ++k )
+            if ( b.wave_gone[ k ] && !before[ k ] )
+                events.push_back( static_cast< unsigned >( k ) );
+        const unsigned ne = *s++;
+        bad += events.size( ) != ne;
+        for ( unsigned k = 0; k < ne; ++k, ++s )
+            bad += k < events.size( ) && events[ k ] != *s ? 1 : 0;
+        destroyed += static_cast< int >( ne );
+        const unsigned nl = *s++;
+        int e = b.hold.list;
+        for ( unsigned k = 0; k < nl; ++k, s += 2 )
+        {
+            bad += static_cast< unsigned >( e ) != s[ 0 ];
+            if ( e < 0 )
+                break;
+            bad += static_cast< unsigned >( b.hold.pool[ e ].leaf ) != s[ 1 ];
+            e = b.hold.pool[ e ].next;
+        }
+        bad += e != -1;
+        bad += static_cast< unsigned >( b.hold.pool_count ) != *s++;
+        bad += static_cast< unsigned >( b.hold.pool_free ) != *s++;
+        const unsigned nr = *s++;
+        for ( unsigned k = 0; k < nr; ++k, ++s )
+            if ( *s != 0xFFFFFFFFu )
+                bad += k >= b.waves.size( ) || b.wave_gone[ k ] || b.waves[ k ].word[ 1 ] != *s;
+            else
+                bad += k < b.wave_gone.size( ) && !b.wave_gone[ k ];
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "water_release: release %u (wave %d): %d differences", r, wave, bad );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_entity_release matches the wave entities' slot 7 0x5D3690 / 0x5D3F10 / 0x5D6710 / 0x5D5E90 / 0x5D8D30 on "
+                     "Hydroelectric's built water: %u releases (%d with the refcount forced), %d dtors in order, the list, the pool and every "
+                     "refcount after each",
+            n, forced, destroyed );
+    else
+        LOG_ERROR( "water_release FAILED %d of %u", failed, n );
+    return failed == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_water_release( ) && ok;
     ok = verify_pfx_reload( ) && ok;
     ok = verify_water_snap( ) && ok;
     ok = verify_pfx_boats( ) && ok;
