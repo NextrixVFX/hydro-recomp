@@ -10,6 +10,7 @@
 #include <workspace/core/boat/state.hxx>
 #include <workspace/core/game/input.hxx>
 #include <workspace/core/world/build.hxx>
+#include <workspace/core/world/dynamics.hxx>
 #include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/query.hxx>
 #include <workspace/core/world/session.hxx>

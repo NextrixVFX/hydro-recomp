@@ -2188,9 +2188,98 @@ inline bool verify_transform_set_world( )
     return failed == 0;
 }
 
+// world_synchronize_motion_states (world/dynamics.hxx) against retail's
+// synchronizeMotionStates 0x600B00 + 0x600600 run whole (case
+// sync_motion_states; the motion states' setWorldTransform intercepted): per
+// vector the bodies whose motion state is called, in order, and the 16
+// transform words each gets, bit for bit - both the synchronize-all and the
+// non-static paths, every flag / state / type gate, the Taylor and sinf
+// branches and the angular clamp.
+struct sync_motion_log_t
+{
+    const solver_rigid_t* first = nullptr;
+    const std::vector< unsigned >* motion = nullptr;
+    std::vector< unsigned > got;
+};
+
+inline bool verify_sync_motion_states( )
+{
+    int failed = 0, calls = 0;
+    static solver_rigid_t bodies[ 8 ];
+    for ( std::size_t index = 0; index < g_golden_sync_motion_states_count; ++index )
+    {
+        const unsigned* s = g_golden_sync_motion_states_words + g_golden_sync_motion_states_offsets[ index ];
+        auto w = std::make_unique< world_t >( );
+        std::memcpy( &w->local_time, s++, 4 );
+        const bool all = *s++ != 0;
+        const unsigned n = *s++, ns = *s++;
+        std::vector< unsigned > nonstatic( s, s + ns );
+        s += ns;
+        std::vector< unsigned > motion( n );
+        for ( unsigned i = 0; i < n; ++i )
+        {
+            solver_rigid_t& b = bodies[ i ];
+            std::memset( &b, 0, sizeof( b ) );
+            b.collision_flags = static_cast< int >( *s++ );
+            b.activation_state = static_cast< int >( *s++ );
+            b.internal_type = static_cast< int >( *s++ );
+            std::memcpy( &b.hit_fraction, s++, 4 );
+            motion[ i ] = *s++;
+            std::memcpy( b.interpolation_basis, s, 48 );
+            std::memcpy( b.interpolation_origin, s + 12, 16 );
+            std::memcpy( b.interpolation_linear, s + 16, 16 );
+            std::memcpy( b.interpolation_angular, s + 20, 16 );
+            s += 24;
+            w->objects.push_back( &b );
+        }
+        for ( unsigned i : nonstatic )
+            w->bodies.push_back( &bodies[ i ] );
+        const unsigned ncalls = *s++;
+        std::vector< unsigned > want( s, s + 17 * ncalls );
+        sync_motion_log_t log;
+        log.first = bodies;
+        log.motion = &motion;
+        world_synchronize_motion_states( *w, all,
+            []( void* u, const solver_rigid_t& b ) {
+                const sync_motion_log_t& l = *static_cast< const sync_motion_log_t* >( u );
+                return ( *l.motion )[ static_cast< std::size_t >( &b - l.first ) ] != 0;
+            },
+            []( void* u, solver_rigid_t& b, const float* basis, const float* origin ) {
+                sync_motion_log_t& l = *static_cast< sync_motion_log_t* >( u );
+                l.got.push_back( static_cast< unsigned >( &b - l.first ) );
+                unsigned words[ 16 ];
+                std::memcpy( words, basis, 48 );
+                std::memcpy( words + 12, origin, 16 );
+                l.got.insert( l.got.end( ), words, words + 16 );
+            },
+            &log );
+        calls += static_cast< int >( ncalls );
+        if ( log.got != want )
+        {
+            int bad = -1;
+            for ( std::size_t k = 0; k < want.size( ) && k < log.got.size( ); ++k )
+                if ( want[ k ] != log.got[ k ] )
+                {
+                    bad = static_cast< int >( k );
+                    break;
+                }
+            if ( ++failed <= 4 )
+                LOG_ERROR( "sync motion states vector %d: %d / %d calls, first difference at word %d", static_cast< int >( index ),
+                           static_cast< int >( log.got.size( ) / 17 ), static_cast< int >( ncalls ), bad );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "world_synchronize_motion_states matches btDiscreteDynamicsWorld::synchronizeMotionStates 0x600B00 + 0x600600: %d "
+                     "vectors, %d setWorldTransform calls, the transforms bit for bit", static_cast< int >( g_golden_sync_motion_states_count ), calls );
+    else
+        LOG_ERROR( "sync motion states FAILED %d of %d vectors", failed, static_cast< int >( g_golden_sync_motion_states_count ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_sync_motion_states( ) && ok;
     ok = verify_transform_set_world( ) && ok;
     ok = verify_boat_build_audio( ) && ok;
     ok = verify_water_surface_list( ) && ok;
