@@ -197,7 +197,12 @@ inline bool verify_ui_race_results( )
 // byte, the VuRetVal of SetFocus, the hook log in order.
 inline bool verify_ui_subtitles_combo( )
 {
-    int failed = 0, steps = 0, logs = 0;
+    int failed = 0, steps = 0, logs = 0, dispatched = 0;
+    // Batch 25: pass 1 again with the touch ops through the device's dispatch (controls.hxx
+    // ui_touch_dispatch_down / _up / _move; the move's point in the device's touch 0, as the
+    // platform's pointer-moved 0x4DB100 leaves it) reaching the combo through OUR handlers
+    // (ui_touch_handlers - the binding's glue): every step must come out the same.
+    for ( int pass = 0; pass < 2; ++pass )
     for ( std::size_t k = 0; k < g_golden_sc_entities_count; ++k )
     {
         const golden_sc_entity_t& ge = g_golden_sc_entities[ k ];
@@ -206,6 +211,8 @@ inline bool verify_ui_subtitles_combo( )
         std::vector< std::string > log;
         ui_settings_t settings;
         ui_touch_device_t device;
+        float inverse_now[ 16 ] = { };
+        int faults = 0;
         ui_combo_box_hooks_t hooks;
         char line[ 160 ];
         hooks.m_broadcast = [ & ]( std::uint32_t hash, const ui_params_t& p )
@@ -227,6 +234,8 @@ inline bool verify_ui_subtitles_combo( )
         hooks.m_delta = [ ] { return ui_lv_float( g_golden_sc_delta ); };
         hooks.m_apply = [ & ]( std::uint32_t, int current ) { settings.m_subtitles = current != 0; };
         c_ui_combo_box c( 0u, k_ui_subtitles_vtable, hooks );
+        if ( pass )
+            ui_touch_handlers( device, &c, [ &inverse_now ] { return static_cast< const float* >( inverse_now ); }, faults );
         bool same = e && e->m_ctor && e->m_ctor->m_vtable == k_ui_subtitles_vtable && raw.size( ) == 0x260;
         if ( same )
         {
@@ -247,9 +256,27 @@ inline bool verify_ui_subtitles_combo( )
             const std::vector< std::uint8_t > inverse_raw = ui_unhex( g_golden_sc_inverses[ st.m_env ] );
             float inverse[ 16 ];
             std::memcpy( inverse, inverse_raw.data( ), 64 );
+            std::memcpy( inverse_now, inverse, 64 );
             const float point[ 2 ] = { ui_lv_float( st.m_point[ 0 ] ), ui_lv_float( st.m_point[ 1 ] ) };
             log.clear( );
             std::uint32_t ret[ 2 ] = { 0xCCCCCCCCu, 0xCCCCCCCCu };
+            const int touch_op = pass ? st.m_op : -1;
+            if ( touch_op == 4 )
+                ui_touch_dispatch_down( device, 1u, point[ 0 ], point[ 1 ] );
+            else if ( touch_op == 5 )
+                ui_touch_dispatch_up( device, 1u, 0.0f, 0.0f );
+            else if ( touch_op == 6 )
+            {
+                log.push_back( "touch|0" );   // the device's slot 7 (0, out)
+                if ( device.m_touches.empty( ) )
+                    device.m_touches.resize( 1 );
+                device.m_touches[ 0 ].m_point[ 0 ] = point[ 0 ];
+                device.m_touches[ 0 ].m_point[ 1 ] = point[ 1 ];
+                ui_touch_dispatch_move( device );
+            }
+            if ( touch_op >= 4 && touch_op <= 6 )
+                ++dispatched;
+            else
             switch ( st.m_op )
             {
             case 0:
@@ -310,6 +337,7 @@ inline bool verify_ui_subtitles_combo( )
             ok = ok && static_cast< int >( device.m_callbacks.size( ) ) == st.m_entries && device.m_priority == st.m_priority;
             if ( ok && st.m_entries )
                 ok = device.m_callbacks[ 0 ].first == &c && st.m_entry_offset == 0x5C && device.m_callbacks[ 0 ].second == st.m_entry_priority;
+            ok = ok && device.m_unhandled == 0 && faults == 0;
             ok = ok && ( settings.m_subtitles ? 1 : 0 ) == st.m_settings && ret[ 0 ] == st.m_ret[ 0 ] && static_cast< int >( log.size( ) ) == st.m_logs;
             for ( int q = 0; ok && q < st.m_logs; ++q )
             {
@@ -318,14 +346,15 @@ inline bool verify_ui_subtitles_combo( )
             }
             ++steps;
             if ( !ok && ++failed <= 8 )
-                LOG_ERROR( "ui subtitles combo: %s entity %d step %d (op %d): the state / choices / touch entries / settings / log differ (log %d, retail %d)",
-                    ge.m_project, ge.m_index, s, st.m_op, static_cast< int >( log.size( ) ), st.m_logs );
+                LOG_ERROR( "ui subtitles combo: %s entity %d step %d (op %d, pass %d): the state / choices / touch entries / settings / log differ (log %d, retail %d)",
+                    ge.m_project, ge.m_index, s, st.m_op, pass, static_cast< int >( log.size( ) ), st.m_logs );
         }
     }
     if ( failed == 0 )
         LOG_SUCCESS( "c_ui_combo_box initialize / touch_down / touch_up / touch_move / release (+ the tick, SetFocus, events, change) match retail's "
-                     "VuUISubtitlesSettingEntity 0x46D7A0 / 0x474F80 / 0x475080 / 0x475090 / 0x4253D0 on %d entities: %d steps, %d hook calls in order",
-            static_cast< int >( g_golden_sc_entities_count ), steps, logs );
+                     "VuUISubtitlesSettingEntity 0x46D7A0 / 0x474F80 / 0x475080 / 0x475090 / 0x4253D0 on %d entities: %d steps (both passes; the "
+                     "second's %d touch ops through the device's dispatch 0x5393E0 / 0x5394A0 / 0x53FB40 and OUR handlers), %d hook calls in order",
+            static_cast< int >( g_golden_sc_entities_count ), steps, dispatched, logs );
     else
         LOG_ERROR( "the UI subtitles combo box FAILED %d checks against retail's", failed );
     return failed == 0;

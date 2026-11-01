@@ -287,6 +287,29 @@ inline bool ui_touch_point( const ui_touch_device_t& d, std::uint32_t index, flo
     return true;
 }
 
+// Batch 25: OUR dispatch target for an object whose VuTouchCallback is the
+// shared shape (the settings combos 0x73DF24, the leaderboard 0x73F2B4, the
+// front-end button 0x73B79C: slot 0 down (inverse, the dispatched point), slot
+// 1 up, slot 2 move = the device's touch 0 (slot 7 0x539230 - ui_touch_point;
+// an entry never written is indeterminate in retail: `faults` + 1, nothing
+// run)). `inverse` answers VuUIImpl +0x4C at the time of the call.
+template < typename T >
+inline void ui_touch_handlers( ui_touch_device_t& device, T* o, std::function< const float*( ) > inverse, int& faults )
+{
+    ui_touch_handler_t h;
+    h.m_down = [ o, inverse ]( const float p[ 2 ] ) { o->touch_down( inverse( ), p ); };
+    h.m_up = [ o ]( const float* ) { o->touch_up( ); };
+    h.m_move = [ o, inverse, &device, &faults ]
+    {
+        float p[ 2 ];
+        if ( ui_touch_point( device, 0u, p ) )
+            o->touch_move( inverse( ), p );
+        else
+            ++faults;
+    };
+    device.m_handlers[ o ] = h;
+}
+
 // 0x53FB90 (thiscall device + 4, const pair&): push_back.
 inline void ui_touch_add( ui_touch_device_t& d, const void* callback, std::uint32_t priority ) { d.m_callbacks.push_back( { callback, priority } ); }
 

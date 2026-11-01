@@ -1454,19 +1454,7 @@ private:
             device.m_handlers.erase( object );
             return;
         }
-        T* o = const_cast< T* >( object );
-        ui_touch_handler_t h;
-        h.m_down = [ this, o ]( const float p[ 2 ] ) { o->touch_down( touch_inverse( ), p ); };
-        h.m_up = [ o ]( const float* ) { o->touch_up( ); };
-        h.m_move = [ this, o, &device ]
-        {
-            float p[ 2 ];
-            if ( ui_touch_point( device, 0u, p ) )
-                o->touch_move( touch_inverse( ), p );
-            else
-                ++m_config_faults;
-        };
-        device.m_handlers[ object ] = h;
+        ui_touch_handlers( device, const_cast< T* >( object ), [ this ] { return touch_inverse( ); }, m_config_faults );
     }
 
     const float* touch_inverse( ) const
