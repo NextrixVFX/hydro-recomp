@@ -439,6 +439,84 @@ inline bool verify_static_wake( )
     return failed == 0;
 }
 
+// VuWakeWaveEntity's motion IF (world/wake.hxx water_wake_entity_motion_water / water_wake_entity_detach) against 0x5D5660
+// / 0x5D5870 on Hydroelectric's built water (case wake_entity): four synthetic entities, eight frames each (the wake's
+// fixed-end age before each frame an input). Compared per frame: the wake index, the waves destroyed, the wake's known
+// words (+0x18 / +0x28 / +0x40 excepted), the wave list, the pool, every surface's wave tree; after the detach the wake's
+// reference. The setWorldTransform 0x5344A0 the handler starts with is entity_set_world's (world/race.hxx) - not compared.
+inline bool verify_wake_entity( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "wake_entity: the document did not load" );
+        return false;
+    }
+    water_built_t b{};
+    water_build_world( *tree, b, []( entity_t& e ) { return entity_transform( e ); } );
+    const unsigned* s = g_golden_wen_words;
+    const unsigned n = *s++;
+    int failed = 0, compared = 0, frames = 0, segments = 0;
+    for ( unsigned c = 0; c < n; ++c )
+    {
+        int bad = 0;
+        std::uint32_t entity[ 14 ];
+        std::memcpy( entity, s, sizeof( entity ) );
+        s += 14;
+        const unsigned nf = *s++;
+        int wake = -1;
+        for ( unsigned f = 0; f < nf; ++f, ++frames )
+        {
+            const unsigned age = *s++;
+            if ( age != 0xFFFFFFFFu && wake >= 0 )
+                b.waves[ static_cast< std::size_t >( wake ) ].set( 0xBC, age );
+            const unsigned* motion = s;
+            s += 20;
+            const std::vector< std::uint8_t > before = b.wave_gone;
+            const int was = wake;
+            water_wake_entity_motion_water( b, entity, motion, wake );
+            segments += wake != was && was >= 0 ? 1 : 0;
+            bad += static_cast< unsigned >( wake ) != *s++;
+            std::vector< unsigned > gone;
+            for ( std::size_t k = 0; k < b.wave_gone.size( ); ++k )
+                if ( b.wave_gone[ k ] && !( k < before.size( ) && before[ k ] ) )
+                    gone.push_back( static_cast< unsigned >( k ) );
+            const unsigned nd = *s++;
+            bad += gone != std::vector< unsigned >( s, s + nd );
+            s += nd;
+            const water_words_t& w = b.waves[ static_cast< std::size_t >( wake ) ];
+            for ( int k = 0; k < 48; ++k )
+                if ( w.known[ k ] && k != 6 && k != 10 && k != 16 )
+                {
+                    ++compared;
+                    bad += w.word[ k ] != s[ k ];
+                }
+            s += 48;
+            bad += flow_check_state( b, wake, s, false, compared );
+        }
+        const unsigned e98 = *s++, ref = *s++, nd = *s++;
+        const std::vector< std::uint8_t > before = b.wave_gone;
+        const int was = wake;
+        water_wake_entity_detach( b, wake );
+        const bool gone = was < static_cast< int >( b.wave_gone.size( ) ) && b.wave_gone[ static_cast< std::size_t >( was ) ] &&
+                          !( static_cast< std::size_t >( was ) < before.size( ) && before[ static_cast< std::size_t >( was ) ] );
+        bad += e98 != 0u || wake != -1 || ( gone ? 1u : 0u ) != nd;
+        bad += gone ? ref != 0xFFFFFFFFu : ref != b.waves[ static_cast< std::size_t >( was ) ].word[ 1 ];
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "wake_entity: entity %u: %d differences", c, bad );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuWakeWaveEntity's motion IF (0x5D5660 after 0x5344A0, 0x5D5870) matches retail on Hydroelectric's built water: %u entities, "
+                     "%d frames, %d new segments, %d values plus every wave tree",
+            n, frames, segments, compared );
+    else
+        LOG_ERROR( "wake_entity FAILED %d of %u", failed, n );
+    return failed == 0;
+}
+
 // water_surface_motion (0x5DC3B0 = entity_set_world + the watcher water_surface_refresh / water_ramp_refresh) against retail
 // on Hydroelectric's built water (case water_surface_motion): every surface / ramp entity in entity order handed a new world
 // (rotated about z and moved) through its motion component. Compared per call: the transform's world, the surface's known
@@ -870,6 +948,7 @@ inline bool verify_watchers_all( )
     ok = verify_water_types_game( ) && ok;
     ok = verify_flow_wave( ) && ok;
     ok = verify_static_wake( ) && ok;
+    ok = verify_wake_entity( ) && ok;
     ok = verify_wave_refresh( ) && ok;
     ok = verify_water_controls( ) && ok;
     ok = verify_water_surface_motion( ) && ok;

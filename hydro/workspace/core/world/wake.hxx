@@ -264,6 +264,77 @@ inline void water_static_wake_refresh( water_built_t& b, int& wave, bool initial
     wave = water_static_wake_create( b, entity, transform );
 }
 
+// ---------------------------------------------------------------------------
+// VuWakeWaveEntity (vtable 0x7534A8; no level authors one - verified on
+// synthetic entities, case wake_entity). Its slots 6 / 7 are nullsubs: the
+// wake is its VuMotionComponentIF's (entity +0x5C, vtable 0x7534DC) work.
+//
+// IF slot 0 0x5D5660 (thiscall entity + 0x5C), after setWorldTransform
+// 0x5344A0( the transform, motion +0x18, 1 ) (world/watchers.hxx's wrapper): a
+// zeroed 13-word record from the motion component (`motion` = its words from
+// +0x18: the matrix, +0x48 its translation, +0x58 the velocity) and the
+// entity's words (`entity` from +0x60):
+//   s = sqrt( vx^2 + vy^2 ) (VuMath_sqrt); s > 0 (comiss): d = (vx, vy) x 1 / s
+//   (the reciprocal once, then two mulss), else (vx, vy) as they are;
+//   t = maxss( 0, minss( 1, ( s - 1 ) / ( +0x70 - +0x6C ) ) );
+//   record = translation (4), d.x, d.y, +0x78 t, +0x7C t, +0x74 t, +0x80 t,
+//            maxss( +0x84 t, FLT_EPSILON ), +0x88, 0.
+// A wake at +0x98: the record over its +0x58 (the moving end), 0x52C720, out
+// of the trees and back; when 1 / +0x68 > its +0xBC (the fixed end's age;
+// comiss, ja) done; else the entity's reference dropped (slot 0 with 1 at
+// zero - the water keeps its own) and a new one. None, or after that:
+// VuWater_createWakeWave 0x5287D0( entity + 0x8C - Range Start / End Ratio and
+// the third word -, record ) into +0x98.
+inline void water_wake_entity_motion_water( water_built_t& b, const std::uint32_t* entity, const std::uint32_t* motion, int& wake )
+{
+    auto e = [ & ]( int o ) { return wave_bits( entity[ ( o - 0x60 ) / 4 ] ); };
+    auto m = [ & ]( int o ) { return wave_bits( motion[ ( o - 0x18 ) / 4 ] ); };
+    float vx = m( 0x58 ), vy = m( 0x5C );
+    const float s = _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( vx * vx ) + ( vy * vy ) ) ) );
+    if ( _mm_comigt_ss( _mm_set_ss( s ), _mm_setzero_ps( ) ) )
+    {
+        const float r = 1.0f / s;
+        vx = vx * r;
+        vy = vy * r;
+    }
+    const float q = ( s - 1.0f ) / ( e( 0x70 ) - e( 0x6C ) );
+    const float t = _mm_cvtss_f32( _mm_max_ss( _mm_setzero_ps( ), _mm_min_ss( _mm_set_ss( 1.0f ), _mm_set_ss( q ) ) ) );
+    std::uint32_t rec[ 13 ] = { };
+    for ( int k = 0; k < 4; ++k )
+        rec[ k ] = motion[ ( 0x48 - 0x18 ) / 4 + k ];
+    const float f[ 7 ] = { vx, vy, e( 0x78 ) * t, e( 0x7C ) * t, e( 0x74 ) * t, e( 0x80 ) * t,
+        _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( e( 0x84 ) * t ), _mm_set_ss( wave_bits( 0x34000000u ) ) ) ) };
+    std::memcpy( &rec[ 4 ], f, sizeof( f ) );
+    rec[ 11 ] = entity[ ( 0x88 - 0x60 ) / 4 ];
+    if ( wake >= 0 )
+    {
+        water_words_t& w = b.waves[ static_cast< std::size_t >( wake ) ];
+        for ( int k = 0; k < 13; ++k )
+            w.set( 0x58 + 4 * k, rec[ k ] );
+        water_wake_bounds( w );
+        water_hold_remove( b.hold, wake );
+        water_wake_hold_sync( b, wake );
+        water_hold_add( b.hold, wake );
+        if ( _mm_comigt_ss( _mm_set_ss( 1.0f / e( 0x68 ) ), _mm_set_ss( w.f( 0xBC ) ) ) )
+            return;
+        if ( --w.word[ 1 ] == 0u )
+            water_built_destroy( b, wake );
+    }
+    wake = water_create_wake( b, &entity[ ( 0x8C - 0x60 ) / 4 ], rec, false );
+}
+
+// IF slot 2 0x5D5870: the wake's entity reference dropped (slot 0 with 1 at
+// zero; no VuWater removal - the water's own reference stays until its tick
+// drops it), +0x98 = 0.
+inline void water_wake_entity_detach( water_built_t& b, int& wake )
+{
+    if ( wake < 0 )
+        return;
+    if ( --b.waves[ static_cast< std::size_t >( wake ) ].word[ 1 ] == 0u )
+        water_built_destroy( b, wake );
+    wake = -1;
+}
+
 // Live (not destroyed) wake / flat wake waves - what the race trace should count
 // (b.waves also keeps every destroyed record unless wake_reuse is on).
 inline int water_live_wakes( const water_built_t& b )
