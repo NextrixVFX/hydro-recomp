@@ -285,6 +285,8 @@ struct race_session_t
     };
     std::vector< std::unique_ptr< control_live_t > > controls;
     int control_unrecreated = 0;
+    // The race project's entity tree (c_world's; the gameInitialize walk's and the session end's 0x500B80).
+    entity_t* tree = nullptr;
     int breaks = 0;   // dev count (not retail)
     // VuExplosionManagerImpl g 0x759034's listeners (+4 / +8; world/mine.hxx): the human drivers' +0x80 parts, added by
     // their slot 6 0x40F210 (boat human.hxx human_game_initialize).
@@ -1925,8 +1927,55 @@ inline bool race_session_game_data( const std::string& mode, const std::string& 
 // 0x50FAF0 (bodies.hxx rigid_body_destroy) on every level body and boat body (the boats' via VuBoatEntity's dtor
 // 0x41CB10 - the boat lane's - stated, not run; the body dtor itself is run on them). VuRigidBodyComponent's dtor
 // 0x543FC0 frees two VuStrings and deletes its property list: ours are std::string / C++ objects (RAII - the library's
-// frees, no retail-visible word). The rest of 0x4B97E0 (0x4D3100, the game's deleting dtor vt+0xC, 0x500B80 on the
-// project, vt+0x1C) is not read. Ours: the caller decides WHEN (a replaced session, or the --end-race test driver).
+// frees, no retail-visible word). The rest of 0x4B97E0, read (batch 27): the current action-mode state's exit delegate,
+// 0x4D3100 on g_vugameutil (not recreated), 0x482D50, the game's deleting dtor vt+0xC(1), then 0x500B80 on the project
+// root (race_session_game_release) and the repository's vt+0x1C, then the project asset's release (the render device's
+// flush vt+0x30 / +0xD0 around it - the renderer's) whose last reference deletes it - the entities and their bodies
+// (below); the same for +0x38's asset. Ours: the caller decides WHEN (a replaced session, or the --end-race test driver).
+// VuEntity's gameRelease 0x500B80 on the project's root (0x4B97E0 after VuGame's release 0x482D50 and the game's deleting
+// dtor, when the root's +0x14 bit 2 - gameInitialize'd - is set; then the repository vt+0x1C and the project asset's
+// release, which destroys the entities): per entity with bit 2 set - each component's vt+0x28 (+0x48 list), the
+// children in +0x38 order (recursively), its own slot 7 (vt+0x1C), the repository g 0x759080 vt+0x24 unless +0x14 & 8
+// (a hook), +0x14 &= ~4. Slot 7 recreated here: VuControlEntity 0x5CD660 (keyframe.hxx control_game_release) and
+// VuKeyframeMotionEntity 0x5CEA40 (keymotion.hxx key_motion_game_release); every other class's slot 7 and every
+// component's vt+0x28 are not run (counted, logged).
+inline void race_session_game_release( race_session_t& s )
+{
+    if ( !s.tree )
+        return;
+    std::map< std::string, int > unknown;
+    int components = 0, released = 0;
+    const auto walk = [ & ]( const auto& self, entity_t& e ) -> void {
+        components += static_cast< int >( e.m_components.size( ) );
+        for ( auto& c : e.m_children )
+            self( self, *c );
+        if ( e.m_type == "VuControlEntity" )
+            for ( const auto& k : s.controls )
+                if ( k->entity == &e )
+                {
+                    control_game_release( *k->c, race_session_control_hooks( *k ) );
+                    ++released;
+                    return;
+                }
+        if ( e.m_type == "VuKeyframeMotionEntity" )
+            for ( const auto& k : s.key_motions )
+                if ( k->entity == &e )
+                {
+                    key_motion_game_release( *k->k, race_session_key_hooks( *k ) );
+                    ++released;
+                    return;
+                }
+        ++unknown[ e.m_type.empty( ) ? std::string( "(UNKNOWN node)" ) : e.m_type ];
+    };
+    walk( walk, *s.tree );
+    std::string by;
+    for ( const auto& u : unknown )
+        by += ( by.empty( ) ? "" : ", " ) + u.first + " x" + std::to_string( u.second );
+    LOG_INFO( "race: the project's gameRelease 0x500B80 - %d slot 7s run (VuControlEntity / VuKeyframeMotionEntity)", released );
+    race_unwired( s, "the project's gameRelease 0x500B80: slot 7 not recreated for " + by + "; " + std::to_string( components ) +
+                     " components' vt+0x28 not run; the repository vt+0x24 / +0x1C (hooks)" );
+}
+
 inline void race_session_end( race_session_t& s )
 {
     if ( !s.active )
@@ -1958,6 +2007,7 @@ inline void race_session_end( race_session_t& s )
                                w == "lens24" ? "lens water vt+0x24" : w == "listener" ? "0x539020 on g 0x75906C" : "0x4D2010" ) + ") - not recreated" );
     };
     vugame_release( s.rules, flags, h );
+    race_session_game_release( s );
     int bodies = 0;
     for ( const auto& lb : s.level_bodies )
     {
@@ -2009,6 +2059,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     }
     s.mode = mode;
     s.track = track;
+    s.tree = &tree;
 
     // VuGame's boat load 0x481CE0 + each boat's postLoad 0x41CFF0.
     value_t& util = s.util;
