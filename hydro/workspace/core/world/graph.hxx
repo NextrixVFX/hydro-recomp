@@ -145,6 +145,26 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
         return retval_t{};
     }
 
+    // VuAudioEmitterEntity's inputs (world/sound.hxx, the water agent's - case audio_emitter): Start 0x5F3B80 (play at the
+    // transform's world position, +0x80) and Stop 0x5F3BE0, on the entity's state (world/emitters.hxx) and the audio platform.
+    const auto em = m_entities.find( entity );
+    if ( em != m_entities.end( ) && em->second->m_type == "VuAudioEmitterEntity" && em->second->m_state )
+    {
+        audio_emitter_t& a = static_cast< audio_emitter_state_t* >( em->second->m_state.get( ) )->value;
+        const transform_component_t* t = entity_transform( *em->second );
+        if ( plug == "Start" && t && !em->second->m_world_unknown )
+            audio_emitter_start( a, t->world + 12, m_sound );
+        else if ( plug == "Stop" )
+            audio_emitter_stop( a, m_sound );
+        else
+        {
+            count_unhandled( entity, plug );
+            return retval_t{};
+        }
+        ++m_fired;
+        return retval_t{};
+    }
+
     // VuSetFrontEndCameraEntity. "Trigger" is its ONE input plug, named
     // inside the init helper @0x409570 which binds
     // VuMethod1<VuSetFrontEndCameraEntity,VuRetVal,VuParams const&> to the
@@ -697,7 +717,23 @@ inline void c_world::on_animation_event( const std::string& owner, const std::st
     // (json PfxName/Pos/Rot), Show and Hide (the prop's vtable slots 12
     // and 13, @0x5ecf90 / @0x5ecfe0, unread). Any other name does nothing
     // in retail either.
-    if ( name == "PlayAudioEvent" || name == "PlayPfxModelSpace" || name == "Show" || name == "Hide" )
+    // PlayAudioEvent (world/sound.hxx prop_play_audio_event, the water agent's): json EventName / Pos through the prop's
+    // transform +0x50 and its +0xB0 scale, on the audio platform.
+    if ( name == "PlayAudioEvent" )
+    {
+        const auto e = m_entities.find( owner );
+        const transform_component_t* t = e != m_entities.end( ) ? entity_transform( *e->second ) : nullptr;
+        if ( !t || e->second->m_world_unknown )
+        {
+            count_unhandled( owner, name );
+            return;
+        }
+        static const value_t none;
+        prop_play_audio_event( params ? *params : none, t->world, t->scale, m_sound );
+        ++m_fired;
+        return;
+    }
+    if ( name == "PlayPfxModelSpace" || name == "Show" || name == "Hide" )
         count_unhandled( owner, name );
 }
 

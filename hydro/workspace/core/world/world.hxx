@@ -1068,6 +1068,7 @@ public:
                     item.off = !on;
         };
         m_race.world.fire = [ this ]( const entity_t& owner, const char* plug ) { fire( entity_path( owner ), plug ); };
+        m_race.world.sound = &m_sound;
         // VuRaceGame's ctor 0x489030 loads its three HUD projects (0x4B4360) - before the boat load.
         load_huds( );
         m_race.world.hud = [ this ]( int project, race_hud_verb_t verb, float step ) { hud( project, verb, step ); };
@@ -1268,6 +1269,7 @@ public:
                     item.off = !on;
         };
         m_race.world.fire = [ this ]( const entity_t& owner, const char* plug ) { fire( entity_path( owner ), plug ); };
+        m_race.world.sound = &m_sound;
         if ( !m_race.active )
             water_frame( dt );
 
@@ -1693,6 +1695,29 @@ private:
     // by graph.hxx; m_logic_fired counts their handlers run.
     std::map< std::string, entity_t* > m_logic;
     std::map< std::string, std::uint32_t > m_static_pfx;   // VuStaticPfxEntity path -> its +0x94 instance (0: none)
+    std::map< std::string, entity_t* > m_entities;   // every tree entity by its graph path
+    // THE AUDIO PLATFORM (FMOD's imports, world/sound.hxx sound_hooks_t): there is none on this platform yet - every call
+    // retail would make is counted (and logged once per kind); getEvent answers a failure (1, not FMOD_OK) as FMOD does
+    // when an event cannot be made, so nothing is started or held.
+    sound_hooks_t m_sound = make_sound_hooks( this );
+    int m_sound_calls[ 6 ] = { };   // getEvent, setCallback, stop, start, set3DAttributes, setWorldTransform
+    static sound_hooks_t make_sound_hooks( c_world* self )
+    {
+        sound_hooks_t h;
+        h.user = self;
+        h.get_event = []( void* u, const char* name, std::uint32_t, std::uint32_t* ev, const void* ) {
+            c_world& w = *static_cast< c_world* >( u );
+            if ( w.m_sound_calls[ 0 ]++ == 0 )
+                LOG_WARNING( "audio: FMOD getEvent('%s') - no audio platform: answered failure (further calls counted)", name );
+            *ev = 0u;
+            return 1;
+        };
+        h.set_callback = []( void* u, std::uint32_t, std::uint32_t, const void* ) { ++static_cast< c_world* >( u )->m_sound_calls[ 1 ]; };
+        h.stop = []( void* u, std::uint32_t, bool ) { ++static_cast< c_world* >( u )->m_sound_calls[ 2 ]; };
+        h.start = []( void* u, std::uint32_t ) { ++static_cast< c_world* >( u )->m_sound_calls[ 3 ]; };
+        h.attributes = []( void* u, std::uint32_t, const float*, const float*, const float* ) { ++static_cast< c_world* >( u )->m_sound_calls[ 4 ]; };
+        return h;
+    }
     std::unique_ptr< c_action_mode > m_action;   // the game mode manager's current mode in a front-end race (world/action.hxx)
     action_fade_t m_fade;                        // g_vufademanager 0x758FC4
     std::function< void( ) > m_action_level;     // LoadLevel's enter while load_scene runs

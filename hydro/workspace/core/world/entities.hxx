@@ -65,6 +65,7 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     int pfx_placed = 0;
     int pfx_unplaced = 0;
     std::map< std::string, std::uint32_t > fresh_static_pfx;
+    std::map< std::string, entity_t* > fresh_entities;   // every entity by its graph path (the audio receivers read their state)
     int triggers_unplaced = 0;
     // The logic / action / motion / settings consumers (engine entity/actions.hxx).
     std::vector< rotator_t > fresh_rotators;
@@ -244,6 +245,8 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
         if ( e.m_ctor && e.m_type == "VuIfEntity" )
             fresh_ifs.insert( trail );
         // The logic entities (world/logic.hxx): their state is the tree's (race.hxx logic_state_t).
+        if ( !trail.empty( ) )
+            fresh_entities[ trail ] = &e;
         if ( logic_state_of( e ) && !trail.empty( ) )
             fresh_logic[ trail ] = &e;
         // VuTriggerPlaneEntity / VuTriggerBoxEntity (engine entity/trigger.hxx):
@@ -474,6 +477,7 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     m_ifs = std::move( fresh_ifs );
     m_logic = std::move( fresh_logic );
     m_static_pfx = std::move( fresh_static_pfx );
+    m_entities = std::move( fresh_entities );
     // Dev trace: each logic entity's links (both ends are recorded, so its inputs' senders are here too).
     for ( const auto& pair : m_graph )
         if ( m_logic.count( pair.first.first ) != 0 )

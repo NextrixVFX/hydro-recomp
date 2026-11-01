@@ -132,6 +132,8 @@ struct race_world_t
     std::function< void( const entity_t& owner, bool on ) > prop_drawn;
     // An entity's output plug fired (VuScriptComponent findPlug 0x504770 + the plug's vt+8 = 0x5023A0): c_world's graph.
     std::function< void( const entity_t& owner, const char* plug ) > fire;
+    // The audio platform (FMOD's imports - world/sound.hxx; c_world's). Null: no audio calls made (logged).
+    const sound_hooks_t* sound = nullptr;
     std::uint32_t viewports = 1;
     std::int32_t control_method = 0;
     std::int32_t display_w = 1280;
@@ -1076,6 +1078,16 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
             lh.user = &s;
             lh.add = []( void* u, const void* emitter ) { static_cast< race_session_t* >( u )->lens_emitters.push_back( emitter ); };
             lens_water_emitter_start( &e, lh );
+            return;
+        }
+        // VuAudioEmitterEntity's slot 6 0x5F3B30 (world/sound.hxx audio_emitter_game_init: plays when Initially Active).
+        if ( e.m_type == "VuAudioEmitterEntity" && e.m_state )
+        {
+            const transform_component_t* et = entity_transform( e );
+            if ( !s.world.sound || !et || e.m_world_unknown )
+                race_unwired( s, "a VuAudioEmitterEntity's gameInitialize 0x5F3B30 with no audio platform / known world - not run" );
+            else
+                audio_emitter_game_init( static_cast< audio_emitter_state_t* >( e.m_state.get( ) )->value, et->world + 12, *s.world.sound );
             return;
         }
         const bool breakable = e.m_type == "VuBreakablePropEntity";
