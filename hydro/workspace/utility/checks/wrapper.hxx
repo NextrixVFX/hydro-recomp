@@ -366,3 +366,140 @@ inline bool verify_collision_contact( )
         LOG_ERROR( "collision_contact FAILED %d", bad );
     return bad == 0;
 }
+// VuCollisionManager's impact tick 0x4ADA10 (world/collide.hxx collision_impact_tick on pfxmgr.hxx's manager and a pfx_heap_t
+// holding the case's fake instances) against retail (case collision_impact): per tick the hook log (audio, creates, the
+// instance slots) and the count; at the end every process's +0x1C and the manager's entries (flags, serial).
+struct cim_log_t
+{
+    std::vector< unsigned > log;   // length-prefixed entries
+    unsigned entries = 0;
+    std::deque< unsigned > event, param, create;
+    const collision_tables_t* tables = nullptr;
+    void add( std::initializer_list< unsigned > e )
+    {
+        log.push_back( static_cast< unsigned >( e.size( ) ) );
+        log.insert( log.end( ), e );
+        ++entries;
+    }
+};
+
+inline unsigned cim_cell( const std::vector< std::string >& names, const char* s )
+{
+    for ( std::size_t c = 0; c < names.size( ); ++c )
+        if ( names[ c ].c_str( ) == s )
+            return static_cast< unsigned >( c );
+    return 0xFFFFu;
+}
+
+inline bool verify_collision_impact( )
+{
+    constexpr std::uint32_t arg = 0x30000000u, block0 = arg + 0x1100u;
+    const unsigned* s = g_golden_cim_words;
+    collision_tables_t t;
+    t.types = static_cast< std::int32_t >( *s++ );
+    const unsigned nc = *s++;
+    for ( unsigned c = 0; c < nc; ++c, s += 2 )
+    {
+        t.impact_sfx.push_back( s[ 0 ] ? "sfx_" + std::to_string( c ) : "" );
+        t.impact_pfx.push_back( s[ 1 ] ? "Generic/Impact/p" + std::to_string( c ) : "" );
+    }
+    pfx_heap_t heap;
+    heap.add( arg + 0x1000u, 0xE000u );
+    const unsigned ni = *s++;
+    for ( unsigned i = 0; i < ni; ++i, s += 2 )
+        heap[ arg + s[ 0 ] ] = s[ 1 ];
+    const unsigned np = *s++;
+    const unsigned* procs = s;
+    s += np;
+    cim_log_t L;
+    L.tables = &t;
+    pfx_manager_ops_t ops;
+    ops.user = &L;
+    ops.create = []( void* u, const char* path ) {
+        cim_log_t& l = *static_cast< cim_log_t* >( u );
+        const std::uint32_t a = l.create.front( );
+        l.create.pop_front( );
+        l.add( { 6u, cim_cell( l.tables->impact_pfx, path ), a ? ( a - block0 ) / 0x280u : 0xFFFFFFFFu } );
+        return a;
+    };
+    pfx_manager_t pm;
+    pfx_manager_init( pm, ops );
+    collision_impact_hooks_t k;
+    k.user = &L;
+    k.get_event = []( void* u, const char* name, std::uint32_t& ev ) {
+        cim_log_t& l = *static_cast< cim_log_t* >( u );
+        const unsigned ok = l.event.front( );
+        l.event.pop_front( );
+        ev = 0xE000u + l.entries;
+        l.add( { 1u, cim_cell( l.tables->impact_sfx, name ), 1u, ok } );
+        return ok != 0u;
+    };
+    k.set_position = []( void* u, std::uint32_t ev, const float* p ) {
+        unsigned w[ 3 ];
+        std::memcpy( w, p, 12 );
+        static_cast< cim_log_t* >( u )->add( { 2u, ev, w[ 0 ], w[ 1 ], w[ 2 ], 0u, 0u } );
+    };
+    k.get_parameter = []( void* u, std::uint32_t ev, const char* name, std::uint32_t& p ) {
+        cim_log_t& l = *static_cast< cim_log_t* >( u );
+        const unsigned ok = l.param.front( );
+        l.param.pop_front( );
+        p = 0xF000u + l.entries;
+        l.add( { 3u, ev, std::strcmp( name, "intensity" ) == 0 ? 1u : 0u, ok } );
+        return ok != 0u;
+    };
+    k.set_value = []( void* u, std::uint32_t p, float v ) {
+        unsigned w;
+        std::memcpy( &w, &v, 4 );
+        static_cast< cim_log_t* >( u )->add( { 4u, p, w } );
+    };
+    k.start = []( void* u, std::uint32_t ev ) { static_cast< cim_log_t* >( u )->add( { 5u, ev } ); };
+    k.pfx_position = []( void* u, std::uint32_t i, const float* p ) {
+        unsigned w[ 3 ];
+        std::memcpy( w, p, 12 );
+        static_cast< cim_log_t* >( u )->add( { 7u, ( i - block0 ) / 0x280u, w[ 0 ], w[ 1 ], w[ 2 ] } );
+    };
+    k.pfx_duration = []( void* u, std::uint32_t i ) { static_cast< cim_log_t* >( u )->add( { 8u, ( i - block0 ) / 0x280u } ); };
+    k.pfx_start = []( void* u, std::uint32_t i ) { static_cast< cim_log_t* >( u )->add( { 9u, ( i - block0 ) / 0x280u } ); };
+    k.pfx_walk = []( void* u, std::uint32_t i ) { static_cast< cim_log_t* >( u )->add( { 10u, ( i - block0 ) / 0x280u } ); };
+    collision_manager_t m;
+    m.impacts.data.resize( 8 );
+    m.impacts.capacity = 8;
+    const unsigned nt = *s++;
+    int bad = 0;
+    for ( unsigned tk = 0; tk < nt; ++tk )
+    {
+        const unsigned nr = *s++;
+        for ( unsigned i = 0; i < nr; ++i, s += 7 )
+            std::memcpy( &m.impacts.data[ i ], s, 28 );
+        m.impacts.count = static_cast< std::int32_t >( nr );
+        L.event.assign( s, s + nr );
+        L.param.assign( s + nr, s + 2 * nr );
+        L.create.clear( );
+        for ( unsigned i = 0; i < nr; ++i )
+            L.create.push_back( s[ 2 * nr + i ] == 0xFFFFFFFFu ? 0u : block0 + 0x280u * s[ 2 * nr + i ] );
+        s += 3 * nr;
+        L.log.clear( );
+        L.entries = 0;
+        collision_impact_tick( m, t, pm, ops, heap, k );
+        const unsigned nl = *s++;
+        bad += L.log != std::vector< unsigned >( s, s + nl );
+        s += nl;
+        bad += static_cast< unsigned >( m.impacts.count ) != *s++;
+    }
+    const unsigned nf = *s++;
+    for ( unsigned i = 0; i < nf && i < np; ++i )
+        bad += heap[ arg + procs[ i ] + 0x1Cu ] != s[ i ];
+    s += nf;
+    const unsigned ne = *s++;
+    for ( unsigned i = 0; i < ne; ++i, s += 2 )
+    {
+        const pfx_manager_entry_t& x = pm.entries[ static_cast< std::size_t >( pm.table[ i ] ) ];
+        bad += ( x.flags != s[ 0 ] ) + ( x.serial != s[ 1 ] );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "collision_impact_tick matches VuCollisionManager's impact tick 0x4ADA10 on a retail VuPfxManager: %u ticks, %u fountain "
+                     "processes, %u entries", nt, np, ne );
+    else
+        LOG_ERROR( "collision_impact FAILED %d", bad );
+    return bad == 0;
+}

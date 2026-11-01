@@ -10,9 +10,11 @@
 // the scrapes (0x4ADC00) and empties the arrays.
 
 #include <workspace/core/boat/events.hxx>
+#include <workspace/core/world/pfxmgr.hxx>
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
 // The engine's VuArray<T> (data, count, capacity; _aligned_malloc 16). Its
@@ -115,4 +117,98 @@ inline void collision_contact_added( collision_manager_t& m, const std::uint8_t*
     r.part_b = part_b;
     std::memcpy( r.point, point, 16 );
     r.strength = s;
+}
+
+// The surface-pair tables init 0x4AD110 loads from "SurfaceTableDB" (0x4AD690,
+// not recreated here): +0x14 the surface type count (g_vudynamicsimpl
+// vt+0x4C), then four types x types arrays of 64-byte names - +0x18
+// "ImpactSfx", +0x24 "ScrapeSfx", +0x30 "ImpactPfx" (prefix "Generic/Impact/"),
+// +0x3C "ScrapePfx" ("Generic/Scrape/"); cell (a, b) = entry a x types + b.
+struct collision_tables_t
+{
+    std::int32_t types = 0;
+    std::vector< std::string > impact_sfx, scrape_sfx, impact_pfx, scrape_pfx;
+};
+
+// The impact tick's outside world. AUDIO (platform: FMOD's event API, hooks):
+// +8 is the "Global/Collisions/Collisions_Player" event group (0x4AD970 fetches
+// it once through EventSystem::getGroup); `get_event` = its vt+0x20
+// getEvent( name, 1, &event ) - false = a non-zero FMOD_RESULT; then
+// set3DAttributes( event, &position, 0, 0 ), getParameter( event, "intensity",
+// &p ) (false = failed) -> setValue( p, strength ), start( event ). THE PFX:
+// g_vupfxmanager (pfxmgr.hxx: the manager, its ops) and the system instance's
+// slots 10 (Duration, the answer discarded), 0 (position), 11 (start) - by
+// default pfxsim.hxx's on `heap` (null hook = that default).
+struct collision_impact_hooks_t
+{
+    void* user = nullptr;
+    bool ( *get_event )( void* user, const char* name, std::uint32_t& event ) = nullptr;
+    void ( *set_position )( void* user, std::uint32_t event, const float* xyz ) = nullptr;
+    bool ( *get_parameter )( void* user, std::uint32_t event, const char* name, std::uint32_t& parameter ) = nullptr;
+    void ( *set_value )( void* user, std::uint32_t parameter, float value ) = nullptr;
+    void ( *start )( void* user, std::uint32_t event ) = nullptr;
+    void ( *pfx_duration )( void* user, std::uint32_t instance ) = nullptr;
+    void ( *pfx_position )( void* user, std::uint32_t instance, const float* xyz ) = nullptr;
+    void ( *pfx_start )( void* user, std::uint32_t instance ) = nullptr;
+    void ( *pfx_walk )( void* user, std::uint32_t instance ) = nullptr;   // slot 16 (0x401DA0: the instance itself) - told only
+};
+
+// The impact tick 0x4ADA10 (thiscall manager): per impact record, cell = part
+// A x types + part B: the sound (ImpactSfx[cell]) at the record's point with
+// "intensity" = the strength; then createEffect 0x52BCD0( ImpactPfx[cell] ) -
+// on an entry: a new handle (the serial bump, 0x43C5E0's inline), the
+// instance's slot 10, and when the handle is not 0 and still resolves (the
+// lookup inline): slot 16, every process of a pattern whose node is a
+// VuPfxEmitFountain (descriptor 0x7369BC up the chain) gets +0x1C (its count
+// scale) = the strength, then slot 0 with the record's point, slot 11. The
+// effect is fire-and-forget: the manager's Final tick releases it when its
+// state reaches 0. Last: the count = 0.
+inline void collision_impact_tick( collision_manager_t& m, const collision_tables_t& t, pfx_manager_t& pm, const pfx_manager_ops_t& ops,
+                                   pfx_heap_t& heap, const collision_impact_hooks_t& k )
+{
+    for ( std::int32_t i = 0; i < m.impacts.count; ++i )
+    {
+        const collision_impact_t& r = m.impacts.data[ static_cast< std::size_t >( i ) ];
+        const std::size_t cell = static_cast< std::size_t >( r.part_a * t.types + r.part_b );
+        std::uint32_t event = 0;
+        if ( k.get_event != nullptr && k.get_event( k.user, t.impact_sfx[ cell ].c_str( ), event ) )
+        {
+            if ( k.set_position != nullptr )
+                k.set_position( k.user, event, r.point );
+            std::uint32_t parameter = 0;
+            if ( k.get_parameter != nullptr && k.get_parameter( k.user, event, "intensity", parameter ) && k.set_value != nullptr )
+                k.set_value( k.user, parameter, r.strength );
+            if ( k.start != nullptr )
+                k.start( k.user, event );
+        }
+        const int e = pfx_manager_create( pm, t.impact_pfx[ cell ].c_str( ), ops );
+        if ( e < 0 )
+            continue;
+        const std::uint32_t handle = pfx_manager_handle( pm, e );
+        const std::uint32_t created = pm.entries[ static_cast< std::size_t >( e ) ].instance;
+        if ( k.pfx_duration != nullptr )
+            k.pfx_duration( k.user, created );
+        else
+            ( void )pfx_instance_duration( heap, created );
+        if ( handle == 0u )
+            continue;
+        const int f = pfx_manager_lookup( pm, handle );
+        if ( f < 0 )
+            continue;
+        const std::uint32_t inst = pm.entries[ static_cast< std::size_t >( f ) ].instance;
+        if ( k.pfx_walk != nullptr )
+            k.pfx_walk( k.user, inst );
+        std::uint32_t bits;
+        std::memcpy( &bits, &r.strength, 4 );
+        pfx_system_bind( heap, inst, "VuPfxEmitFountain", 0x1C, bits );
+        if ( k.pfx_position != nullptr )
+            k.pfx_position( k.user, inst, r.point );
+        else
+            pfx_system_set_position( heap.find( inst ), reinterpret_cast< const std::uint32_t* >( r.point ) );
+        if ( k.pfx_start != nullptr )
+            k.pfx_start( k.user, inst );
+        else
+            pfx_instance_start( heap, inst );
+    }
+    m.impacts.count = 0;
 }
