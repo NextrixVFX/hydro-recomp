@@ -474,3 +474,123 @@ inline void bt_triangle_penetration_direction( const bt_mem_t& m, std::uint32_t 
     for ( std::uint32_t k = 0; k < 12; k += 4 )
         bt_wrf( m, out + k, bt_rdf( m, out + k ) * -1.0f );
 }
+// btAlignedObjectArray's ctor inlined (init): m_ownsMemory (+16) = 1, m_data
+// (+12) = 0, m_size (+4) = 0, m_capacity (+8) = 0.
+inline void bt_array_init( const bt_mem_t& m, std::uint32_t array )
+{
+    m.wr8( m.user, array + 16, 1 );
+    m.wr( m.user, array + 12, 0 );
+    m.wr( m.user, array + 4, 0 );
+    m.wr( m.user, array + 8, 0 );
+}
+
+// The scalar deleting dtor 0x5263F0 of the polyhedral rows (btConvexTriangle-
+// MeshShape / btBoxShape / btPolyhedralConvex(AabbCaching)Shape /
+// btTriangleShape slot 0; flags; retn 4): [this] = 0x74E074; the +0x40 block
+// (m_polyhedron) btAlignedFree'd when set - no destructor call; [this] =
+// 0x74CF98; with flags & 1 the btAlignedFree of this. eax = this.
+inline std::uint32_t bt_polyhedral_shape_delete( const bt_mem_t& m, std::uint32_t self, std::uint32_t flags )
+{
+    m.wr( m.user, self, 0x74E074u );
+    const std::uint32_t polyhedron = m.rd( m.user, self + 0x40 );
+    if ( polyhedron != 0 )
+        bt_aligned_free( m, polyhedron );
+    m.wr( m.user, self, 0x74CF98u );
+    if ( ( flags & 1u ) != 0 )
+        bt_aligned_free( m, self );
+    return self;
+}
+
+// CProfileNode::Reset 0x57B840 (thiscall): per node of the sibling chain
+// (+0x1C) from this one: TotalCalls (+4) = 0, TotalTime (+8) = 0, then the
+// child (+0x18) reset first (recursively).
+inline void bt_profile_node_reset( const bt_mem_t& m, std::uint32_t node )
+{
+    do
+    {
+        m.wr( m.user, node + 4, 0 );
+        m.wr( m.user, node + 8, 0 );
+        const std::uint32_t child = m.rd( m.user, node + 0x18 );
+        if ( child != 0 )
+            bt_profile_node_reset( m, child );
+        node = m.rd( m.user, node + 0x1C );
+    } while ( node != 0 );
+}
+
+// btCollisionWorld::LocalConvexResult's ctor 0x552570 (thiscall; hitObject,
+// localShapeInfo, normal*, point*, fraction; retn 14h): +0 / +4 the two
+// words, +0x10 the normal, +0x20 the point (16 bytes each), +0x30 the
+// fraction. eax = this.
+inline std::uint32_t bt_local_convex_result_construct( const bt_mem_t& m, std::uint32_t self, const std::uint32_t* args )
+{
+    m.wr( m.user, self, args[ 0 ] );
+    m.wr( m.user, self + 4, args[ 1 ] );
+    bt_copy16( m, self + 0x10, args[ 2 ] );
+    bt_copy16( m, self + 0x20, args[ 3 ] );
+    m.wr( m.user, self + 0x30, args[ 4 ] );
+    return self;
+}
+
+// btSimulationIslandManager's ctor 0x624520: [this] = 0x758330; the union
+// find's m_elements (+4), m_islandmanifold (+0x18), m_islandBodies (+0x2C)
+// initialised; m_splitIslands (+0x40) = 1. eax = this.
+inline std::uint32_t bt_island_manager_construct( const bt_mem_t& m, std::uint32_t self )
+{
+    m.wr( m.user, self, 0x758330u );
+    for ( std::uint32_t at : { 4u, 0x18u, 0x2Cu } )
+        bt_array_init( m, self + at );
+    m.wr8( m.user, self + 0x40, 1 );
+    return self;
+}
+
+// btSequentialImpulseConstraintSolver's ctor 0x56FAD0: [this] = 0x74F8EC; the
+// six pools (+4 m_tmpSolverBodyPool, +0x18 / +0x2C / +0x40 / +0x54 the
+// contact / non-contact / friction / rolling constraint pools, +0x68
+// m_orderTmpConstraintPool ... ) initialised; m_btSeed2 (+0x7C) = 0. eax =
+// this.
+inline std::uint32_t bt_sequential_solver_construct( const bt_mem_t& m, std::uint32_t self )
+{
+    m.wr( m.user, self, 0x74F8ECu );
+    for ( std::uint32_t at : { 4u, 0x18u, 0x2Cu, 0x40u, 0x54u, 0x68u } )
+        bt_array_init( m, self + at );
+    m.wr( m.user, self + 0x7C, 0 );
+    return self;
+}
+
+// btMatrix3x3's ctor from nine scalars 0x413340 (thiscall; nine float*; retn
+// 24h): the rows (xx, xy, xz, 0) (yx, yy, yz, 0) (zx, zy, zz, 0). eax = this.
+inline std::uint32_t bt_matrix3x3_construct( const bt_mem_t& m, std::uint32_t self, const std::uint32_t* args )
+{
+    for ( std::uint32_t row = 0; row < 3; ++row )
+    {
+        for ( std::uint32_t k = 0; k < 3; ++k )
+            m.wr( m.user, self + 0x10 * row + 4 * k, m.rd( m.user, args[ 3 * row + k ] ) );
+        m.wr( m.user, self + 0x10 * row + 12, 0 );
+    }
+    return self;
+}
+
+// btHashMap::findIndex 0x551E90 (thiscall; key*; retn 4): Thomas Wang's
+// 32-bit hash of the key's first word (the shifts right are `sar`), masked
+// by m_valueArray's capacity (+0x30) - 1; an index at or past m_hashTable's
+// size (+4, unsigned) -> -1; else the chain from m_hashTable[index] (+0xC)
+// through m_next (+0x20) until -1 or m_keyArray[i] (+0x48, 8-byte keys, the
+// first word) equals the key.
+inline std::uint32_t bt_hash_map_find_index( const bt_mem_t& m, std::uint32_t self, std::uint32_t key_ptr )
+{
+    const std::uint32_t key = m.rd( m.user, key_ptr );
+    const auto sar = []( std::uint32_t v, int s ) { return static_cast< std::uint32_t >( static_cast< std::int32_t >( v ) >> s ); };
+    std::uint32_t h = key + ~( key << 15 );
+    h ^= sar( h, 10 );
+    h = h * 9u;
+    h ^= sar( h, 6 );
+    h += ~( h << 11 );
+    h ^= sar( h, 16 );
+    const std::uint32_t index = h & ( m.rd( m.user, self + 0x30 ) - 1u );
+    if ( index >= m.rd( m.user, self + 4 ) )
+        return 0xFFFFFFFFu;
+    std::uint32_t i = m.rd( m.user, m.rd( m.user, self + 0xC ) + 4u * index );
+    while ( i != 0xFFFFFFFFu && key != m.rd( m.user, m.rd( m.user, self + 0x48 ) + 8u * i ) )
+        i = m.rd( m.user, m.rd( m.user, self + 0x20 ) + 4u * i );
+    return i;
+}

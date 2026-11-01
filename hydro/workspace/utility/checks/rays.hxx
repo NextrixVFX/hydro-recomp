@@ -1956,3 +1956,24 @@ inline bool verify_bt_rows2( )
             }
         } );
 }
+
+// verify_bt_rows3 (boat batch 19): cases/boat.py bt_rows3 - 0x5263F0,
+// 0x57B840, 0x552570, 0x624520, 0x56FAD0, 0x413340, 0x551E90.
+inline bool verify_bt_rows3( )
+{
+    return bt_rows_verify( g_golden_bt_rows3_words, "bt_rows3",
+        "seven Bullet rows 0x5263F0 / 0x57B840 / 0x552570 / 0x624520 / 0x56FAD0 / 0x413340 / 0x551E90 (collision/arena.hxx: the polyhedral "
+        "dtor, CProfileNode::Reset, LocalConvexResult, the island manager / sequential solver ctors, btMatrix3x3, btHashMap::findIndex)",
+        []( unsigned kind, const bt_mem_t& m, const bt_io_t&, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            switch ( kind )
+            {
+                case 1: return bt_polyhedral_shape_delete( m, self, args[ 0 ] );
+                case 2: bt_profile_node_reset( m, self ); return 0;
+                case 3: return bt_local_convex_result_construct( m, self, args );
+                case 4: return bt_island_manager_construct( m, self );
+                case 5: return bt_sequential_solver_construct( m, self );
+                case 6: return bt_matrix3x3_construct( m, self, args );
+                default: return bt_hash_map_find_index( m, self, args[ 0 ] );
+            }
+        } );
+}
