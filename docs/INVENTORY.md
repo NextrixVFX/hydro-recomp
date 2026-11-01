@@ -18,10 +18,10 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 1830 | 757618 |
-| callee | 1007 | 212607 |
-| cited | 367 | 125741 |
-| absent | 5434 | 1130294 |
+| verified | 1842 | 762547 |
+| callee | 1038 | 214467 |
+| cited | 362 | 123007 |
+| absent | 5396 | 1126239 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -30,11 +30,11 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 
 | subsystem | functions | verified | callee | cited | absent | verified bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| unattributed | 1845 | 419 | 197 | 88 | 1141 | 251440 of 695394 |
+| unattributed | 1845 | 422 | 197 | 86 | 1140 | 253967 of 695394 |
 | physics (Bullet) | 646 | 339 | 88 | 47 | 172 | 113409 of 256657 |
-| entity / component / script framework | 1094 | 205 | 204 | 42 | 643 | 63269 of 207438 |
+| entity / component / script framework | 1094 | 213 | 232 | 40 | 609 | 65400 of 207438 |
 | HUD / UI / fonts | 648 | 101 | 138 | 13 | 396 | 53927 of 184315 |
-| game modes / race | 766 | 89 | 56 | 24 | 597 | 47711 of 179957 |
+| game modes / race | 766 | 90 | 59 | 23 | 594 | 47982 of 179957 |
 | rendering / gfx | 552 | 79 | 43 | 33 | 397 | 28659 of 126915 |
 | water | 325 | 170 | 68 | 33 | 54 | 58200 of 96416 |
 | boat | 264 | 163 | 40 | 18 | 43 | 67085 of 87400 |
@@ -58,8 +58,8 @@ Over-approximate (a referenced vtable brings every slot) and under-approximate (
 
 | tier | functions | verified | callee | cited | absent | runtime / STL / thunk | platform layer | game + engine logic not verified |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| race | 4905 | 1559 | 676 | 328 | 2342 | 68 | 610 | 2762 |
-| game | 2431 | 269 | 329 | 37 | 1796 | 77 | 313 | 1781 |
+| race | 4905 | 1564 | 677 | 324 | 2340 | 68 | 610 | 2757 |
+| game | 2431 | 276 | 359 | 36 | 1760 | 77 | 313 | 1774 |
 | service | 452 | 0 | 0 | 0 | 452 | 45 | 98 | 309 |
 | dead | 850 | 2 | 2 | 2 | 844 | 61 | 126 | 661 |
 
