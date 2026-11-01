@@ -1504,9 +1504,110 @@ inline bool verify_boat_game_init( )
     return failed == 0;
 }
 
+// race_boat_post_load (world/race.hxx) against retail's VuBoatEntity postLoad
+// 0x41CFF0 run whole (oracle case boat_post_load; the unrecreated ctors and
+// the two composed units 0x420A70 / 0x421670 recorded): per vector the call
+// rows in order, what +0x220 holds (a new block of retail's size / the
+// previous driver kept), and for an AI / UI driver its 0xD4 bytes on retail's
+// two-fill mask (the +0x60 string field compared as its text), its pointer
+// refs (the +0x60 string's heap block excepted) and the name.
+inline bool verify_boat_post_load( )
+{
+    const value_t doc = c_reader( std::vector< std::uint8_t >( g_golden_boat_post_load_doc,
+                                                               g_golden_boat_post_load_doc + g_golden_boat_post_load_doc_size ) ).parse( );
+    const unsigned* w = g_golden_boat_post_load_words;
+    const char* const* t = g_golden_boat_post_load_texts;
+    int failed = 0, rows_total = 0, drivers = 0;
+    for ( std::size_t v = 0; v < g_golden_boat_post_load_vectors; ++v )
+    {
+        const unsigned length = *w++;
+        const std::string type( *t++, length );
+        const std::string key = *t++;
+        std::vector< std::uint8_t > boat( 0x520, 0 );
+        std::memcpy( boat.data( ) + 0x270, w, 8 );
+        std::memcpy( boat.data( ) + 0x280, w + 2, 8 );
+        w += 4;
+        const unsigned held = *w++, size = *w++, calls = *w++, has = *w++;
+        const value_t& entry = member( doc, key.c_str( ) );
+        const value_t& driver_node = member( entry, "Driver" );
+        // The previous driver the case presets at +0x220: an object of no recreated class.
+        auto previous = std::make_unique< race_boat_driver_t >( );
+        race_boat_driver_t* const before = previous.get( );
+        std::unique_ptr< race_boat_driver_t > driver = std::move( previous );
+        std::vector< std::string > got;
+        race_post_load_hooks_t hooks;
+        hooks.unknown_ctor = [ &got ]( std::uint32_t ctor )
+        {
+            char buf[ 32 ];
+            std::snprintf( buf, sizeof( buf ), "ctor 0x%X boat", ctor );
+            got.push_back( buf );
+        };
+        hooks.unknown_load = [ &got, &driver_node ]( race_boat_driver_t&, const value_t& c )
+        { got.push_back( &c == &driver_node && c.tag != 0 ? "driver load Driver" : "driver load null" ); };
+        hooks.load_sections = [ &got ] { got.push_back( "sections boat" ); };
+        hooks.transform_changed = [ &got ] { got.push_back( "transform boat" ); };
+        race_boat_post_load( boat.data( ), type, entry, driver, hooks );
+        int bad = got.size( ) != calls ? 1 : 0;
+        for ( unsigned k = 0; k < calls; ++k )
+            bad = bad ? bad : ( k < got.size( ) && got[ k ] == t[ k ] ? 0 : 2 );
+        t += calls;
+        rows_total += static_cast< int >( calls );
+        if ( !bad && held == 1 && driver.get( ) != before )
+            bad = 3;
+        if ( !bad && held == 0 && ( driver.get( ) == before || !driver || driver->size != size ) )
+            bad = 4;
+        if ( !bad && has != ( driver && driver.get( ) != before && driver->known ? 1u : 0u ) )
+            bad = 5;
+        if ( has )
+        {
+            const std::uint8_t* want = reinterpret_cast< const std::uint8_t* >( w );
+            const std::uint8_t* mask = reinterpret_cast< const std::uint8_t* >( w + 0xD4 / 4 );
+            w += 2 * ( 0xD4 / 4 );
+            std::vector< image_ref_t > refs;
+            const unsigned n = *w++;
+            for ( unsigned k = 0; k < n; ++k, w += 4 )
+                if ( w[ 0 ] != 0x60 )
+                    refs.push_back( { static_cast< int >( w[ 0 ] ), w[ 1 ] == 1 ? AI_DRIVER_REF_BOAT : static_cast< int >( w[ 2 ] ),
+                                      static_cast< int >( w[ 3 ] ) } );
+            const std::string name = *t++;
+            ++drivers;
+            if ( !bad )
+            {
+                const std::vector< std::uint8_t >& img = driver->graph[ 0 ].image;
+                for ( int at = 0; at < 0xD4 && !bad; ++at )
+                    if ( mask[ at ] && !( at >= 0x60 && at < 0x78 ) && img[ static_cast< std::size_t >( at ) ] != want[ at ] )
+                        bad = 0x100 + at;
+                std::vector< image_ref_t > ours = driver->graph[ 0 ].refs;
+                auto by_slot = []( const image_ref_t& x, const image_ref_t& y ) { return x.slot < y.slot; };
+                std::sort( ours.begin( ), ours.end( ), by_slot );
+                std::sort( refs.begin( ), refs.end( ), by_slot );
+                bool same = ours.size( ) == refs.size( );
+                for ( std::size_t k = 0; same && k < refs.size( ); ++k )
+                    same = ours[ k ].slot == refs[ k ].slot && ours[ k ].object == refs[ k ].object && ours[ k ].offset == refs[ k ].offset;
+                if ( !bad && !same )
+                    bad = 6;
+                const auto it = driver->strings.find( 0x60 );
+                if ( !bad && ( it == driver->strings.end( ) ? std::string( ) : it->second ) != name )
+                    bad = 7;
+            }
+        }
+        if ( bad && ++failed <= 6 )
+            LOG_ERROR( "boat post load vector %d (type '%s', %s) differs from retail: %d (1/2 calls, 3/4 +0x220, 5 recreated, 6 refs, 7 name, "
+                       "0x1xx the driver's byte)", static_cast< int >( v ), type.c_str( ), key.c_str( ), bad );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "race_boat_post_load matches retail's VuBoatEntity postLoad 0x41CFF0: %d vectors, %d call rows, %d AI / UI drivers "
+                     "(bytes, refs, name); Human / Nuisance / Ghost ctors UNKNOWN", static_cast< int >( g_golden_boat_post_load_vectors ),
+                     rows_total, drivers );
+    else
+        LOG_ERROR( "boat post load FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_post_load_vectors ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_boat_post_load( ) && ok;
     ok = verify_boat_game_init( ) && ok;
     ok = verify_game_boat_load( ) && ok;
     ok = verify_race_track( ) && ok;
