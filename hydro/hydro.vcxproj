@@ -153,6 +153,7 @@
     <ClInclude Include="workspace\core\trigger\volume.hxx" />
     <ClInclude Include="workspace\core\ui\action.hxx" />
     <ClInclude Include="workspace\core\ui\button.hxx" />
+    <ClInclude Include="workspace\core\ui\combo.hxx" />
     <ClInclude Include="workspace\core\ui\compose.hxx" />
     <ClInclude Include="workspace\core\ui\config.hxx" />
     <ClInclude Include="workspace\core\ui\dock.hxx" />
@@ -166,11 +167,13 @@
     <ClInclude Include="workspace\core\ui\hud.hxx" />
     <ClInclude Include="workspace\core\ui\image.hxx" />
     <ClInclude Include="workspace\core\ui\leave.hxx" />
+    <ClInclude Include="workspace\core\ui\leaves.hxx" />
     <ClInclude Include="workspace\core\ui\map.hxx" />
     <ClInclude Include="workspace\core\ui\navigate.hxx" />
     <ClInclude Include="workspace\core\ui\schema.hxx" />
     <ClInclude Include="workspace\core\ui\screen.hxx" />
     <ClInclude Include="workspace\core\ui\select.hxx" />
+    <ClInclude Include="workspace\core\ui\ticker.hxx" />
     <ClInclude Include="workspace\core\ui\wiring.hxx" />
     <ClInclude Include="workspace\core\world\animate.hxx" />
     <ClInclude Include="workspace\core\world\bodies.hxx" />
@@ -203,15 +206,18 @@
     <ClInclude Include="workspace\core\world\transform.hxx" />
     <ClInclude Include="workspace\core\world\tree.hxx" />
     <ClInclude Include="workspace\core\world\wake.hxx" />
+    <ClInclude Include="workspace\core\world\watchers.hxx" />
     <ClInclude Include="workspace\core\world\water.hxx" />
     <ClInclude Include="workspace\core\world\wave.hxx" />
     <ClInclude Include="workspace\core\world\world.hxx" />
     <ClInclude Include="workspace\utility\checks\boat.hxx" />
+    <ClInclude Include="workspace\utility\checks\leaves.hxx" />
     <ClInclude Include="workspace\utility\checks\menu.hxx" />
     <ClInclude Include="workspace\utility\checks\pfx.hxx" />
     <ClInclude Include="workspace\utility\checks\race.hxx" />
     <ClInclude Include="workspace\utility\checks\ui.hxx" />
     <ClInclude Include="workspace\utility\checks\wake.hxx" />
+    <ClInclude Include="workspace\utility\checks\watchers.hxx" />
     <ClInclude Include="workspace\utility\checks\water.hxx" />
     <ClInclude Include="workspace\utility\checks\world.hxx" />
   </ItemGroup>
