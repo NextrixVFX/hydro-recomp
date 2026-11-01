@@ -2276,9 +2276,53 @@ inline bool verify_sync_motion_states( )
     return failed == 0;
 }
 
+// boat_motion_set (world/dynamics.hxx) against retail's VuBoatEntity
+// setWorldTransform 0x41E460 run whole with 0x534830 (case boat_motion_set;
+// 0x534C00 intercepted - called once with 0 on the component): the component's
+// local, world and both eulers' lanes 0 - 2 bit for bit over 64 vectors (8 of
+// them a non-orthonormal basis with odd w lanes), and the walk's call.
+inline bool verify_boat_motion_set( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_motion_set_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_motion_set_words + g_golden_boat_motion_set_offsets[ index ];
+        float basis[ 12 ], origin[ 4 ];
+        std::memcpy( basis, s, 48 );
+        std::memcpy( origin, s + 12, 16 );
+        s += 16;
+        std::vector< std::uint8_t > boat( 0x520, 0 ), transform( 0xC0, 0x77 );
+        std::memcpy( boat.data( ) + 0x290, s, 12 );
+        s += 3;
+        const unsigned* after = s;
+        s += 40;
+        const unsigned ncalls = *s++;
+        const bool walk_ok = ncalls == 1 && s[ 0 ] == 1 && s[ 1 ] == 0;
+        const bool ran = boat_motion_set( boat.data( ), transform.data( ), false, basis, origin );
+        int bad = -1;
+        for ( int w = 0; w < 40 && ran; ++w )
+            if ( w != 35 && w != 39 && std::memcmp( transform.data( ) + 0x10 + 4 * w, &after[ w ], 4 ) != 0 )
+            {
+                bad = w;
+                break;
+            }
+        if ( !ran || bad >= 0 || !walk_ok )
+            if ( ++failed <= 4 )
+                LOG_ERROR( "boat motion set vector %d: %s +0x%X (walk %s)", static_cast< int >( index ), ran ? "differs at" : "did not run",
+                           0x10 + 4 * bad, walk_ok ? "0x534C00(0)" : "NOT as recreated" );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "boat_motion_set matches VuBoatEntity's setWorldTransform 0x41E460 + 0x534830 over %d vectors: local, world, both "
+                     "eulers bit for bit, 0x534C00(0)", static_cast< int >( g_golden_boat_motion_set_count ) );
+    else
+        LOG_ERROR( "boat motion set FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_motion_set_count ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_boat_motion_set( ) && ok;
     ok = verify_sync_motion_states( ) && ok;
     ok = verify_transform_set_world( ) && ok;
     ok = verify_boat_build_audio( ) && ok;

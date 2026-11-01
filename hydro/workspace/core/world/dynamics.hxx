@@ -2,6 +2,7 @@
 
 #include <workspace/core/dynamics/step.hxx>
 #include <workspace/core/dynamics/writeback.hxx>
+#include <workspace/core/world/transform.hxx>
 
 #include <cstdint>
 #include <cstring>
@@ -64,4 +65,43 @@ inline void world_synchronize_motion_states( world_t& w, bool synchronize_all, m
     for ( solver_rigid_t* b : w.bodies )
         if ( b->activation_state != 2 && b->activation_state != 5 )
             world_synchronize_single_motion_state( w.local_time, *b, has, set, user );
+}
+
+// ---- VuBoatEntity's btMotionState::setWorldTransform 0x41E460 --------------
+//
+// The boat body's motion state (boat +0x5C, vtable 0x7383C4 slot 2; thiscall;
+// const btTransform&; retn 4) - VuBoatEntity code, recreated here because the
+// race's synchronizeMotionStates reaches it (flagged for the boat agent): M =
+// VuMatrix_multiply(this = translation(-(boat +0x290)) 0x410AB0, the body
+// transform as a VuMatrix 0x410B40) - the centre of mass taken back out; the
+// transform component's (boat +0x50) world = M and its world euler, then
+// 0x534830 and 0x534C00(0): transform_set_world (world/transform.hxx) on the
+// component's image (+0x10 local, +0x50 world, +0x90 / +0xA0 the eulers'
+// lanes 0 - 2; their fourth lanes are stack words - left). The boat has no
+// parent and no children in a race (0x481CE0's boats; the nuisance boats'
+// owners are not their parents - 0x42FDC0): `has_parent` true is the
+// parent path on an image, NOT modelled - false returned, nothing written.
+inline bool boat_motion_set( const std::uint8_t* boat, std::uint8_t* transform, bool has_parent, const float* basis, const float* origin )
+{
+    if ( has_parent )
+        return false;
+    float bt[ 16 ], m[ 16 ], tr[ 16 ], out[ 16 ];
+    std::memcpy( bt, basis, 48 );
+    std::memcpy( bt + 12, origin, 16 );
+    hull_vu_from_bt( m, bt );
+    float c[ 3 ];
+    for ( int k = 0; k < 3; ++k )
+    {
+        std::memcpy( &c[ k ], boat + 0x290 + 4 * k, 4 );
+        c[ k ] = -c[ k ];   // xorps with the sign mask 0x6F7CD0
+    }
+    hull_translation( tr, c );
+    hull_multiply( tr, out, m );
+    transform_component_t t{};
+    transform_set_world( t, out, nullptr );
+    std::memcpy( transform + 0x10, t.local, 64 );
+    std::memcpy( transform + 0x50, t.world, 64 );
+    std::memcpy( transform + 0x90, t.rotation, 12 );
+    std::memcpy( transform + 0xA0, t.world_rotation, 12 );
+    return true;
 }
