@@ -13,6 +13,7 @@
 #include <workspace/core/boat/contact.hxx>
 #include <workspace/core/boat/events.hxx>
 #include <workspace/core/boat/damage.hxx>
+#include <workspace/core/collision/leaves.hxx>
 
 #include <algorithm>
 #include <array>
@@ -2762,6 +2763,72 @@ inline bool verify_boat_small( )
     LOG_ERROR( "boat_small FAILED %d of %u vectors", failed, nv );
     return false;
 }
+// The physics (Bullet) leaf virtuals (engine collision/leaves.hxx) against retail (oracle case bt_leaves): each row's
+// eax (the bits its kind defines), ST0 for `one`, the ret's pop, the image's changed words, the name's text.
+inline bool verify_bt_leaves( )
+{
+    const unsigned* g = g_golden_bt_leaves_words;
+    auto text = [ & ]( ) {
+        const unsigned n = *g++;
+        std::string s( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        return s;
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    const std::uint32_t self = 0x30000100u;   // the case's ARG_BASE + 0x100
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned address = *g++;
+        std::uint8_t object[ 0x200 ] = {};
+        std::memcpy( object, g, 0x200 ); g += 0x80;
+        std::uint8_t before[ 0x200 ];
+        std::memcpy( before, object, 0x200 );
+        const unsigned eax = *g++, st0 = *g++, pop = *g++;
+        std::vector< std::pair< unsigned, unsigned > > changed( *g++ );
+        for ( auto& c : changed )
+        {
+            c.first = *g++;
+            c.second = *g++;
+        }
+        const std::string t = text( );
+        const bool has_text = *g++ != 0;
+        const bt_leaf_t* l = bt_leaf_find( address );
+        bool same = l != nullptr;
+        if ( same )
+        {
+            const bt_leaf_result_t r = bt_leaf_call( *l, object, self );
+            same = ( r.eax & r.eax_mask ) == ( eax & r.eax_mask ) && l->pop == pop;
+            if ( r.st0_set )
+            {
+                unsigned bits;
+                std::memcpy( &bits, &r.st0, 4 );
+                same = same && bits == st0;
+            }
+            std::vector< std::pair< unsigned, unsigned > > mine;
+            for ( unsigned o = 0; o < 0x200; o += 4 )
+                if ( std::memcmp( object + o, before + o, 4 ) != 0 )
+                {
+                    unsigned w;
+                    std::memcpy( &w, object + o, 4 );
+                    mine.emplace_back( o, w );
+                }
+            // A store of 0 over a word that already held 0 changes nothing - retail's list is of changed words too.
+            same = same && mine == changed;
+            if ( l->kind == bt_leaf_kind_t::text )
+                same = same && has_text && l->text && t == l->text;
+        }
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "bt_leaves vector %u (0x%X): eax 0x%08X, pop %u, text \"%s\"", v, address, eax, pop, t.c_str( ) );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the %zu physics (Bullet) leaf virtuals match retail: %u vectors", sizeof( k_bt_leaves ) / sizeof( k_bt_leaves[ 0 ] ), nv );
+        return true;
+    }
+    LOG_ERROR( "bt_leaves FAILED %d of %u vectors", failed, nv );
+    return false;
+}
 // The contact-added callback 0x574E90 -> 0x5751F0 -> 0x519720 against retail (oracle case contact_added): the manifold
 // point after (every word, bit for bit), the return, and each listener / callback call's record (but its stale-stack
 // words) with the case's scripted write-backs replayed.
@@ -3133,6 +3200,7 @@ inline bool verify_race_all( )
     ok = verify_driver_dtors( ) && ok;
     ok = verify_fleet_small( ) && ok;
     ok = verify_boat_small( ) && ok;
+    ok = verify_bt_leaves( ) && ok;
     ok = verify_contact_added( ) && ok;
     ok = verify_boat_rtti( ) && ok;
     ok = verify_human_explosion( ) && ok;
