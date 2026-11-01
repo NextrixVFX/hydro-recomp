@@ -3212,6 +3212,7 @@ inline bool verify_race_all( )
     ok = verify_boat_debris( ) && ok;
     ok = verify_piece_remove( ) && ok;
     ok = verify_hull_splash( ) && ok;
+    ok = verify_debris_launch( ) && ok;
     ok = verify_simplex_ctor( ) && ok;
     ok = verify_thunk_exclude( ) && ok;
     ok = verify_boat_contact( ) && ok;

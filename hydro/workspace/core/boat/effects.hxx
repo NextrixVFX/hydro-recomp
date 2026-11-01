@@ -9,6 +9,8 @@
 #include <workspace/core/world/pfxmgr.hxx>
 #include <workspace/core/world/pfxsim.hxx>
 #include <workspace/core/boat/camera.hxx>
+#include <workspace/core/boat/fleet.hxx>
+#include <workspace/core/world/surface.hxx>
 
 #include <cstdint>
 #include <cstring>
@@ -357,6 +359,7 @@ struct boat_debris_part_t
 {
     std::uint8_t image[ 0xD8 ]{};
     const float* model_aabb = nullptr;
+    const float* model_matrix = nullptr;   // the model's +0x24 (16): 0x51E790's launch only
 };
 
 // 0x51F1C0 (thiscall the sub-object; aabb*; xmm1 dt; retn 4): with g = -(+0x68)
@@ -560,4 +563,220 @@ inline void boat_hull_splash( pfx_manager_t& m, const char* name, int ( *create 
     o.set_matrix( o.user, inst, mat );
     o.set_velocity( o.user, inst, v );
     o.start( o.user, inst );
+}
+// ---------------------------------------------------------------------------
+// The launch: 0x410FF0 (__usercall: ecx the debris) - boat_decision_hooks_t's
+// debris_410FF0, run by 0x41E010 when the boat is destroyed and by 0x422A10
+// (the scripted path's flag 0x10).
+
+// 0x51E790 (thiscall the debris +4; world*, velocity*; retn 8): L =
+// lookAtBasis( velocity, (0, 0, 1) ) (0x50CA70; the up vector's fourth word a
+// stack word nothing writes - not read); per part, M = model +0x24 . world
+// (VuMatrix_multiply), +0x54 = the pivot +0x44 through M (((M0 p0 + M4 p1) +
+// M8 p2) + M12 ...), +0x64 = M's euler (0x534AA0's three: world/surface.hxx
+// water_world_euler, its CRT atan2 / asinf SUBSTITUTION); seven draws of the
+// global VuRandom (inlined: boat/fleet.hxx fleet_random_t::draw) lerp the
+// sub-object's ranges - l = (1 - r) lo + hi r: +0x20 / +0x30 .. +0x28 / +0x38
+// the launch velocity in L's frame (+0x74 = ((L4 l2 + L0 l1) + L8 l3), ...),
+// +0x40 / +0x50 .. +0x48 / +0x58 the spin in the world's frame (+0x84 =
+// ((W0 a1 + a2 W4) + a3 W8), +0x88 = ((W5 a2 + W1 a1) + W9 a3), +0x8C =
+// ((W6 a2 + W2 a1) + a3 W10)), +0x60 / +0x64 the damping +0xD4; +0x74 .. +=
+// the velocity; +0x94 rebuilt as 0x51F1C0 does. The fourth words of the
+// position / euler / velocity / spin stores (+0x60, +0x70, +0x80, +0x90) are
+// stack words nothing writes: UNKNOWN, not written.
+struct boat_debris_sub_t
+{
+    float range[ 18 ]{};   // +0x20 .. +0x67 of the sub-object (debris +0x24 ..)
+};
+
+inline void boat_debris_parts_launch( const boat_debris_sub_t& s, std::vector< boat_debris_part_t >& parts, const float* world,
+                                      const float* velocity, fleet_random_t& rng )
+{
+    const float up[ 4 ] = { 0.0f, 0.0f, 1.0f, 0.0f };
+    float L[ 16 ];
+    camera_look_at( velocity, up, L );
+    auto r = [ & ]( int lo, int hi, bool hi_first ) {
+        const float t = rng.draw( );
+        const float a = sse_mul( sse_sub( 1.0f, t ), s.range[ lo ] );
+        return sse_add( a, hi_first ? sse_mul( s.range[ hi ], t ) : sse_mul( t, s.range[ hi ] ) );
+    };
+    for ( boat_debris_part_t& p : parts )
+    {
+        std::uint8_t* e = p.image;
+        float M[ 16 ];
+        hull_multiply( p.model_matrix, M, world );
+        const float p0 = state_f( e, 0x44 ), p1 = state_f( e, 0x48 ), p2 = state_f( e, 0x4C );
+        for ( int k = 0; k < 3; ++k )
+            state_put_f( e, 0x54 + 4 * k, sse_add( sse_add( sse_add( sse_mul( M[ k ], p0 ), sse_mul( M[ 4 + k ], p1 ) ), sse_mul( M[ 8 + k ], p2 ) ), M[ 12 + k ] ) );
+        float eul[ 3 ];
+        water_world_euler( M, eul );
+        std::memcpy( e + 0x64, eul, 12 );
+        const float l1 = r( 0, 4, false ), l2 = r( 1, 5, true ), l3 = r( 2, 6, true );   // +0x20/+0x30 .. +0x28/+0x38
+        for ( int k = 0; k < 3; ++k )
+            state_put_f( e, 0x74 + 4 * k, sse_add( sse_add( sse_mul( L[ 4 + k ], l2 ), sse_mul( L[ k ], l1 ) ), sse_mul( L[ 8 + k ], l3 ) ) );
+        const float a1 = r( 8, 12, true ), a2 = r( 9, 13, true ), a3 = r( 10, 14, true );   // +0x40/+0x50 .. +0x48/+0x58
+        state_put_f( e, 0x84, sse_add( sse_add( sse_mul( world[ 0 ], a1 ), sse_mul( a2, world[ 4 ] ) ), sse_mul( a3, world[ 8 ] ) ) );
+        state_put_f( e, 0x88, sse_add( sse_add( sse_mul( world[ 5 ], a2 ), sse_mul( world[ 1 ], a1 ) ), sse_mul( world[ 9 ], a3 ) ) );
+        state_put_f( e, 0x8C, sse_add( sse_add( sse_mul( world[ 6 ], a2 ), sse_mul( world[ 2 ], a1 ) ), sse_mul( a3, world[ 10 ] ) ) );
+        state_put_f( e, 0xD4, r( 16, 17, false ) );   // +0x60 / +0x64
+        for ( int k = 0; k < 3; ++k )
+            state_put_f( e, 0x74 + 4 * k, sse_add( state_f( e, 0x74 + 4 * k ), velocity[ k ] ) );
+        float id[ 16 ], R[ 16 ], m[ 16 ], t[ 16 ], pivot[ 3 ];
+        vu_identity( id );
+        vu_matrix_from_euler( R, eul );
+        hull_multiply( id, m, R );
+        std::memcpy( m + 12, e + 0x54, 12 );
+        for ( int a = 0; a < 3; ++a )
+        {
+            std::uint32_t w;
+            std::memcpy( &w, e + 0x44 + 4 * a, 4 );
+            pivot[ a ] = water_bits( w ^ 0x80000000u );
+        }
+        hull_translation( t, pivot );
+        hull_multiply( t, m, m );
+        float base[ 16 ];
+        std::memcpy( base, e + 4, 64 );
+        hull_multiply( base, m, m );
+        std::memcpy( e + 0x94, m, 64 );
+    }
+}
+
+// One VuPiece for the launch: its image (0x230: +8 matrix, +0x1B0 offset,
+// +0x1C0 .. +0x1C8 / +0x1D0 .. +0x1D8 the velocity range, +0x1E0 .. / +0x1F0 ..
+// the spin range, +0x208 its body, +0x20C in the world, +0x210 the pfx name,
+// +0x228 the pfx), its rigid body and the name.
+struct boat_launch_piece_t
+{
+    std::uint8_t* image = nullptr;
+    solver_rigid_t* body = nullptr;
+    std::string pfx_name;
+};
+
+struct boat_launch_hooks_t
+{
+    boat_piece_hooks_t remove;                                                   // 0x411950's and the loop's removals
+    void ( *add_body )( void* user, std::uint32_t body ) = nullptr;              // g_vudynamicsimpl vt+0x3C
+    void ( *add_step )( void* user, std::uint8_t* step ) = nullptr;              // vt+0x2C (piece + 4)
+    std::uint32_t ( *pfx_create )( void* user, const std::string& name ) = nullptr;   // g_vupfximpl vt+0x28 (0: none)
+    void ( *pfx_start )( void* user, std::uint32_t system ) = nullptr;           // the system's slot 11
+};
+
+// 0x410FF0: 0x411950 (boat_debris_reset with boat_piece_remove), +0x94 = 1,
+// +0x98 = 10.0, +0xC8 = 1.0, the parts launched (0x51E790 on the transform's
+// world and the boat body's +0x140 .. +0x14F); then per piece: removed again
+// as 0x411950 does (no +0x94 test), +8 = the world, W = translation( +0x1B0 ) .
+// it; the boat body's velocity at W's origin v = lin + ((dz wy - dy wz), (dx wz
+// - dz wx), (dy wx - dx wy)), d = W row 3 - body origin; six draws: l = (1 - r)
+// +0x1C0.. + +0x1D0.. r, a = (1 - r) +0x1E0.. + +0x1F0.. r; the piece body's
+// +0x140 = v + ((W4 l2 + W0 l1) + W8 l3) per lane (+0x14C 0), +0x150 = the boat
+// body's spin + ((W4 a2 + W0 a1) + W8 a3) (+0x15C 0); setCenterOfMassTransform
+// 0x50E660( W as a btTransform: 0x410C30 ); into the world (vt+0x3C body, vt+0x2C
+// piece + 4, +0x20C = 1) unless there; +0x228 = the pfx created by +0x210's name,
+// started when made.
+inline void boat_debris_launch( std::uint8_t* debris, boat_debris_sub_t& sub, std::vector< boat_debris_part_t >& parts,
+                                std::vector< boat_launch_piece_t >& pieces, const float* world, const solver_rigid_t& body,
+                                fleet_random_t& rng, const boat_launch_hooks_t& h )
+{
+    struct ctx_t
+    {
+        std::vector< boat_launch_piece_t >* pieces;
+        const boat_piece_hooks_t* remove;
+    } c{ &pieces, &h.remove };
+    boat_decision_hooks_t dh;
+    dh.user = &c;
+    dh.piece_remove = []( void* u, int k ) {
+        ctx_t& x = *static_cast< ctx_t* >( u );
+        boat_piece_remove( ( *x.pieces )[ static_cast< std::size_t >( k ) ].image, *x.remove );
+    };
+    boat_debris_reset( debris, dh );
+    debris[ 0x94 ] = 1;
+    state_put_f( debris, 0x98, 10.0f );
+    state_put_f( debris, 0xC8, 1.0f );
+    boat_debris_parts_launch( sub, parts, world, body.linear_velocity, rng );
+    std::int32_t count;
+    std::memcpy( &count, debris + 0xA0, 4 );
+    for ( std::int32_t k = 0; k < count; ++k )
+    {
+        boat_launch_piece_t& q = pieces[ static_cast< std::size_t >( k ) ];
+        std::uint8_t* p = q.image;
+        boat_piece_remove( p, h.remove );
+        std::memcpy( p + 8, world, 64 );
+        float T[ 16 ], W[ 16 ], m[ 16 ];
+        hull_translation( T, reinterpret_cast< const float* >( p + 0x1B0 ) );
+        std::memcpy( m, p + 8, 64 );
+        hull_multiply( T, W, m );
+        const float dx = sse_sub( W[ 12 ], body.origin[ 0 ] ), dy = sse_sub( W[ 13 ], body.origin[ 1 ] ), dz = sse_sub( W[ 14 ], body.origin[ 2 ] );
+        const float* lv = body.linear_velocity;
+        const float* av = body.angular_velocity;
+        const float vx = sse_add( lv[ 0 ], sse_sub( sse_mul( dz, av[ 1 ] ), sse_mul( dy, av[ 2 ] ) ) );
+        const float vy = sse_add( lv[ 1 ], sse_sub( sse_mul( dx, av[ 2 ] ), sse_mul( dz, av[ 0 ] ) ) );
+        const float vz = sse_add( lv[ 2 ], sse_sub( sse_mul( dy, av[ 0 ] ), sse_mul( dx, av[ 1 ] ) ) );
+        auto r = [ & ]( int lo ) {
+            const float t = rng.draw( );
+            return sse_add( sse_mul( sse_sub( 1.0f, t ), state_f( p, lo ) ), sse_mul( state_f( p, lo + 0x10 ), t ) );
+        };
+        const float l1 = r( 0x1C0 ), l2 = r( 0x1C4 ), l3 = r( 0x1C8 ), a1 = r( 0x1E0 ), a2 = r( 0x1E4 ), a3 = r( 0x1E8 );
+        auto frame = [ & ]( int k2, float x1, float x2, float x3 ) {
+            return sse_add( sse_add( sse_mul( W[ 4 + k2 ], x2 ), sse_mul( W[ k2 ], x1 ) ), sse_mul( W[ 8 + k2 ], x3 ) );
+        };
+        solver_rigid_t& pb = *q.body;
+        pb.linear_velocity[ 0 ] = sse_add( vx, frame( 0, l1, l2, l3 ) );
+        pb.linear_velocity[ 1 ] = sse_add( frame( 1, l1, l2, l3 ), vy );
+        pb.linear_velocity[ 2 ] = sse_add( frame( 2, l1, l2, l3 ), vz );
+        pb.linear_velocity[ 3 ] = 0.0f;
+        pb.angular_velocity[ 0 ] = sse_add( av[ 0 ], frame( 0, a1, a2, a3 ) );
+        pb.angular_velocity[ 1 ] = sse_add( av[ 1 ], frame( 1, a1, a2, a3 ) );
+        pb.angular_velocity[ 2 ] = sse_add( av[ 2 ], frame( 2, a1, a2, a3 ) );
+        pb.angular_velocity[ 3 ] = 0.0f;
+        float basis[ 12 ], origin[ 4 ];
+        for ( int row = 0; row < 3; ++row )
+        {
+            for ( int k2 = 0; k2 < 3; ++k2 )
+                basis[ 4 * row + k2 ] = W[ row + 4 * k2 ];
+            basis[ 4 * row + 3 ] = 0.0f;
+        }
+        origin[ 0 ] = W[ 12 ];
+        origin[ 1 ] = W[ 13 ];
+        origin[ 2 ] = W[ 14 ];
+        origin[ 3 ] = 0.0f;
+        body_set_center_of_mass_transform( pb, basis, origin );
+        if ( p[ 0x20C ] == 0 )
+        {
+            std::uint32_t bw;
+            std::memcpy( &bw, p + 0x208, 4 );
+            if ( h.add_body )
+                h.add_body( h.remove.user, bw );
+            if ( h.add_step )
+                h.add_step( h.remove.user, p + 4 );
+            p[ 0x20C ] = 1;
+        }
+        const std::uint32_t s = h.pfx_create ? h.pfx_create( h.remove.user, q.pfx_name ) : 0u;
+        image_put32( p, 0x228, s );
+        if ( s != 0 && h.pfx_start )
+            h.pfx_start( h.remove.user, s );
+    }
+}
+// 0x41E240 (thiscall the boat) - boat_decision_hooks_t's boat_41E240, run
+// after the launch: the FMOD event named by the VuString at boat +0x1EC
+// (FMOD::EventSystem::getEvent on g_vuaudio +8, mode 1); found (FMOD_OK) ->
+// set3DAttributes( the transform's +0x80 .. +0x88, no velocity, no
+// orientation ) and start. All three are the platform's audio: hooks. Read
+// from the decompilation; NOT oracle-run.
+struct boat_event_hooks_t
+{
+    void* user = nullptr;
+    bool ( *get )( void* user, const std::string& name, std::uint32_t& event ) = nullptr;   // true: FMOD_OK
+    void ( *attributes )( void* user, std::uint32_t event, const float* position ) = nullptr;
+    void ( *start )( void* user, std::uint32_t event ) = nullptr;
+};
+
+inline void boat_destroyed_event( const std::string& name, const float* position, const boat_event_hooks_t& h )
+{
+    std::uint32_t ev = 0;
+    if ( !h.get || !h.get( h.user, name, ev ) )
+        return;
+    if ( h.attributes )
+        h.attributes( h.user, ev, position );
+    if ( h.start )
+        h.start( h.user, ev );
 }

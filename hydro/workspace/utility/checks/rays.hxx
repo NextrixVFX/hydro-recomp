@@ -1178,3 +1178,135 @@ inline bool verify_hull_splash( )
     LOG_ERROR( "hull_splash FAILED %d of %d", failed, static_cast< int >( g_golden_hull_splash_count ) );
     return false;
 }
+// verify_debris_launch (boat batch 17): the launch 0x410FF0 + the parts 0x51E790
+// (boat/effects.hxx boat_debris_launch) against cases/boat.py debris_launch:
+// the hook calls in order, +0x94 / +0x98 / +0xC8, every part image (but the
+// four stack words +0x60 / +0x70 / +0x80 / +0x90), every piece image and body,
+// the VuRandom state after.
+inline bool verify_debris_launch( )
+{
+    constexpr int kBody = 0x2D4;
+    const std::size_t body_bytes = sizeof( solver_rigid_t ) < kBody ? sizeof( solver_rigid_t ) : kBody;
+    int failed = 0, calls = 0, parts_n = 0, pieces_n = 0;
+    for ( std::size_t v = 0; v < g_golden_debris_launch_count; ++v )
+    {
+        const unsigned* g = g_golden_debris_launch_words + g_golden_debris_launch_offsets[ v ];
+        fleet_random_t rng;
+        rng.seed = static_cast< std::int32_t >( *g++ );
+        rng.last = static_cast< std::int32_t >( *g++ );
+        for ( auto& x : rng.table )
+            x = static_cast< std::int32_t >( *g++ );
+        boat_debris_sub_t sub;
+        std::memcpy( sub.range, g, 72 );
+        g += 18;
+        const unsigned np = *g++;
+        std::vector< boat_debris_part_t > parts( np );
+        std::vector< std::array< float, 16 > > mm( np );
+        for ( unsigned k = 0; k < np; ++k )
+        {
+            std::memcpy( parts[ k ].image, g, 0xD8 );
+            g += 0xD8 / 4;
+            std::memcpy( mm[ k ].data( ), g, 64 );
+            g += 16;
+            parts[ k ].model_matrix = mm[ k ].data( );
+        }
+        float world[ 16 ];
+        std::memcpy( world, g, 64 );
+        g += 16;
+        solver_rigid_t body{ };
+        std::memcpy( &body, g, body_bytes );
+        g += kBody / 4;
+        std::uint8_t debris[ 0xD0 ]{};
+        debris[ 0x94 ] = static_cast< std::uint8_t >( *g++ );
+        image_put32( debris, 0xC8, *g++ );
+        const unsigned nq = *g++;
+        image_put32( debris, 0xA0, nq );
+        std::vector< std::array< std::uint8_t, 0x230 > > imgs( nq );
+        std::vector< solver_rigid_t > bodies( nq );
+        std::vector< boat_launch_piece_t > pieces( nq );
+        std::vector< unsigned > plan( nq );
+        for ( unsigned k = 0; k < nq; ++k )
+        {
+            std::memcpy( imgs[ k ].data( ), g, 0x230 );
+            g += 0x230 / 4;
+            bodies[ k ] = solver_rigid_t{ };
+            std::memcpy( &bodies[ k ], g, body_bytes );
+            g += kBody / 4;
+            const unsigned len = *g++;
+            char name[ 33 ]{};
+            std::memcpy( name, g, 32 );
+            g += 8;
+            pieces[ k ].image = imgs[ k ].data( );
+            pieces[ k ].body = &bodies[ k ];
+            pieces[ k ].pfx_name.assign( name, len );
+            plan[ k ] = *g++;
+        }
+        const unsigned nlog = *g++;
+        const std::vector< unsigned > want( g, g + 2 * nlog );
+        g += 2 * nlog;
+        struct ctx_t
+        {
+            std::vector< std::array< std::uint8_t, 0x230 > >* imgs;
+            std::vector< unsigned >* plan;
+            std::size_t next = 0;
+            std::vector< unsigned > log;
+        } c{ &imgs, &plan };
+        auto index_of = []( ctx_t& x, const std::uint8_t* s ) {
+            for ( std::size_t i = 0; i < x.imgs->size( ); ++i )
+                if ( s == ( *x.imgs )[ i ].data( ) + 4 )
+                    return static_cast< unsigned >( i );
+            return 0xEEEEu;
+        };
+        static unsigned ( *s_index )( ctx_t&, const std::uint8_t* );
+        s_index = index_of;
+        boat_launch_hooks_t h;
+        h.remove.user = &c;
+        auto add = []( void* u, unsigned a, unsigned b ) { static_cast< ctx_t* >( u )->log.insert( static_cast< ctx_t* >( u )->log.end( ), { a, b } ); };
+        static void ( *s_add )( void*, unsigned, unsigned );
+        s_add = add;
+        h.remove.remove_body = []( void* u, std::uint32_t b ) { s_add( u, 1, b ); };
+        h.remove.remove_step = []( void* u, std::uint8_t* s ) { s_add( u, 2, s_index( *static_cast< ctx_t* >( u ), s ) ); };
+        h.remove.pfx_release = []( void* u, std::uint32_t s ) { s_add( u, 3, s ); };
+        h.add_body = []( void* u, std::uint32_t b ) { s_add( u, 4, b ); };
+        h.add_step = []( void* u, std::uint8_t* s ) { s_add( u, 5, s_index( *static_cast< ctx_t* >( u ), s ) ); };
+        h.pfx_create = []( void* u, const std::string& n ) -> std::uint32_t {
+            ctx_t& x = *static_cast< ctx_t* >( u );
+            s_add( u, 6, static_cast< unsigned >( n.size( ) ) );
+            return ( *x.plan )[ x.next++ ];
+        };
+        h.pfx_start = []( void* u, std::uint32_t s ) { s_add( u, 7, s ); };
+        boat_debris_launch( debris, sub, parts, pieces, world, body, rng, h );
+        bool same = c.log == want && debris[ 0x94 ] == g[ 0 ] && piece_check_word( debris, 0x98 ) == g[ 1 ] && piece_check_word( debris, 0xC8 ) == g[ 2 ];
+        g += 3;
+        for ( unsigned k = 0; k < np; ++k )
+        {
+            for ( int w = 0; w < 0xD8 / 4; ++w )
+                if ( w != 0x60 / 4 && w != 0x70 / 4 && w != 0x80 / 4 && w != 0x90 / 4 )
+                    same = same && piece_check_word( parts[ k ].image, 4 * w ) == g[ w ];
+            g += 0xD8 / 4;
+        }
+        for ( unsigned k = 0; k < nq; ++k )
+        {
+            same = same && std::memcmp( imgs[ k ].data( ), g, 0x230 ) == 0;
+            g += 0x230 / 4;
+            same = same && std::memcmp( &bodies[ k ], g, body_bytes ) == 0;
+            g += kBody / 4;
+        }
+        same = same && static_cast< unsigned >( rng.seed ) == g[ 0 ] && static_cast< unsigned >( rng.last ) == g[ 1 ] &&
+               std::memcmp( rng.table, g + 2, 128 ) == 0;
+        calls += static_cast< int >( nlog );
+        parts_n += static_cast< int >( np );
+        pieces_n += static_cast< int >( nq );
+        if ( !same && ++failed <= 4 )
+            LOG_ERROR( "debris_launch %u: log %s, rng %s", static_cast< unsigned >( v ), c.log == want ? "same" : "differs",
+                       static_cast< unsigned >( rng.seed ) == g[ 0 ] ? "same" : "differs" );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the debris launch 0x410FF0 + parts 0x51E790 (boat_debris_launch / boat_debris_parts_launch) match retail: %d launches, "
+                     "%d parts, %d pieces, %d hook calls", static_cast< int >( g_golden_debris_launch_count ), parts_n, pieces_n, calls );
+        return true;
+    }
+    LOG_ERROR( "debris_launch FAILED %d of %d", failed, static_cast< int >( g_golden_debris_launch_count ) );
+    return false;
+}
