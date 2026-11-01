@@ -207,7 +207,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x407390,62,sub_407390,,,audio (by address),callee,,False,False,race
 0x4073D0,47,sub_4073D0,VuMethod1<...>,VuMethod1<...>+2; VuMethod1<...>+2; VuMethod1<...>+2; VuMethod1<...>+2; VuMethod1<...>+2; VuMethod1<...>+2,entity / component / script framework,callee,,False,False,race
 0x407400,78,sub_407400,,,entity / component / script framework (by address),verified,hydro/workspace/core/ui/select.hxx,False,False,race
-0x407450,818,sub_407450,,,entity / component / script framework (by address),cited,hydro/workspace/core/ui/controls.hxx,False,False,race
+0x407450,818,sub_407450,,,entity / component / script framework (by address),verified,hydro/workspace/core/ui/controls.hxx,False,False,race
 0x407790,78,sub_407790,,,entity / component / script framework (by address),verified,hydro/workspace/core/ui/select.hxx,False,False,race
 0x4077DE,5,sub_4077DE,,,entity / component / script framework (by address),verified,hydro/workspace/core/ui/frame.hxx; hydro/workspace/core/ui/image.hxx,False,False,race
 0x4077E3,5,sub_4077E3,,,entity / component / script framework (by address),verified,hydro/workspace/core/boat/construct.hxx; hydro/workspace/core/ui/action.hxx; hydro/workspace/core/ui/difficulty.hxx; hydro/workspace/core/ui/frame.hxx; hydro/workspace/core/ui/hud.hxx; hydro/workspace/core/ui/wiring.hxx; hydro/workspace/core/world/graph.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/core/world/watchers.hxx,False,False,race
@@ -546,8 +546,8 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x424530,34,sub_424530,VuHUDHiddenPackageToastEntity,VuHUDHiddenPackageToastEntity+0,HUD / UI / fonts,absent,,False,False,race
 0x424560,140,sub_424560,,,HUD / UI / fonts (by address),absent,,False,False,race
 0x4245F0,5,sub_4245F0,VuHUDHiddenPackageToastEntity,VuHUDHiddenPackageToastEntity+6,HUD / UI / fonts,absent,,False,False,race
-0x424600,735,sub_424600,,,HUD / UI / fonts (by address),cited,hydro/workspace/core/ui/controls.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,race
-0x4248E0,300,sub_4248E0,,,HUD / UI / fonts (by address),cited,hydro/workspace/core/ui/controls.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,race
+0x424600,735,sub_424600,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/controls.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,race
+0x4248E0,300,sub_4248E0,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/controls.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,race
 0x424A10,6,sub_424A10,VuHUDButtonEntity,VuHUDButtonEntity+1,HUD / UI / fonts,absent,,False,False,race
 0x424A20,2227,sub_424A20,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/controls.hxx,False,False,race
 0x4252E0,34,sub_4252E0,VuHUDButtonEntity; VuHUDPauseButtonEntity; VuHUDRecoverButtonEntity,VuHUDPauseButtonEntity+0; VuHUDRecoverButtonEntity+0; VuHUDButtonEntity+0,HUD / UI / fonts,absent,,False,False,race
@@ -558,7 +558,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x425490,26,sub_425490,VuHUDButtonEntity; VuHUDPauseButtonEntity; VuHUDRecoverButtonEntity,VuHUDPauseButtonEntity+1; VuHUDRecoverButtonEntity+1; VuHUDButtonEntity+1,HUD / UI / fonts,absent,,False,False,race
 0x4254B0,252,sub_4254B0,VuHUDButtonEntity; VuHUDPauseButtonEntity; VuHUDRecoverButtonEntity,VuHUDPauseButtonEntity+2; VuHUDRecoverButtonEntity+2; VuHUDButtonEntity+2,HUD / UI / fonts,absent,,False,False,race
 0x4255B0,493,sub_4255B0,VuHUDButtonEntity; VuHUDPauseButtonEntity; VuHUDRecoverButtonEntity,VuHUDPauseButtonEntity+12; VuHUDRecoverButtonEntity+12; VuHUDButtonEntity+12,HUD / UI / fonts,absent,,False,False,race
-0x4257A0,310,sub_4257A0,VuHUDButtonEntity; VuHUDPauseButtonEntity,VuHUDPauseButtonEntity+16; VuHUDButtonEntity+16,HUD / UI / fonts,cited,hydro/workspace/core/ui/controls.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,race
+0x4257A0,310,sub_4257A0,VuHUDButtonEntity; VuHUDPauseButtonEntity,VuHUDPauseButtonEntity+16; VuHUDButtonEntity+16,HUD / UI / fonts,verified,hydro/workspace/core/ui/controls.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,race
 0x4258E0,357,sub_4258E0,,,HUD / UI / fonts (by address),absent,,False,False,race
 0x425A50,6,sub_425A50,VuHUDRecoverButtonEntity,VuHUDRecoverButtonEntity+1,HUD / UI / fonts,absent,,False,False,race
 0x425A60,117,sub_425A60,,,HUD / UI / fonts (by address),callee,,False,False,race
@@ -566,13 +566,13 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x425B60,594,sub_425B60,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/controls.hxx,False,False,race
 0x425DC0,332,sub_425DC0,VuHUDRecoverButtonEntity,VuHUDRecoverButtonEntity+13,HUD / UI / fonts,absent,,False,False,race
 0x425F10,52,sub_425F10,VuHUDRecoverButtonEntity,VuHUDRecoverButtonEntity+14,HUD / UI / fonts,absent,,False,False,race
-0x425F50,27,sub_425F50,VuHUDRecoverButtonEntity,VuHUDRecoverButtonEntity+15,HUD / UI / fonts,cited,hydro/workspace/core/ui/controls.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,race
-0x425F70,412,sub_425F70,VuHUDRecoverButtonEntity,VuHUDRecoverButtonEntity+16,HUD / UI / fonts,cited,hydro/workspace/core/ui/controls.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,race
+0x425F50,27,sub_425F50,VuHUDRecoverButtonEntity,VuHUDRecoverButtonEntity+15,HUD / UI / fonts,verified,hydro/workspace/core/ui/controls.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,race
+0x425F70,412,sub_425F70,VuHUDRecoverButtonEntity,VuHUDRecoverButtonEntity+16,HUD / UI / fonts,verified,hydro/workspace/core/ui/controls.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,race
 0x426110,6,sub_426110,VuHUDPauseButtonEntity,VuHUDPauseButtonEntity+1,HUD / UI / fonts,absent,,False,False,race
 0x426120,132,sub_426120,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/controls.hxx,False,False,race
 0x4261B0,235,sub_4261B0,VuHUDPauseButtonEntity,VuHUDPauseButtonEntity+13,HUD / UI / fonts,absent,,False,False,race
 0x4262A0,131,sub_4262A0,VuHUDPauseButtonEntity,VuHUDPauseButtonEntity+14,HUD / UI / fonts,absent,,False,False,race
-0x426330,21,sub_426330,VuHUDPauseButtonEntity,VuHUDPauseButtonEntity+15,HUD / UI / fonts,cited,hydro/workspace/core/ui/controls.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,race
+0x426330,21,sub_426330,VuHUDPauseButtonEntity,VuHUDPauseButtonEntity+15,HUD / UI / fonts,verified,hydro/workspace/core/ui/controls.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,race
 0x426350,54,sub_426350,,,HUD / UI / fonts (by address),callee,,False,False,race
 0x426390,6,sub_426390,VuBasicProperty<...>,VuBasicProperty<...>+1,entity / component / script framework,absent,,False,False,race
 0x4263A0,15,sub_4263A0,VuBasicProperty<...>,VuBasicProperty<...>+7,entity / component / script framework,callee,,False,False,race
@@ -627,7 +627,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x429D60,34,sub_429D60,VuHUDOnScreenControlEntity,VuHUDOnScreenControlEntity+0,HUD / UI / fonts,absent,,False,False,race
 0x429D90,113,sub_429D90,,,HUD / UI / fonts (by address),absent,,False,False,race
 0x429E10,681,sub_429E10,,,HUD / UI / fonts (by address),absent,,False,False,race
-0x42A0C0,381,sub_42A0C0,,,HUD / UI / fonts (by address),cited,hydro/workspace/core/ui/controls.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,race
+0x42A0C0,381,sub_42A0C0,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/controls.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,race
 0x42A240,354,sub_42A240,,,HUD / UI / fonts (by address),absent,,False,False,race
 0x42A3B0,6,sub_42A3B0,VuHUDOnScreenButtonEntity,VuHUDOnScreenButtonEntity+1,HUD / UI / fonts,absent,,False,False,race
 0x42A3C0,117,sub_42A3C0,,,HUD / UI / fonts (by address),callee,,False,False,race
@@ -1172,7 +1172,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x448430,64,sub_448430,,,boat (by address),absent,,False,False,game
 0x448470,1504,?$VuMethod1@VVuBaseConfigEntity@@XABVVuParams@@_load_ComboBoxID,VuBaseConfigEntity; VuBoatConfigEntity; VuGameConfigEntity,VuBaseConfigEntity+13; VuBoatConfigEntity+13; VuGameConfigEntity+13,boat,verified,hydro/workspace/core/ui/leave.hxx; hydro/workspace/core/ui/navigate.hxx; hydro/workspace/utility/checks/menu.hxx,False,False,game
 0x448A50,306,sub_448A50,VuBaseConfigEntity; VuBoatConfigEntity; VuGameConfigEntity,VuBaseConfigEntity+14; VuBoatConfigEntity+14; VuGameConfigEntity+14,boat,verified,hydro/workspace/core/ui/navigate.hxx; hydro/workspace/utility/checks/menu.hxx,False,False,game
-0x448B90,939,sub_448B90,VuBaseConfigEntity; VuBoatConfigEntity; VuGameConfigEntity,VuBaseConfigEntity+15; VuBoatConfigEntity+15; VuGameConfigEntity+15,boat,cited,hydro/workspace/core/ui/combo.hxx; hydro/workspace/utility/checks/leaves.hxx,False,False,game
+0x448B90,939,sub_448B90,VuBaseConfigEntity; VuBoatConfigEntity; VuGameConfigEntity,VuBaseConfigEntity+15; VuBoatConfigEntity+15; VuGameConfigEntity+15,boat,verified,hydro/workspace/core/ui/combo.hxx; hydro/workspace/utility/checks/leaves.hxx,False,False,game
 0x448F40,8,sub_448F40,VuBaseConfigEntity; VuBoatConfigEntity; VuGameConfigEntity,VuBaseConfigEntity+16; VuBoatConfigEntity+16; VuGameConfigEntity+16,boat,verified,hydro/workspace/core/ui/combo.hxx; hydro/workspace/core/ui/frame.hxx; hydro/workspace/utility/checks/leaves.hxx,False,False,game
 0x448F50,225,loader_00448F50_load_ComboBoxID,,,boat (by address),verified,hydro/workspace/core/ui/combo.hxx; hydro/workspace/core/ui/frame.hxx; hydro/workspace/utility/checks/leaves.hxx,False,False,game
 0x449040,372,loader_00449050_load_Choices,,,boat (by address),callee,,False,False,game
@@ -1527,7 +1527,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x46C950,88,sub_46C950,,,entity / component / script framework (by address),absent,,False,False,game
 0x46C9B0,57,sub_46C9B0,VuTiltSteeringSettingsEntity,VuTiltSteeringSettingsEntity+12,entity / component / script framework,absent,,False,False,game
 0x46C9F0,6,sub_46C9F0,VuSteeringSensitivitySettingsEntity,VuSteeringSensitivitySettingsEntity+1,entity / component / script framework,absent,,False,False,game
-0x46CA00,44,sub_46CA00,VuSteeringSensitivitySettingsEntity,VuSteeringSensitivitySettingsEntity+12,entity / component / script framework,cited,hydro/workspace/core/ui/slider.hxx,False,False,game
+0x46CA00,44,sub_46CA00,VuSteeringSensitivitySettingsEntity,VuSteeringSensitivitySettingsEntity+12,entity / component / script framework,verified,hydro/workspace/core/ui/slider.hxx,False,False,game
 0x46CA30,26,sub_46CA30,VuSteeringSensitivitySettingsEntity,VuSteeringSensitivitySettingsEntity+13,entity / component / script framework,cited,hydro/workspace/core/ui/slider.hxx,False,False,game
 0x46CA50,125,sub_46CA50,,,entity / component / script framework (by address),callee,,False,False,game
 0x46CAD0,34,sub_46CAD0,VuDisplayScaleSettingsEntity; VuEffectVolumeSettingsEntity; VuMusicVolumeSettingsEntity; VuSliderEntity; VuSteeringSensitivitySettingsEntity,VuDisplayScaleSettingsEntity+0; VuMusicVolumeSettingsEntity+0; VuEffectVolumeSettingsEntity+0; VuSteeringSensitivitySettingsEntity+0; VuSliderEntity+0,audio,absent,,False,False,game
@@ -1538,15 +1538,15 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x46CD70,508,sub_46CD70,VuVibrationSettingsEntity,VuVibrationSettingsEntity+6,entity / component / script framework,absent,,False,False,game
 0x46CF70,19,sub_46CF70,VuVibrationSettingsEntity,VuVibrationSettingsEntity+12,entity / component / script framework,absent,,False,False,game
 0x46CF90,6,sub_46CF90,VuEffectVolumeSettingsEntity,VuEffectVolumeSettingsEntity+1,entity / component / script framework,absent,,False,False,game
-0x46CFA0,44,sub_46CFA0,VuEffectVolumeSettingsEntity,VuEffectVolumeSettingsEntity+12,entity / component / script framework,cited,hydro/workspace/core/ui/slider.hxx,False,False,game
-0x46CFE0,145,sub_46CFE0,VuEffectVolumeSettingsEntity,VuEffectVolumeSettingsEntity+13,entity / component / script framework,cited,hydro/workspace/core/ui/slider.hxx,False,False,game
+0x46CFA0,44,sub_46CFA0,VuEffectVolumeSettingsEntity,VuEffectVolumeSettingsEntity+12,entity / component / script framework,verified,hydro/workspace/core/ui/slider.hxx,False,False,game
+0x46CFE0,145,sub_46CFE0,VuEffectVolumeSettingsEntity,VuEffectVolumeSettingsEntity+13,entity / component / script framework,verified,hydro/workspace/core/ui/slider.hxx,False,False,game
 0x46D080,125,sub_46D080,,,entity / component / script framework (by address),callee,,False,False,game
 0x46D100,6,sub_46D100,VuMusicVolumeSettingsEntity,VuMusicVolumeSettingsEntity+1,audio,absent,,False,False,game
-0x46D110,44,sub_46D110,VuMusicVolumeSettingsEntity,VuMusicVolumeSettingsEntity+12,audio,cited,hydro/workspace/core/ui/slider.hxx,False,False,game
-0x46D140,98,sub_46D140,VuMusicVolumeSettingsEntity,VuMusicVolumeSettingsEntity+13,audio,cited,hydro/workspace/core/ui/slider.hxx,False,False,game
+0x46D110,44,sub_46D110,VuMusicVolumeSettingsEntity,VuMusicVolumeSettingsEntity+12,audio,verified,hydro/workspace/core/ui/slider.hxx,False,False,game
+0x46D140,98,sub_46D140,VuMusicVolumeSettingsEntity,VuMusicVolumeSettingsEntity+13,audio,verified,hydro/workspace/core/ui/slider.hxx,False,False,game
 0x46D1B0,125,sub_46D1B0,,,audio (by address),callee,,False,False,game
 0x46D230,6,sub_46D230,VuDisplayScaleSettingsEntity,VuDisplayScaleSettingsEntity+1,rendering / gfx,absent,,False,False,game
-0x46D240,60,sub_46D240,VuDisplayScaleSettingsEntity,VuDisplayScaleSettingsEntity+12,rendering / gfx,cited,hydro/workspace/core/ui/slider.hxx,False,False,game
+0x46D240,60,sub_46D240,VuDisplayScaleSettingsEntity,VuDisplayScaleSettingsEntity+12,rendering / gfx,verified,hydro/workspace/core/ui/slider.hxx,False,False,game
 0x46D280,52,sub_46D280,VuDisplayScaleSettingsEntity,VuDisplayScaleSettingsEntity+13,rendering / gfx,cited,hydro/workspace/core/ui/slider.hxx,False,False,game
 0x46D2C0,125,sub_46D2C0,,,rendering / gfx (by address),callee,,False,False,game
 0x46D340,6,sub_46D340,VuUIUnitsSettingEntity,VuUIUnitsSettingEntity+1,HUD / UI / fonts,absent,,False,False,game
@@ -1572,14 +1572,14 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x46E280,99,sub_46E280,,,HUD / UI / fonts (by address),callee,,False,False,game
 0x46E2F0,6,sub_46E2F0,VuSliderEntity,VuSliderEntity+1,entity / component / script framework,absent,,False,False,game
 0x46E300,5155,sub_46E300,,,entity / component / script framework (by address),verified,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/slider.hxx,False,False,game
-0x46F730,58,sub_46F730,,,unattributed,cited,hydro/workspace/core/ui/slider.hxx,False,False,game
-0x46F770,213,sub_46F770,,,unattributed,cited,hydro/workspace/core/ui/slider.hxx,False,False,game
-0x46F850,153,sub_46F850,,,unattributed,cited,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/slider.hxx,False,False,game
-0x46F8F0,67,sub_46F8F0,,,unattributed,cited,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/slider.hxx; hydro/workspace/utility/checks/update.hxx,False,False,game
-0x46F940,883,sub_46F940,,,unattributed,cited,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/slider.hxx; hydro/workspace/utility/checks/update.hxx,False,False,game
-0x46FCC0,847,sub_46FCC0,,,unattributed,cited,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/slider.hxx; hydro/workspace/utility/checks/update.hxx,False,False,game
-0x470010,198,sub_470010,,,unattributed,cited,hydro/workspace/core/ui/slider.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,game
-0x4700E0,1159,sub_4700E0,,,unattributed,cited,hydro/workspace/core/ui/slider.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,game
+0x46F730,58,sub_46F730,,,unattributed,verified,hydro/workspace/core/ui/slider.hxx,False,False,game
+0x46F770,213,sub_46F770,,,unattributed,verified,hydro/workspace/core/ui/slider.hxx,False,False,game
+0x46F850,153,sub_46F850,,,unattributed,verified,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/slider.hxx,False,False,game
+0x46F8F0,67,sub_46F8F0,,,unattributed,verified,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/slider.hxx; hydro/workspace/utility/checks/update.hxx,False,False,game
+0x46F940,883,sub_46F940,,,unattributed,verified,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/slider.hxx; hydro/workspace/utility/checks/update.hxx,False,False,game
+0x46FCC0,847,sub_46FCC0,,,unattributed,verified,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/slider.hxx; hydro/workspace/utility/checks/update.hxx,False,False,game
+0x470010,198,sub_470010,,,unattributed,verified,hydro/workspace/core/ui/slider.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,game
+0x4700E0,1159,sub_4700E0,,,unattributed,verified,hydro/workspace/core/ui/slider.hxx; hydro/workspace/utility/checks/widgets.hxx,False,False,game
 0x470570,139,sub_470570,,,unattributed,verified,hydro/workspace/core/ui/slider.hxx,False,False,game
 0x470600,148,sub_470600,,,unattributed,verified,hydro/workspace/core/ui/slider.hxx,False,False,game
 0x4706A0,150,sub_4706A0,,,unattributed,verified,hydro/workspace/core/ui/slider.hxx,False,False,game
