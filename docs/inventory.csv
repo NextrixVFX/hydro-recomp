@@ -5670,8 +5670,8 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5491A0,1525,sub_5491A0,,,physics (Bullet) (by address),absent,,False,False,race
 0x5497A0,6516,sub_5497A0,btBoxShape; btConvexTriangleMeshShape; btPolyhedralConvexAabbCachingShape; btPolyhedralConvexShape; btTriangleShape,btConvexTriangleMeshShape+21; btBoxShape+21; btPolyhedralConvexAabbCachingShape+21; btPolyhedralConvexShape+21; btTriangleShape+21,physics (Bullet),absent,,False,False,race
 0x54B120,258,sub_54B120,,,unattributed,absent,,False,False,race
-0x54B230,388,sub_54B230,btPolyhedralConvexAabbCachingShape; btPolyhedralConvexShape,btPolyhedralConvexAabbCachingShape+15; btPolyhedralConvexShape+15,physics (Bullet),absent,,False,False,race
-0x54B3C0,243,sub_54B3C0,btPolyhedralConvexAabbCachingShape; btPolyhedralConvexShape,btPolyhedralConvexAabbCachingShape+17; btPolyhedralConvexShape+17,physics (Bullet),absent,,False,False,race
+0x54B230,388,sub_54B230,btPolyhedralConvexAabbCachingShape; btPolyhedralConvexShape,btPolyhedralConvexAabbCachingShape+15; btPolyhedralConvexShape+15,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
+0x54B3C0,243,sub_54B3C0,btPolyhedralConvexAabbCachingShape; btPolyhedralConvexShape,btPolyhedralConvexAabbCachingShape+17; btPolyhedralConvexShape+17,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x54B4C0,281,sub_54B4C0,btConvexTriangleMeshShape; btPolyhedralConvexAabbCachingShape; btPolyhedralConvexShape,btConvexTriangleMeshShape+7; btPolyhedralConvexAabbCachingShape+7; btPolyhedralConvexShape+7,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/core/world/bodies.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x54B5E0,100,sub_54B5E0,btPolyhedralConvexAabbCachingShape,btPolyhedralConvexAabbCachingShape+5,physics (Bullet),verified,engine/workspace/core/collision/support.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x54B650,125,sub_54B650,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/support.hxx; hydro/workspace/core/boat/load.hxx,False,False,race
@@ -5721,11 +5721,11 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x550310,14,sub_550310,,,rendering / gfx (by address),absent,,False,False,dead
 0x550320,4042,sub_550320,VuDynamicsWorldImpl; btCollisionWorld; btDiscreteDynamicsWorld; btDynamicsWorld,btCollisionWorld+5; VuDynamicsWorldImpl+5; btDiscreteDynamicsWorld+5; btDynamicsWorld+5,physics (Bullet),absent,,False,False,race
 0x551330,922,sub_551330,btCollisionWorld,btCollisionWorld+4,physics (Bullet),absent,,False,False,race
-0x5516E0,453,sub_5516E0,,,physics (Bullet) (by address),absent,,False,False,race
-0x5518B0,323,sub_5518B0,,,physics (Bullet) (by address),absent,,False,False,race
-0x551A00,38,sub_551A00,btCollisionWorld; btDynamicsWorld,btCollisionWorld+10; btDynamicsWorld+10,physics (Bullet),absent,,False,False,race
-0x551A30,561,sub_551A30,,,physics (Bullet) (by address),absent,,False,False,race
-0x551C70,541,sub_551C70,,,physics (Bullet) (by address),absent,,False,False,race
+0x5516E0,453,sub_5516E0,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
+0x5518B0,323,sub_5518B0,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
+0x551A00,38,sub_551A00,btCollisionWorld; btDynamicsWorld,btCollisionWorld+10; btDynamicsWorld+10,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
+0x551A30,561,sub_551A30,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
+0x551C70,541,sub_551C70,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x551E90,118,sub_551E90,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x551F10,1185,sub_551F10,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/raytest.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x5523B1,8,sub_5523B1,DebugDrawcallback,DebugDrawcallback+0,rendering / gfx,absent,,False,False,race
@@ -5759,13 +5759,13 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x552EF0,20,sub_552EF0,,,particles (by address),verified,hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,game
 0x552F10,20,sub_552F10,,,particles (by address),verified,hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,game
 0x552F30,95,sub_552F30,btPolyhedralConvexShape; btSphereShape; btTriangleShape,btSphereShape+5; btPolyhedralConvexShape+5; btTriangleShape+5,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
-0x552F90,860,sub_552F90,btBoxShape; btConvexTriangleMeshShape; btCylinderShape; btCylinderShapeX; btCylinderShapeZ; btPolyhedralConvexAabbCachingShape; btPolyhedralConvexShape; btSphereShape; btTriangleShape,btSphereShape+18; btConvexTriangleMeshShape+18; btBoxShape+18; btPolyhedralConvexAabbCachingShape+18; btPolyhedralConvexShape+18; btCylinderShapeZ+18,physics (Bullet),absent,,False,False,race
+0x552F90,860,sub_552F90,btBoxShape; btConvexTriangleMeshShape; btCylinderShape; btCylinderShapeX; btCylinderShapeZ; btPolyhedralConvexAabbCachingShape; btPolyhedralConvexShape; btSphereShape; btTriangleShape,btSphereShape+18; btConvexTriangleMeshShape+18; btBoxShape+18; btPolyhedralConvexAabbCachingShape+18; btPolyhedralConvexShape+18; btCylinderShapeZ+18,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x5532F0,37,sub_5532F0,btSphereShape,btSphereShape+15,physics (Bullet),verified,engine/workspace/core/collision/sphere.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
 0x553320,53,sub_553320,btSphereShape,btSphereShape+17,physics (Bullet),verified,engine/workspace/core/collision/sphere.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
 0x553360,326,sub_553360,btSphereShape,btSphereShape+14,physics (Bullet),verified,engine/workspace/core/collision/raytest.hxx; engine/workspace/core/collision/sphere.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
 0x5534B0,229,sub_5534B0,btSphereShape,btSphereShape+1,physics (Bullet),verified,engine/workspace/core/collision/concave.hxx; engine/workspace/utility/meshes.hxx,False,False,race
 0x5535A0,97,sub_5535A0,btSphereShape,btSphereShape+7,physics (Bullet),verified,engine/workspace/core/collision/sphere.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
-0x553610,669,sub_553610,btBoxShape; btConvexTriangleMeshShape; btCylinderShape; btCylinderShapeX; btCylinderShapeZ; btPolyhedralConvexAabbCachingShape; btPolyhedralConvexShape; btSphereShape; btTriangleShape,btSphereShape+16; btConvexTriangleMeshShape+16; btBoxShape+16; btPolyhedralConvexAabbCachingShape+16; btPolyhedralConvexShape+16; btCylinderShapeZ+16,physics (Bullet),absent,,False,False,race
+0x553610,669,sub_553610,btBoxShape; btConvexTriangleMeshShape; btCylinderShape; btCylinderShapeX; btCylinderShapeZ; btPolyhedralConvexAabbCachingShape; btPolyhedralConvexShape; btSphereShape; btTriangleShape,btSphereShape+16; btConvexTriangleMeshShape+16; btBoxShape+16; btPolyhedralConvexAabbCachingShape+16; btPolyhedralConvexShape+16; btCylinderShapeZ+16,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x5538B0,194,sub_5538B0,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/support.hxx,False,False,race
 0x553980,1782,sub_553980,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/epa.hxx; engine/workspace/core/collision/support.hxx; engine/workspace/utility/narrow.hxx,False,False,race
 0x5540B0,416,sub_5540B0,,,unattributed,verified,engine/workspace/core/collision/epa.hxx; engine/workspace/core/collision/support.hxx; engine/workspace/utility/narrow.hxx,False,False,race
@@ -6092,7 +6092,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x56C370,190,sub_56C370,btConvexConcaveCollisionAlgorithm::SwappedCreateFunc,btConvexConcaveCollisionAlgorithm::SwappedCreateFunc+1,physics (Bullet),verified,engine/workspace/core/collision/dispatch.hxx,False,False,race
 0x56C430,192,sub_56C430,btCompoundCollisionAlgorithm::CreateFunc,btCompoundCollisionAlgorithm::CreateFunc+1,physics (Bullet),verified,engine/workspace/core/collision/compound.hxx; engine/workspace/core/collision/dispatch.hxx,False,False,race
 0x56C4F0,192,sub_56C4F0,btCompoundCollisionAlgorithm::SwappedCreateFunc,btCompoundCollisionAlgorithm::SwappedCreateFunc+1,physics (Bullet),verified,engine/workspace/core/collision/compound.hxx; engine/workspace/core/collision/dispatch.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
-0x56C5B0,288,sub_56C5B0,btConvexPlaneCollisionAlgorithm::CreateFunc,btConvexPlaneCollisionAlgorithm::CreateFunc+1,physics (Bullet),absent,,False,False,race
+0x56C5B0,288,sub_56C5B0,btConvexPlaneCollisionAlgorithm::CreateFunc,btConvexPlaneCollisionAlgorithm::CreateFunc+1,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x56C6D0,35,sub_56C6D0,btBoxBoxCollisionAlgorithm::CreateFunc; btCollisionAlgorithmCreateFunc; btCompoundCollisionAlgorithm::CreateFunc; btCompoundCollisionAlgorithm::SwappedCreateFunc; btConvexConcaveCollisionAlgorithm::CreateFunc; btConvexConcaveCollisionAlgorithm::SwappedCreateFunc; btConvexConvexAlgorithm::CreateFunc; btConvexPlaneCollisionAlgorithm::CreateFunc; btEmptyAlgorithm::CreateFunc; btSphereSphereCollisionAlgorithm::CreateFunc; btSphereTriangleCollisionAlgorithm::CreateFunc,btSphereTriangleCollisionAlgorithm::CreateFunc+0; btBoxBoxCollisionAlgorithm::CreateFunc+0; btEmptyAlgorithm::CreateFunc+0; btSphereSphereCollisionAlgorithm::CreateFunc+0; btCompoundCollisionAlgorithm::CreateFunc+0; btCompoundCollisionAlgorithm::SwappedCreateFunc+0,physics (Bullet),callee,,False,False,race
 0x56C700,111,sub_56C700,btBoxBoxCollisionAlgorithm::CreateFunc,btBoxBoxCollisionAlgorithm::CreateFunc+1,physics (Bullet),verified,engine/workspace/core/collision/compound.hxx; engine/workspace/core/collision/dispatch.hxx,False,False,race
 0x56C770,172,sub_56C770,btSphereTriangleCollisionAlgorithm::CreateFunc,btSphereTriangleCollisionAlgorithm::CreateFunc+1,physics (Bullet),verified,engine/workspace/core/collision/concave.hxx,False,False,race
@@ -6131,7 +6131,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x56DF40,186,sub_56DF40,btDbvtBroadphase,btDbvtBroadphase+2,physics (Bullet),verified,engine/workspace/core/collision/broadphase.hxx,False,False,race
 0x56E000,54,sub_56E000,btDbvtBroadphase,btDbvtBroadphase+4,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x56E040,136,sub_56E040,btDbvtBroadphase,btDbvtBroadphase+5,physics (Bullet),verified,engine/workspace/core/collision/raytest.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
-0x56E0D0,118,sub_56E0D0,btDbvtBroadphase,btDbvtBroadphase+6,physics (Bullet),absent,,False,False,race
+0x56E0D0,118,sub_56E0D0,btDbvtBroadphase,btDbvtBroadphase+6,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x56E150,657,sub_56E150,btDbvtBroadphase,btDbvtBroadphase+3,physics (Bullet),verified,engine/workspace/core/collision/broadphase.hxx,False,False,race
 0x56E3F0,35,sub_56E3F0,btDbvtBroadphase,btDbvtBroadphase+7,physics (Bullet),verified,engine/workspace/core/collision/broadphase.hxx,False,False,race
 0x56E420,627,sub_56E420,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/broadphase.hxx,False,False,race
@@ -6141,7 +6141,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x56EB20,167,sub_56EB20,btDbvtBroadphase,btDbvtBroadphase+11,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x56EBD0,698,sub_56EBD0,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/broadphase.hxx,False,False,race
 0x56EE90,912,sub_56EE90,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/raytest.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
-0x56F220,673,sub_56F220,,,physics (Bullet) (by address),absent,,False,False,race
+0x56F220,673,sub_56F220,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x56F4D0,916,sub_56F4D0,,,unattributed,verified,engine/workspace/core/collision/broadphase.hxx,False,False,race
 0x56F870,164,sub_56F870,,,unattributed,absent,,False,False,race
 0x56F920,362,sub_56F920,,,unattributed,absent,,False,False,race
@@ -6950,7 +6950,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5B7FA0,21,sub_5B7FA0,btTriangleShape,btTriangleShape+27,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x5B7FC0,274,sub_5B7FC0,btTriangleShape,btTriangleShape+29,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x5B80E0,37,sub_5B80E0,btBvhTriangleMeshShape; btTriangleMeshShape; btTriangleShape,btBvhTriangleMeshShape+7; btTriangleShape+7; btTriangleMeshShape+7,physics (Bullet),verified,engine/workspace/core/collision/teardown.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
-0x5B8110,684,sub_5B8110,btTriangleShape,btTriangleShape+28,physics (Bullet),absent,,False,False,race
+0x5B8110,684,sub_5B8110,btTriangleShape,btTriangleShape+28,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x5B83C0,6,sub_5B83C0,btTriangleShape,btTriangleShape+8,physics (Bullet),callee,,False,False,race
 0x5B83D0,297,sub_5B83D0,btTriangleShape,btTriangleShape+20,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x5B8500,1250,sub_5B8500,PBVbtC::0PAVbtCollisionObject::SAXABVbtTransform::btCollisionWorld::??rayTestSingle::?BG::.?AUBridgeTriangleRaycastCallback; PBVbtC::0PAVbtCollisionObject::SAXABVbtTransform::btCollisionWorld::??rayTestSingle::?BJ::.?AUBridgeTriangleRaycastCallback; btTriangleRaycastCallback,PBVbtC::0PAVbtCollisionObject::SAXABVbtTransform::btCollisionWorld::??rayTestSingle::?BG::.?AUBridgeTriangleRaycastCallback+1; PBVbtC::0PAVbtCollisionObject::SAXABVbtTransform::btCollisionWorld::??rayTestSingle::?BJ::.?AUBridgeTriangleRaycastCallback+1; btTriangleRaycastCallback+1,physics (Bullet),verified,engine/workspace/core/collision/raytest.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
@@ -8041,7 +8041,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x605C60,7,sub_605C60,VuDynamicsWorldImpl; btDiscreteDynamicsWorld,VuDynamicsWorldImpl+24; btDiscreteDynamicsWorld+24,physics (Bullet),callee,,False,False,race
 0x605C70,19,sub_605C70,VuDynamicsWorldImpl; btDiscreteDynamicsWorld,VuDynamicsWorldImpl+25; VuDynamicsWorldImpl+26; btDiscreteDynamicsWorld+25; btDiscreteDynamicsWorld+26,physics (Bullet),absent,,False,False,race
 0x605C90,194,sub_605C90,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
-0x605D60,46,sub_605D60,VuDynamicsWorldImpl; btDiscreteDynamicsWorld,VuDynamicsWorldImpl+10; btDiscreteDynamicsWorld+10,physics (Bullet),absent,,False,False,race
+0x605D60,46,sub_605D60,VuDynamicsWorldImpl; btDiscreteDynamicsWorld,VuDynamicsWorldImpl+10; btDiscreteDynamicsWorld+10,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x605D90,301,sub_605D90,,,physics (Bullet) (by address),verified,engine/workspace/core/dynamics/island.hxx,False,False,race
 0x605EC0,111,sub_605EC0,,,physics (Bullet) (by address),absent,,False,False,race
 0x605F30,111,sub_605F30,,,physics (Bullet) (by address),absent,,False,False,race
