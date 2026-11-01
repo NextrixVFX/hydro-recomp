@@ -29,6 +29,7 @@
 #include <workspace/core/world/water.hxx>
 #include <workspace/core/world/watchers.hxx>
 #include <workspace/core/world/background.hxx>
+#include <workspace/core/world/action.hxx>
 #include <workspace/core/assets/texture.hxx>
 #include <workspace/utility/logger.hxx>
 #include <workspace/utility/trace.hxx>
@@ -941,6 +942,7 @@ public:
     // 0x4FDB70): SCAFFOLD, ours - GameData {Level: --race, GameType: --mode (else "Race"), Course: --course}, the
     // inputs the old Games/<track><mode> path took; with Level a bare track name 0x4D3480 names the same projects.
     void load_background( );
+    void action_start( value_t& game_data, const race_session_dbs_t& dbs, const std::function< void( ) >& level );
 
     void load_scene( const char* track, const char* mode, const char* course = nullptr )
     {
@@ -972,6 +974,10 @@ public:
             if ( course != nullptr && course[ 0 ] != '\0' )
                 ui_json_set_string( ui_json_child( game_data, "Course" ), course );
         }
+        // VuActionGameMode 0x4BA060 (LoadLevel's enter): the body below. A front-end race runs it through the action mode
+        // (world/action.hxx); every other path (the scaffold, --front-end-defaults to a non-race) calls it directly.
+        const auto level = [ & ]( )
+        {
         const std::string name = race_project_name( util, nullptr, [ this ]( const std::string& type, const std::string& n ) {
             for ( const std::string& rest : m_archive.names( type + "/" + n ) )   // names() strips the prefix: exact = ""
                 if ( rest.empty( ) )
@@ -1008,6 +1014,12 @@ public:
             LOG_WARNING( "0x4BA060: the %s game's ctor (0x48BEC0 / 0x48ED30 / 0x484A20) is NOT recreated - no game object", type.c_str( ) );
             break;
         }
+        };
+        m_action.reset( );
+        if ( race && front_end )
+            action_start( game_data, dbs, level );
+        else
+            level( );
     }
 
     // BoatDB / TrackDB / ConstantDB (and SkinDB for the skin pass) from the pack.
@@ -1244,7 +1256,24 @@ public:
         // target / far (c_engine::camera): the camera's own projection +0x30 / view +0x70 (fov, roll) are not
         // consumed - SUBSTITUTION, the renderer's. The far plane stays the gfx settings' (the camera's +0x17C is
         // boat +0x408, which the Build tick 0x41F330 fills). No race: dev_vantage's orbit / freecam (scaffold).
+        // The game mode manager's Decision tick: the action mode (world/action.hxx) when this race has one.
+        if ( m_action )
+            m_race.world.game_mode = [ this ]( float step ) {
+                const std::string& next = m_action->tick( step );
+                if ( m_action_reported != m_action->state( ) )
+                {
+                    m_action_reported = m_action->state( );
+                    LOG_INFO( "action mode: %s (sync %d)%s%s", m_action_reported.c_str( ), m_race.dynamics ? m_race.dynamics->syncs : -1,
+                              next.empty( ) ? "" : " - the next game mode: ", next.c_str( ) );
+                }
+            };
+        else
+            m_race.world.game_mode = nullptr;
         race_session_frame( m_race, dt );
+        // g_vufademanager's "Final" tick 0x4AEE50 (ui/flow.hxx ui_fade_t; delta = the tick manager's = dt): after the
+        // frame's other phases. Its two broadcasts (OnFadeOutComplete / OnFadeInComplete) reach no subscriber here.
+        if ( m_action )
+            m_fade.tick( dt, nullptr );
         // Dev trace (--verbose, ours): the event census at the session's milestone frames - the logic handlers run
         // and every plug fire that reached no handler, by class . plug.
         if ( g_verbose && m_race.active && ( m_race.frames == 960 || m_race.frames == 1920 || m_race.frames == 3840 || m_race.frames == 7680 ) )
@@ -1642,6 +1671,10 @@ private:
     // by graph.hxx; m_logic_fired counts their handlers run.
     std::map< std::string, entity_t* > m_logic;
     std::map< std::string, std::uint32_t > m_static_pfx;   // VuStaticPfxEntity path -> its +0x94 instance (0: none)
+    std::unique_ptr< c_action_mode > m_action;   // the game mode manager's current mode in a front-end race (world/action.hxx)
+    action_fade_t m_fade;                        // g_vufademanager 0x758FC4
+    std::function< void( ) > m_action_level;     // LoadLevel's enter while load_scene runs
+    std::string m_action_reported;
     background_t m_background;           // g 0x758FF0 +0x44 (world/background.hxx; --front-end)
     camera_env_t m_background_env;       // the rig's display / VerticalFOV
     int m_logic_fired = 0;

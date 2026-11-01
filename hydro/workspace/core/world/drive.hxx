@@ -1260,6 +1260,7 @@ inline void race_session_game_mode( void* user, float dt )
     // VuGame's two machines after slot 7 (world/rules.hxx vugame_fsms_tick: verified tables, handlers hooks).
     const std::string event_before = s.rules.event.current( ) ? s.rules.event.current( )->m_name : std::string( );
     const bool game_running = vugame_fsms_tick( s.rules, running, dt );
+    s.game_answer = game_running;
     const std::string event_after = s.rules.event.current( ) ? s.rules.event.current( )->m_name : std::string( );
     if ( event_before != event_after )
         LOG_INFO( "race: VuGame +0x0C state %s -> %s (sync %d)%s", event_before.c_str( ), event_after.c_str( ), s.dynamics ? s.dynamics->syncs : -1,

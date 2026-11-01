@@ -110,6 +110,9 @@ struct race_world_t
     // The "Triggers" tick 0x536460's trigger half: every listed trigger's vt+0x30 over the manager's
     // instigators (c_world's trigger list - world.hxx race_triggers), run after the instigator step.
     std::function< void( ) > triggers;
+    // The game mode manager's Decision tick 0x4CBFD0 -> the action mode's slot 4 0x4B99E0 (world/action.hxx, c_world's);
+    // null: no action mode - the session's game tick runs as if in Run (the scaffold paths).
+    std::function< void( float ) > game_mode;
     // The race HUD projects (VuRaceGame +0x738 / +0x73C / +0x740: 0 PreGame, 1 Game, 2 PostGame) - their load, gameInitialize,
     // release and graph are the world's (c_world), their tick / draw the UI's; null: no HUD projects (UNKNOWN, logged).
     std::function< void( int project, race_hud_verb_t verb, float dt ) > hud;
@@ -248,6 +251,7 @@ struct race_session_t
     race_rules_game_t rules_game;
     std::vector< race_rules_boat_t > rules_boats;
     bool rules_running = false;
+    bool game_answer = true;   // VuGame's tick 0x482F10's answer, last frame (false: the game is done - Run's 0x4BAB50 reads it)
     int rules_frames = 0;
     // THE TEST INPUT (ours, flagged - not retail): --input-script's per-frame pad states (world/drive.hxx race_input_script_t),
     // answered by the platform input hook in place of the device; null: the device (game/input.hxx read_input). rames: the
@@ -286,6 +290,16 @@ inline void race_drive_viewports( race_session_t& s );
 inline void race_drive_build( race_session_t& s, std::size_t boat, float dt );
 // VuGame's tick 0x482F10 as the Decision phase reaches it (world/drive.hxx).
 inline void race_session_game_mode( void* user, float dt );
+// The Decision tick the game mode manager registers: the action mode when there is one (its Run state's 0x4BAB50
+// calls race_session_game_mode), else race_session_game_mode itself.
+inline void race_session_mode_tick( void* user, float dt )
+{
+    race_session_t& s = *static_cast< race_session_t* >( user );
+    if ( s.world.game_mode )
+        s.world.game_mode( dt );
+    else
+        race_session_game_mode( user, dt );
+}
 
 // The graph object a boat-image pointer slot refers to (-1 none).
 inline int race_session_ref( const boat_graph_t& g, int object, int slot )
@@ -1390,7 +1404,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     // 0x758F8C, 0x403310 at 0x402808, init 0x4042E0 at 0x402828: 'Decision' -> 0x404331's handler) long before the game
     // mode manager (g 0x758FF0, 0x4CBA30 at 0x402A6C, init 0x4CBCD0 at 0x402A90: 'Decision' at 0x4CBE4C); the list's
     // later walk (0x402AB2) calls each one's vt+4 - 0x401560 (nothing) for both. So the AI's Decision tick runs first.
-    tick_register( s.ticks, { &s.rules, race_session_game_mode, &s }, "Decision" );
+    tick_register( s.ticks, { &s.rules, race_session_mode_tick, &s }, "Decision" );
     tick_register( s.ticks, { &s.manager, race_session_viewports, &s }, "Viewports" );
     // VuWater's tick 0x529E30 in "Water" (VuWater made by the engine init, before the race: c_world's
     // water_tick - surface.hxx water_built_tick and the queries' view).

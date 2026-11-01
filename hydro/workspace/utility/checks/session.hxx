@@ -3,6 +3,9 @@
 #include <workspace/core/world/race.hxx>
 #include <workspace/core/world/strings.hxx>
 #include <workspace/core/world/background.hxx>
+#include <workspace/core/world/action.hxx>
+
+#include <cstdio>
 
 // The world area's second checks file (checks/world.hxx is at its size limit): the race session's
 // pieces from world batch 24 on. Included at the end of checks/world.hxx; verify_session_all runs
@@ -227,9 +230,84 @@ inline bool verify_front_end_trigger( )
     return failed == 0;
 }
 
+// c_action_mode (world/action.hxx: VuActionGameMode's ctor 0x4B9160 / enter 0x4B9630 / tick 0x4B99E0 and the state
+// delegates it recreates) against retail's on 3 scripts (oracle case action_mode): per step the state, the FSM time, the
+// answer, the fade manager's value / rate / skip words and the calls into the hooks (the same tokens the case logs).
+inline bool verify_action_mode( )
+{
+    const auto bits = []( float f ) { std::uint32_t u; std::memcpy( &u, &f, 4 ); return u; };
+    const auto real = []( std::uint32_t u ) { float f; std::memcpy( &f, &u, 4 ); return f; };
+    int failed = 0, compared = 0;
+    for ( std::size_t k = 0; k < g_golden_action_script_count; ++k )
+    {
+        const golden_action_script_t& want = g_golden_action_scripts[ k ];
+        action_fade_t fade;
+        fade.m_duration = real( want.duration );
+        std::string calls;
+        int display[ 2 ] = { 0, 0 };
+        const auto note = [ &calls ]( const std::string& s ) { calls += ( calls.empty( ) ? "" : "," ) + s; };
+        action_mode_hooks_t h;
+        h.erase_dev_restart = [ & ] { note( "0x4FC140" ); };
+        h.viewports = [ & ]( int on ) { note( "0x530BB0:" + std::to_string( on ) ); };
+        h.load_loading_screen = [ & ] { note( "0x4D3690" ); note( "0x4B4360" ); return false; };
+        h.load_snap = [ & ] { note( "0x4B4360" ); return false; };
+        h.loading_assets = [ & ] { note( "0x4D3410" ); note( "0x4D2440" ); };
+        h.loading_more = [ ] { return false; };   // the case's asset list +0xE8 is null
+        h.clock = [ ] { return 12.5; };
+        h.broadcast_float = [ & ]( const char* name, float v ) {
+            char t[ 64 ];
+            std::snprintf( t, sizeof( t ), "bc:%08X:8:00000002:%08X", fsm_hash( name ), bits( v ) );
+            note( t );
+        };
+        h.load_level = [ & ] { note( "0x4BA060" ); };
+        h.action_game_data = [ & ] { note( "0x4D2DE0" ); };
+        h.pause_tick = [ & ]( float ) { note( "0x4BB540" ); };
+        h.snap_pause = [ & ]( bool on ) { note( on ? "0x4BABA0" : "0x4BAC50" ); };
+        h.display = [ & ]( int& w, int& hh ) { w = display[ 0 ]; hh = display[ 1 ]; };
+        c_action_mode mode( fade, want.dev_restart != 0, h );
+        bool bad = calls != want.ctor_calls;
+        calls.clear( );
+        mode.enter( );
+        bad = bad || calls != want.enter_calls || std::string( mode.state( ) ) != want.enter_state || bits( fade.m_value ) != want.enter_fade[ 0 ] ||
+              bits( fade.m_rate ) != want.enter_fade[ 1 ] || fade.m_skip != want.enter_fade[ 2 ];
+        for ( int s = 0; s < want.count; ++s )
+        {
+            const golden_action_step_t& step = g_golden_action_steps[ want.first + s ];
+            calls.clear( );
+            display[ 0 ] = step.w;
+            display[ 1 ] = step.h;
+            if ( step.has_rate )
+                fade.m_rate = real( step.rate );
+            if ( step.event == 1 )
+                mode.on_end_action_game( );
+            else if ( step.event == 2 )
+                mode.on_restart_action_game( );
+            const std::string answer = mode.tick( real( step.dt ) );
+            ++compared;
+            const bool wrong = std::string( mode.state( ) ) != step.state || bits( mode.m_fsm.m_time ) != step.time || answer != step.answer ||
+                               bits( fade.m_value ) != step.fade[ 0 ] || bits( fade.m_rate ) != step.fade[ 1 ] || fade.m_skip != step.fade[ 2 ] ||
+                               calls != step.calls;
+            if ( wrong && failed < 8 )
+                LOG_ERROR( "action mode script %d step %d: state %s time 0x%08X answer '%s' fade %08X %08X %u calls '%s'; retail %s 0x%08X '%s' %08X %08X %u '%s'",
+                           static_cast< int >( k ), s, mode.state( ), bits( mode.m_fsm.m_time ), answer.c_str( ), bits( fade.m_value ), bits( fade.m_rate ),
+                           fade.m_skip, calls.c_str( ), step.state, step.time, step.answer, step.fade[ 0 ], step.fade[ 1 ], step.fade[ 2 ], step.calls );
+            bad = bad || wrong;
+        }
+        if ( bad )
+            ++failed;
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_action_mode matches VuActionGameMode's ctor 0x4B9160 / enter 0x4B9630 / tick 0x4B99E0 on %d scripts (%d steps: state, "
+                     "FSM time, answer, fade words, hook calls), bit for bit", static_cast< int >( g_golden_action_script_count ), compared );
+    else
+        LOG_ERROR( "the action mode FAILED on %d of %d scripts", failed, static_cast< int >( g_golden_action_script_count ) );
+    return failed == 0;
+}
+
 inline bool verify_session_all( )
 {
     bool ok = true;
+    ok = verify_action_mode( ) && ok;
     ok = verify_front_end_trigger( ) && ok;
     ok = verify_logic_properties( ) && ok;
     ok = verify_string_db( ) && ok;
