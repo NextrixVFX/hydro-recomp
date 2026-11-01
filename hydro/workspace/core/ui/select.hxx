@@ -209,8 +209,8 @@ inline bool ui_json_equal( const value_t& a, const value_t& b )
 // platform): `unlock` = g_vuunlockmanagerimpl 0x758FE8 slot +92 / +96 (two
 // strings: c unused) and +100 / +104 (three); `license` = the license
 // manager 0x758FAC slot +0x18; `next_choice` = VuGameConfigEntity's slot 26
-// (+104) 0x45E300 (READ - a walk over the progress manager 0x758FD8 +48 and
-// the unlock manager - NOT recreated): true with the choice text to select.
+// (+104) 0x45E300 - recreated (ui_game_config_next below); set it only to
+// answer that slot from outside: true with the choice text to select.
 // The boat selector's further reads, HOOKS too: `progress` = the progress
 // manager 0x758FD8 slot +132 (one string; `has_progress` false = the global is
 // null), `store_beta` = 0x4D3170 (the asset factory's slot +124 build name
@@ -229,6 +229,12 @@ struct ui_profile_t
     // slot +88 (championship name) and slot +48 (mode, track, course, 0, ...).
     std::function< int( const std::string& championship ) > champ_rank;
     std::function< int( const std::string& mode, const std::string& track, const std::string& course ) > race_rank;
+    // The same progress slots' boolean answers (VuGameConfigEntity slot 17
+    // 0x45D720 reads only those): +48 (mode, track, course, 0, ...), +88
+    // (championship), +124 (the Ghost track).
+    std::function< bool( const std::string& mode, const std::string& track, const std::string& course ) > race_done;
+    std::function< bool( const std::string& championship ) > champ_done;
+    std::function< bool( const std::string& track ) > ghost_done;
     bool has_progress = true;
     bool has_unlock = true;
 };
@@ -386,6 +392,72 @@ inline bool ui_game_config_locked_trial( const value_t& root, const std::string&
     return false;
 }
 
+// VuGameConfigEntity slot 17 (+68) 0x45D720 (stdcall name, value): whether a
+// choice is already done (the progress manager's answers; no progress manager
+// 0x758FD8 -> true). Mode = GameConfig.Mode's text. "Track": Race / TimeTrial
+// -> +48(mode, value, "None"); Slalom -> +48(mode, value, CourseA) || CourseB
+// || CourseC (in order, stopping at the first true); Ghost -> +124(value);
+// other modes true. "Championship" -> +88(value). "Course" with mode Slalom
+// -> +48(mode, GameConfig.Track's text (0x4FC4B0), value). Anything else true.
+inline bool ui_game_config_done( const value_t& root, const std::string& name, const std::string& value, const ui_profile_t& p )
+{
+    if ( !p.has_progress )
+        return true;
+    const std::string mode = ui_json_text( member( member( root, "GameConfig" ), "Mode" ) );
+    if ( name == "Track" )
+    {
+        if ( mode == "Race" || mode == "TimeTrial" )
+            return p.race_done( mode, value, "None" );
+        if ( mode == "Slalom" )
+            return p.race_done( mode, value, "CourseA" ) || p.race_done( mode, value, "CourseB" ) || p.race_done( mode, value, "CourseC" );
+        if ( mode == "Ghost" )
+            return p.ghost_done( value );
+        return true;
+    }
+    if ( name == "Championship" )
+        return p.champ_done( value );
+    if ( name == "Course" && mode == "Slalom" )
+        return p.race_done( mode, ui_json_text( member( member( root, "GameConfig" ), "Track" ) ), value );
+    return true;
+}
+
+// VuGameConfigEntity slot 26 (+104) 0x45E300 (thiscall this, const
+// VuJsonContainer& option, VuString* out): the first choice (the array's size
+// re-read every step) that is neither done (slot 17) nor locked (slot 18) ->
+// out = its Value text, true. Otherwise, only with GameConfig.Mode exactly
+// "Slalom" and the option's Name exactly "Track": the first choice with some
+// course (CourseA, B, C in order) that the progress manager +48 ("Slalom",
+// value, course) has NOT done and the unlock manager +100 ("Slalom", value,
+// course) unlocks -> out = its Value, true. Else false (out untouched).
+inline bool ui_game_config_next( const ui_config_entity_t& e, const value_t& root, const value_t& option, const ui_profile_t& p, std::string& out )
+{
+    const std::string& name = ui_json_text( member( option, "Name" ) );
+    const value_t& choices = member( option, "Choices" );
+    for ( int i = 0; i < ui_json_size( choices ); ++i )
+    {
+        const std::string& value = ui_json_text( member( ui_json_element( choices, i ), "Value" ) );
+        if ( !ui_game_config_done( root, name, value, p ) && !ui_game_config_locked( e, root, name, value, p ) )
+        {
+            out = value;
+            return true;
+        }
+    }
+    if ( ui_json_text( member( member( root, "GameConfig" ), "Mode" ) ) != "Slalom" || name != "Track" )
+        return false;
+    static const char* const courses[ ] = { "CourseA", "CourseB", "CourseC" };
+    for ( int i = 0; i < ui_json_size( choices ); ++i )
+    {
+        const std::string& value = ui_json_text( member( ui_json_element( choices, i ), "Value" ) );
+        for ( const char* course : courses )
+            if ( !p.race_done( "Slalom", value, course ) && p.unlock( 100, "Slalom", value, course ) )
+            {
+                out = value;
+                return true;
+            }
+    }
+    return false;
+}
+
 // 0x44BD50 (thiscall this, option): the index of the first choice whose
 // "Value" equals root ["GameConfig"] [Name] (lookups only), else slot 22
 // (+88) - VuGameConfigEntity's 0x4471B0 returns 0.
@@ -481,7 +553,12 @@ inline ui_config_class_t ui_game_config_class( const ui_config_entity_t& e, valu
     c.fallback = []( const value_t&, const std::string& ) { return 0; };
     c.last = [ &root ]( const std::string& name ) { return ui_game_config_last( root, name ); };
     c.remember = [ &root ]( const std::string& name, const std::string& value ) { ui_game_config_remember( root, name, value ); };
-    c.next_choice = p.next_choice;
+    // Slot 26: 0x45E300 recreated above, unless the profile answers it itself
+    // (the checks whose retail runs hooked 0x45E300 set p.next_choice).
+    if ( p.next_choice )
+        c.next_choice = p.next_choice;
+    else
+        c.next_choice = [ &e, &root, &p ]( const value_t& option, std::string& out ) { return ui_game_config_next( e, root, option, p, out ); };
     return c;
 }
 

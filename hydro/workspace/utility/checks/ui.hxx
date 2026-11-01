@@ -2729,8 +2729,8 @@ inline value_t ui_fr_document( int index )
 // Allow Special Boats read from OUR loaded entities and compared with
 // retail's): per run the whole root after, the trophy byte, every answered
 // hook call in order with its arguments, and every broadcast / plug fire /
-// trophy model / voice in order - the two info-string broadcasts excepted
-// (the game selector's slot 23 0x45DBF0 text is not recreated).
+// trophy model / voice in order - the info-string broadcasts included (the
+// game selector's slot 23 0x45DBF0 text, expand.hxx).
 inline bool verify_ui_front_end_root( )
 {
     const ui_loaded_t& loaded = ui_loaded( );
@@ -2748,7 +2748,6 @@ inline bool verify_ui_front_end_root( )
     dbs.m_skin_db = &skin_db;
     dbs.m_track_db = &track_db;
     dbs.m_champ_db = &champ_db;
-    const std::uint32_t info_short = fsm_hash( "OnSetShortUnlockStringID" ), info = fsm_hash( "OnSetInfoStringID" );
     auto answered = []( int kind ) { return kind <= 3 || kind == 8 || kind == 9 || kind == 10 || kind == 11; };
     auto posted = []( int kind ) { return kind == 5 || kind == 6 || kind == 7 || kind == 12; };
     for ( std::size_t k = 0; k < g_golden_fr_pairs_count; ++k )
@@ -2787,8 +2786,7 @@ inline bool verify_ui_front_end_root( )
                 const golden_bci_log_t& g = g_golden_fr_logs[ run.m_first_log + n ];
                 if ( answered( g.m_kind ) )
                     want_answers.push_back( &g );
-                else if ( posted( g.m_kind ) && !( g.m_kind == 6 && ( std::strtoul( g.m_a, nullptr, 16 ) == info_short ||
-                                                                     std::strtoul( g.m_a, nullptr, 16 ) == info ) ) )
+                else if ( posted( g.m_kind ) )
                     want_posts.push_back( &g );
             }
             std::size_t at = 0, post_at = 0;
@@ -2864,8 +2862,6 @@ inline bool verify_ui_front_end_root( )
             };
             h.broadcast = [ & ]( std::uint32_t hash, const ui_params_t& params )
             {
-                if ( hash == info_short || hash == info )
-                    return;
                 char text[ 16 ];
                 std::snprintf( text, sizeof( text ), "0x%08X", hash );
                 post( 6, text, ui_bci_hex( params ) );
@@ -2896,9 +2892,12 @@ inline bool verify_ui_front_end_root( )
     return failed == 0;
 }
 
+#include <workspace/utility/checks/menu.hxx>
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_menu_all( ) && ok;
     ok = verify_ui_front_end_root( ) && ok;
     ok = verify_ui_config_expand( ) && ok;
     ok = verify_ui_boat_config_init( ) && ok;
