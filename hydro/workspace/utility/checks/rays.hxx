@@ -1775,8 +1775,13 @@ template < typename F > inline bool bt_rows_verify( const unsigned* g, const cha
         std::vector< unsigned > frees, deletes;
         const unsigned* vcalls = nullptr;
         unsigned nv = 0, at = 0;
+        // (boat batch 21) a perturbed model can chase a chain through garbage forever (a hash chain whose reads
+        // answer 0): past 50M accesses the vector is abandoned (thrown, caught around the row: a failure).
+        unsigned long long ops = 0;
         std::uint8_t* p( std::uint32_t a, unsigned n )
         {
+            if ( ++ops > 50000000ull )
+                throw ops;
             if ( a < base || a + n > base + bytes.size( ) )
             {
                 bad = true;
@@ -1830,10 +1835,19 @@ template < typename F > inline bool bt_rows_verify( const unsigned* g, const cha
         std::vector< std::uint8_t > want( x.bytes );
         for ( unsigned k = 0; k < nch; ++k )
             std::memcpy( want.data( ) + 4 * changed[ 2 * k ], &changed[ 2 * k + 1 ], 4 );
-        std::uint32_t counter = c0;
+        std::uint32_t counter = c0, allocs = 0;
         bt_mem_t m;
         m.user = &x;
         m.num_aligned_free = &counter;
+        // (boat batch 21) btAlignedAlloc's function [0x7358A4]: a logged call on self 0x7358A4, offset 0 (size,
+        // alignment); gNumAlignedAlloc counts from 0 (a row's check answers its count as eax).
+        m.num_aligned_alloc = &allocs;
+        m.aligned_alloc = []( void* u, std::uint32_t size, std::uint32_t alignment ) -> std::uint32_t {
+            arena_t& y = *static_cast< arena_t* >( u );
+            const std::uint32_t a[ 2 ] = { size, alignment };
+            const unsigned* c = y.next( 0x7358A4u, 0, a, 2 );
+            return c ? c[ 3 + c[ 2 ] ] : 0u;
+        };
         m.rd = []( void* u, std::uint32_t a ) -> std::uint32_t {
             std::uint32_t w = 0;
             if ( std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 4 ) )
@@ -1877,7 +1891,15 @@ template < typename F > inline bool bt_rows_verify( const unsigned* g, const cha
             std::memcpy( out, c + 5 + c[ 2 ], 4u * static_cast< unsigned >( words ) );
             return c[ 3 + c[ 2 ] ];
         };
-        const std::uint32_t r = call( kind, m, io, self, args );
+        std::uint32_t r = 0;
+        try
+        {
+            r = call( kind, m, io, self, args );
+        }
+        catch ( unsigned long long )
+        {
+            x.bad = true;
+        }
         calls += static_cast< int >( x.nv );
         frees += static_cast< int >( nf );
         const bool same = !x.bad && x.at == x.nv && r == eax && counter == c1 && x.frees == want_frees && x.deletes == want_deletes && x.bytes == want;
@@ -2014,7 +2036,119 @@ inline bool verify_bt_rows5( )
             }
         } );
 }
-// verify_mesh_scaling (boat batch 20): cases/boat.py mesh_scaling -
+
+// A bt_mem_t over the arena with a stack frame in front of it: addresses in
+// [0x0F000000, +0x5C) are a local buffer (a retail stack frame the model
+// keeps in memory), the rest - and every hook - go to the inner one.
+struct bt_framed_t
+{
+    const bt_mem_t* inner = nullptr;
+    std::uint8_t bytes[ 0x5C ] = { };
+    std::uint8_t* p( std::uint32_t a, unsigned n )
+    {
+        return a >= 0x0F000000u && a + n <= 0x0F000000u + sizeof( bytes ) ? bytes + ( a - 0x0F000000u ) : nullptr;
+    }
+};
+
+inline bt_mem_t bt_framed_mem( bt_framed_t& fr, const bt_mem_t& m )
+{
+    fr.inner = &m;
+    bt_mem_t f = m;
+    f.user = &fr;
+    f.rd = []( void* u, std::uint32_t a ) -> std::uint32_t {
+        bt_framed_t& y = *static_cast< bt_framed_t* >( u );
+        if ( std::uint8_t* q = y.p( a, 4 ) )
+        {
+            std::uint32_t w;
+            std::memcpy( &w, q, 4 );
+            return w;
+        }
+        return y.inner->rd( y.inner->user, a );
+    };
+    f.rd8 = []( void* u, std::uint32_t a ) -> std::uint8_t {
+        bt_framed_t& y = *static_cast< bt_framed_t* >( u );
+        if ( std::uint8_t* q = y.p( a, 1 ) )
+            return *q;
+        return y.inner->rd8( y.inner->user, a );
+    };
+    f.wr = []( void* u, std::uint32_t a, std::uint32_t w ) {
+        bt_framed_t& y = *static_cast< bt_framed_t* >( u );
+        if ( std::uint8_t* q = y.p( a, 4 ) )
+            std::memcpy( q, &w, 4 );
+        else
+            y.inner->wr( y.inner->user, a, w );
+    };
+    f.wr8 = []( void* u, std::uint32_t a, std::uint8_t b ) {
+        bt_framed_t& y = *static_cast< bt_framed_t* >( u );
+        if ( std::uint8_t* q = y.p( a, 1 ) )
+            *q = b;
+        else
+            y.inner->wr8( y.inner->user, a, b );
+    };
+    f.aligned_free = []( void* u, std::uint32_t q ) {
+        bt_framed_t& y = *static_cast< bt_framed_t* >( u );
+        y.inner->aligned_free( y.inner->user, q );
+    };
+    f.aligned_alloc = []( void* u, std::uint32_t size, std::uint32_t alignment ) -> std::uint32_t {
+        bt_framed_t& y = *static_cast< bt_framed_t* >( u );
+        return y.inner->aligned_alloc( y.inner->user, size, alignment );
+    };
+    f.vcall = []( void* u, std::uint32_t s, std::uint32_t off, const std::uint32_t* a, int count ) -> std::uint32_t {
+        bt_framed_t& y = *static_cast< bt_framed_t* >( u );
+        return y.inner->vcall( y.inner->user, s, off, a, count );
+    };
+    return f;
+}
+// verify_bt_rows6 (boat batch 21): cases/boat.py bt_rows6 - btCollisionWorld::
+// serialize 0x551A00, btDiscreteDynamicsWorld::serialize 0x605D60,
+// serializeCollisionObjects 0x5516E0 and the btHashMap rows insert 0x551A30 /
+// growTables 0x551C70 / dtor 0x5518B0. eax = the row's gNumAlignedAlloc count.
+// 0x5516E0's stack frame (the local map, key, value) is a 0x5C-byte buffer at
+// 0x0F000000 filled with the case's stack fill (args[ 1 ]): the key's second
+// word is read from it, as retail reads its stack.
+inline bool verify_bt_rows6( )
+{
+    return bt_rows_verify( g_golden_bt_rows6_words, "bt_rows6",
+        "six Bullet rows 0x551A00 / 0x605D60 / 0x5516E0 / 0x551A30 / 0x551C70 / 0x5518B0 (collision/arena.hxx: the world serialize, "
+        "serializeCollisionObjects, btHashMap insert / growTables / dtor)",
+        []( unsigned kind, const bt_mem_t& m, const bt_io_t&, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            bt_framed_t fr;
+            const std::uint32_t before = *m.num_aligned_alloc;
+            if ( kind <= 3 )
+                for ( unsigned k = 0; k < sizeof( fr.bytes ); k += 4 )
+                    std::memcpy( fr.bytes + k, &args[ 1 ], 4 );
+            const bt_mem_t f = bt_framed_mem( fr, m );
+            switch ( kind )
+            {
+                case 1: bt_collision_world_serialize( f, self, args[ 0 ], 0x0F000000u, false ); break;
+                case 2: bt_collision_world_serialize( f, self, args[ 0 ], 0x0F000000u, true ); break;
+                case 3: bt_collision_world_serialize_objects( f, self, args[ 0 ], 0x0F000000u ); break;
+                case 4: bt_hash_map_insert( f, self, args[ 0 ], args[ 1 ] ); break;
+                case 5: bt_hash_map_grow_tables( f, self ); break;
+                default: bt_hash_map_destroy( f, self ); break;
+            }
+            return *m.num_aligned_alloc - before;
+        } );
+}
+// verify_bt_rows7 (boat batch 21): cases/boat.py bt_rows7 - btDbvtBroadphase::
+// aabbTest 0x56E0D0 (its stack policy + volume in the 0x0F000000 frame) and
+// btDbvt::collideTV 0x56F220 (this = the root, args the volume and the
+// policy); eax = the row's gNumAlignedAlloc count.
+inline bool verify_bt_rows7( )
+{
+    return bt_rows_verify( g_golden_bt_rows7_words, "bt_rows7",
+        "two Bullet rows 0x56E0D0 / 0x56F220 (collision/arena.hxx: btDbvtBroadphase::aabbTest, btDbvt::collideTV with its growing stack)",
+        []( unsigned kind, const bt_mem_t& m, const bt_io_t&, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            bt_framed_t fr;
+            const std::uint32_t before = *m.num_aligned_alloc;
+            const bt_mem_t f = bt_framed_mem( fr, m );
+            if ( kind == 1 )
+                bt_dbvt_broadphase_aabb_test( f, self, args[ 0 ], args[ 1 ], args[ 2 ], 0x0F000000u );
+            else
+                bt_dbvt_collide_tv( f, self, args[ 0 ], args[ 1 ] );
+            return *m.num_aligned_alloc - before;
+        } );
+}// verify_mesh_scaling (boat batch 20): cases/boat.py mesh_scaling -
 // btTriangleMeshShape::setLocalScaling 0x60C1C0 (concave.hxx mesh_shape_set
 // _local_scaling: under the BVH vtable the BVH-walk recalc, under the plain
 // vtable the all-triangles walk) and btBvhTriangleMeshShape::setLocalScaling

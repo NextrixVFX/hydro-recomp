@@ -29,7 +29,20 @@ struct bt_mem_t
     // slot's byte offset, the stack arguments; answers eax.
     std::uint32_t ( *vcall )( void* user, std::uint32_t self, std::uint32_t offset, const std::uint32_t* args, int count ) = nullptr;
     std::uint32_t* num_aligned_free = nullptr;                               // gNumAlignedFree 0x759050
+    // (boat batch 21) btAlignedAlloc's function pointer [0x7358A4] (cdecl size,
+    // alignment; answers the block) and gNumAlignedAlloc 0x759054.
+    std::uint32_t ( *aligned_alloc )( void* user, std::uint32_t size, std::uint32_t alignment ) = nullptr;
+    std::uint32_t* num_aligned_alloc = nullptr;
 };
+
+// btAlignedAlloc inlined: ++gNumAlignedAlloc, then the alloc function (a
+// hook: the caller must set it).
+inline std::uint32_t bt_aligned_alloc( const bt_mem_t& m, std::uint32_t size, std::uint32_t alignment )
+{
+    if ( m.num_aligned_alloc )
+        ++*m.num_aligned_alloc;
+    return m.aligned_alloc( m.user, size, alignment );
+}
 
 // btAlignedFree inlined: ++gNumAlignedFree, then the free function.
 inline void bt_aligned_free( const bt_mem_t& m, std::uint32_t pointer )
