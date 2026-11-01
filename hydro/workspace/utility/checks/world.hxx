@@ -439,6 +439,36 @@ inline bool verify_static_model_draw( )
     return failed == 0;
 }
 
+// scene_component_aabb (hydro assets/scene.hxx) against the static model
+// component's world aabb 0x531D10 on seeded inputs (oracle case
+// static_world_aabb): the six x y z lanes bit for bit and whether the draw
+// manager was handed the component, one failure per vector.
+inline bool verify_static_world_aabb( )
+{
+    int failed = 0;
+    int registered = 0;
+    for ( std::size_t k = 0; k < g_golden_static_world_aabbs_count; ++k )
+    {
+        const golden_static_world_aabb_t& g = g_golden_static_world_aabbs[ k ];
+        float source[ 8 ], matrix[ 16 ], aabb[ 8 ];
+        std::memcpy( source, g.m_source, sizeof( source ) );
+        std::memcpy( matrix, g.m_matrix_a, 32 );
+        std::memcpy( matrix + 8, g.m_matrix_b, 32 );
+        const bool handed = scene_component_aabb( aabb, source, matrix, g.m_register != 0 );
+        const float lanes[ 6 ] = { aabb[ 0 ], aabb[ 1 ], aabb[ 2 ], aabb[ 4 ], aabb[ 5 ], aabb[ 6 ] };
+        const bool same = std::memcmp( lanes, g.m_out, sizeof( lanes ) ) == 0 && handed == ( g.m_registered != 0 );
+        registered += g.m_registered != 0;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "static world aabb: vector %d differs (handed %d, retail %d)", static_cast< int >( k ), handed ? 1 : 0, g.m_registered );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "scene_component_aabb matches the static model component's world aabb 0x531D10 (0x41B2A0 / 0x5175E0) on %d vectors "
+                     "(%d handed to the draw manager) bit for bit", static_cast< int >( g_golden_static_world_aabbs_count ), registered );
+    else
+        LOG_ERROR( "scene_component_aabb FAILED %d vectors", failed );
+    return failed == 0;
+}
+
 // The event graph as VuScriptComponent's loads resolve it (engine
 // entity/script.hxx: 0x503D70 / 0x504320, 0x502430, 0x542830, 0x5049E0)
 // against retail's VuProject::load on Games/HydroelectricRace (its level's
@@ -781,5 +811,6 @@ inline bool verify_world_all( )
     ok = verify_actions( ) && ok;
     ok = verify_trigger_plane( ) && ok;
     ok = verify_static_model_draw( ) && ok;
+    ok = verify_static_world_aabb( ) && ok;
     return ok;
 }
