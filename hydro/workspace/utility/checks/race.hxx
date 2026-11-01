@@ -1020,6 +1020,51 @@ inline bool verify_nuisance_tick( )
     return false;
 }
 
+// The drivers' slots 23 / 24 / 25 / 26 against retail (oracle case driver_slots): the x87 answers bit for bit, the
+// sector answers by what they point at.
+inline bool verify_driver_slots( )
+{
+    const unsigned* g = g_golden_driver_slots_words;
+    const unsigned nv = *g++;
+    static const int sizes[ 5 ] = { 0x104, 0x520, 0xC8, 0x2D4, 0x40 };
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        std::vector< std::uint8_t > blocks[ 5 ];
+        for ( int k = 0; k < 5; ++k )
+        {
+            blocks[ k ].assign( reinterpret_cast< const std::uint8_t* >( g ), reinterpret_cast< const std::uint8_t* >( g ) + sizes[ k ] );
+            g += sizes[ k ] / 4;
+        }
+        const unsigned n = *g++, first = *g++;
+        const std::uint8_t* boat = blocks[ 1 ].data( );
+        auto bits = []( float x ) { std::uint32_t u; std::memcpy( &u, &x, 4 ); return u; };
+        fleet_plan_t plan;
+        for ( unsigned k = 0; k < n; ++k )
+            plan.sectors.push_back( k == 0 && first ? 7 : k == 0 ? -1 : 8 );
+        human_pilot_t hp;
+        hp.sector = 5;
+        ghost_pilot_t gp;
+        gp.sector = 6;
+        const float ai = ai_driver_throttle( blocks[ 0 ].data( ), boat, blocks[ 4 ].data( ), boat );
+        const unsigned mine[ 7 ] = { bits( driver_steer_value( boat ) ), bits( driver_entity_throttle( boat, blocks[ 2 ].data( ), blocks[ 4 ].data( ), blocks[ 3 ].data( ) ) ),
+                                     bits( ai ), bits( ai ), ai_driver_sector( plan ) >= 0 ? 1u : 0u, human_driver_sector( hp ) == 5 ? 1u : 0u,
+                                     ghost_driver_sector( gp ) == 6 ? 1u : 0u };
+        static const char* names[ 7 ] = { "slot 26", "slot 24 0x40EB00", "AI slot 24", "AI slot 25", "AI slot 23", "human slot 23", "ghost slot 23" };
+        for ( int k = 0; k < 7; ++k, ++g )
+            if ( mine[ k ] != *g && ++failed <= 8 )
+                LOG_ERROR( "driver_slots vector %u %s: 0x%08X, retail 0x%08X", v, names[ k ], mine[ k ], *g );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "The drivers' slots 26 0x40EB20, 24 / 25 0x40EB00, AI 24 0x40BD40 / 25 0x40BDD0, 23 0x40BD20 / 0x40ED30 / 0x40EB40 "
+                     "match retail: %u vectors x 7", nv );
+        return true;
+    }
+    LOG_ERROR( "driver_slots FAILED %d of %u values", failed, nv * 7 );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -1031,5 +1076,6 @@ inline bool verify_race_all( )
     ok = verify_ui_tick( ) && ok;
     ok = verify_boat_drivers( ) && ok;
     ok = verify_nuisance_tick( ) && ok;
+    ok = verify_driver_slots( ) && ok;
     return ok;
 }

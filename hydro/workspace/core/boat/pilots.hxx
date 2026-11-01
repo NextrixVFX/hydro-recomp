@@ -352,3 +352,44 @@ inline void nuisance_driver_tick( const track_manager_t& tm, nuisance_pilot_t& p
         }
     }
 }
+
+// ---- The drivers' small virtuals (the animation tick's driver vt+0x64 / +0x68 are slots 25 / 26) ----
+
+// Slot 26 0x40EB20 (every driver class): the boat's +0x300 (the steer
+// control), returned on x87 (a float load: exact).
+inline float driver_steer_value( const std::uint8_t* boat ) { return state_f( boat, 0x300 ); }
+
+// Slots 24 and 25 0x40EB00 (VuDriverEntity, the human, the ghost): 0x41D570
+// on the boat (tick.hxx's boat_41D570 - the boat's +0x2FC / +0x308 / +0x32C /
+// +0x32F, the component's forward row, the engine's +4 / +0xC and its owner's
+// +0x470, the body's velocity), through x87.
+inline float driver_entity_throttle( const std::uint8_t* boat, const std::uint8_t* transform, const std::uint8_t* engine,
+    const std::uint8_t* body )
+{
+    solver_rigid_t b = boat_decision_body( body );
+    std::uint32_t i308;
+    std::memcpy( &i308, boat + 0x308, 4 );
+    boat_view_t view{ state_f( boat, 0x2FC ), i308, boat[ 0x32C ], boat[ 0x32F ], { }, state_f( engine, 4 ), state_f( engine, 0xC ),
+                      state_f( boat, 0x470 ), b };
+    for ( int k = 0; k < 3; ++k )
+        view.o50_60[ k ] = state_f( transform, 0x60 + 4 * k );
+    return boat_41D570( view );
+}
+
+// VuAiDriver's (and the UI / nuisance drivers') slot 24 0x40BD40, and slot 25
+// 0x40BDD0 (jmp vt+0x60: slot 24): 1 while the boat's +0x32C, else
+// maxss(+0x9C / ((owner +0x470 x (engine +0xC x +4)) x 0.44704), boat +0x2FC).
+inline float ai_driver_throttle( const std::uint8_t* driver, const std::uint8_t* boat, const std::uint8_t* engine, const std::uint8_t* owner )
+{
+    if ( boat[ 0x32C ] )
+        return 1.0f;
+    const float top = ( state_f( owner, 0x470 ) * ( state_f( engine, 0xC ) * state_f( engine, 4 ) ) ) * ai_bits( 0x3EE4E26Du );
+    return ai_maxss( state_f( driver, 0x9C ) / top, state_f( boat, 0x2FC ) );
+}
+
+// Slot 23, the driver's current sector: VuAiDriver's 0x40BD20 the plan's first
+// point (none without one), the human's 0x40ED30 its +0x84, the ghost's
+// 0x40EB40 its +0x80 (the pilots' `sector` fields).
+inline int ai_driver_sector( const fleet_plan_t& plan ) { return plan.sectors.empty( ) ? -1 : plan.sectors[ 0 ]; }
+inline int human_driver_sector( const human_pilot_t& p ) { return p.sector; }
+inline int ghost_driver_sector( const ghost_pilot_t& p ) { return p.sector; }
