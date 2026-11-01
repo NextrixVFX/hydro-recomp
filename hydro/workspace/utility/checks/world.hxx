@@ -4,6 +4,7 @@
 #include <workspace/core/world/drive.hxx>
 #include <workspace/core/world/livery.hxx>
 #include <workspace/core/world/race.hxx>
+#include <workspace/core/world/rules.hxx>
 #include <workspace/core/world/start.hxx>
 #include <workspace/core/world/tick.hxx>
 
@@ -439,6 +440,131 @@ inline bool verify_trigger_plane( )
                      "crossings fired", static_cast< int >( g_golden_trigger_planes_count ), pairs, fires );
     else
         LOG_ERROR( "trigger_plane_crossing FAILED %d of %d pairs", failed, pairs );
+    return failed == 0;
+}
+
+// The race rules' bookkeeping (world/rules.hxx: race_rules_distances 0x483230,
+// race_rules_checkpoints 0x483540 with race_rules_next_checkpoint 0x4D0820 and
+// the boat agent's track_checkpoint_index 0x4D0900, race_rules_clocks
+// 0x4831D0, race_rules_places 0x48AB20) against retail's run frame by frame
+// (oracle case race_progress): one failure per (frame, boat) whose words /
+// finished / checkpoint / driver +0x78 differ, per frame whose order or calls
+// differ.
+inline bool verify_race_progress( )
+{
+    int failed = 0, rows = 0, crossings = 0, finishes = 0;
+    const auto u2f = []( unsigned u ) { float f; std::memcpy( &f, &u, 4 ); return f; };
+    for ( std::size_t ri = 0; ri < g_golden_rp_runs_count; ++ri )
+    {
+        const golden_rp_run_t& run = g_golden_rp_runs[ ri ];
+        const int nb = run.m_boats;
+        track_manager_t tm;
+        tm.sectors.resize( 1 );
+        tm.end = 0;
+        if ( run.m_circuit )
+            tm.sectors[ 0 ].next.push_back( 0 );
+        for ( int w = 0; w < 4; ++w )
+            tm.checkpoints.push_back( w );
+        std::vector< std::array< std::uint8_t, 0x100 > > sectors( static_cast< std::size_t >( run.m_sec_count ) );
+        for ( int s = 0; s < run.m_sec_count; ++s )
+        {
+            std::uint8_t* q = sectors[ static_cast< std::size_t >( s ) ].data( );
+            std::memset( q, 0, 0x100 );
+            const unsigned* w = g_golden_rp_sectors[ run.m_sec + s ];
+            std::memcpy( q + 0x40, w, 16 );
+            std::memcpy( q + 0x70, w + 4, 16 );
+            std::memcpy( q + 0xB0, w + 8, 4 );
+            std::memcpy( q + 0xBC, w + 9, 4 );
+        }
+        std::vector< std::array< std::uint8_t, 0x520 > > images( static_cast< std::size_t >( nb ) );
+        std::vector< std::array< std::uint8_t, 0xC8 > > transforms( static_cast< std::size_t >( nb ) );
+        std::vector< std::array< std::uint8_t, 0xD0 > > drivers( static_cast< std::size_t >( nb ) );
+        std::vector< race_rules_boat_t > boats( static_cast< std::size_t >( nb ) );
+        race_rules_game_t game;
+        game.circuit = static_cast< std::uint8_t >( run.m_circuit );
+        game.length = u2f( run.m_length );
+        game.laps = run.m_laps;
+        for ( int k = 0; k < nb; ++k )
+        {
+            const golden_rp_start_t& st = g_golden_rp_start[ run.m_start + k ];
+            std::uint8_t* b = images[ static_cast< std::size_t >( k ) ].data( );
+            std::memset( b, 0, 0x520 );
+            std::memset( transforms[ static_cast< std::size_t >( k ) ].data( ), 0, 0xC8 );
+            std::memset( drivers[ static_cast< std::size_t >( k ) ].data( ), 0, 0xD0 );
+            rules_put_i32( b, 0x4AC, st.m_lap );
+            std::memcpy( b + 0x4B8, &st.m_best, 4 );
+            std::memcpy( b + 0x50C, st.m_prev, 12 );
+            boats[ static_cast< std::size_t >( k ) ] = { b, transforms[ static_cast< std::size_t >( k ) ].data( ), drivers[ static_cast< std::size_t >( k ) ].data( ),
+                                                         nullptr, st.m_cp, false };
+            game.order.push_back( k );
+        }
+        std::vector< std::array< int, 3 > > calls;
+        race_checkpoint_hooks_t h;
+        h.view = [ & ]( int w, race_checkpoint_view_t& v ) {
+            const golden_rp_wp_t& g = g_golden_rp_waypoints[ run.m_wp + w ];
+            for ( int i = 0; i < 3; ++i )
+            {
+                v.normal[ i ] = u2f( g.m_normal[ i ] );
+                v.origin[ i ] = u2f( g.m_origin[ i ] );
+            }
+            v.finish = static_cast< std::uint8_t >( g.m_finish );
+            v.width = u2f( g.m_width );
+            v.height = u2f( g.m_height );
+            return true;
+        };
+        h.index = [ & ]( int w ) { return track_checkpoint_index( tm, w ); };
+        h.next = [ & ]( int w ) { return race_rules_next_checkpoint( tm, w ); };
+        h.crossed = [ & ]( int boat, int w ) { calls.push_back( { 0, boat, w } ); };
+        h.finished = [ & ]( int boat ) { calls.push_back( { 1, boat, -1 } ); };
+        for ( int f = 0; f < run.m_frames; ++f )
+        {
+            const golden_rp_frame_t& gf = g_golden_rp_frames[ run.m_frame + f ];
+            for ( int k = 0; k < nb; ++k )
+            {
+                const golden_rp_row_t& row = g_golden_rp_rows[ ( run.m_frame + f ) * nb + k ];
+                std::memcpy( transforms[ static_cast< std::size_t >( k ) ].data( ) + 0x80, row.m_pos, 12 );
+                boats[ static_cast< std::size_t >( k ) ].sector = row.m_sector < 0 ? nullptr : sectors[ static_cast< std::size_t >( row.m_sector ) ].data( );
+            }
+            calls.clear( );
+            race_rules_distances( game, boats );
+            race_rules_checkpoints( game, boats, h );
+            race_rules_clocks( boats, u2f( run.m_dt ) );
+            race_rules_places( game, boats );
+            for ( int k = 0; k < nb; ++k )
+            {
+                const golden_rp_row_t& row = g_golden_rp_rows[ ( run.m_frame + f ) * nb + k ];
+                const race_rules_boat_t& r = boats[ static_cast< std::size_t >( k ) ];
+                static const int offs[ 10 ] = { 0x308, 0x4AC, 0x4B0, 0x4B4, 0x4B8, 0x4BC, 0x4C0, 0x4C4, 0x4C8, 0x4CC };
+                bool same = r.boat[ 0x32F ] == row.m_finished && r.checkpoint == row.m_cp && rules_i32( r.driver, 0x78 ) == row.m_driver78;
+                for ( int i = 0; i < 10; ++i )
+                    same = same && static_cast< unsigned >( rules_i32( r.boat, offs[ i ] ) ) == row.m_words[ i ];
+                ++rows;
+                if ( !same && ++failed <= 8 )
+                    LOG_ERROR( "race progress: run %d frame %d boat %d differs (lap %d / %u, place %d / %u, cp %d / %d)", static_cast< int >( ri ), f, k,
+                               rules_i32( r.boat, 0x4AC ), row.m_words[ 1 ], rules_i32( r.boat, 0x4CC ), row.m_words[ 9 ], r.checkpoint, row.m_cp );
+                std::memcpy( r.boat + 0x50C, r.transform + 0x80, 12 );   // 0x482F10's +0x4DC copy (its row 3)
+            }
+            bool same = static_cast< int >( calls.size( ) ) == gf.m_calls;
+            for ( int c = 0; same && c < gf.m_calls; ++c )
+            {
+                const golden_rp_call_t& gc = g_golden_rp_calls[ gf.m_call + c ];
+                same = calls[ static_cast< std::size_t >( c ) ] == std::array< int, 3 >{ gc.m_kind, gc.m_boat, gc.m_wp };
+                crossings += gc.m_kind == 0;
+                finishes += gc.m_kind == 1;
+            }
+            for ( int k = 0; same && k < nb; ++k )
+                same = game.order[ static_cast< std::size_t >( k ) ] == gf.m_order[ k ];
+            if ( !same && ++failed <= 8 )
+                LOG_ERROR( "race progress: run %d frame %d order / calls differ (%d calls, retail %d)", static_cast< int >( ri ), f,
+                           static_cast< int >( calls.size( ) ), gf.m_calls );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the race rules' bookkeeping matches retail's 0x483230 / 0x483540 (0x4D0820 / 0x4D0900) / 0x4831D0 / 0x48AB20 on %d runs: %d "
+                     "boat-frames (13 values each), %d checkpoint crossings, %d finishes, the place order every frame",
+                     static_cast< int >( g_golden_rp_runs_count ), rows, crossings, finishes );
+    else
+        LOG_ERROR( "the race rules' bookkeeping FAILED %d checks", failed );
     return failed == 0;
 }
 
@@ -2919,6 +3045,7 @@ inline bool verify_world_all( )
     ok = verify_actions( ) && ok;
     ok = verify_trigger_plane( ) && ok;
     ok = verify_trigger_box( ) && ok;
+    ok = verify_race_progress( ) && ok;
     ok = verify_static_model_draw( ) && ok;
     ok = verify_static_world_aabb( ) && ok;
     return ok;
