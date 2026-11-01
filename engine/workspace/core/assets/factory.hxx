@@ -3,6 +3,7 @@
 #include <workspace/core/assets/package.hxx>
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -530,3 +531,93 @@ private:
     std::unordered_map< std::uint32_t, vu_asset_t* > m_loaded;
     std::vector< std::pair< std::uint32_t, std::string > > m_substitutes;
 };
+
+// ---- The asset rows' scalar-deleting dtors on retail's words (boat batch 26) ----
+//
+// Each is thiscall( object, flags ), retn 4, eax = this: the body, then operator delete( this ) when flags & 1. The
+// objects are retail images (asset_words_t: the caller's 32-bit memory); what the bodies call outside is a hook, in
+// retail's order (asset_dtor_hooks_t). A std::string member is reset as MSVC's dtor does: the heap text freed when
+// the capacity +0x14 is >= 16, then capacity 15, size +0x10 = 0, the first byte 0.
+//   0x515D70 VuAsset (body 0x515D00): +0 = VuAsset's vtable 0x74CA08, the +0x38 VuJsonContainer cleared (0x4FBB10), the
+//            strings +0x20 then +0x8. Every asset class's dtor ends in this body (21 callers).
+//   0x53FD10 VuBaseAssetProperty (body 0x53FD40): +0 = 0x74D6CC; a held asset (+0x64 non-null) released through
+//            g_vuassetfactoryimpl's slot 9 (0x4EDE70, c_asset_factory::release); the string +0x4C; then the property
+//            base's dtor 0x405260 (the entity framework's: a hook). +0x64 itself is not cleared.
+//   0x5F4AB0 VuSubstituteAssetEntity (body 0x5F4AE0): the strings +0x90, +0x78, +0x60, then a tail jump to VuEntity's
+//            dtor 0x500870 (a hook). No vtable store of its own.
+struct asset_words_t
+{
+    std::function< std::uint32_t( std::uint32_t ) > get;
+    std::function< void( std::uint32_t, std::uint32_t ) > put;
+};
+
+struct asset_dtor_hooks_t
+{
+    std::function< void( std::uint32_t ) > free_block;        // operator delete (0x64C150's import)
+    std::function< void( std::uint32_t ) > json_clear;        // 0x4FBB10 ( container )
+    std::function< void( std::uint32_t ) > factory_release;   // [0x759004] slot 9 0x4EDE70 ( asset )
+    std::function< void( ) > property_base_dtor;              // 0x405260 ( this )
+    std::function< void( ) > entity_dtor;                     // 0x500870 ( this )
+};
+
+enum class asset_dtor_kind_t
+{
+    asset,               // 0x515D70
+    asset_property,      // 0x53FD10
+    substitute_entity,   // 0x5F4AB0
+};
+
+inline void asset_string_reset( const asset_words_t& w, std::uint32_t at, const asset_dtor_hooks_t& h )
+{
+    if ( w.get( at + 0x14 ) >= 0x10u && h.free_block )
+        h.free_block( w.get( at ) );
+    w.put( at + 0x14, 0xFu );
+    w.put( at + 0x10, 0u );
+    w.put( at, w.get( at ) & 0xFFFFFF00u );
+}
+
+// 0x515D00: VuAsset's dtor body.
+inline void asset_base_dtor( const asset_words_t& w, std::uint32_t self, const asset_dtor_hooks_t& h )
+{
+    w.put( self, 0x74CA08u );
+    if ( h.json_clear )
+        h.json_clear( self + 0x38 );
+    asset_string_reset( w, self + 0x20, h );
+    asset_string_reset( w, self + 0x8, h );
+}
+
+// 0x53FD40: VuBaseAssetProperty's dtor body.
+inline void asset_property_dtor( const asset_words_t& w, std::uint32_t self, const asset_dtor_hooks_t& h )
+{
+    w.put( self, 0x74D6CCu );
+    if ( const std::uint32_t held = w.get( self + 0x64 ) )
+        if ( h.factory_release )
+            h.factory_release( held );
+    asset_string_reset( w, self + 0x4C, h );
+    if ( h.property_base_dtor )
+        h.property_base_dtor( );
+}
+
+// 0x5F4AE0: VuSubstituteAssetEntity's dtor body.
+inline void substitute_entity_dtor( const asset_words_t& w, std::uint32_t self, const asset_dtor_hooks_t& h )
+{
+    for ( std::uint32_t at : { 0x90u, 0x78u, 0x60u } )
+        asset_string_reset( w, self + at, h );
+    if ( h.entity_dtor )
+        h.entity_dtor( );
+}
+
+// 0x515D70 / 0x53FD10 / 0x5F4AB0: the scalar-deleting dtors.
+inline std::uint32_t asset_destroy( asset_dtor_kind_t kind, const asset_words_t& w, std::uint32_t self, std::uint32_t flags,
+                                    const asset_dtor_hooks_t& h )
+{
+    if ( kind == asset_dtor_kind_t::asset )
+        asset_base_dtor( w, self, h );
+    else if ( kind == asset_dtor_kind_t::asset_property )
+        asset_property_dtor( w, self, h );
+    else
+        substitute_entity_dtor( w, self, h );
+    if ( ( flags & 1u ) && h.free_block )
+        h.free_block( self );
+    return self;
+}

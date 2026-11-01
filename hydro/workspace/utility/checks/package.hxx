@@ -287,6 +287,80 @@ inline bool verify_powerup_dtors( )
     return failed == 0;
 }
 
+// asset_destroy (engine assets/factory.hxx) against retail's 0x515D70 / 0x53FD10 / 0x5F4AB0 (bodies 0x515D00 / 0x53FD40 /
+// 0x5F4AE0) run whole on images (case asset_dtors, cases/package.py): the hook log in order, every string's words, +0, eax.
+inline bool verify_asset_dtors( )
+{
+    const unsigned* g = g_golden_asset_dtors_words;
+    const std::uint32_t obj = 0x100, fac = 0x600, asset = 0x700;
+    const std::uint32_t offs[ 3 ][ 3 ] = { { 0x20, 0x8, 0 }, { 0x4C, 0, 0 }, { 0x90, 0x78, 0x60 } };
+    auto text_at = []( unsigned k ) { return 0x800u + 0x40u * k; };
+    auto sym = [ & ]( std::uint32_t x ) -> unsigned {
+        if ( x == 0 ) return 0;
+        if ( x == obj ) return 1;
+        if ( x == fac ) return 2;
+        if ( x == asset ) return 3;
+        if ( x == obj + 0x38 ) return 4;
+        for ( unsigned k = 0; k < 3; ++k )
+            if ( x == text_at( k ) ) return 5u + k;
+        return 0x100 + ( x & 0xFF );
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned kind = *g++, flags = *g++, held = *g++, untouched = *g++, nt = *g++;
+        std::map< std::uint32_t, std::uint32_t > mem;
+        asset_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0x5A5A5A5Au : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        mem[ obj + 0x64 ] = held == 3 ? asset : 0u;
+        for ( unsigned k = 0; k < nt; ++k )
+        {
+            const unsigned n = *g++;
+            const unsigned first = n != 0 ? *g : 0u;
+            g += ( n + 3 ) / 4;
+            const std::uint32_t at = obj + offs[ kind - 1 ][ k ];
+            mem[ at ] = n < 16 ? first : text_at( k );
+            mem[ at + 0x10 ] = n;
+            mem[ at + 0x14 ] = n < 16 ? 15u : ( n | 15u );
+        }
+        std::vector< std::vector< unsigned > > glog( *g++ ), log;
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        const unsigned* after = g;
+        g += 3 * nt + 2;
+        asset_dtor_hooks_t h;
+        h.free_block = [ & ]( std::uint32_t a ) { log.push_back( { 1u, sym( a ) } ); };
+        h.json_clear = [ & ]( std::uint32_t a ) { log.push_back( { 2u, sym( a ) } ); };
+        h.factory_release = [ & ]( std::uint32_t a ) { log.push_back( { 3u, sym( fac ), sym( a ) } ); };
+        h.property_base_dtor = [ & ]( ) { log.push_back( { 4u, 1u } ); };
+        h.entity_dtor = [ & ]( ) { log.push_back( { 5u, 1u } ); };
+        const asset_dtor_kind_t k = kind == 1 ? asset_dtor_kind_t::asset
+                                  : kind == 2 ? asset_dtor_kind_t::asset_property : asset_dtor_kind_t::substitute_entity;
+        const std::uint32_t r = asset_destroy( k, w, obj, flags, h );
+        bool ok = log == glog && untouched == 1;
+        for ( unsigned s = 0; s < nt && ok; ++s )
+        {
+            const std::uint32_t at = obj + offs[ kind - 1 ][ s ];
+            ok = ( w.get( at ) & 0xFFu ) == after[ 3 * s ] && w.get( at + 0x10 ) == after[ 3 * s + 1 ] && w.get( at + 0x14 ) == after[ 3 * s + 2 ];
+        }
+        // +0: the stored vtable; the substitute entity stores none (the image's random word, not compared).
+        ok = ok && ( kind == 3 || w.get( obj ) == after[ 3 * nt ] ) && ( r == obj ? 1u : 0u ) == after[ 3 * nt + 1 ];
+        if ( !ok && ++failed <= 4 )
+            LOG_ERROR( "asset dtor vector %u (kind %u flags %u) differs from retail: %d log entries, retail %d", v, kind, flags,
+                static_cast< int >( log.size( ) ), static_cast< int >( glog.size( ) ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "asset_destroy matches retail's 0x515D70 / 0x53FD10 / 0x5F4AB0 (bodies 0x515D00 / 0x53FD40 / 0x5F4AE0) on %u images: the hook log, every string, +0, eax", nv );
+    else
+        LOG_ERROR( "asset_destroy FAILED %d of %u against 0x515D70 / 0x53FD10 / 0x5F4AB0", failed, nv );
+    return failed == 0;
+}
+
 inline bool verify_asset_package( )
 {
     const std::string pack = package_check_pack( );
