@@ -205,6 +205,8 @@
     <ClInclude Include="workspace\core\world\grid.hxx" />
     <ClInclude Include="workspace\core\world\huds.hxx" />
     <ClInclude Include="workspace\core\world\kernel.hxx" />
+    <ClInclude Include="workspace\core\world\keyframe.hxx" />
+    <ClInclude Include="workspace\core\world\lens.hxx" />
     <ClInclude Include="workspace\core\world\livery.hxx" />
     <ClInclude Include="workspace\core\world\logic.hxx" />
     <ClInclude Include="workspace\core\world\models.hxx" />
