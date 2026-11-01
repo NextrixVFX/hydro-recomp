@@ -19,6 +19,7 @@
 #include <workspace/core/world/lens.hxx>
 #include <workspace/core/world/mine.hxx>
 #include <workspace/core/world/modes.hxx>
+#include <workspace/core/world/voice.hxx>
 #include <workspace/core/world/pfxmgr.hxx>
 #include <workspace/core/world/pfxsim.hxx>
 #include <workspace/core/world/dynprop.hxx>
@@ -123,6 +124,9 @@ struct race_world_t
     std::function< void( const char* name, const ui_params_t* params ) > broadcast;   // params null: an empty VuParams
     // VuStringDBImpl's getString (g 0x759078 slot 6 0x53B830, world/strings.hxx): c_world's string DB. Null: UNKNOWN.
     std::function< std::string( const char* id ) > string_db;
+    // VuVoiceOverManagerImpl g 0x758FEC (world/voice.hxx: c_world's, loaded once) and its hooks. Null: UNKNOWN (logged).
+    vo_manager_t* vo = nullptr;
+    const vo_hooks_t* vo_hooks = nullptr;
     // The world's VuPfx runtime / VuPfxManager g 0x75905C (c_effects; null: none - the boats' pfx calls are UNKNOWN).
     pfx_runtime_t* pfx = nullptr;
     pfx_manager_t* pfx_manager = nullptr;
@@ -184,6 +188,9 @@ struct race_session_t
     // The lens-water manager g 0x759048's emitter list (VuLensWaterManagerImpl vt+0x38 / +0x3C, render side - a
     // hook): what each VuLensWaterEmitterEntity's slot 6 0x5E6720 handed it (world/lens.hxx). Nothing reads it yet.
     std::vector< const void* > lens_emitters;
+    // VuLensWaterManagerImpl g 0x759048's drops (world/lens.hxx): slot 10 / 11 from the explosions / the boat manager,
+    // its tick 0x514500 in "Build". Its +0x10 half width is written outside what was read (the render side) - 0 here.
+    lens_water_manager_t lens;
     // Counts of the stopped paths reached (UNKNOWN), logged once each.
     int stopped_decision = 0, stopped_build = 0, stopped_transform = 0, stopped_viewports = 0, stopped_fleet = 0;
     // The world's services (refreshed per frame) and each boat's Decision
@@ -379,6 +386,79 @@ inline void race_session_mode_tick( void* user, float dt )
         s.world.game_mode( dt );
     else
         race_session_game_mode( user, dt );
+}
+
+// The voice-over say gate's boat half (0x4B7EA0 / 0x4B7F50): boat +0x46B == 0, then its driver's (+0x220) vt+0x30 and
+// vt+0x38 (slots 12 / 14: the start boats' driver class answers). A boat image not in this race: false.
+inline bool race_session_vo_boat_ok( const race_session_t& s, const void* boat )
+{
+    for ( std::size_t k = 0; k < s.boats.size( ) && k < s.start_boats.size( ); ++k )
+        if ( boat == s.boats[ k ]->graph.objects[ 0 ].image.data( ) )
+            return s.boats[ k ]->graph.objects[ 0 ].image[ 0x46B ] == 0 && s.start_boats[ k ].cls.slot[ 0 ] && s.start_boats[ k ].cls.slot[ 2 ];
+    return false;
+}
+
+// The voice-over manager's slot 7 (vt+0x1C, 0x4B7EA0: say now) / slot 8 (vt+0x20, 0x4B7F50: queue) on (boat, line).
+inline void race_unwired( race_session_t& s, const std::string& what );
+inline void race_session_vo_say( race_session_t& s, const void* boat, const char* line, bool queue )
+{
+    if ( !s.world.vo || !s.world.vo_hooks )
+    {
+        race_unwired( s, "the voice-over manager g 0x758FEC (no manager bound) - UNKNOWN" );
+        return;
+    }
+    if ( queue )
+        vo_queue( *s.world.vo, boat, line, *s.world.vo_hooks );
+    else
+        vo_say_now( *s.world.vo, boat, line, *s.world.vo_hooks );
+}
+
+// Its tick 0x4B8000 (registered in "Decision" by its init 0x4B7970 - the game init 0x4024E0 makes it after the AI
+// manager (0x40281D) and before the game mode manager (0x402A81), so it runs between their ticks).
+inline void race_session_vo_tick( void* user, float dt )
+{
+    race_session_t& s = *static_cast< race_session_t* >( user );
+    if ( s.world.vo && s.world.vo_hooks )
+        vo_tick( *s.world.vo, dt, *s.world.vo_hooks );
+}
+
+// VuLensWaterManagerImpl's tick 0x514500 (world/lens.hxx lens_water_tick): every emitter's slot 0 rate on the first
+// viewport's position (g 0x759060 +0x28: the viewport camera's eye +0x00 - none copied yet: the rates are UNKNOWN and the
+// tick is not run), THE global VuRand 0x736810 (the session's fleet_random_t, copied through pfx_rand_t as c_effects does).
+inline void race_session_lens_tick( void* user, float dt )
+{
+    race_session_t& s = *static_cast< race_session_t* >( user );
+    if ( !s.random )
+    {
+        race_unwired( s, "the lens-water tick 0x514500 with no VuRand bound - not run (UNKNOWN)" );
+        return;
+    }
+    if ( !s.lens_emitters.empty( ) && !s.viewport_set )
+    {
+        race_unwired( s, "the lens-water tick 0x514500 before the viewport's camera is copied (its position UNKNOWN) - not run" );
+        return;
+    }
+    float eye[ 3 ];
+    std::memcpy( eye, s.viewport_camera, 12 );
+    const auto rate = [ &s, &eye ]( int i ) -> float {
+        entity_t& e = *const_cast< entity_t* >( static_cast< const entity_t* >( s.lens_emitters[ static_cast< std::size_t >( i ) ] ) );
+        const transform_component_t* t = entity_transform( e );
+        if ( !e.m_state || !t )
+        {
+            race_unwired( s, "a lens-water emitter with no state / transform - its rate UNKNOWN, answered 0" );
+            return 0.0f;
+        }
+        const lens_emitter_state_t& ls = *static_cast< const lens_emitter_state_t* >( e.m_state.get( ) );
+        return lens_water_emitter_rate( t->world + 12, ls.radius, ls.drops, eye );
+    };
+    pfx_rand_t r;
+    r.seed = s.random->seed;
+    r.previous = s.random->last;
+    std::memcpy( r.table, s.random->table, sizeof( r.table ) );
+    lens_water_tick( s.lens, dt, static_cast< int >( s.lens_emitters.size( ) ), rate, r );
+    s.random->seed = r.seed;
+    s.random->last = r.previous;
+    std::memcpy( s.random->table, r.table, sizeof( s.random->table ) );
 }
 
 // The graph object a boat-image pointer slot refers to (-1 none).
@@ -2134,6 +2214,10 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     tick_manager_init( s.ticks );
     tick_register( s.ticks, { s.dynamics.get( ), race_session_dynamics_sync, &s }, "DynamicsSync" );   // 0x4F8050's registrations
     tick_register( s.ticks, { s.dynamics.get( ), race_session_dynamics_kick, &s }, "DynamicsKick" );
+    // VuLensWaterManagerImpl's tick 0x514500 in "Build" (its init 0x513B90 at 0x513C0A - an engine system, made before the
+    // game's; its order against the other engine systems' Build ticks is not read).
+    s.lens = lens_water_manager_t{ };
+    tick_register( s.ticks, { &s.lens, race_session_lens_tick, &s }, "Build" );
     // VuCollisionManager (g 0x758FBC): the game init 0x4024E0 creates it (0x4ACD30 at 0x4026B9: the ctor 0x4ACDF0) and calls
     // its init 0x4AD110 at 0x4026D4 - before the AI manager's (0x402828), so its Decision tick precedes the AI's. The init's
     // hooks: addContactListener (g_vudynamicsimpl slot 13) = this session's contact-added path hands every record to it
@@ -2162,6 +2246,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
                   static_cast< int >( s.collision_tables.types ) );
     }
     tick_register( s.ticks, { &s.fleet, race_session_fleet, &s }, "Decision" );
+    tick_register( s.ticks, { &s.world, race_session_vo_tick, &s }, "Decision" );   // VuVoiceOverManagerImpl 0x4B8000
     // The game mode manager's Decision tick 0x4CBFD0 (its init 0x4CBCD0, slot 5): the action mode's Run state 0x4BAB50 ->
     // VuGame's tick 0x482F10 (race_session_game_mode). The order is read (world batch 21): the game init 0x4024E0 creates
     // each system, pushes it on the back of its list (0x403120) and calls its init vt+0x14 AT ONCE - the AI manager (g
@@ -2313,7 +2398,16 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         if ( s.world.broadcast )
             s.world.broadcast( name, &p );
     };
-    s.rules.hooks.platform = [ &s ]( const std::string& call ) { race_unwired( s, "platform services: " + call + " (saves / online / achievements / audio - hooks)" ); };
+    s.rules.hooks.platform = [ &s ]( const std::string& call ) {
+        // The voice-over lines (vt+0x1C "vo", vt+0x20 "vo20") on the human (+0x24 [0]) go to the manager (world/voice.hxx).
+        const bool now = call.compare( 0, 3, "vo " ) == 0, queued = call.compare( 0, 5, "vo20 " ) == 0;
+        if ( now || queued )
+        {
+            race_session_vo_say( s, s.rules.humans.empty( ) ? nullptr : s.rules.humans[ 0 ], call.c_str( ) + ( now ? 3 : 5 ), queued );
+            return;
+        }
+        race_unwired( s, "platform services: " + call + " (saves / online / achievements - hooks)" );
+    };
     s.rules.track = s.game.track;
     {
         // VuGame's ctor 0x481630: +0x674 = ConstantDB VuDBAsset / HUD / ChallengeTextDuration - an int (1, cvtdq2ps), a float (2), an int64

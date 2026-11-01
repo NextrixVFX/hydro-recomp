@@ -399,9 +399,10 @@ inline void race_drive_driver( void* user, float dt )
         h.avoid.user = &s;
         h.avoid.ray = race_drive_ray;
         h.avoid.aabb = nullptr;   // reached only after a hit
-        h.controls.user = &s;
-        h.controls.misfire = []( void* u ) { race_unwired( *static_cast< race_session_t* >( u ), "audio: the BoostMisfire sound 0x41E060 (FMOD - platform)" ); };
-        h.controls.voice = []( void* u, const char* ) { race_unwired( *static_cast< race_session_t* >( u ), "the voice-over manager g 0x758FEC vt+0x1C (not wired)" ); };
+        h.controls.user = &r;
+        h.controls.misfire = []( void* u ) { race_unwired( *race_drive_of( u ).session, "audio: the BoostMisfire sound 0x41E060 (FMOD - platform)" ); };
+        // The voice-over manager g 0x758FEC vt+0x1C (boat, line): world/voice.hxx's say-now on this boat.
+        h.controls.voice = []( void* u, const char* line ) { race_session_vo_say( *race_drive_of( u ).session, race_drive_of( u ).d.boat, line, false ); };
         fleet_driver_tick( *s.track, s.pilots[ static_cast< std::size_t >( r.pilot ) ], t, transforms.data( ), dt, h );
         return;
     }
@@ -421,9 +422,9 @@ inline void race_drive_driver( void* user, float dt )
         h.ai.avoid.user = &s;
         h.ai.avoid.ray = race_drive_ray;
         h.ai.avoid.aabb = nullptr;   // reached only after a hit
-        h.ai.controls.user = &s;
-        h.ai.controls.misfire = []( void* u ) { race_unwired( *static_cast< race_session_t* >( u ), "audio: the BoostMisfire sound 0x41E060 (FMOD - platform)" ); };
-        h.ai.controls.voice = []( void* u, const char* ) { race_unwired( *static_cast< race_session_t* >( u ), "the voice-over manager g 0x758FEC vt+0x1C (not wired)" ); };
+        h.ai.controls.user = &r;
+        h.ai.controls.misfire = []( void* u ) { race_unwired( *race_drive_of( u ).session, "audio: the BoostMisfire sound 0x41E060 (FMOD - platform)" ); };
+        h.ai.controls.voice = []( void* u, const char* line ) { race_session_vo_say( *race_drive_of( u ).session, race_drive_of( u ).d.boat, line, false ); };
         // The boat's DB "AudioLines" (0x41D500 - the asset system, not wired): the count is answered -1 (the not-a-list
         // answer, so no line is picked) and logged UNKNOWN.
         h.line_count = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the nuisance driver's AudioLines from the boat's DB 0x41D500 (the asset system, not wired) - answered -1, no line (UNKNOWN)" ); return -1; };
@@ -531,7 +532,7 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
                 l.hit = []( void* u, const std::uint8_t* params, float scale ) {
                     race_drive_t& x = *static_cast< race_drive_t* >( u );
                     human_explosion_hit( x.d.driver, x.d.camera, params, scale,
-                                         [ &x ]( float ) { race_unwired( *x.session, "the lens-water manager g 0x759048 vt+0x28 (an explosion's lens splash - render)" ); } );
+                                         [ &x ]( float n ) { lens_water_add_drops( x.session->lens, n ); } );   // g 0x759048 vt+0x28 = slot 10 0x513600
                 };
                 s.explosion_listeners.push_back( l );
             } );
@@ -578,7 +579,15 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         };
         hd.hooks.pressed = []( void*, std::int32_t, const char* ) -> std::uint8_t { return 0; };
         hd.hooks.misfire = []( void* u ) { race_unwired( *static_cast< race_session_t* >( u ), "audio: the BoostMisfire sound 0x41E060 (FMOD - platform)" ); };
-        hd.hooks.voice = []( void* u, const char* ) { race_unwired( *static_cast< race_session_t* >( u ), "the voice-over manager g 0x758FEC vt+0x1C (not wired)" ); };
+        // vt+0x1C (boat, line) from the human's decision: these hooks carry the session, not the boat - the human list's
+        // only entry is the boat (a second human: UNKNOWN, logged).
+        hd.hooks.voice = []( void* u, const char* line ) {
+            race_session_t& x = *static_cast< race_session_t* >( u );
+            if ( x.manager.lists.humans.boats.size( ) != 1 )
+                race_unwired( x, "the voice-over vt+0x1C from a human decision with more than one human (which boat: UNKNOWN)" );
+            else
+                race_session_vo_say( x, x.manager.lists.humans.boats[ 0 ], line, false );
+        };
         hd.hooks.jump_refused = []( void* u ) { race_unwired( *static_cast< race_session_t* >( u ), "audio: the jump-refused sound 0x41E1A0 (FMOD - platform)" ); };
         hd.hooks.jump_sound = []( void* u ) { race_unwired( *static_cast< race_session_t* >( u ), "audio: the jump sound 0x41E100 (FMOD - platform)" ); };
         hd.hooks.menu_change = []( void* u ) { race_unwired( *static_cast< race_session_t* >( u ), "audio: menu_change (FMOD - platform)" ); };
@@ -660,7 +669,8 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         h.piece_remove = []( void* u, int ) { race_unwired( *race_drive_of( u ).session, "a debris piece's removal (boat_piece_remove) - no piece is built here: UNKNOWN" ); };
         h.boost.user = r.get( );
         h.boost.sound = []( void* u, const std::string& ) { race_unwired( *race_drive_of( u ).session, "audio: the boost sounds (FMOD - platform)" ); };
-        h.boost.stats = []( void* u, const char* ) { race_unwired( *race_drive_of( u ).session, "the stats service g 0x758FEC vt+0x1C (platform)" ); };
+        // g 0x758FEC vt+0x1C (boat, "BoostLow" / "Drafting") is the voice-over manager's say-now (world/voice.hxx).
+        h.boost.stats = []( void* u, const char* line ) { race_session_vo_say( *race_drive_of( u ).session, race_drive_of( u ).d.boat, line, false ); };
         h.hull.user = r.get( );
         h.hull.fmod.user = r.get( );
         h.hull.fmod.get_event = []( void* u, int, const std::string&, std::uint32_t* ) {
@@ -1160,7 +1170,7 @@ inline void race_drive_viewports( race_session_t& s )
     hooks.viewport_camera = [ &s ]( const std::uint8_t* ) { race_unwired( s, "the boat manager's override camera +0x2C0 (who sets it is not established)" ); };
     hooks.debug_camera = [ &s ] { race_unwired( s, "the boat manager's debug camera (dev layer)" ); };
     hooks.lens_scale = [ &s ]( float ) { race_unwired( s, "the viewport's lens scale +0x278 (not consumed)" ); };
-    hooks.lens_water = [ &s ]( float ) { race_unwired( s, "the lens-water manager g 0x759048 vt+0x2C (not wired)" ); };
+    hooks.lens_water = [ &s ]( float x ) { lens_water_set_push( s.lens, x ); };   // g 0x759048 vt+0x2C = slot 11 0x513620
     hooks.local = []( const void* boat, std::uint8_t local ) { const_cast< std::uint8_t* >( static_cast< const std::uint8_t* >( boat ) )[ 0x467 ] = local; };
     hooks.listener = [ &s ] { race_unwired( s, "the FMOD listener + the ActiveCameraTrigger's position (0x534830 / 0x534C00) (not wired)" ); };
     hooks.trigger = [ &s ]( bool ) { race_unwired( s, "the ActiveCameraTrigger's registration (the trigger manager, not wired)" ); };

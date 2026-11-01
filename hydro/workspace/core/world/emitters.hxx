@@ -103,8 +103,19 @@ inline void control_entity_post_load( entity_t& e, const value_t& data, bool ove
         control_load( v, data );
 }
 
+// VuLensWaterEmitterEntity (create 0x5E64C0, world/lens.hxx): its two VuBasicProperty<float> (0x737484: property_float)
+// "Radius" +0x60 (25.0) and "Drops Per Second" +0x64 (64.0) - the ctor's defaults as the schema (engine entity/schema.hxx)
+// holds them.
+struct lens_emitter_state_t
+{
+    float radius = 25.0f, radius_default = 25.0f;
+    float drops = 64.0f, drops_default = 64.0f;
+};
+
 inline std::shared_ptr< void > audio_emitter_state_for( const std::string& cls )
 {
+    if ( cls == "VuLensWaterEmitterEntity" )
+        return std::make_shared< lens_emitter_state_t >( );
     if ( cls == "VuControlEntity" )
         return std::make_shared< control_entity_state_t >( );
     if ( cls == "VuSubstituteAssetEntity" )
@@ -177,6 +188,13 @@ inline void audio_emitter_load_properties( entity_t& e, const value_t& p )
         property_string( p, "Subst Asset Name", s.subst, subst );
         return;
     }
+    if ( e.m_type == "VuLensWaterEmitterEntity" && e.m_state )
+    {
+        lens_emitter_state_t& s = *static_cast< lens_emitter_state_t* >( e.m_state.get( ) );
+        property_float( p, "Radius", s.radius, s.radius_default, false );
+        property_float( p, "Drops Per Second", s.drops, s.drops_default, false );
+        return;
+    }
     if ( e.m_type != "VuAudioEmitterEntity" || !e.m_state )
         return;
     audio_emitter_state_t& s = *static_cast< audio_emitter_state_t* >( e.m_state.get( ) );
@@ -186,6 +204,12 @@ inline void audio_emitter_load_properties( entity_t& e, const value_t& p )
 
 inline void audio_emitter_mark_properties( entity_t& e )
 {
+    if ( e.m_type == "VuLensWaterEmitterEntity" && e.m_state )
+    {
+        lens_emitter_state_t& s = *static_cast< lens_emitter_state_t* >( e.m_state.get( ) );
+        s.radius_default = s.radius;
+        s.drops_default = s.drops;
+    }
     if ( e.m_type == "VuSubstituteAssetEntity" && e.m_state )
         static_cast< substitute_asset_state_t* >( e.m_state.get( ) )->type_default = static_cast< substitute_asset_state_t* >( e.m_state.get( ) )->type;
     if ( e.m_type == "VuAudioEmitterEntity" && e.m_state )
