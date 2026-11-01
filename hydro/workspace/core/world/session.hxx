@@ -1,5 +1,6 @@
 #pragma once
 
+#include <workspace/core/world/ghost.hxx>
 #include <workspace/core/boat/construct.hxx>
 #include <workspace/core/boat/fleet.hxx>
 #include <workspace/core/boat/load.hxx>
@@ -192,6 +193,8 @@ struct race_session_t
     race_boat_manager_t manager;
     std::vector< std::unique_ptr< race_session_boat_t > > boats;
     // pfx_frame_t's boats / fluids (the words the boat processes hold -> their readers): one entry per boat, kept current by Build step 5.
+    ghost_manager_t ghost;              // VuGhostManager g 0x758FC8 (world/ghost.hxx)
+    std::string ghost_error;            // VuGhostGame +0x740 (a string key, ShowError's message)
     std::vector< pfx_frame_boat_t > pfx_boats;
     std::vector< pfx_frame_fluids_t > pfx_fluids;
     std::vector< race_start_boat_t > start_boats;
@@ -2281,7 +2284,7 @@ inline void race_session_end( race_session_t& s )
         s.slalom_draw = false;   // +0x744's +0x1E = 0 after the draw manager's remove (g 0x7590B8 vt+0x2C - the renderer's)
         race_unwired( s, "VuSlalomGame slot 6 0x48C880: the draw manager's remove (g 0x7590B8 vt+0x2C) of +0x744 - the renderer's (a hook)" );
     };
-    h.ghost_release = [ &s ] { race_unwired( s, "VuGhostGame slot 6 0x485360: 0x4AF490 on the ghost manager g 0x758FC8 - not recreated (UNKNOWN)" ); };
+    h.ghost_release = [ &s ] { ghost_clear( s.ghost ); };   // VuGhostGame slot 6 0x485360: 0x4AF490 (no ghost boats: 0x4AF640 not recreated)
     h.call = [ &s ]( const char* what ) {
         const std::string w( what );
         if ( w == "cameras" )
@@ -2858,6 +2861,25 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
             if ( s.rules.unrecreated )
                 s.rules.unrecreated( address, what );
         } );
+        // GetLeaderboard, read whole. Enter 0x485890: the tick manager's vt+0x2C, every game boat's +0x308 += 1, the leaderboard
+        // g 0x758FA8's vt+0x18 (the request: "Ghost" and the track), a "Ghost_Leaderboard" VuMessageBox +0x758 (UI: a hook). Exit
+        // 0x485AA0: vt+0x30, +0x308 -= 1, the box released. Tick 0x485AF0: vt+0x1C's status 0 waits, 1 "Success", else +0x740 =
+        // "Ghost_NotConnected" and the "Failure" pulse (ShowError).
+        // PLATFORM (a hook, FLAGGED): the online leaderboard is not in this build, so vt+0x1C answers 2 - retail's answer with no
+        // connection, the one path retail itself has for it. LoadGhosts 0x485B50 and on need the service: not reached.
+        for ( auto& st : s.rules.fsm.m_states )
+            if ( st->m_name == "GetLeaderboard" )
+            {
+                st->m_enter = [ &s ] {
+                    race_rules_hold( s.rules, 1 );
+                    race_unwired( s, "VuGhostGame GetLeaderboard: the tick manager's vt+0x2C and the \"Ghost_Leaderboard\" VuMessageBox +0x758 (UI, not recreated)" );
+                };
+                st->m_exit = [ &s ] { race_rules_hold( s.rules, -1 ); };
+                st->m_tick = [ &s ]( float ) {
+                    s.ghost_error = "Ghost_NotConnected";
+                    s.rules.fsm.pulse_condition( "Failure" );
+                };
+            }
         // 0x485380 past the time: for i < the +0x75C list's count, the ghost manager g 0x758FC8's +0x64 record whose [0] == i:
         // its +0x58 entity's +0x4DC = its transform's world (+0x50 +0x50, 16 words). The list is LoadGhosts' / PreGame's
         // (0x485B50 / 0x486060, not recreated): empty here, so the loop runs over none - logged.
