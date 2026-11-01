@@ -9,6 +9,7 @@
 #include <workspace/core/boat/sections.hxx>
 #include <workspace/core/boat/state.hxx>
 #include <workspace/core/boat/track.hxx>
+#include <workspace/core/boat/fleet.hxx>
 
 #include <array>
 #include <cstdio>
@@ -1900,6 +1901,146 @@ inline bool verify_track_build( )
     return false;
 }
 
+// fleet.hxx's VuAiManagerImpl and VuRandomTrackPlan against retail on
+// Hydroelectric's track (oracle case ai_manager; the track is
+// verify_track_build's): 7 boats (6 the manager's drivers, modes 0 / 1 / 2),
+// addDriver 0x403590 x6, the start 0x4034B0 / 0x404590, slot 7 0x4034E0, then
+// 240 ticks of 0x403930 (+ 0x403800) on scripted boat motion, VuRandom
+// (0x50FD20) carried across. Compared after the adds, the start and every
+// tick: the time, state, start / end, VuRandom's state, every entry's words
+// (the matrices once written, the ring's written slots), and every driver's
+// +0x78 / +0x9C / +0xBC and plan.
+inline bool verify_ai_manager( )
+{
+    const std::unique_ptr< entity_t > tree = track_document_tree( );
+    track_manager_t tm;
+    if ( !tree || !track_build_from_tree( *tree, tm ) )
+    {
+        LOG_ERROR( "ai_manager: the track did not build" );
+        return false;
+    }
+    const unsigned* g = g_golden_ai_manager_words;
+    const int nb = static_cast< int >( *g++ );
+    std::vector< std::array< float, 16 > > worlds( nb );
+    std::vector< fleet_boat_t > boats( nb );
+    std::vector< std::array< std::uint8_t, 0xD4 > > images( nb );
+    for ( int k = 0; k < nb; ++k )
+    {
+        std::memcpy( &boats[ k ].engine_4, g++, 4 );
+        std::memcpy( &boats[ k ].engine_c, g++, 4 );
+        boats[ k ].world = worlds[ k ].data( );
+    }
+    std::vector< fleet_pilot_t > pilots( nb );
+    for ( int k = 0; k < nb; ++k )
+    {
+        images[ k ].fill( 0 );
+        track_put_u32( images[ k ].data( ), 0x78, 0xFFFFFFFFu );
+        track_put_u32( images[ k ].data( ), 0x80, *g++ );
+        pilots[ k ].driver = images[ k ].data( );
+        pilots[ k ].boat = k;
+    }
+    for ( int k = 0; k < nb; ++k, g += 16 )
+        std::memcpy( worlds[ k ].data( ), g, 64 );
+    fleet_manager_t m;
+    m.state = 0;   // the case's image: slot 5 0x4042E0 (state 1) is not run there - it reads VuDevConfig
+    const int adds = static_cast< int >( *g++ );
+    for ( int k = 0; k < adds; ++k, g += 3 )
+    {
+        fleet_add_driver( m, boats, k, k, fleet_bits( g[ 0 ] ), fleet_bits( g[ 1 ] ) );
+        pilots[ k ].sector = static_cast< int >( g[ 2 ] );
+    }
+    const float dt = fleet_bits( *g++ );
+    fleet_random_t rng;
+    std::memcpy( &rng, g, 136 );
+    g += 34;
+    int failed = 0, compared = 0, snapshots = 0;
+    auto cmp = [ & ]( const char* what, int at, int a, std::uint32_t ours, std::uint32_t theirs ) {
+        ++compared;
+        if ( ours != theirs && ++failed <= 12 )
+            LOG_ERROR( "ai_manager snapshot %d %s %d: ours 0x%08X retail 0x%08X", at, what, a, ours, theirs );
+    };
+    const auto u = []( float f ) { std::uint32_t v; std::memcpy( &v, &f, 4 ); return v; };
+    const auto snapshot = [ & ]( int at ) {
+        ++snapshots;
+        cmp( "time", at, 0, u( m.time ), *g++ );
+        cmp( "state", at, 0, static_cast< std::uint32_t >( m.state ), *g++ );
+        cmp( "start", at, 0, static_cast< std::uint32_t >( m.start ), *g++ );
+        cmp( "end", at, 0, static_cast< std::uint32_t >( m.end ), *g++ );
+        std::uint32_t r[ 34 ];
+        std::memcpy( r, &rng, 136 );
+        for ( int k = 0; k < 34; ++k )
+            cmp( "random", at, k, r[ k ], *g++ );
+        const unsigned ne = *g++;
+        cmp( "entries", at, 0, static_cast< std::uint32_t >( m.entries.size( ) ), ne );
+        for ( unsigned k = 0; k < ne; ++k, g += 55 )
+        {
+            if ( k >= m.entries.size( ) )
+                continue;
+            const fleet_entry_t& e = m.entries[ k ];
+            const int id = static_cast< int >( k );
+            if ( e.matrices_known )
+                for ( int j = 0; j < 16; ++j )
+                {
+                    cmp( "entry prev", at, id * 100 + j, u( e.prev[ j ] ), g[ j ] );
+                    cmp( "entry cur", at, id * 100 + j, u( e.cur[ j ] ), g[ 16 + j ] );
+                }
+            const std::uint32_t mine[ 11 ] = { static_cast< std::uint32_t >( e.pilot ), static_cast< std::uint32_t >( e.boat ),
+                static_cast< std::uint32_t >( e.target ), static_cast< std::uint32_t >( e.sector ), e.w90, e.w94, u( e.cap ), u( e.arrival ), e.wa0,
+                e.wa4, u( e.wanted ) };
+            for ( int j = 0; j < 11; ++j )
+                cmp( "entry word", at, id * 100 + 32 + j, mine[ j ], g[ 32 + j ] );
+            for ( int j = 0; j < 10 && j < e.samples; ++j )
+                cmp( "entry ring", at, id * 100 + j, u( e.ring[ j ] ), g[ 43 + j ] );
+            cmp( "entry samples", at, id, static_cast< std::uint32_t >( e.samples ), g[ 53 ] );
+            cmp( "entry timer", at, id, u( e.timer ), g[ 54 ] );
+        }
+        const unsigned nd = *g++;
+        for ( unsigned k = 0; k < nd; ++k )
+        {
+            const fleet_pilot_t& p = pilots[ k ];
+            const int id = static_cast< int >( k );
+            cmp( "driver +0x78", at, id, track_u32( p.driver, 0x78 ), *g++ );
+            cmp( "driver +0x9C", at, id, track_u32( p.driver, 0x9C ), *g++ );
+            cmp( "driver +0xBC", at, id, static_cast< std::uint32_t >( p.other ), *g++ );
+            cmp( "plan depth", at, id, static_cast< std::uint32_t >( p.plan.depth ), *g++ );
+            const unsigned np = *g++;
+            cmp( "plan count", at, id, static_cast< std::uint32_t >( p.plan.sectors.size( ) ), np );
+            for ( unsigned j = 0; j < np; ++j, ++g )
+                if ( j < p.plan.sectors.size( ) )
+                    cmp( "plan sector", at, id * 100 + static_cast< int >( j ), static_cast< std::uint32_t >( p.plan.sectors[ j ] ), *g );
+        }
+    };
+    snapshot( 0 );
+    fleet_start( m, tm, pilots, boats, rng );
+    fleet_run( m );
+    snapshot( 1 );
+    int transitions = 0;
+    for ( std::size_t frame = 0; frame < g_golden_ai_manager_frames; ++frame )
+    {
+        for ( int k = 0; k < nb; ++k, g += 16 )
+            std::memcpy( worlds[ k ].data( ), g, 64 );
+        for ( int k = 0; k < nb; ++k )
+            track_put_u32( images[ k ].data( ), 0xA0, *g++ );
+        std::vector< int > before;
+        for ( const fleet_entry_t& e : m.entries )
+            before.push_back( e.sector );
+        fleet_tick( m, tm, pilots, boats, rng, dt );
+        for ( std::size_t k = 0; k < m.entries.size( ); ++k )
+            transitions += m.entries[ k ].sector != before[ k ] ? 1 : 0;
+        snapshot( 2 + static_cast< int >( frame ) );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuAiManagerImpl (addDriver 0x403590, start 0x4034B0 / 0x404590, tick 0x403930 / 0x403800) and VuRandomTrackPlan "
+                     "(0x4D0D50 / 0x4D0DD0 / 0x4D0E30 / 0x4D0F10, VuRandom 0x50FD20) match retail on Hydroelectric's track: %d snapshots, "
+                     "%d sector changes, %d values, bit for bit",
+            snapshots, transitions, compared );
+        return true;
+    }
+    LOG_ERROR( "ai_manager FAILED %d of %d values", failed, compared );
+    return false;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
@@ -1926,5 +2067,6 @@ inline bool verify_boat_all( )
     ok = verify_ai_avoid( ) && ok;
     ok = verify_ai_tick( ) && ok;
     ok = verify_track_build( ) && ok;
+    ok = verify_ai_manager( ) && ok;
     return ok;
 }
