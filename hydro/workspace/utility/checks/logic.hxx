@@ -906,6 +906,18 @@ inline int key_motion_replay( const unsigned* words, bool curves, const char* ta
                 for ( const auto& r : e.euler )
                     for ( int j : { 0, 1, 2, 4, 5, 6, 8 } )
                         st.push_back( r[ static_cast< std::size_t >( j ) ] );
+                st.insert( st.end( ), { static_cast< std::uint32_t >( e.spline.size( ) ), static_cast< std::uint32_t >( e.spline_capacity ),
+                                        static_cast< std::uint32_t >( e.lengths.size( ) ), static_cast< std::uint32_t >( e.lengths_capacity ),
+                                        e.total, e.spline_valid } );
+                for ( const auto& r : e.spline )
+                    for ( int j = 0; j < 19; ++j )
+                        if ( j != 10 && j != 14 && j != 18 )
+                            st.push_back( r[ static_cast< std::size_t >( j ) ] );
+                st.insert( st.end( ), e.lengths.begin( ), e.lengths.end( ) );
+                st.insert( st.end( ), { static_cast< std::uint32_t >( e.squad.size( ) ), static_cast< std::uint32_t >( e.squad_capacity ),
+                                        e.squad_valid } );
+                for ( const auto& r : e.squad )
+                    st.insert( st.end( ), r.begin( ), r.end( ) );
             }
             const int diff = ( ( op == 1 || op == 2 ) && ret != arg ? 1 : 0 ) + ( env.log == want ? 0 : 1 ) + ( st == want_state ? 0 : 1 )
                              + ( unrecreated != before ? 1 : 0 );
@@ -934,7 +946,7 @@ inline bool verify_key_motion( )
     return true;
 }
 
-// Curve Types 1 / 2 (case key_curve): slot 6's position curve (0x5CEC60 -> 0x61A7A0 -> 0x61AE50: every record word but +0x1C,
+// Curve Types 1 / 2 / 3 (case key_curve; type 3: 0x5CF800's +0xB0 / +0xD0 splines, every word but the position segments' 10 / 14 / 18): slot 6's position curve (0x5CEC60 -> 0x61A7A0 -> 0x61AE50: every record word but +0x1C,
 // the count, capacity and valid byte), type 2's euler curve (0x5CEF20: every record word but +0xC / +0x1C) and the update's
 // cubic branches of 0x5D0440, through the same replay.
 inline bool verify_key_curve( )
@@ -943,8 +955,8 @@ inline bool verify_key_curve( )
     int steps = 0;
     if ( key_motion_replay( g_golden_kcv_words, true, "key_curve", n, steps ) )
         return false;
-    LOG_SUCCESS( "VuKeyframeMotionEntity Curve Types 1 / 2 (Cubic, Cubic Euler) match retail: %u scenarios, %d steps (the +0x90 / +0xA0 "
-                 "splines - 0x5CEC60 / 0x5CEF20 / 0x61A7A0 / 0x61AE50 - and 0x5D0440's cubic branches: the target's matrix and velocities)",
+    LOG_SUCCESS( "VuKeyframeMotionEntity Curve Types 1 / 2 / 3 (Cubic, Cubic Euler, Spline) match retail: %u scenarios, %d steps (the +0x90 / +0xA0 / +0xB0 / +0xD0 "
+                 "splines - 0x5CEC60 / 0x5CEF20 / 0x61A7A0 / 0x61AE50 / 0x5CF800 / 0x61B120 / 0x61B9E0 - and 0x5D0440's branches: the target's matrix and velocities)",
                  n, steps );
     return true;
 }
