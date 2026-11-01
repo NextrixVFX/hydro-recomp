@@ -2155,13 +2155,16 @@ inline bool verify_ui_boat_player( )
 // 0x4FC230, VuGameConfigEntity's 0x45D0C0 / 0x45D4C0 / 0x45E210 / 0x45E2B0 /
 // 0x4471B0) against retail's walk on every VuGameConfigEntity of the five
 // GameConfig* screens (oracle case config_options; the options document is
-// retail's own slot 4 output - an input): per run the whole root after, the
+// OUR slot 4's (ui_game_config_build over the real DBs, compared with retail's
+// slot 4 output first; the hand-built documents are inputs)): per run the whole root after, the
 // pushed options' names in order, and every hook call in order with its
 // arguments (the hooks answer what retail's recorded answers were).
+inline value_t ui_cx_document( int index );
+
 inline bool verify_ui_config_options( )
 {
     const ui_loaded_t& loaded = ui_loaded( );
-    int failed = 0, runs = 0, calls = 0;
+    int failed = 0, runs = 0, calls = 0, built_docs = 0;
     auto bad = [ &failed ]( const char* what, int k )
     {
         if ( ++failed <= 8 )
@@ -2176,9 +2179,70 @@ inline bool verify_ui_config_options( )
                  static_cast< std::size_t >( want.m_index ) < loaded.trees[ p ].size( ) )
                 have = loaded.trees[ p ][ static_cast< std::size_t >( want.m_index ) ].second;
         if ( !have || have->m_type != "VuGameConfigEntity" || have->m_name != want.m_name )
+        {
             bad( "the authored entity", static_cast< int >( k ) );
+            continue;
+        }
         const std::vector< std::uint8_t > odoc = ui_unhex( want.m_options );
-        const value_t options = c_reader( odoc ).parse( );
+        value_t options = c_reader( odoc ).parse( );
+        if ( want.m_built )
+        {
+            // OUR slot 4 (ui_game_config_build) from the loaded entity's OptionType / Single Player / Force Online over
+            // the real OptionDB / TrackDB, its hooks answered from retail's slot 4 log; compared with retail's document.
+            const ui_front_end_screen_t screen = ui_front_end_screen( *have, want.m_flags );
+            if ( screen.m_option_type != want.m_option_type )
+                bad( "the OptionType", static_cast< int >( k ) );
+            value_t root0;
+            ui_json_make_map( root0 );
+            ui_config_env_t env0;
+            env0.m_root = &root0;
+            int at0 = 0;
+            bool same0 = true;
+            auto next0 = [ & ]( int kind ) -> const golden_opt_log_t*
+            {
+                if ( at0 >= want.m_builds || g_golden_opt_logs[ want.m_first_build + at0 ].m_kind != kind )
+                {
+                    same0 = false;
+                    return nullptr;
+                }
+                return &g_golden_opt_logs[ want.m_first_build + at0++ ];
+            };
+            ui_profile_t p0;
+            p0.unlock = [ & ]( int slot, const std::string& a, const std::string& b, const std::string& c )
+            {
+                const golden_opt_log_t* g = next0( 0 );
+                same0 = same0 && g && g->m_slot == slot && a == g->m_a && b == g->m_b && c == g->m_c;
+                return g && g->m_answer != 0;
+            };
+            p0.license = [ & ]( ) { const golden_opt_log_t* g = next0( 1 ); return g && g->m_answer != 0; };
+            p0.next_choice = [ & ]( const value_t&, std::string& ) { next0( 2 ); return false; };
+            p0.package = [ & ]( const std::string& asset )
+            {
+                const golden_opt_log_t* g = next0( 3 );
+                same0 = same0 && g && asset == g->m_a;
+                return g && g->m_answer != 0;
+            };
+            ui_config_hooks_t h0;
+            h0.touch = [ & ]( ) { same0 = false; };
+            h0.fire = [ & ]( const std::string&, const ui_params_t& ) { same0 = false; return true; };
+            h0.broadcast = [ & ]( std::uint32_t, const ui_params_t& ) { same0 = false; };
+            h0.sound = [ & ]( const char* ) { same0 = false; };
+            ui_config_entity_t e0;
+            e0.m_single_player = screen.m_single_player;
+            e0.m_force_online = screen.m_force_online;
+            const value_t option_db = ui_cx_document( 4 ), track_db = ui_cx_document( 2 );
+            value_t built;
+            const bool done = ui_game_config_build( e0, env0, built, &option_db, screen.m_option_type, &track_db, want.m_flags, p0, h0 );
+            std::string ours, theirs;
+            vujb_dump( built, ours );
+            vujb_dump( options, theirs );
+            if ( !done || ours != theirs )
+                bad( "our slot 4's options document", static_cast< int >( k ) );
+            if ( !same0 || at0 != want.m_builds )
+                bad( "our slot 4's hook calls", static_cast< int >( k ) );
+            options = built;
+            ++built_docs;
+        }
         for ( int r = 0; r < want.m_runs; ++r )
         {
             const golden_opt_run_t& run = g_golden_opt_runs[ want.m_first + r ];
@@ -2247,8 +2311,9 @@ inline bool verify_ui_config_options( )
     }
     if ( failed == 0 )
         LOG_SUCCESS( "ui_config_apply_options matches retail's option walk 0x44B0D0 / 0x44BD50 with VuGameConfigEntity's virtuals on %d entities "
-                     "(the GameConfig* screens): %d runs, the whole root, the option order, %d hook calls",
-            static_cast< int >( g_golden_opt_entities_count ), runs, calls );
+                     "(the GameConfig* screens; %d options documents built by OUR slot 4 and equal to retail's): %d runs, the whole root, "
+                     "the option order, %d hook calls",
+            static_cast< int >( g_golden_opt_entities_count ), built_docs, runs, calls );
     else
         LOG_ERROR( "the config option walk FAILED %d checks against retail's", failed );
     return failed == 0;
@@ -2384,15 +2449,15 @@ inline std::string ui_bci_hex( const ui_params_t& p )
 // 0x44B780, slot 12 0x44E2B0, the info string 0x44B9C0 - over the boat
 // virtuals; select.hxx's walk machinery) against retail's on every
 // VuBoatConfigEntity of the five BoatConfig* screens (oracle case
-// boat_config_init; the options document and the combo records are retail's
-// own slot 4 output - inputs): per run the whole root after, the player, the
+// boat_config_init; the options document and the combo records are OUR slot
+// 4's (ui_dock_build, compared with retail's first)): per run the whole root after, the player, the
 // pushed options' names, every combo record after, and every hook call in
 // order (unlock / license / progress / store-beta answers replayed; touch,
 // plug fires, broadcasts with their VuParams bytes, the voice compared).
 inline bool verify_ui_boat_config_init( )
 {
     const ui_loaded_t& loaded = ui_loaded( );
-    int failed = 0, runs = 0, calls = 0;
+    int failed = 0, runs = 0, calls = 0, built_docs = 0;
     auto bad = [ &failed ]( const char* what, int k )
     {
         if ( ++failed <= 8 )
@@ -2408,9 +2473,84 @@ inline bool verify_ui_boat_config_init( )
                  static_cast< std::size_t >( want.m_index ) < loaded.trees[ p ].size( ) )
                 have = loaded.trees[ p ][ static_cast< std::size_t >( want.m_index ) ].second;
         if ( !have || have->m_type != "VuBoatConfigEntity" || have->m_name != want.m_name )
+        {
             bad( "the authored entity", static_cast< int >( k ) );
-        const value_t options = ui_bci_document( want.m_options );
-        const std::vector< ui_config_combo_t > combos = ui_bci_combos( want.m_combos );
+            continue;
+        }
+        value_t options = ui_bci_document( want.m_options );
+        std::vector< ui_config_combo_t > combos = ui_bci_combos( want.m_combos );
+        if ( *want.m_slot4_root )
+        {
+            // OUR slot 4 (ui_dock_build) from the loaded entity over the real OptionDB / BoatDB / SkinDB / ChampDB, its
+            // hooks answered from retail's slot 4 log; the document and the combo records compared with retail's.
+            const ui_front_end_screen_t screen = ui_front_end_screen( *have, want.m_flags );
+            const std::vector< std::uint8_t > authored = ui_unhex( want.m_authored );
+            if ( screen.m_option_type != want.m_option_type || authored.size( ) < 3 || screen.m_single_player != ( authored[ 0 ] != 0 ) ||
+                 screen.m_force_online != ( authored[ 1 ] != 0 ) || screen.m_allow_special != ( authored[ 2 ] != 0 ) )
+                bad( "the authored properties", static_cast< int >( k ) );
+            value_t root0 = c_reader( ui_unhex( want.m_slot4_root ) ).parse( );
+            ui_config_env_t env0;
+            env0.m_root = &root0;
+            int at0 = 0;
+            bool same0 = true;
+            auto next0 = [ & ]( int kind ) -> const golden_bci_log_t*
+            {
+                if ( at0 >= want.m_slot4s || g_golden_bci_logs[ want.m_first_slot4 + at0 ].m_kind != kind )
+                {
+                    same0 = false;
+                    return nullptr;
+                }
+                return &g_golden_bci_logs[ want.m_first_slot4 + at0++ ];
+            };
+            ui_profile_t p0;
+            p0.unlock = [ & ]( int slot, const std::string& a, const std::string& b, const std::string& c )
+            {
+                const golden_bci_log_t* g = next0( 0 );
+                same0 = same0 && g && g->m_slot == slot && a == g->m_a && b == g->m_b && c == g->m_c;
+                return g && g->m_answer != 0;
+            };
+            p0.license = [ & ]( ) { const golden_bci_log_t* g = next0( 1 ); return g && g->m_answer != 0; };
+            p0.progress = [ & ]( const std::string& value )
+            {
+                const golden_bci_log_t* g = next0( 2 );
+                same0 = same0 && g && value == g->m_a;
+                return g && g->m_answer != 0;
+            };
+            p0.store_beta = [ & ]( ) { const golden_bci_log_t* g = next0( 3 ); return g && g->m_answer != 0; };
+            p0.package = [ & ]( const std::string& asset )
+            {
+                const golden_bci_log_t* g = next0( 8 );
+                same0 = same0 && g && asset == g->m_a;
+                return g && g->m_answer != 0;
+            };
+            ui_config_hooks_t h0;
+            h0.touch = [ & ]( ) { next0( 4 ); };
+            h0.fire = [ & ]( const std::string&, const ui_params_t& ) { next0( 5 ); return true; };
+            h0.broadcast = [ & ]( std::uint32_t, const ui_params_t& ) { next0( 6 ); };
+            h0.sound = [ & ]( const char* ) { next0( 7 ); };
+            const value_t option_db = ui_cx_document( 4 ), champ_db = ui_cx_document( 3 );
+            ui_dock_t d0;
+            d0.m_base.m_single_player = screen.m_single_player;
+            d0.m_base.m_force_online = screen.m_force_online;
+            d0.m_allow_special = screen.m_allow_special;
+            d0.m_boat_db = &boat_db;
+            d0.m_skin_db = &skin_db;
+            d0.m_champ_db = &champ_db;
+            value_t built;
+            const bool done = ui_dock_build( d0, env0, built, &option_db, screen.m_option_type, want.m_flags, p0, h0 );
+            std::string ours, theirs;
+            vujb_dump( built, ours );
+            vujb_dump( options, theirs );
+            if ( !done || ours != theirs )
+                bad( "our slot 4's options document", static_cast< int >( k ) );
+            if ( ui_bci_combo_text( d0.m_base.m_combos ) != want.m_combos )
+                bad( "our slot 4's combo records", static_cast< int >( k ) );
+            if ( !same0 || at0 != want.m_slot4s )
+                bad( "our slot 4's hook calls", static_cast< int >( k ) );
+            options = built;
+            combos = d0.m_base.m_combos;
+            ++built_docs;
+        }
         for ( int r = 0; r < want.m_runs; ++r )
         {
             const golden_bci_run_t& run = g_golden_bci_runs[ want.m_first + r ];
@@ -2521,8 +2661,9 @@ inline bool verify_ui_boat_config_init( )
     if ( failed == 0 )
         LOG_SUCCESS( "ui_dock_initialize matches retail's VuBoatConfigEntity onGameInitialize 0x44CD10 (refresh 0x448140, walk 0x44B0D0 with the "
                      "boat virtuals, combo state 0x44B780, OnChangeDockedBoat / stat plugs / OnPlayerBoatConfig, info strings 0x44B9C0) on %d "
-                     "entities: %d runs, the whole root, the player, the option order, every combo record, %d hook calls",
-            static_cast< int >( g_golden_bci_entities_count ), runs, calls );
+                     "entities (%d options documents + combo records built by OUR slot 4 and equal to retail's): %d runs, the whole root, the "
+                     "player, the option order, every combo record, %d hook calls",
+            static_cast< int >( g_golden_bci_entities_count ), built_docs, runs, calls );
     else
         LOG_ERROR( "the boat selector's initialize FAILED %d checks against retail's", failed );
     return failed == 0;
@@ -2729,8 +2870,8 @@ inline value_t ui_fr_document( int index )
 // Allow Special Boats read from OUR loaded entities and compared with
 // retail's): per run the whole root after, the trophy byte, every answered
 // hook call in order with its arguments, and every broadcast / plug fire /
-// trophy model / voice in order - the two info-string broadcasts excepted
-// (the game selector's slot 23 0x45DBF0 text is not recreated).
+// trophy model / voice in order - the info-string broadcasts included (the
+// game selector's slot 23 0x45DBF0 text, expand.hxx).
 inline bool verify_ui_front_end_root( )
 {
     const ui_loaded_t& loaded = ui_loaded( );
@@ -2748,7 +2889,6 @@ inline bool verify_ui_front_end_root( )
     dbs.m_skin_db = &skin_db;
     dbs.m_track_db = &track_db;
     dbs.m_champ_db = &champ_db;
-    const std::uint32_t info_short = fsm_hash( "OnSetShortUnlockStringID" ), info = fsm_hash( "OnSetInfoStringID" );
     auto answered = []( int kind ) { return kind <= 3 || kind == 8 || kind == 9 || kind == 10 || kind == 11; };
     auto posted = []( int kind ) { return kind == 5 || kind == 6 || kind == 7 || kind == 12; };
     for ( std::size_t k = 0; k < g_golden_fr_pairs_count; ++k )
@@ -2787,8 +2927,7 @@ inline bool verify_ui_front_end_root( )
                 const golden_bci_log_t& g = g_golden_fr_logs[ run.m_first_log + n ];
                 if ( answered( g.m_kind ) )
                     want_answers.push_back( &g );
-                else if ( posted( g.m_kind ) && !( g.m_kind == 6 && ( std::strtoul( g.m_a, nullptr, 16 ) == info_short ||
-                                                                     std::strtoul( g.m_a, nullptr, 16 ) == info ) ) )
+                else if ( posted( g.m_kind ) )
                     want_posts.push_back( &g );
             }
             std::size_t at = 0, post_at = 0;
@@ -2864,8 +3003,6 @@ inline bool verify_ui_front_end_root( )
             };
             h.broadcast = [ & ]( std::uint32_t hash, const ui_params_t& params )
             {
-                if ( hash == info_short || hash == info )
-                    return;
                 char text[ 16 ];
                 std::snprintf( text, sizeof( text ), "0x%08X", hash );
                 post( 6, text, ui_bci_hex( params ) );
@@ -2896,9 +3033,12 @@ inline bool verify_ui_front_end_root( )
     return failed == 0;
 }
 
+#include <workspace/utility/checks/menu.hxx>
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_menu_all( ) && ok;
     ok = verify_ui_front_end_root( ) && ok;
     ok = verify_ui_config_expand( ) && ok;
     ok = verify_ui_boat_config_init( ) && ok;
