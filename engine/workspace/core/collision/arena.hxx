@@ -646,3 +646,106 @@ inline std::uint32_t bt_collision_dispatcher_construct( const bt_mem_t& m, std::
         }
     return self;
 }
+// --- Serialization (btSerializer virtuals: vt+0xC allocate( size, count ),
+// vt+0x10 finalizeChunk( chunk, structType, code, oldPtr ), vt+0x18
+// getUniquePointer, vt+0x1C / +0x20 start / finishSerialization, vt+0x24
+// findNameForPointer, vt+0x2C serializeName). Race-reach rows the running
+// race never calls (nothing serializes a world in a race).
+
+// The name prologue btCollisionShape::serialize 0x554620 and the convex
+// rows inline: name = findNameForPointer( this ); buffer +0 = getUnique-
+// Pointer( name ); a non-null answer -> serializeName( name ); +4 =
+// m_shapeType (+4).
+inline void bt_shape_serialize_name( const bt_mem_t& m, std::uint32_t self, std::uint32_t buffer, std::uint32_t serializer )
+{
+    const std::uint32_t name = m.vcall( m.user, serializer, 0x24, &self, 1 );
+    const std::uint32_t unique = m.vcall( m.user, serializer, 0x18, &name, 1 );
+    m.wr( m.user, buffer, unique );
+    if ( unique != 0 )
+        m.vcall( m.user, serializer, 0x2C, &name, 1 );
+    m.wr( m.user, buffer + 4, m.rd( m.user, self + 4 ) );
+}
+
+// btCollisionShape::serialize 0x554620 (slot 12; buffer, serializer; retn 8):
+// the prologue; answers "btCollisionShapeData" (0x6D2CAC).
+inline std::uint32_t bt_shape_serialize( const bt_mem_t& m, std::uint32_t self, std::uint32_t buffer, std::uint32_t serializer )
+{
+    bt_shape_serialize_name( m, self, buffer, serializer );
+    return 0x6D2CACu;
+}
+
+// btConvexInternalShape::serialize 0x43D680 (slot 12): the prologue, then
+// m_implicitShapeDimensions (+0x20..+0x2C) to +0x1C..+0x28, m_localScaling
+// (+0x10..+0x1C) to +0xC..+0x18, m_collisionMargin (+0x30) to +0x2C; answers
+// "btConvexInternalShapeData" (0x6F36B8). btCylinderShape's 0x5AEAC0 adds
+// m_upAxis (+0x40) to +0x34 and answers "btCylinderShapeData" (0x6F6494).
+inline std::uint32_t bt_convex_internal_serialize( const bt_mem_t& m, std::uint32_t self, std::uint32_t buffer, std::uint32_t serializer, bool cylinder )
+{
+    bt_shape_serialize_name( m, self, buffer, serializer );
+    for ( std::uint32_t k = 0; k < 16; k += 4 )
+        m.wr( m.user, buffer + 0x1C + k, m.rd( m.user, self + 0x20 + k ) );
+    for ( std::uint32_t k = 0; k < 16; k += 4 )
+        m.wr( m.user, buffer + 0xC + k, m.rd( m.user, self + 0x10 + k ) );
+    m.wr( m.user, buffer + 0x2C, m.rd( m.user, self + 0x30 ) );
+    if ( !cylinder )
+        return 0x6F36B8u;
+    m.wr( m.user, buffer + 0x34, m.rd( m.user, self + 0x40 ) );
+    return 0x6F6494u;
+}
+
+// One chunk: size = object's vt+`size_slot`, chunk = allocate( size, 1 ),
+// structType = object's vt+`serialize_slot`( chunk->m_oldPtr (+8),
+// serializer ), finalizeChunk( chunk, structType, code, object ).
+inline void bt_serialize_chunk( const bt_mem_t& m, std::uint32_t object, std::uint32_t serializer, std::uint32_t size_slot, std::uint32_t serialize_slot,
+                                std::uint32_t code )
+{
+    const std::uint32_t size = m.vcall( m.user, object, size_slot, nullptr, 0 );
+    const std::uint32_t a[ 2 ] = { size, 1 };
+    const std::uint32_t chunk = m.vcall( m.user, serializer, 0xC, a, 2 );
+    const std::uint32_t b[ 2 ] = { m.rd( m.user, chunk + 8 ), serializer };
+    const std::uint32_t type = m.vcall( m.user, object, serialize_slot, b, 2 );
+    const std::uint32_t c[ 4 ] = { chunk, type, code, object };
+    m.vcall( m.user, serializer, 0x10, c, 4 );
+}
+
+// btCollisionShape::serializeSingleShape 0x554670 (slot 13; serializer;
+// retn 4): one 'SHAP' (0x50414853) chunk of this (vt+0x2C / vt+0x30).
+inline void bt_shape_serialize_single( const bt_mem_t& m, std::uint32_t self, std::uint32_t serializer )
+{
+    bt_serialize_chunk( m, self, serializer, 0x2C, 0x30, 0x50414853u );
+}
+
+// btBvhTriangleMeshShape::serializeSingleBvh 0x5AF5F0 (slot 17) / serialize-
+// SingleTriangleInfoMap 0x5AF640 (slot 18) (serializer; retn 4): with the
+// bvh (+0x40) a 'QBVH' (0x48564251) chunk of it (vt+0xC / vt+4); with the
+// triangle info map (+0x44) a 'TMAP' (0x50414D54) one (vt+4 / vt+8).
+inline void bt_bvh_serialize_single_bvh( const bt_mem_t& m, std::uint32_t self, std::uint32_t serializer )
+{
+    const std::uint32_t bvh = m.rd( m.user, self + 0x40 );
+    if ( bvh != 0 )
+        bt_serialize_chunk( m, bvh, serializer, 0xC, 4, 0x48564251u );
+}
+
+inline void bt_bvh_serialize_single_info_map( const bt_mem_t& m, std::uint32_t self, std::uint32_t serializer )
+{
+    const std::uint32_t map = m.rd( m.user, self + 0x44 );
+    if ( map != 0 )
+        bt_serialize_chunk( m, map, serializer, 4, 8, 0x50414D54u );
+}
+
+// btDiscreteDynamicsWorld::serializeRigidBodies 0x605C90 (serializer; retn
+// 4): each collision object (+8 count, +0x10 data, both re-read) whose
+// internal type (+0xF4) has bit 1 -> an 'RBDY' (0x59444252) chunk (vt+0xC /
+// vt+0x10); then each constraint (+0xB8 count, +0xC0 data) a 'CONS'
+// (0x534E4F43) chunk (vt+0x20 / vt+0x24).
+inline void bt_world_serialize_rigid_bodies( const bt_mem_t& m, std::uint32_t self, std::uint32_t serializer )
+{
+    for ( std::int32_t i = 0; i < static_cast< std::int32_t >( m.rd( m.user, self + 8 ) ); ++i )
+    {
+        const std::uint32_t object = m.rd( m.user, m.rd( m.user, self + 0x10 ) + 4u * static_cast< std::uint32_t >( i ) );
+        if ( ( m.rd8( m.user, object + 0xF4 ) & 2u ) != 0 )
+            bt_serialize_chunk( m, object, serializer, 0xC, 0x10, 0x59444252u );
+    }
+    for ( std::int32_t i = 0; i < static_cast< std::int32_t >( m.rd( m.user, self + 0xB8 ) ); ++i )
+        bt_serialize_chunk( m, m.rd( m.user, m.rd( m.user, self + 0xC0 ) + 4u * static_cast< std::uint32_t >( i ) ), serializer, 0x20, 0x24, 0x534E4F43u );
+}

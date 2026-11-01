@@ -1993,3 +1993,24 @@ inline bool verify_bt_rows4( )
             return bt_collision_dispatcher_construct( m, self, args[ 0 ] );
         } );
 }
+
+// verify_bt_rows5 (boat batch 19): cases/boat.py bt_rows5 - the
+// serialization rows 0x554620 / 0x554670 / 0x43D680 / 0x5AEAC0 / 0x5AF5F0 /
+// 0x5AF640 / 0x605C90.
+inline bool verify_bt_rows5( )
+{
+    return bt_rows_verify( g_golden_bt_rows5_words, "bt_rows5",
+        "seven Bullet serialization rows 0x554620 / 0x554670 / 0x43D680 / 0x5AEAC0 / 0x5AF5F0 / 0x5AF640 / 0x605C90 (collision/arena.hxx)",
+        []( unsigned kind, const bt_mem_t& m, const bt_io_t&, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            switch ( kind )
+            {
+                case 1: return bt_shape_serialize( m, self, args[ 0 ], args[ 1 ] );
+                case 2: bt_shape_serialize_single( m, self, args[ 0 ] ); return 0;
+                case 3: return bt_convex_internal_serialize( m, self, args[ 0 ], args[ 1 ], false );
+                case 4: return bt_convex_internal_serialize( m, self, args[ 0 ], args[ 1 ], true );
+                case 5: bt_bvh_serialize_single_bvh( m, self, args[ 0 ] ); return 0;
+                case 6: bt_bvh_serialize_single_info_map( m, self, args[ 0 ] ); return 0;
+                default: bt_world_serialize_rigid_bodies( m, self, args[ 0 ] ); return 0;
+            }
+        } );
+}
