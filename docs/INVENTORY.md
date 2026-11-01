@@ -18,10 +18,10 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 1903 | 784570 |
-| callee | 1033 | 207216 |
-| cited | 366 | 123406 |
-| absent | 5336 | 1111068 |
+| verified | 1917 | 787991 |
+| callee | 1027 | 206194 |
+| cited | 376 | 125095 |
+| absent | 5318 | 1106980 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -30,14 +30,14 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 
 | subsystem | functions | verified | callee | cited | absent | verified bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| unattributed | 1845 | 426 | 202 | 88 | 1129 | 254797 of 695394 |
-| physics (Bullet) | 646 | 353 | 88 | 47 | 158 | 119294 of 256657 |
+| unattributed | 1845 | 428 | 201 | 88 | 1128 | 255045 of 695394 |
+| physics (Bullet) | 646 | 360 | 88 | 48 | 150 | 121601 of 256657 |
 | entity / component / script framework | 1094 | 248 | 222 | 41 | 583 | 78702 of 207438 |
-| HUD / UI / fonts | 648 | 101 | 138 | 13 | 396 | 53927 of 184315 |
+| HUD / UI / fonts | 648 | 105 | 134 | 17 | 392 | 54421 of 184315 |
 | game modes / race | 766 | 92 | 59 | 22 | 593 | 48561 of 179957 |
 | rendering / gfx | 552 | 79 | 43 | 33 | 397 | 28659 of 126915 |
 | water | 325 | 170 | 68 | 33 | 54 | 58200 of 96416 |
-| boat | 264 | 163 | 40 | 18 | 43 | 67085 of 87400 |
+| boat | 264 | 164 | 39 | 23 | 38 | 67457 of 87400 |
 | engine core / math / containers | 391 | 34 | 15 | 21 | 321 | 6376 of 76072 |
 | other classes | 731 | 12 | 3 | 3 | 713 | 6660 of 67698 |
 | assets | 286 | 32 | 30 | 6 | 218 | 5446 of 61239 |
@@ -58,8 +58,8 @@ Over-approximate (a referenced vtable brings every slot) and under-approximate (
 
 | tier | functions | verified | callee | cited | absent | runtime / STL / thunk | platform layer | game + engine logic not verified |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| race | 4905 | 1588 | 674 | 324 | 2319 | 68 | 610 | 2733 |
-| game | 2431 | 313 | 357 | 40 | 1721 | 77 | 313 | 1737 |
+| race | 4905 | 1596 | 674 | 325 | 2310 | 68 | 610 | 2725 |
+| game | 2431 | 319 | 351 | 49 | 1712 | 77 | 313 | 1731 |
 | service | 452 | 0 | 0 | 0 | 452 | 45 | 98 | 309 |
 | dead | 850 | 2 | 2 | 2 | 844 | 61 | 126 | 661 |
 
