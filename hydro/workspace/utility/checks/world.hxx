@@ -1,5 +1,7 @@
 #pragma once
 
+#include <workspace/core/world/race.hxx>
+
 // The world area's oracle-backed checks (one file per parallel agent; included by check.hxx after every
 // shared check, so anything above is usable here). verify_world_all runs them all.
 
@@ -902,9 +904,133 @@ inline bool verify_water_grid( )
     return failed == 0;
 }
 
+// THE RACE'S TRACK AS THE RUNNING WORLD BUILDS IT (world/race.hxx +
+// entities.hxx): VuProjectAsset/Games/HydroelectricRace loaded from Base.apf
+// through race_load_tree (the callbacks c_world::load_entity_tree uses, the
+// templates read from the pack), then track_build_from_tree - against retail's
+// VuTrackManagerImpl (oracle case track_build, boat area: the level's "AI"
+// child under a bare root, VuEntity::load + every waypoint's slot 6 + slot 7).
+// The same fields verify_track_build compares (stale lanes / pointers
+// skipped). One failure per waypoint, per sector, for the checkpoint list, for
+// the summary, and for a refused load / build.
+inline int race_track_failures( const track_manager_t& tm )
+{
+    int failed = 0;
+    const auto bits = []( float f ) { std::uint32_t u; std::memcpy( &u, &f, 4 ); return u; };
+    if ( tm.waypoints.size( ) != g_golden_track_waypoint_count || tm.sectors.size( ) != g_golden_track_sector_count )
+    {
+        LOG_ERROR( "race track: %d waypoints / %d sectors, retail %d / %d", static_cast< int >( tm.waypoints.size( ) ),
+            static_cast< int >( tm.sectors.size( ) ), static_cast< int >( g_golden_track_waypoint_count ), static_cast< int >( g_golden_track_sector_count ) );
+        return 1 + static_cast< int >( g_golden_track_waypoint_count + g_golden_track_sector_count );
+    }
+    for ( std::size_t i = 0; i < tm.waypoints.size( ); ++i )
+    {
+        const track_waypoint_t& w = tm.waypoints[ i ];
+        const unsigned* g = g_golden_track_waypoints + 20 * i;
+        bool same = w.entity->m_name == g_golden_track_waypoint_names[ i ];
+        for ( int k = 0; k < 3; ++k )
+            same = same && bits( w.right[ k ] ) == g[ k ] && bits( w.left[ k ] ) == g[ 4 + k ];
+        same = same && bits( w.p.speed_hint ) == g[ 10 ] &&
+               static_cast< std::uint32_t >( w.p.start | ( w.p.checkpoint << 8 ) | ( w.p.finish << 16 ) | ( w.p.allow_recovery << 24 ) ) == g[ 11 ] &&
+               w.p.show_wrong_way == ( g[ 12 ] & 0xFF ) && bits( w.p.width ) == g[ 13 ] && bits( w.p.height ) == g[ 14 ] &&
+               static_cast< std::uint32_t >( w.sector_a ) == g[ 15 ] && static_cast< std::uint32_t >( w.sector_b ) == g[ 16 ] &&
+               bits( w.p.branch_a ) == g[ 17 ] && bits( w.p.branch_b ) == g[ 18 ];
+        if ( !same && ++failed <= 6 )
+            LOG_ERROR( "race track: waypoint %d (%s) differs from retail", static_cast< int >( i ), w.entity->m_name.c_str( ) );
+    }
+    const unsigned* g = g_golden_track_sectors;
+    for ( std::size_t i = 0; i < tm.sectors.size( ); ++i )
+    {
+        const track_sector_t& s = tm.sectors[ i ];
+        const std::uint64_t stale = g[ 60 ] | ( static_cast< std::uint64_t >( g[ 61 ] ) << 32 );
+        bool same = true;
+        for ( int k = 0; k < 60; ++k )
+        {
+            const int at = 4 * k;
+            if ( at == 0x0C || at == 0x1C || at == 0x2C || at == 0x3C || at == 0xD4 || at == 0xD8 || at == 0xE0 || at == 0xE4 || at == 0xEC ||
+                 ( stale >> k & 1 ) )
+                continue;
+            same = same && track_u32( s.image, at ) == g[ k ];
+        }
+        const unsigned nn = g[ 63 ], np = g[ 64 ];
+        same = same && static_cast< std::uint32_t >( s.waypoint ) == g[ 62 ] && s.next.size( ) == nn && s.prev.size( ) == np;
+        for ( unsigned k = 0; same && k < nn; ++k )
+            same = static_cast< std::uint32_t >( s.next[ k ] ) == g[ 65 + k ];
+        for ( unsigned k = 0; same && k < np; ++k )
+            same = static_cast< std::uint32_t >( s.prev[ k ] ) == g[ 65 + nn + k ];
+        if ( !same && ++failed <= 12 )
+            LOG_ERROR( "race track: sector %d differs from retail", static_cast< int >( i ) );
+        g += 65 + nn + np;
+    }
+    bool checkpoints = tm.checkpoints.size( ) == g_golden_track_checkpoint_count;
+    for ( std::size_t k = 0; checkpoints && k < tm.checkpoints.size( ); ++k )
+        checkpoints = static_cast< std::uint32_t >( tm.checkpoints[ k ] ) == static_cast< std::uint32_t >( g_golden_track_checkpoints[ k ] );
+    if ( !checkpoints && ++failed )
+        LOG_ERROR( "race track: the checkpoint list differs from retail" );
+    const bool summary = static_cast< std::uint32_t >( tm.start ) == static_cast< std::uint32_t >( g_golden_track_summary[ 0 ] ) &&
+                         static_cast< std::uint32_t >( tm.end ) == static_cast< std::uint32_t >( g_golden_track_summary[ 1 ] ) &&
+                         bits( tm.length ) == g_golden_track_manager[ 7 ] && static_cast< std::uint32_t >( tm.state ) == g_golden_track_manager[ 12 ];
+    if ( !summary && ++failed )
+        LOG_ERROR( "race track: start / end / length / state differ from retail" );
+    return failed;
+}
+
+// The race project's tree the way c_world loads it (race_load_tree with a
+// template reader equal to c_world::template_document: the parsed
+// VuTemplateAsset document when it is a map). Null when the pack is missing.
+inline std::unique_ptr< entity_t > race_check_tree( c_archive& archive, std::map< std::string, value_t >& templates, const char* asset )
+{
+    const std::string pack = world_check_pack( );
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) )
+        return nullptr;
+    std::vector< std::uint8_t > bytes;
+    if ( !archive.read( asset, bytes ) )
+        return nullptr;
+    const value_t root = c_reader( bytes ).parse( );
+    const value_t* project = find( root, "VuProject" );
+    if ( !project )
+        return nullptr;
+    const auto read = [ &archive, &templates ]( const std::string& name ) -> const value_t*
+    {
+        auto it = templates.find( name );
+        if ( it == templates.end( ) )
+        {
+            std::vector< std::uint8_t > b;
+            value_t parsed{};
+            if ( archive.read( ( "VuTemplateAsset/" + name ).c_str( ), b ) )
+                parsed = c_reader( b ).parse( );
+            it = templates.emplace( name, std::move( parsed ) ).first;
+        }
+        return it->second.tag == 6 ? &it->second : nullptr;
+    };
+    return race_load_tree( archive, asset, *project, read );
+}
+
+inline bool verify_race_track( )
+{
+    c_archive archive;
+    std::map< std::string, value_t > templates;
+    const std::unique_ptr< entity_t > tree = race_check_tree( archive, templates, "VuProjectAsset/Games/HydroelectricRace" );
+    track_manager_t tm;
+    if ( !tree || !track_build_from_tree( *tree, tm ) )
+    {
+        LOG_ERROR( "race track FAILED: HydroelectricRace %s", tree ? "built no track (refused)" : "did not load (Base.apf?)" );
+        return false;
+    }
+    const int failed = race_track_failures( tm );
+    if ( failed == 0 )
+        LOG_SUCCESS( "the running world's track (HydroelectricRace's tree via race_load_tree -> track_build_from_tree) matches retail's "
+                     "VuTrackManagerImpl: %d waypoints, %d sectors, %d checkpoints, bit for bit",
+            static_cast< int >( tm.waypoints.size( ) ), static_cast< int >( tm.sectors.size( ) ), static_cast< int >( tm.checkpoints.size( ) ) );
+    else
+        LOG_ERROR( "race track FAILED: %d items differ from retail", failed );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_race_track( ) && ok;
     ok = verify_water_templates( ) && ok;
     ok = verify_water_frustum( ) && ok;
     ok = verify_water_grid( ) && ok;
