@@ -296,6 +296,9 @@
     <ClInclude Include="workspace\core\entity\registry.hxx">
       <Filter>workspace\core\entity</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\entity\repository.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\entity\rig.hxx">
       <Filter>workspace\core\entity</Filter>
     </ClInclude>

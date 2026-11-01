@@ -387,6 +387,9 @@
     <ClInclude Include="workspace\core\world\models.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\world\modes.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\world\motion.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>

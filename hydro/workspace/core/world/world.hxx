@@ -1097,6 +1097,13 @@ public:
         load_huds( mode == "TimeTrial" ? game_mode_defs( )[ 1 ].huds : k_race_hud_projects );
         m_race.world.hud = [ this ]( int project, race_hud_verb_t verb, float step ) { hud( project, verb, step ); };
         m_race.world.broadcast = [ this ]( const char* name, const ui_params_t* params ) { race_broadcast( name, params ); };
+        vo_ready( );
+        m_race.world.vo = &m_vo;
+        m_race.world.vo_hooks = &m_vo_hooks;
+        m_race.world.string_db = [ this ]( const char* id ) {
+            string_db_ready( );
+            return string_db_get( m_string_db, id ? id : "" );
+        };
         const bool started = race_session_start( m_race, mode, game_data, dbs, m_archive, *m_tree, track( ), m_vurandom,
                                                  [ this ] { project_initialized( ); } );
         if ( !m_project_initialized )
@@ -1294,6 +1301,8 @@ public:
         };
         m_race.world.fire = [ this ]( const entity_t& owner, const char* plug ) { fire( entity_path( owner ), plug ); };
         m_race.world.sound = &m_sound;
+        m_race.world.vo = m_vo_ready ? &m_vo : nullptr;
+        m_race.world.vo_hooks = m_vo_ready ? &m_vo_hooks : nullptr;
         m_race.world.prop_moved = [ this ]( const entity_t& owner ) { prop_moved( owner ); };
         if ( !m_race.active )
             water_frame( dt );
@@ -1789,6 +1798,57 @@ private:
     // Their game environment: the gameutil +0x50 root (load_scene's), no SKU (the asset manager's vt+0x7C: a platform
     // answer, not supplied) and no entity repository (find / word: not wired) - those filters count unrecreated.
     value_t m_game_util;
+    // VuVoiceOverManagerImpl g 0x758FEC (world/voice.hxx): one for the program, loaded once (vo_ready); m_crt_rand the
+    // CRT rand's _holdrand. SUBSTITUTION: rand (MSVCR110 0x64C1F8) is the VC CRT's published LCG (x 214013 + 2531011,
+    // bits 16..30); retail imports no srand, so the seed is the CRT's 1, and the VO shuffle 0x4B8F90 is rand's only
+    // caller in the image (one call site, 0x4B8FC6), so the sequence is the one retail draws.
+    vo_manager_t m_vo;
+    vo_hooks_t m_vo_hooks;
+    std::uint32_t m_crt_rand = 1u;
+    bool m_vo_ready = false;
+    value_t m_vo_db;
+    int m_vo_subtitles = 0, m_vo_ducks = 0;
+    void vo_ready( )
+    {
+        if ( m_vo_ready )
+            return;
+        m_vo_ready = true;
+        m_vo_hooks.rand = [ this ]( ) -> std::int32_t {
+            m_crt_rand = m_crt_rand * 214013u + 2531011u;
+            return static_cast< std::int32_t >( ( m_crt_rand >> 16 ) & 0x7FFFu );
+        };
+        m_vo_hooks.get_event = [ this ]( const std::string& name, std::uint32_t& event ) {
+            return m_sound.get_event ? m_sound.get_event( m_sound.user, name.c_str( ), 1u, &event, nullptr ) : 1;
+        };
+        // setCallback( event, 0x4B8180, the waveform ): the audio platform's hook carries a holder, not the userdata word.
+        m_vo_hooks.set_callback = [ this ]( std::uint32_t event, std::int32_t ) {
+            if ( m_sound.set_callback )
+                m_sound.set_callback( m_sound.user, event, 0x4B8180u, nullptr );
+        };
+        m_vo_hooks.start = [ this ]( std::uint32_t event ) {
+            if ( m_sound.start )
+                m_sound.start( m_sound.user, event );
+        };
+        // The subtitle manager g 0x758FE4 vt+0x1C and the ducking 0x4F94B0 / 0x4F95B0 (the audio platform): hooks, counted.
+        m_vo_hooks.subtitle = [ this ]( const char* text ) {
+            if ( m_vo_subtitles++ == 0 )
+                LOG_WARNING( "voice over: the subtitle manager g 0x758FE4 vt+0x1C('%s') - not recreated (counted)", text );
+        };
+        m_vo_hooks.duck = [ this ]( const std::string&, float, float ) -> std::uint32_t { ++m_vo_ducks; return 0u; };
+        m_vo_hooks.unduck = [ this ]( std::uint32_t ) { ++m_vo_ducks; };
+        m_vo_hooks.viewports = [ this ]( ) { return static_cast< std::int32_t >( m_race.world.viewports ); };
+        m_vo_hooks.boat_ok = [ this ]( const void* boat ) { return race_session_vo_boat_ok( m_race, boat ); };
+        std::vector< std::uint8_t > bytes;
+        if ( !m_archive.read( "VuDBAsset/VoiceOverDB", bytes ) )
+        {
+            LOG_WARNING( "voice over: VuDBAsset/VoiceOverDB not in the pack - the manager stays empty (UNKNOWN)" );
+            return;
+        }
+        m_vo_db = c_reader( bytes ).parse( );
+        vo_load( m_vo, member( m_vo_db, "VuDBAsset" ), m_vo_hooks );
+        LOG_INFO( "voice over: VoiceOverDB loaded (slot 5 0x4B7970) - %u lines, ducking '%s' %.3f", static_cast< unsigned >( m_vo.entries.size( ) ),
+                  m_vo.duck_category.c_str( ), m_vo.duck_volume );
+    }
     // VuStringDBImpl (world/strings.hxx), the HUD's m_string_db; m_string_asset the loaded document.
     string_db_t m_string_db;
     value_t m_string_asset;
