@@ -824,10 +824,10 @@ inline bool verify_slalom_results( ) { return verify_game_results_writer( g_gold
 // slot 15 0x490D70 run whole (oracle case timetrial_split): the same code byte for byte but for the split vector's place
 // (+0x720, VuRaceGame's +0x72C) - compared: +0x6D8 / +0x6DC, every condition's value / pulse (and the record before the
 // vector: the missing-condition write), the split vector after. One failure per differing vector.
-inline bool verify_timetrial_split( )
+inline bool verify_game_split( const unsigned* words, const char* const* texts, const char* label )
 {
     int failed = 0;
-    const unsigned* w = g_golden_tts_words;
+    const unsigned* w = words;
     std::size_t s = 0;
     const auto next = [ & ] { return *w++; };
     const unsigned sentinel = next( );
@@ -836,7 +836,7 @@ inline bool verify_timetrial_split( )
         set.resize( next( ) );
     for ( auto& set : sets )
         for ( std::string& n : set )
-            n = g_golden_tts_text[ s++ ];
+            n = texts[ s++ ];
     std::vector< value_t > docs( next( ) );
     for ( value_t& d : docs )
     {
@@ -903,18 +903,22 @@ inline bool verify_timetrial_split( )
         std::memcpy( &d[ 0 ], &g.m_split_delta, 4 );
         std::memcpy( &d[ 1 ], &g.m_result_delta, 4 );
         const unsigned d0 = next( ), d1 = next( );
-        const std::string want = g_golden_tts_text[ s++ ];
+        const std::string want = texts[ s++ ];
         same = same && d[ 0 ] == d0 && d[ 1 ] == d1 && have == want;
         if ( !same && ++failed <= 6 )
-            LOG_ERROR( "timetrial split vector %u: conditions %s / %s, deltas 0x%08X 0x%08X / 0x%08X 0x%08X", v, have.c_str( ), g_golden_tts_text[ s - 1 ], d[ 0 ],
+            LOG_ERROR( "%s split vector %u: conditions %s / %s, deltas 0x%08X 0x%08X / 0x%08X 0x%08X", label, v, have.c_str( ), texts[ s - 1 ], d[ 0 ],
                        d[ 1 ], d0, d1 );
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "ui_race_checkpoint matches VuTimeTrialGame slot 15 0x490D70 on %u vectors (+0x6D8 / +0x6DC, the conditions, the splits)", nv );
+        LOG_SUCCESS( "ui_race_checkpoint matches %s on %u vectors (+0x6D8 / +0x6DC, the conditions, the splits)", label, nv );
     else
-        LOG_ERROR( "the time trial split FAILED on %d of %u vectors", failed, nv );
+        LOG_ERROR( "the %s split FAILED on %d of %u vectors", label, failed, nv );
     return failed == 0;
 }
+
+// The same against VuSlalomGame slot 15 0x48E500 (case slalom_split: its split vector at +0x750).
+inline bool verify_timetrial_split( ) { return verify_game_split( g_golden_tts_words, g_golden_tts_text, "VuTimeTrialGame slot 15 0x490D70" ); }
+inline bool verify_slalom_split( ) { return verify_game_split( g_golden_sls_words, g_golden_sls_text, "VuSlalomGame slot 15 0x48E500" ); }
 
 // The course system (world/slalom.hxx slalom_course_start / slalom_gates_tick / slalom_recovered) against retail's
 // VuSlalomGame slot 5 0x48C660, the gates tick 0x48E6E0 (0x43FC70 / 0x48E910 / 0x48EA40 / 0x48EBB0) and OnBoatRecovered
@@ -1075,10 +1079,10 @@ inline bool verify_slalom_gates( )
 // timetrial_place: 0..2 game boats, 0..3 grid entries, ConstantDB TimeTrial InitialBoostEnergy as float / int / int64 /
 // string / absent / broken). Compared: whether boat [0]'s transform got setWorldTransform (0x5344A0) and with which
 // world (+0x50 after) and notify (the +0xC0 delegate), and every boat's +0x310 bits - one failure per differing vector.
-inline bool verify_timetrial_place( )
+inline bool verify_game_place( const unsigned* words, const char* const* texts, const char* mode, const char* label )
 {
     int failed = 0;
-    const unsigned* w = g_golden_ttp_words;
+    const unsigned* w = words;
     std::size_t s = 0;
     const auto next = [ & ] { return *w++; };
     const unsigned nv = next( );
@@ -1126,7 +1130,7 @@ inline bool verify_timetrial_place( )
                 boats.push_back( b );
             }
         }
-        const std::string hex = g_golden_ttp_text[ s++ ];
+        const std::string hex = texts[ s++ ];
         std::vector< std::uint8_t > bytes;
         for ( std::size_t k = 0; k + 1 < hex.size( ); k += 2 )
             bytes.push_back( static_cast< std::uint8_t >( std::stoul( hex.substr( k, 2 ), nullptr, 16 ) ) );
@@ -1134,7 +1138,7 @@ inline bool verify_timetrial_place( )
         int changed = 0;
         race_start_hooks_t hooks;
         hooks.transform_changed = [ & ]( int ) { ++changed; };
-        race_place_timetrial( boats, m, cdb, hooks );
+        race_place_timetrial( boats, m, cdb, hooks, mode );
         bool same = changed == ( nc ? want_notify : 0 );
         if ( nc )
             same = same && want_t == 0 && std::memcmp( trans[ 0 ].data( ) + 0x50, want_world, 64 ) == 0;
@@ -1146,14 +1150,18 @@ inline bool verify_timetrial_place( )
         for ( unsigned k = 0; k < 2; ++k )
             same = same && std::memcmp( images[ k ].data( ) + 0x310, &want_boost[ k ], 4 ) == 0;
         if ( !same && ++failed <= 6 )
-            LOG_ERROR( "timetrial place vector %u (boats %u, grid %u, calls %u): differs from retail", v, nb, ng, nc );
+            LOG_ERROR( "%s place vector %u (boats %u, grid %u, calls %u): differs from retail", mode, v, nb, ng, nc );
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "race_place_timetrial matches VuTimeTrialGame slot 13 0x490CA0 on %u vectors (the grid placement, notify, +0x310)", nv );
+        LOG_SUCCESS( "race_place_timetrial matches %s on %u vectors (the grid placement, notify, +0x310)", label, nv );
     else
-        LOG_ERROR( "the time trial placement FAILED on %d of %u vectors", failed, nv );
+        LOG_ERROR( "the %s placement FAILED on %d of %u vectors", mode, failed, nv );
     return failed == 0;
 }
+
+// The same against VuSlalomGame slot 13 0x48E430 (case slalom_place: ConstantDB "Slalom").
+inline bool verify_timetrial_place( ) { return verify_game_place( g_golden_ttp_words, g_golden_ttp_text, "TimeTrial", "VuTimeTrialGame slot 13 0x490CA0" ); }
+inline bool verify_slalom_place( ) { return verify_game_place( g_golden_slp_words, g_golden_slp_text, "Slalom", "VuSlalomGame slot 13 0x48E430" ); }
 
 // race_rules_cheat_finish (world/rules.hxx) against retail's OnCheatFinish 0x483190 -> 0x4848C0 (oracle case
 // cheat_finish): 300 human lists of 0..4 boats - the six words of each boat after, and the AI manager's vt+0x30 calls.
@@ -1426,7 +1434,9 @@ inline bool verify_session_all( )
     ok = verify_timetrial_results( ) && ok;
     ok = verify_slalom_results( ) && ok;
     ok = verify_timetrial_split( ) && ok;
+    ok = verify_slalom_split( ) && ok;
     ok = verify_timetrial_place( ) && ok;
+    ok = verify_slalom_place( ) && ok;
     ok = verify_breakable_properties( ) && ok;
     ok = verify_slalom_gate_properties( ) && ok;
     ok = verify_slalom_gates( ) && ok;
