@@ -151,10 +151,10 @@ inline bool boat_jump( std::uint8_t* boat, std::uint8_t* body, const std::uint8_
     return true;   // HOOK: 0x41E100, the jump sound
 }
 // What 0x41F740 hands its two outside callees: VuWater's surface lookup
-// 0x5296C0 (on g 0x759058; the WATER side, not recreated - its answer is an
-// INPUT here, UNKNOWN until the water agent recreates it) gets the probe
-// point and a callback {vtable 0x738424, point x, y, direction x, y} whose
-// +0x14 it fills; g 0x758FEC's vt+0x1C(boat, "Drafting") is a platform
+// 0x5296C0 (on g 0x759058; the water agent's water_best_wake, world/
+// tree.hxx - reached through a lookup callback) gets the probe point and a
+// callback {vtable 0x738424, point x, y, direction x, y} whose +0x14 (0
+// first) it raises; g 0x758FEC's vt+0x1C(boat, "Drafting") is a platform
 // service call (HOOK).
 struct boat_probe_io_t
 {
@@ -172,8 +172,23 @@ struct boat_probe_io_t
 // over boat +0x470 x (engine +0xC x engine +4) x 0.44704 x 0.5, the timer
 // +0x480 += dt, the event firing when it crosses 4.0 (0x6F7754); every
 // other way out zeroes the timer.
+// `lookup` answers VuWater 0x5296C0 for what io holds when it is asked (the
+// finder's +0x14 starts at 0 - retail's [ebp-8]); water_best_wake (world/
+// tree.hxx) is that lookup.
+using boat_wake_lookup_fn = float ( * )( void* user, const boat_probe_io_t& io );
+
+inline void boat_nose_probe_with( std::uint8_t* boat, const std::uint8_t* body, const std::uint8_t* solver, const std::uint8_t* world,
+    const std::uint8_t* engine, float dt, boat_wake_lookup_fn lookup, void* user, boat_probe_io_t& io );
+
 inline void boat_nose_probe( std::uint8_t* boat, const std::uint8_t* body, const std::uint8_t* solver, const std::uint8_t* world,
     const std::uint8_t* engine, float dt, float water_answer, boat_probe_io_t& io )
+{
+    boat_nose_probe_with( boat, body, solver, world, engine, dt,
+        []( void* u, const boat_probe_io_t& ) { return *static_cast< const float* >( u ); }, &water_answer, io );
+}
+
+inline void boat_nose_probe_with( std::uint8_t* boat, const std::uint8_t* body, const std::uint8_t* solver, const std::uint8_t* world,
+    const std::uint8_t* engine, float dt, boat_wake_lookup_fn lookup, void* user, boat_probe_io_t& io )
 {
     state_put_f( boat, 0x30C, 0.0f );
     const float vx = state_f( body, 0x140 ), vy = state_f( body, 0x144 );
@@ -196,7 +211,7 @@ inline void boat_nose_probe( std::uint8_t* boat, const std::uint8_t* body, const
         std::memcpy( &io.callback[ 2 ], &py, 4 );
         std::memcpy( &io.callback[ 3 ], &dx, 4 );
         std::memcpy( &io.callback[ 4 ], &dy, 4 );
-        state_put_f( boat, 0x30C, water_answer );   // UNKNOWN: VuWater 0x5296C0's answer
+        state_put_f( boat, 0x30C, lookup( user, io ) );   // VuWater 0x5296C0's answer
     }
     if ( state_f( boat, 0x30C ) > 0.2f )
     {
@@ -649,4 +664,206 @@ inline void boat_hull_tick( std::uint8_t* hull, const boat_strings_t& names, std
     state_put_f( hull, 0x170, maxss( 0.0f, state_f( hull, 0x170 ) - dt ) );
     if ( hooks.wake )
         hooks.wake( hooks.user );   // HOOK: 0x417D80
+}
+
+// Everything the Decision tick 0x41EFF0 reaches, by the boat's pointers:
+// +0x21C body (its image; `proxy` = the broadphase proxy at body +0xC8, null
+// when none), +0x220 driver (its classes' predicates; `human` = IS-A
+// VuHumanDriver), +0x224 camera, +0x228 hull (its +0x1CC the solver), +0x22C
+// engine (its +0xF8 records), +0x230 animation, +0x238 the debris object
+// (+0 the boat, +0x90 .. +0xCC), +0x50 the transform component. `floor` =
+// g 0x759058's first surface's +0xD8 ([[[water +0x20]] +8]) when water +0x24
+// is nonzero, else null.
+struct boat_decision_t
+{
+    std::uint8_t* boat;
+    std::uint8_t* body;
+    std::uint8_t* proxy;
+    std::uint8_t* driver;
+    boat_driver_t slots;
+    bool human;
+    std::uint8_t* camera;
+    std::uint8_t* hull;
+    const boat_strings_t* hull_names;
+    std::uint8_t* engine;
+    const boat_strings_t* engine_names;
+    const std::uint8_t* records;
+    std::uint8_t* animation;
+    std::uint8_t* debris;
+    std::uint8_t* transform;
+    const std::uint8_t* solver;
+    std::uint32_t local_players;   // g 0x759060 +4
+    const float* floor;
+};
+
+// The Decision tick's callees that are NOT recreated here, each a hook: the
+// driver's tick (vt+0x48: 0x40F270 human, 0x40B940 AI, 0x40E5C0 UI, 0x40DA90
+// nuisance, 0x40EBA0 ghost), the animation tick 0x40FFF0, VuBoatCamera_tick
+// 0x409900, the respawn 0x41D790, the boat's slots 17 / 18 (0x421980 /
+// 0x421940: boat_enable / boat_disable, entity.hxx - the caller wires them),
+// 0x410FF0 and 0x41E240 (0x41E010's tail), the debris pieces' paths (0x5344A0
+// / 0x50E660 on piece k, and 0x411950's per-piece removal: the dynamics world
+// vt+0x40 / +0x30, g 0x75904C vt+0x2C) and the jump sound 0x41E100; plus the
+// sub-ticks' own hooks and the wake lookup (water_best_wake).
+struct boat_decision_hooks_t
+{
+    void* user = nullptr;
+    boat_wake_lookup_fn wake_lookup = nullptr;
+    void ( *jump_sound )( void* user ) = nullptr;
+    void ( *driver_tick )( void* user, float dt ) = nullptr;
+    void ( *animation_tick )( void* user, float dt ) = nullptr;
+    void ( *camera_tick )( void* user, float dt ) = nullptr;
+    void ( *respawn )( void* user ) = nullptr;
+    void ( *enable )( void* user ) = nullptr;
+    void ( *disable )( void* user ) = nullptr;
+    void ( *debris_410FF0 )( void* user ) = nullptr;
+    void ( *boat_41E240 )( void* user ) = nullptr;
+    void ( *piece_follow )( void* user ) = nullptr;
+    void ( *piece_remove )( void* user, int piece ) = nullptr;
+    boat_boost_hooks_t boost;
+    boat_hull_tick_hooks_t hull;
+};
+
+// 0x411950 (thiscall, the debris object): while +0x94 is set it is cleared,
+// +0xC8 = 0, and each piece (+0x9C / +0xA0) is taken out (a hook).
+inline void boat_debris_reset( std::uint8_t* debris, const boat_decision_hooks_t& hooks )
+{
+    if ( debris[ 0x94 ] == 0 )
+        return;
+    debris[ 0x94 ] = 0;
+    image_put32( debris, 0xC8, 0 );
+    std::int32_t count;
+    std::memcpy( &count, debris + 0xA0, 4 );
+    for ( std::int32_t k = 0; k < count; ++k )
+        if ( hooks.piece_remove )
+            hooks.piece_remove( hooks.user, k );
+}
+
+inline solver_rigid_t boat_decision_body( const std::uint8_t* body )
+{
+    solver_rigid_t b{ };
+    std::memcpy( &b, body, sizeof( b ) < 0x2D4 ? sizeof( b ) : 0x2D4 );
+    return b;
+}
+
+// VuBoatEntity vtable slot 13 0x41EFF0 (thiscall, the boat; dt on the stack;
+// retn 4), the Decision tick. In the water (the solver's +0x54 > 0) the
+// water time +0x33C grows and the air time +0x338 is 0; out of it the air
+// time grows, +0x33C = 0 and +0x340 keeps the longest; +0x32F counts +0x330.
+// Then 0x41F740, 0x41F9D0, 0x41FDA0, 0x41FF70, 0x420010, the driver's tick,
+// 0x416630, 0x413830, 0x40FFF0. Destroyed (+0x46B): the pieces follow, the
+// +0x46C clock and past 10 s (0x6F778C; not while +0x32F) +0x46B clears,
+// the respawn and slot 17; else a hit (+0x468 with the driver's slot 14, or
+// +0x469) with no flash (+0x464) runs 0x41E010. +0x468 / +0x469 = 0; the
+// debris +0xC8 runs down at 1 / +0x90 per second and +0x98's timer, once
+// ordered <= 0 (not while +0x32F), resets it (0x411950). The camera's tick;
+// +0x3D4 clears when 0x41D570 > 0; the respawn when +0x306 is set with
+// +0x308 0 and no flash, and when the boat (transform +0x88) is below the
+// first water surface's +0xD8.
+inline void boat_decision_tick( boat_decision_t& d, float dt, const boat_decision_hooks_t& hooks )
+{
+    auto gt = []( float a, float b ) { return _mm_comigt_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) != 0; };   // ordered a > b
+    auto ge = []( float a, float b ) { return _mm_comige_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) != 0; };   // ordered a >= b
+    auto maxss = []( float a, float b ) { return _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); };
+    std::uint8_t* boat = d.boat;
+    if ( gt( state_f( d.solver, 0x54 ), 0.0f ) )
+    {
+        const float wet = dt + state_f( boat, 0x33C );
+        image_put32( boat, 0x338, 0 );
+        state_put_f( boat, 0x33C, wet );
+    }
+    else
+    {
+        const float air = state_f( boat, 0x338 ) + dt;
+        image_put32( boat, 0x33C, 0 );
+        state_put_f( boat, 0x338, air );
+        state_put_f( boat, 0x340, maxss( state_f( boat, 0x340 ), air ) );
+    }
+    if ( boat[ 0x32F ] )
+        state_put_f( boat, 0x330, dt + state_f( boat, 0x330 ) );
+    boat_probe_io_t io;
+    boat_nose_probe_with( boat, d.body, d.solver, d.transform + 0x50, d.engine, dt, hooks.wake_lookup, hooks.user, io );
+    if ( io.event && hooks.boost.stats )
+        hooks.boost.stats( hooks.boost.user, "Drafting" );
+    boat_boost( boat, d.animation, d.slots.slot[ 0 ], d.slots.slot[ 2 ], d.local_players, dt, hooks.boost );
+    if ( boat_jump( boat, d.body, d.solver, dt ) && hooks.jump_sound )
+        hooks.jump_sound( hooks.user );
+    boat_flash_timer( boat, d.body, d.proxy, dt );
+    boat_beached_test( boat, d.body );
+    if ( hooks.driver_tick )
+        hooks.driver_tick( hooks.user, dt );
+    {
+        solver_rigid_t b = boat_decision_body( d.body );
+        boat_hull_tick( d.hull, *d.hull_names, boat, b, d.transform, d.solver, d.engine, d.driver, d.human, d.camera, dt, hooks.hull );
+        boat_engine_audio( d.engine, *d.engine_names, boat, b, d.transform, d.solver, d.records, dt, hooks.hull.fmod );
+    }
+    if ( hooks.animation_tick )
+        hooks.animation_tick( hooks.user, dt );
+    std::uint8_t* debris = d.debris;
+    if ( boat[ 0x46B ] )
+    {
+        std::int32_t pieces;
+        std::memcpy( &pieces, debris + 0xA0, 4 );
+        if ( pieces > 0 && hooks.piece_follow )
+            hooks.piece_follow( hooks.user );   // NOT recreated: 0x5344A0, the velocities, 0x50E660
+        const float clock = state_f( boat, 0x46C ) + dt;
+        state_put_f( boat, 0x46C, clock );
+        if ( gt( clock, 10.0f ) && boat[ 0x32F ] == 0 && boat[ 0x46B ] )
+        {
+            boat[ 0x46B ] = 0;
+            if ( hooks.respawn )
+                hooks.respawn( hooks.user );
+            if ( hooks.enable )
+                hooks.enable( hooks.user );
+        }
+    }
+    else if ( ( ( boat[ 0x468 ] && d.slots.slot[ 2 ] ) || boat[ 0x469 ] ) && boat[ 0x464 ] == 0 )
+    {
+        // 0x41E010 (thiscall, the boat).
+        if ( boat[ 0x46B ] == 0 && debris[ 0xCC ] )
+        {
+            boat[ 0x46A ] = 1;
+            boat[ 0x46B ] = 1;
+            image_put32( boat, 0x46C, 0 );
+            if ( hooks.disable )
+                hooks.disable( hooks.user );
+            if ( hooks.debris_410FF0 )
+                hooks.debris_410FF0( hooks.user );
+            if ( hooks.boat_41E240 )
+                hooks.boat_41E240( hooks.user );
+        }
+    }
+    boat[ 0x468 ] = 0;
+    boat[ 0x469 ] = 0;
+    state_put_f( debris, 0xC8, maxss( state_f( debris, 0xC8 ) - dt / state_f( debris, 0x90 ), 0.0f ) );
+    if ( debris[ 0x94 ] )
+    {
+        const float t = state_f( debris, 0x98 ) - dt;
+        state_put_f( debris, 0x98, t );
+        if ( ge( 0.0f, t ) && boat[ 0x32F ] == 0 )
+        {
+            image_put32( debris, 0x98, 0 );
+            boat_debris_reset( debris, hooks );
+        }
+    }
+    if ( hooks.camera_tick )
+        hooks.camera_tick( hooks.user, dt );
+    if ( boat[ 0x3D4 ] )
+    {
+        solver_rigid_t b = boat_decision_body( d.body );
+        std::uint32_t i308;
+        std::memcpy( &i308, boat + 0x308, 4 );
+        boat_view_t view{ state_f( boat, 0x2FC ), i308, boat[ 0x32C ], boat[ 0x32F ], { }, state_f( d.engine, 4 ), state_f( d.engine, 0xC ),
+                          state_f( boat, 0x470 ), b };
+        for ( int k = 0; k < 3; ++k )
+            view.o50_60[ k ] = state_f( d.transform, 0x60 + 4 * k );
+        if ( gt( boat_41D570( view ), 0.0f ) )
+            boat[ 0x3D4 ] = 0;
+    }
+    std::uint32_t w308;
+    std::memcpy( &w308, boat + 0x308, 4 );
+    if ( boat[ 0x306 ] && w308 == 0 && boat[ 0x464 ] == 0 && hooks.respawn )
+        hooks.respawn( hooks.user );
+    if ( d.floor && gt( *d.floor, state_f( d.transform, 0x88 ) ) && hooks.respawn )
+        hooks.respawn( hooks.user );
 }
