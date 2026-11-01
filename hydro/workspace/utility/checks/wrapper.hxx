@@ -13,7 +13,10 @@
 #include <workspace/core/world/collide.hxx>
 #include <workspace/core/world/dynamics.hxx>
 
+#include <algorithm>
 #include <deque>
+#include <map>
+#include <string>
 #include <vector>
 
 struct dyw_log_t
@@ -768,6 +771,120 @@ inline bool verify_dynamics_sync( )
         LOG_SUCCESS( "vu_dynamics_sync matches VuDynamicsImpl slot 25 0x4F8900 on %u vectors (+0xD cleared whatever the wait answers)", n );
     else
         LOG_ERROR( "dynamics_sync FAILED %d", bad );
+    return bad == 0;
+}
+// VuDynamicsImpl's create 0x4F7CB0 (engine dynamics/wrapper.hxx vu_dynamics_impl_create) against retail (case
+// dynamics_create): the events in order (each new's size, the dev pages' names and rects, the tick's delegate and phase, the
+// two events), eax, g 0x75900C, every allocated block byte for byte (unwritten bytes = the 0xA5 fill on both sides); plus
+// vu_dynamics_wrapper_construct's fields against the same image.
+inline bool verify_dynamics_create( )
+{
+    const unsigned* s = g_golden_dyc_words;
+    const unsigned n = *s++;
+    int bad = 0;
+    for ( unsigned i = 0; i < n; ++i )
+    {
+        struct log_t
+        {
+            std::vector< unsigned > events;
+            std::map< std::uint32_t, std::uint8_t > mem;
+            std::vector< std::uint32_t > answers;   // the new's addresses, retail's (0 = the failed call)
+            std::vector< unsigned > handles;
+        } L;
+        vu_dynamics_create_hooks_t h;
+        h.user = &L;
+        h.dev = s[ 0 ] != 0u;
+        L.handles = { s[ 2 ], s[ 3 ] };
+        const unsigned ne = s[ 4 ];
+        s += 5;
+        std::vector< unsigned > want;
+        for ( unsigned e = 0; e < ne; ++e )
+        {
+            const unsigned k = *s;
+            const unsigned len = k == 1u ? 3u : k == 2u ? 6u : k == 3u ? 3u : 2u;
+            if ( k == 1u )
+                L.answers.push_back( s[ 2 ] );
+            want.insert( want.end( ), s, s + len );
+            s += len;
+        }
+        std::reverse( L.answers.begin( ), L.answers.end( ) );
+        h.allocate = []( void* u, std::uint32_t size ) -> std::uint32_t {
+            log_t& l = *static_cast< log_t* >( u );
+            const std::uint32_t a = l.answers.empty( ) ? 0u : l.answers.back( );
+            if ( !l.answers.empty( ) )
+                l.answers.pop_back( );
+            l.events.insert( l.events.end( ), { 1u, size, a } );
+            for ( std::uint32_t b = 0; a && b < ( ( size + 15u ) & ~15u ); ++b )
+                l.mem[ a + b ] = 0xA5u;
+            return a;
+        };
+        h.write = []( void* u, std::uint32_t at, const void* bytes, std::uint32_t size ) {
+            log_t& l = *static_cast< log_t* >( u );
+            for ( std::uint32_t b = 0; b < size; ++b )
+                l.mem[ at + b ] = static_cast< const std::uint8_t* >( bytes )[ b ];
+        };
+        h.dev_page = []( void* u, const char* name, const float rect[ 4 ] ) {
+            log_t& l = *static_cast< log_t* >( u );
+            const std::string nm = name;
+            l.events.push_back( 2u );
+            l.events.push_back( nm == "DynamicsInfo" ? 1u : nm == "DynamicsProfile" ? 2u : 0u );
+            for ( int k = 0; k < 4; ++k )
+            {
+                unsigned v;
+                std::memcpy( &v, &rect[ k ], 4 );
+                l.events.push_back( v );
+            }
+        };
+        h.register_tick = []( void* u, std::uint32_t delegate, const char* phase ) {
+            log_t& l = *static_cast< log_t* >( u );
+            l.events.insert( l.events.end( ), { 3u, delegate, std::string( phase ) == "Final" ? 3u : 0u } );
+        };
+        h.create_event = []( void* u ) -> std::uint32_t {
+            log_t& l = *static_cast< log_t* >( u );
+            const unsigned v = l.handles.empty( ) ? 0u : l.handles.front( );
+            if ( !l.handles.empty( ) )
+                l.handles.erase( l.handles.begin( ) );
+            l.events.insert( l.events.end( ), { 4u, v } );
+            return v;
+        };
+        std::uint32_t global = 0xDEADBEEFu;
+        const std::uint32_t eax = vu_dynamics_impl_create( global, h );
+        bad += L.events != want;
+        bad += ( eax != s[ 0 ] ) + ( global != s[ 1 ] );
+        const unsigned nb = s[ 2 ];
+        s += 3;
+        for ( unsigned b = 0; b < nb; ++b )
+        {
+            const std::uint32_t at = s[ 0 ];
+            const unsigned nw = s[ 1 ];
+            for ( unsigned k = 0; k < nw * 4u; ++k )
+            {
+                const auto it = L.mem.find( at + k );
+                const unsigned have = it == L.mem.end( ) ? 0x100u : it->second;
+                bad += have != ( ( s[ 2 + k / 4 ] >> ( 8 * ( k % 4 ) ) ) & 0xFFu );
+            }
+            if ( b == 0 && nw == 0x17u )
+            {
+                // the struct model: thread +8, bytes +0xC / +0xD / +0xE, dt +0x10, go +0x18, done +0x1C, the objects +0x20 .. +0x3C
+                vu_dynamics_wrapper_t w;
+                vu_dynamics_wrapper_construct( w, s[ 2 + 6 ], s[ 2 + 7 ] );
+                const unsigned* im = s + 2;
+                bool objs = true;
+                for ( int o = 0; o < 8; ++o )
+                    objs = objs && ( w.objects[ o ] == ( im[ 8 + o ] != 0u ) );
+                float dt;
+                std::memcpy( &dt, &im[ 4 ], 4 );
+                bad += ( w.thread != im[ 2 ] ) + ( w.async != ( im[ 3 ] & 0xFFu ) ) + ( w.base.pending != ( ( im[ 3 ] >> 8 ) & 0xFFu ) ) +
+                       ( w.quit != ( ( im[ 3 ] >> 16 ) & 0xFFu ) ) + ( w.dt != dt ) + ( w.go != im[ 6 ] ) + ( w.base.thread != im[ 7 ] ) + !objs;
+            }
+            s += 2 + nw;
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "vu_dynamics_impl_create matches VuDynamicsImpl's create 0x4F7CB0 (0x4F7D30, ctor 0x4F7D90, 0x4031B0) on %u vectors "
+                     "(events, eax, g 0x75900C, every block byte)", n );
+    else
+        LOG_ERROR( "dynamics_create FAILED %d", bad );
     return bad == 0;
 }
 // VuCollisionManager's ctor 0x4ACDF0 / init 0x4AD110 (world/collide.hxx collision_manager_construct / _init, the loads 0x4AD690)

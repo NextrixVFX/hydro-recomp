@@ -306,6 +306,125 @@ inline void vu_dynamics_release( vu_dynamics_wrapper_t& w )
 }
 
 // ---------------------------------------------------------------------------
+// VuDynamicsImpl's create 0x4F7CB0 on retail's memory (a 32-bit image the
+// hooks write), verified (hydro checks/wrapper.hxx, case dynamics_create):
+// operator new( 0x5C ) - a null answer stores g_vudynamicsimpl 0x75900C = 0 and
+// returns 0 -, then 0x4F7D30 (thiscall; one unread stack word; retn 4: +8 and
+// +0x18 .. +0x40, +0x48 = 0) and 0x4F7D90 (the ctor proper: vtables +0 0x74C044
+// and the substep interface +4 0x74C0BC (0x738070 first), +8 0, word +0xC 0,
+// byte +0xE 0, +0x10 0, +0x20 .. +0x2C 0, +0x34 0, the body listeners +0x40 /
+// +0x44 and the step callbacks +0x48 / +0x4C = a std::list sentinel each
+// (0x4031B0( 0, 0 ): operator new( 0xC ), +0 / +4 self-linked, +8 unwritten -
+// a null answer is _Xbad_alloc 0x64C0AC, a throw: the create stops here), byte
+// +0x58 0; with the dev system g 0x759020 set: its vt+0x18 "DynamicsInfo" { 50,
+// 10, 40, 80 }, "DynamicsProfile" { 5, 5, 90, 90 } (VuRect floats), then the
+// tick manager g 0x759008 vt+0x20( a 0x10-byte VuMethod delegate { 0x74BFAC,
+// this, 0x4F8AF0 (the dev stats page), 0 } - 0 when its new failed -, "Final" );
+// then the thread system g 0x759098 vt+0x30 twice: "go" +0x18, "done" +0x1C);
+// g_vudynamicsimpl = the object, returned. NEVER written: +0x14, +0x50, +0x54,
+// +0x59 .. +0x5B (init slot 5 0x4F8050 sets +0xC / +0x50 / +0x54 later).
+// The dev system, the tick manager and the thread system are hooks (dev /
+// platform); the dev page 0x4F8AF0 itself is DEV, not recreated.
+struct vu_dynamics_create_hooks_t
+{
+    void* user = nullptr;
+    std::uint32_t ( *allocate )( void* user, std::uint32_t size ) = nullptr;   // operator new 0x64C154 (0 = failed)
+    void ( *write )( void* user, std::uint32_t address, const void* bytes, std::uint32_t size ) = nullptr;
+    void ( *bad_alloc )( void* user ) = nullptr;                                 // 0x64C0AC _Xbad_alloc (throws)
+    bool dev = false;                                                            // g 0x759020 non-null
+    void ( *dev_page )( void* user, const char* name, const float rect[ 4 ] ) = nullptr;   // g 0x759020 vt+0x18
+    void ( *register_tick )( void* user, std::uint32_t delegate, const char* phase ) = nullptr;   // g 0x759008 vt+0x20
+    std::uint32_t ( *create_event )( void* user ) = nullptr;                     // g 0x759098 vt+0x30
+};
+
+inline std::uint32_t vu_dynamics_impl_create( std::uint32_t& global, const vu_dynamics_create_hooks_t& h )
+{
+    const auto w32 = [ & ]( std::uint32_t at, std::uint32_t v ) { h.write( h.user, at, &v, 4 ); };
+    const auto w16 = [ & ]( std::uint32_t at, std::uint16_t v ) { h.write( h.user, at, &v, 2 ); };
+    const auto w8 = [ & ]( std::uint32_t at, std::uint8_t v ) { h.write( h.user, at, &v, 1 ); };
+    const std::uint32_t self = h.allocate( h.user, 0x5C );
+    if ( self == 0u )
+    {
+        global = 0u;
+        return 0u;
+    }
+    // 0x4F7D30
+    w32( self + 8, 0u );
+    for ( std::uint32_t o = 0x18; o <= 0x40; o += 4 )
+        w32( self + o, 0u );
+    w32( self + 0x48, 0u );
+    // 0x4F7D90
+    w32( self + 4, 0x738070u );
+    w32( self + 0, 0x74C044u );
+    w32( self + 4, 0x74C0BCu );
+    w32( self + 8, 0u );
+    w16( self + 0xC, 0u );
+    w8( self + 0xE, 0u );
+    w32( self + 0x10, 0u );
+    for ( std::uint32_t o = 0x20; o <= 0x2C; o += 4 )
+        w32( self + o, 0u );
+    w32( self + 0x34, 0u );
+    for ( std::uint32_t o : { 0x40u, 0x48u } )
+    {
+        w32( self + o, 0u );
+        w32( self + o + 4, 0u );
+        const std::uint32_t node = h.allocate( h.user, 0xC );
+        if ( node == 0u )
+        {
+            if ( h.bad_alloc )
+                h.bad_alloc( h.user );
+            return 0u;
+        }
+        w32( node + 0, node );
+        w32( node + 4, node );
+        w32( self + o, node );
+    }
+    w8( self + 0x58, 0u );
+    if ( h.dev )
+    {
+        static const float info[ 4 ] = { 50.0f, 10.0f, 40.0f, 80.0f };
+        static const float profile[ 4 ] = { 5.0f, 5.0f, 90.0f, 90.0f };
+        if ( h.dev_page )
+        {
+            h.dev_page( h.user, "DynamicsInfo", info );
+            h.dev_page( h.user, "DynamicsProfile", profile );
+        }
+        const std::uint32_t delegate = h.allocate( h.user, 0x10 );
+        if ( delegate != 0u )
+        {
+            w32( delegate + 0, 0x74BFACu );
+            w32( delegate + 4, self );
+            w32( delegate + 8, 0x4F8AF0u );
+            w32( delegate + 0xC, 0u );
+        }
+        if ( h.register_tick )
+            h.register_tick( h.user, delegate, "Final" );
+    }
+    w32( self + 0x18, h.create_event ? h.create_event( h.user ) : 0u );
+    w32( self + 0x1C, h.create_event ? h.create_event( h.user ) : 0u );
+    global = self;
+    return self;
+}
+
+// The same construction on the struct model: what 0x4F7D30 / 0x4F7D90 leave in
+// the fields vu_dynamics_wrapper_t carries (interval, max_sub_steps and
+// fixed_time_step untouched - never written there).
+inline void vu_dynamics_wrapper_construct( vu_dynamics_wrapper_t& w, std::uint32_t go, std::uint32_t done )
+{
+    w.thread = 0u;
+    w.async = 0u;
+    w.base.pending = 0u;
+    w.quit = 0u;
+    w.dt = 0.0f;
+    w.go = go;
+    w.base.thread = done;
+    for ( bool& o : w.objects )
+        o = false;
+    w.base.listeners.clear( );
+    w.base.step_callbacks.clear( );
+}
+
+// ---------------------------------------------------------------------------
 // btRigidBody::checkCollideWithOverride 0x50E7B0 (VuRigidBody's slot 0;
 // thiscall body; other; retn 4 -> al) - the dispatcher's needsCollision hook
 // (collision/dispatch.hxx answers -1 for it): true unless the other is a rigid
