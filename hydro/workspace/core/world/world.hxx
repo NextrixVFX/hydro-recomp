@@ -1447,8 +1447,9 @@ public:
         if ( c_engine::option( "no-pfx" ) == nullptr )
         {
             m_pfx.frame( dt, m_eye );
+            race_session_pfx_draw( m_race, m_race_pfx_draw );
             m_pfx.draw( m_eye, m_target, [ this ]( const std::string& path ) { return texture_for( path ); },
-                [ this ]( const std::string& path ) -> const std::vector< pfx_part_t >& { return pfx_parts( path ); } );
+                [ this ]( const std::string& path ) -> const std::vector< pfx_part_t >& { return pfx_parts( path ); }, &m_race_pfx_draw );
         }
         else
             c_engine::drop( 11 );
@@ -1484,6 +1485,7 @@ private:
     c_archive m_archive{};
     // The world's VuPfx (world/effects.hxx: the verified runtime; the old c_pfx simulation is gone).
     c_effects m_pfx{};
+    std::vector< std::uint32_t > m_race_pfx_draw;   // this frame's boat systems (race_session_pfx_draw)
     fleet_random_t m_vurandom{};   // VuRandom 0x736810 (seed_random)
     c_corona_entity m_coronas{};
     std::map< std::string, std::vector< cached_part_t > > m_models;

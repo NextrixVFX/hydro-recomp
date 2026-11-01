@@ -85,6 +85,13 @@ struct race_session_boat_t
     bool pfx_filled = false;
     int pfx_unknown_bones = 0;   // findNodeByName calls answered UNKNOWN (no skeleton here)
     std::uint8_t* pfx_fluids = nullptr;   // the controller's +0x34 VuFluidsObject image
+    // What the VuPfx processes bound to this boat read (pfx_frame_t's entries; world/drive.hxx race_drive_pfx_frame): the
+    // controller's fluids object as the solver 0x4CE760 prepares (its mesh from the load's handle) and the boat's views.
+    fluids_mesh_t pfx_mesh{ };
+    fluid_solver_t pfx_solver{ };
+    solver_rigid_t pfx_body{ };
+    std::unique_ptr< boat_view_t > pfx_view;
+    pfx_hull_boat_t pfx_hull{ };
     bool sections = false;    // 0x420A70 ran to its end
     std::string stop;         // where it stopped (UNKNOWN), when it did
     std::string name, boat, skin;
@@ -184,6 +191,9 @@ struct race_session_t
     race_start_game_t start;
     race_boat_manager_t manager;
     std::vector< std::unique_ptr< race_session_boat_t > > boats;
+    // pfx_frame_t's boats / fluids (the words the boat processes hold -> their readers): one entry per boat, kept current by Build step 5.
+    std::vector< pfx_frame_boat_t > pfx_boats;
+    std::vector< pfx_frame_fluids_t > pfx_fluids;
     std::vector< race_start_boat_t > start_boats;
     tick_manager_t ticks;
     // VuEventManager g 0x759028 and the handlers the session's objects registered (world/bus.hxx).
@@ -2227,6 +2237,19 @@ inline void race_session_end( race_session_t& s )
 {
     if ( !s.active )
         return;
+    if ( s.world.pfx )   // the pfx frame's boats die with the session (world/drive.hxx race_drive_pfx_frame)
+    {
+        pfx_frame_t& pf = s.world.pfx->frame;
+        pf.boats = nullptr;
+        pf.boat_count = 0;
+        pf.fluids = nullptr;
+        pf.fluids_count = 0;
+        pf.user = nullptr;
+        pf.prepare = nullptr;
+        pf.point = nullptr;
+        pf.snap = nullptr;
+        pf.water = true;
+    }
     std::vector< std::uint32_t > flags( s.rules_boats.size( ), 4u );   // every game boat was gameInitialize'd (+0x14 bit 2)
     vugame_release_hooks_t h;
     h.exit = [ &s ]( int machine ) {
@@ -3205,6 +3228,21 @@ inline int race_boat_draw_instance( const std::uint8_t* boat, const std::uint8_t
     if ( _mm_comigt_ss( _mm_set_ss( d ), _mm_set_ss( lod1 * lod1 ) ) )
         return 1;
     return 0;
+}
+
+// 0x41EAE0's tail: the controller's draw 0x419CE0 on the normal pass, reached unless (+0x464 && +0x465) (its +0x46B branch
+// lands on it too). What it draws, boat by boat in the race's order.
+inline void race_session_pfx_draw( const race_session_t& s, std::vector< std::uint32_t >& out )
+{
+    out.clear( );
+    if ( !s.active )
+        return;
+    for ( const auto& b : s.boats )
+    {
+        const std::uint8_t* boat = b->graph.objects[ 0 ].image.data( );
+        if ( !boat[ 0x464 ] || !boat[ 0x465 ] )
+            boat_pfx_draw_systems( b->pfx, boat[ 0x46B ], false, out );
+    }
 }
 
 inline void race_boat_draw_matrix( const std::uint8_t* boat, const std::uint8_t* transform, float* out )

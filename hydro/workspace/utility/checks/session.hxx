@@ -1520,10 +1520,54 @@ inline bool verify_slalom_gate_draw( )
     return failed == 0;
 }
 
+// The boat pfx controller's draw 0x419CE0 (boat effects.hxx boat_pfx_draw_systems) against retail (case boat_pfx_draw):
+// hand-built controllers, the systems whose slot 14 it called, in order.
+inline bool verify_boat_pfx_draw( )
+{
+    const unsigned* p = g_golden_bpd_words;
+    const unsigned nv = *p++;
+    int failed = 0, calls = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        boat_pfx_t c;
+        c.on[ 2 ] = static_cast< std::uint8_t >( *p++ );
+        const std::uint8_t b46b = static_cast< std::uint8_t >( *p++ );
+        const bool reflection = *p++ != 0;
+        const std::int32_t extra = static_cast< std::int32_t >( *p++ );
+        c.extra = extra >= 0 ? 0x1000u + static_cast< std::uint32_t >( extra ) : 0u;
+        for ( int l = 0; l < 7; ++l )
+        {
+            const unsigned n = *p++;
+            for ( unsigned k = 0; k < n; ++k )
+            {
+                boat_pfx_record_t r;
+                r.system = 0x1000u + *p++;
+                c.list[ l ].push_back( r );
+            }
+        }
+        std::vector< std::uint32_t > got;
+        boat_pfx_draw_systems( c, b46b, reflection, got );
+        const unsigned want = *p++;
+        bool bad = got.size( ) != want;
+        for ( unsigned k = 0; k < want; ++k, ++p )
+            if ( k < got.size( ) && got[ k ] != 0x1000u + *p )
+                bad = true;
+        calls += static_cast< int >( want );
+        if ( bad && ++failed <= 6 )
+            LOG_ERROR( "boat pfx draw vector %u: %d systems (retail %u) or their order differs", v, static_cast< int >( got.size( ) ), want );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "boat_pfx_draw_systems matches retail's 0x419CE0 + 0x41ACC0 on %u controllers, %d slot 14 calls in order", nv, calls );
+    else
+        LOG_ERROR( "the boat pfx draw FAILED on %d of %u controllers", failed, nv );
+    return failed == 0;
+}
+
 inline bool verify_session_all( )
 {
     bool ok = true;
     ok = verify_slalom_gate_draw( ) && ok;
+    ok = verify_boat_pfx_draw( ) && ok;
     ok = verify_substitute_asset_properties( ) && ok;
     ok = verify_rigid_body_dtor( ) && ok;
     ok = verify_vugame_release( ) && ok;

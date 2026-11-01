@@ -1052,6 +1052,112 @@ inline bool race_drive_throttle( const race_drive_t& r, float& t )
     return true;
 }
 
+// The pfx frame's boats (pfxsim.hxx pfx_frame_t): what the processes bound to boat `b` read of it, refreshed at its Build
+// step 5 - the thrust 0x4CD5B0 (0x41D570's view, engine +0xF8), the boat spring 0x4CD980, the hull 0x4CE760 (below). The
+// solver is the controller's OWN VuFluidsObject (+0x34, 0x419FF0 hands it to the hull process): its mesh is the asset
+// 0x5243A0 left at +0, its waves excluded (+0x30) must be none - nothing read writes them but the hull's (+0x1CC) wake.
+// The hull's part (byte +0x46B and debris +0xA0): race_drive_effects stops at a debris with pieces (UNKNOWN), so no part.
+inline void race_drive_pfx_frame( race_session_t& s, race_drive_t& r, race_session_boat_t& b )
+{
+    pfx_runtime_t& rt = *s.world.pfx;
+    if ( s.pfx_boats.size( ) != s.boats.size( ) )
+    {
+        s.pfx_boats.assign( s.boats.size( ), pfx_frame_boat_t{ } );
+        s.pfx_fluids.assign( s.boats.size( ), pfx_frame_fluids_t{ } );
+    }
+    if ( !b.pfx_solver.mesh && b.pfx_fluids && load_word( b.pfx_fluids, 0 ) )
+    {
+        const fluids_mesh_asset_t* a = b.meshes.fluids_of( load_word( b.pfx_fluids, 0 ) );
+        if ( a )
+        {
+            fluids_mesh_t& m = b.pfx_mesh;
+            std::memcpy( m.aabb_min, a->aabb, 16 );
+            std::memcpy( m.aabb_max, a->aabb + 4, 16 );
+            m.verts.resize( 4 * static_cast< std::size_t >( a->vertices.size ) );
+            std::memcpy( m.verts.data( ), a->vertices.bytes.data( ), 16 * static_cast< std::size_t >( a->vertices.size ) );
+            m.edges.resize( 2 * static_cast< std::size_t >( a->edges.size ) );
+            std::memcpy( m.edges.data( ), a->edges.bytes.data( ), 8 * static_cast< std::size_t >( a->edges.size ) );
+            m.triangles.resize( 15 * static_cast< std::size_t >( a->records.size ) );
+            std::memcpy( m.triangles.data( ), a->records.bytes.data( ), 60 * static_cast< std::size_t >( a->records.size ) );
+            std::memcpy( &m.total_area, &a->w9c, 4 );
+            b.pfx_solver.mesh = &m;
+            b.pfx_solver.vertices.assign( static_cast< std::size_t >( a->vertices.size ), water_vertex_t{ } );
+            b.pfx_solver.edges.assign( static_cast< std::size_t >( a->edges.size ), fluid_edge_t{ } );
+        }
+        else
+            race_unwired( s, "Build step 5: the controller's fluids asset handle has no mesh in the library - the hull process unrecreated" );
+    }
+    if ( b.pfx_fluids && load_word( b.pfx_fluids, 0x30 ) != 0u )
+        race_unwired( s, "Build step 5: the controller's VuFluidsObject has excluded waves (+0x30) - the hull spray's prepare ignores them (UNKNOWN)" );
+    b.pfx_body = boat_decision_body( r.d.body );
+    std::uint32_t i308;
+    std::memcpy( &i308, r.d.boat + 0x308, 4 );
+    b.pfx_view = std::make_unique< boat_view_t >( boat_view_t{ state_f( r.d.boat, 0x2FC ), i308, r.d.boat[ 0x32C ], r.d.boat[ 0x32F ], { }, state_f( r.d.engine, 4 ),
+                                                               state_f( r.d.engine, 0xC ), state_f( r.d.boat, 0x470 ), b.pfx_body } );
+    for ( int k = 0; k < 3; ++k )
+        b.pfx_view->o50_60[ k ] = state_f( r.d.transform, 0x60 + 4 * k );
+    pfx_hull_boat_t& h = b.pfx_hull;
+    std::memcpy( h.transform, r.d.transform + 0x50, 64 );
+    std::memcpy( h.offset, r.d.boat + 0x49C, 16 );
+    h.part_flag = r.d.boat[ 0x46B ];
+    std::memcpy( &h.part_count, r.d.debris + 0xA0, 4 );
+    std::memcpy( h.body.position, r.d.body + 0x40, 12 );
+    std::memcpy( h.body.linear, r.d.body + 0x140, 12 );
+    std::memcpy( h.body.angular, r.d.body + 0x150, 12 );
+    pfx_frame_boat_t& e = s.pfx_boats[ r.index ];
+    e.address = b.pfx.boat;
+    e.view = b.pfx_view.get( );
+    e.records = r.records.empty( ) ? nullptr : r.records.data( );
+    std::memcpy( e.position, r.d.transform + 0x80, 12 );
+    std::memcpy( e.velocity, r.d.body + 0x140, 12 );
+    e.hull = &h;
+    s.pfx_fluids[ r.index ] = pfx_frame_fluids_t{ b.pfx.fluids, &b.pfx_solver };
+    rt.frame.boats = s.pfx_boats.data( );
+    rt.frame.boat_count = static_cast< int >( s.pfx_boats.size( ) );
+    rt.frame.fluids = s.pfx_fluids.data( );
+    rt.frame.fluids_count = static_cast< int >( s.pfx_fluids.size( ) );
+    rt.frame.user = &s;
+    rt.frame.water = s.world.view != nullptr;
+    rt.frame.prepare = []( void* u, fluid_solver_t& solver, const float* matrix ) {
+        race_session_t& x = *static_cast< race_session_t* >( u );
+        if ( !fluid_prepare( solver, x.world.view->water, matrix, water_view_kernel, const_cast< water_view_t* >( x.world.view ) ) )
+            race_unwired( x, "the hull spray's VuFluidSolver_prepare 0x524450 reached a path not recreated - its edges UNKNOWN" );
+    };
+    rt.frame.point = []( void* u, const float* point, float* out ) {
+        race_session_t& x = *static_cast< race_session_t* >( u );
+        return water_point_query( x.world.view->water, point, water_view_kernel, const_cast< water_view_t* >( x.world.view ), out );
+    };
+    rt.frame.snap = []( void* u, const float* point, water_vertex_t& out ) {
+        race_session_t& x = *static_cast< race_session_t* >( u );
+        return water_point_height( x.world.view->water, point, water_view_kernel, const_cast< water_view_t* >( x.world.view ), out );
+    };
+}
+
+// The boat processes draw from THE global VuRand 0x736810 (the runtime holds a copy; the session's fleet_random_t is it).
+struct race_drive_pfx_rand_t
+{
+    pfx_rand_t& r;
+    fleet_random_t* g;
+    race_drive_pfx_rand_t( pfx_rand_t& rand, fleet_random_t* global ) : r( rand ), g( global )
+    {
+        if ( g )
+        {
+            r.seed = g->seed;
+            r.previous = g->last;
+            std::memcpy( r.table, g->table, sizeof( r.table ) );
+        }
+    }
+    ~race_drive_pfx_rand_t( )
+    {
+        if ( g )
+        {
+            g->seed = r.seed;
+            g->last = r.previous;
+            std::memcpy( g->table, r.table, sizeof( g->table ) );
+        }
+    }
+};
+
 inline void race_drive_effects( race_session_t& s, race_drive_t& r, float dt )
 {
     race_session_boat_t& b = race_drive_boat( r );
@@ -1092,9 +1198,20 @@ inline void race_drive_effects( race_session_t& s, race_drive_t& r, float dt )
             if ( race_drive_t* d = g_race_drive_raising )
                 boat_driver_raise( d->d.driver, d->d.human, a, c );
         };
-        g_race_drive_raising = &r;
-        const bool ran = boat_pfx_tick( b.pfx, pb, dt, o );
-        g_race_drive_raising = nullptr;
+        bool ran = true;
+        if ( s.world.pfx )
+        {
+            race_drive_pfx_frame( s, r, b );
+            race_drive_pfx_rand_t shared( s.world.pfx->rand, s.random );
+            const int before = s.world.pfx->frame.unrecreated;
+            g_race_drive_raising = &r;
+            ran = boat_pfx_tick( b.pfx, pb, dt, o );
+            g_race_drive_raising = nullptr;
+            if ( s.world.pfx->frame.unrecreated != before )
+                race_unwired( s, "Build step 5: a boat pfx process reached a path not recreated (pfx_frame_t::unrecreated)" );
+        }
+        else
+            race_unwired( s, "Build step 5 with no VuPfx runtime - not run" );
         if ( !ran )
             race_unwired( s, "Build step 5: a pfx record's bone outside the model's palette - UNKNOWN" );
         if ( s.world.pfx && b.pfx_filled && r.index == 0 && ( ++r.pfx_ticks % 240 ) == 0 )
@@ -1102,6 +1219,20 @@ inline void race_drive_effects( race_session_t& s, race_drive_t& r, float dt )
             // Ours (a dev census, not retail): what boat 0's systems hold - per list the live particle count (+0xA0).
             std::string by;
             int live = 0;
+            int all_records = 0, all_hull = 0, hull_on = 0;
+            for ( const auto& q : s.boats )
+            {
+                for ( const auto& l : q->pfx.list )
+                    for ( const boat_pfx_record_t& rec : l )
+                        if ( const std::uint32_t* w = s.world.pfx->heap.find( rec.system ) )
+                            all_records += static_cast< int >( pfx_system_count( w ) );
+                if ( const std::uint32_t* w = q->pfx.extra ? s.world.pfx->heap.find( q->pfx.extra ) : nullptr )
+                {
+                    all_hull += static_cast< int >( pfx_system_count( w ) );
+                    hull_on += pfx_system_state( w ) != 0 ? 1 : 0;
+                }
+            }
+            LOG_INFO( "race: pfx census, all %d boats: %d live in records, %d in hull effects (%d running)", static_cast< int >( s.boats.size( ) ), all_records, all_hull, hull_on );
             for ( int l = 0; l < 7; ++l )
                 for ( const boat_pfx_record_t& rec : b.pfx.list[ l ] )
                     if ( const std::uint32_t* w = s.world.pfx->heap.find( rec.system ) )
