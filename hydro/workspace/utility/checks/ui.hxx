@@ -1,6 +1,8 @@
 #pragma once
 
+#include <workspace/core/ui/action.hxx>
 #include <workspace/core/ui/entity.hxx>
+#include <workspace/core/ui/hud.hxx>
 #include <workspace/core/ui/button.hxx>
 #include <workspace/core/ui/flow.hxx>
 #include <workspace/core/ui/screen.hxx>
@@ -667,9 +669,297 @@ inline bool verify_ui_front_end_enter( )
     return failed == 0;
 }
 
+// c_ui_action (hydro core/ui/action.hxx) against retail's screen actions
+// (oracle case ui_actions): every authored VuPush / Pop / Set / Reload
+// ScreenUIAction in the real Screens projects as entity_load_project built it
+// (its "Screen" as the load left it), and hand-made ones with names around
+// VuParams' 0x80 limit (their ctors' property nodes too), each fired through
+// Trigger: the VuRetVal and every broadcast, params byte for byte.
+inline bool verify_ui_actions( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0;
+    auto bad = [ &failed ]( const char* what, int k )
+    {
+        if ( ++failed <= 8 )
+            LOG_ERROR( "ui actions: %s differs from retail (row %d)", what, k );
+    };
+    int authored = 0;
+    for ( std::size_t k = 0; k < g_golden_acts_count; ++k )
+    {
+        const golden_act_t& want = g_golden_acts[ k ];
+        const int row = static_cast< int >( k );
+        ui_action_kind_t kind;
+        if ( !ui_action_kind_of( want.m_class, kind ) )
+        {
+            bad( "the class", row );
+            continue;
+        }
+        std::string screen = want.m_screen ? want.m_screen : "";
+        if ( want.m_project )
+        {
+            const entity_t* have = nullptr;
+            for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+                if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, want.m_project ) == 0 && want.m_index >= 0 &&
+                     static_cast< std::size_t >( want.m_index ) < loaded.trees[ p ].size( ) )
+                    have = loaded.trees[ p ][ static_cast< std::size_t >( want.m_index ) ].second;
+            if ( !have || have->m_type != want.m_class || have->m_name != want.m_name || ui_is_state( *have ) != ( want.m_screen != nullptr ) )
+            {
+                if ( failed < 8 )
+                    LOG_ERROR( "ui actions: %s #%d is %s '%s' (state %d), retail %s '%s'", want.m_project, want.m_index, have ? have->m_type.c_str( ) : "-",
+                        have ? have->m_name.c_str( ) : "-", have ? static_cast< int >( ui_is_state( *have ) ) : -1, want.m_class, want.m_name );
+                bad( "the authored entity", row );
+                continue;
+            }
+            ++authored;
+            const ui_state_t* s = want.m_screen ? static_cast< const ui_state_t* >( have->m_state.get( ) ) : nullptr;
+            bool found = false;
+            for ( int n = 0; s && n < s->m_count; ++n )
+                if ( std::strcmp( s->m_rows[ n ]->m_name, "Screen" ) == 0 )
+                {
+                    found = true;
+                    if ( !want.m_screen || s->m_value[ n ].m_text != want.m_screen )
+                        bad( "the loaded Screen", row );
+                    screen = s->m_value[ n ].m_text;
+                }
+            if ( found != ( want.m_screen != nullptr ) )
+                bad( "the Screen node's presence", row );
+        }
+        else
+        {
+            int count = 0;
+            const ui_property_row_t* first = ui_rows_for( want.m_class, count );
+            if ( count != want.m_nodes )
+                bad( "the ctor's node count", row );
+            for ( int n = 0; first && n < count && n < want.m_nodes; ++n )
+                if ( std::strcmp( first[ n ].m_name, g_golden_act_nodes[ want.m_first_node + n ].m_name ) != 0 ||
+                     first[ n ].m_vtable != g_golden_act_nodes[ want.m_first_node + n ].m_vtable )
+                    bad( "a ctor node", row );
+        }
+        ui_params_t trigger;
+        for ( std::size_t c = 0; want.m_trigger[ c ] && want.m_trigger[ c + 1 ] && trigger.m_size < 128; c += 2 )
+            trigger.m_bytes[ trigger.m_size++ ] = static_cast< std::uint8_t >( std::stoul( std::string( want.m_trigger + c, 2 ), nullptr, 16 ) );
+        std::vector< std::pair< std::uint32_t, std::string > > log;
+        c_ui_action action( kind, screen );
+        action.m_broadcast = [ &log ]( std::uint32_t hash, const ui_params_t& p ) { log.push_back( { hash, ui_hex( p ) } ); };
+        char ret[ 20 ];
+        std::snprintf( ret, sizeof( ret ), "%08X%08X", action.trigger( trigger ), 0u );
+        if ( std::strcmp( ret, want.m_ret ) != 0 )
+            bad( "the VuRetVal", row );
+        bool same = log.size( ) == static_cast< std::size_t >( want.m_logs );
+        for ( int n = 0; same && n < want.m_logs; ++n )
+            same = log[ n ].first == g_golden_act_logs[ want.m_first_log + n ].m_hash && log[ n ].second == g_golden_act_logs[ want.m_first_log + n ].m_params;
+        if ( !same )
+            bad( "the broadcasts", row );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_action matches retail's screen actions (Trigger 0x472800 -> slot 12: push 0x4718C0, set 0x471600, pop 0x4719C0, "
+                     "reload 0x471AB0) on %d authored instances in the loaded Screens projects and %d hand-made: Screen, VuRetVal, "
+                     "broadcast hash + params",
+            authored, static_cast< int >( g_golden_acts_count ) - authored );
+    else
+        LOG_ERROR( "the screen actions FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
+// c_ui_hud_element (hydro core/ui/hud.hxx) against retail's VuHUDElementEntity
+// slot 12 0x423F40 (oracle case hud_element_text): every Type 0..8 over the
+// hand-made worlds - the text, the alpha +264, the StringDB keys asked for.
+inline bool verify_ui_hud_element( )
+{
+    std::vector< std::string > keys;
+    ui_hud_hooks_t hooks;
+    hooks.m_string = [ &keys ]( const char* key )
+    {
+        keys.push_back( key );
+        return std::string( "<" ) + key + ">";
+    };
+    int failed = 0;
+    c_ui_hud_element fresh( hooks );
+    std::uint32_t alpha_bits = 0;
+    std::memcpy( &alpha_bits, &fresh.m_alpha, 4 );
+    if ( alpha_bits != g_golden_hud_initial_alpha || fresh.m_type != g_golden_hud_initial_type )
+    {
+        LOG_ERROR( "ui hud element: the ctor's alpha / Type differ from retail" );
+        ++failed;
+    }
+    const auto bits = []( unsigned w )
+    {
+        float f;
+        std::memcpy( &f, &w, 4 );
+        return f;
+    };
+    for ( std::size_t k = 0; k < g_golden_hud_vectors_count; ++k )
+    {
+        const golden_hud_vector_t& want = g_golden_hud_vectors[ k ];
+        const golden_hud_world_t& gw = g_golden_hud_worlds[ want.m_world ];
+        std::vector< ui_hud_boat_t > store( static_cast< std::size_t >( gw.m_boats ) );
+        ui_hud_world_t world;
+        world.m_manager = gw.m_manager != 0;
+        world.m_settings = gw.m_settings != 0;
+        world.m_local = gw.m_local;
+        world.m_boat_count = gw.m_count;
+        world.m_units = gw.m_units;
+        for ( int b = 0; b < gw.m_boats; ++b )
+        {
+            const golden_hud_boat_t& g = g_golden_hud_boats[ gw.m_first_boat + b ];
+            ui_hud_boat_t& o = store[ static_cast< std::size_t >( b ) ];
+            o.m_lap = g.m_lap;
+            o.m_time_1200 = bits( g.m_time_1200 );
+            o.m_time_1204 = bits( g.m_time_1204 );
+            o.m_time_1208 = bits( g.m_time_1208 );
+            o.m_place = g.m_place;
+            o.m_laps = g.m_laps;
+            o.m_wrong_way = bits( g.m_wrong_way );
+            world.m_boats.push_back( g.m_present ? &o : nullptr );
+        }
+        c_ui_hud_element e( hooks );
+        e.m_type = want.m_type;
+        e.m_alpha = bits( 0x12345678u );
+        keys.clear( );
+        const std::string& text = e.text( world );
+        std::memcpy( &alpha_bits, &e.m_alpha, 4 );
+        bool same = text == want.m_text && &text == &e.m_text && alpha_bits == want.m_alpha && keys.size( ) == static_cast< std::size_t >( want.m_keys );
+        for ( int n = 0; same && n < want.m_keys; ++n )
+            same = keys[ static_cast< std::size_t >( n ) ] == g_golden_hud_keys[ want.m_first_key + n ];
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui hud element: world '%s' Type %d gave '%s', retail '%s'", gw.m_name, want.m_type, text.c_str( ), want.m_text );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_hud_element matches retail's VuHUDElementEntity text 0x423F40 (+ the time formatter 0x53F5E0) on %d vectors: "
+                     "every Type over %d worlds - the text, the alpha +264, the StringDB keys",
+            static_cast< int >( g_golden_hud_vectors_count ), static_cast< int >( sizeof( g_golden_hud_worlds ) / sizeof( g_golden_hud_worlds[ 0 ] ) ) );
+    else
+        LOG_ERROR( "the HUD element's text FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
+// c_ui_hud_speedometer::on_tick (hydro core/ui/hud.hxx) against retail's
+// VuHUDSpeedometerEntity OnUITick 0x42B860 (oracle case hud_speedometer_tick):
+// the ctor's +224 / +228 / +232, then every scripted step's three fields.
+inline bool verify_ui_hud_speedometer( )
+{
+    c_ui_hud_speedometer s;
+    ui_hud_boat_t boat;
+    ui_hud_world_t world;
+    int failed = 0;
+    const auto fields = [ &s ]( std::uint32_t out[ 3 ] )
+    {
+        out[ 0 ] = s.m_metric;
+        std::memcpy( &out[ 1 ], &s.m_v_offset, 4 );
+        std::memcpy( &out[ 2 ], &s.m_countdown, 4 );
+    };
+    std::uint32_t have[ 3 ];
+    fields( have );
+    if ( have[ 0 ] != g_golden_spd_initial[ 0 ] || have[ 1 ] != g_golden_spd_initial[ 1 ] || have[ 2 ] != g_golden_spd_initial[ 2 ] )
+    {
+        LOG_ERROR( "ui speedometer: the ctor's fields differ from retail" );
+        ++failed;
+    }
+    for ( std::size_t k = 0; k < g_golden_spd_steps_count; ++k )
+    {
+        const golden_spd_step_t& st = g_golden_spd_steps[ k ];
+        const std::string op = st.m_op;
+        if ( op == "world" )
+        {
+            boat.m_byte_812 = static_cast< std::uint8_t >( st.m_word );
+            world = ui_hud_world_t( );
+            world.m_manager = true;
+            world.m_settings = true;
+            world.m_units = st.m_text;
+            world.m_boats.push_back( st.m_mode == 2 ? nullptr : &boat );
+            world.m_local = st.m_mode == 1 ? 1 : 0;
+        }
+        else if ( op == "write" )
+            std::memcpy( st.m_offset == 228 ? static_cast< void* >( &s.m_v_offset ) : static_cast< void* >( &s.m_countdown ), &st.m_word, 4 );
+        else
+        {
+            std::uint8_t bytes[ 128 ] = { };
+            int size = 0;
+            for ( std::size_t c = 0; st.m_text[ c ] && st.m_text[ c + 1 ] && size < 128; c += 2 )
+                bytes[ size++ ] = static_cast< std::uint8_t >( std::stoul( std::string( st.m_text + c, 2 ), nullptr, 16 ) );
+            s.on_tick( bytes, size, world );
+        }
+        fields( have );
+        if ( ( have[ 0 ] != st.m_fields[ 0 ] || have[ 1 ] != st.m_fields[ 1 ] || have[ 2 ] != st.m_fields[ 2 ] || s.m_unknown ) && ++failed <= 8 )
+            LOG_ERROR( "ui speedometer: step %d (%s) gave %08X %08X %08X, retail %08X %08X %08X", static_cast< int >( k ), st.m_op, have[ 0 ], have[ 1 ],
+                have[ 2 ], st.m_fields[ 0 ], st.m_fields[ 1 ], st.m_fields[ 2 ] );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_hud_speedometer matches retail's VuHUDSpeedometerEntity OnUITick 0x42B860 on %d steps: the metric flag, "
+                     "the boost texture's V offset (x87 round-to-even wrap), the countdown",
+            static_cast< int >( g_golden_spd_steps_count ) );
+    else
+        LOG_ERROR( "the speedometer's tick FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
+// front_end_engine_t::ui_fade_t (hydro core/ui/flow.hxx) against retail's
+// VuFadeManager create 0x4AED60 and tick 0x4AEE50 (oracle case fade_tick):
+// the four fields after every step, the draw gate 0x4AEF70, the broadcasts.
+inline bool verify_ui_fade( )
+{
+    using fade_t = front_end_engine_t::ui_fade_t;
+    fade_t f = fade_t::created( );
+    std::vector< std::string > log;
+    const std::function< void( const char* ) > broadcast = [ &log ]( const char* name ) { log.push_back( name ); };
+    const auto words = [ &f ]( std::uint32_t out[ 4 ] )
+    {
+        std::memcpy( &out[ 0 ], &f.m_duration, 4 );
+        std::memcpy( &out[ 1 ], &f.m_value, 4 );
+        std::memcpy( &out[ 2 ], &f.m_rate, 4 );
+        out[ 3 ] = f.m_skip;
+    };
+    int failed = 0;
+    std::uint32_t have[ 4 ];
+    words( have );
+    if ( std::memcmp( have, g_golden_fade_initial, sizeof( have ) ) != 0 )
+    {
+        LOG_ERROR( "ui fade: the create's fields differ from retail" );
+        ++failed;
+    }
+    for ( std::size_t k = 0; k < g_golden_fade_steps_count; ++k )
+    {
+        const golden_fade_step_t& st = g_golden_fade_steps[ k ];
+        log.clear( );
+        if ( std::strcmp( st.m_op, "write" ) == 0 )
+        {
+            if ( st.m_offset == 16 )
+                f.m_skip = st.m_word;
+            else
+                std::memcpy( st.m_offset == 8 ? &f.m_value : &f.m_rate, &st.m_word, 4 );
+        }
+        else
+        {
+            float delta;
+            std::memcpy( &delta, &st.m_word, 4 );
+            f.tick( delta, broadcast );
+        }
+        words( have );
+        bool same = std::memcmp( have, st.m_fields, sizeof( have ) ) == 0 && f.draws( ) == ( st.m_draws != 0 ) &&
+                    log.size( ) == static_cast< std::size_t >( st.m_logs );
+        for ( int n = 0; same && n < st.m_logs; ++n )
+            same = log[ static_cast< std::size_t >( n ) ] == g_golden_fade_logs[ st.m_first_log + n ];
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui fade: step %d (%s) gave %08X %08X %08X %u, retail %08X %08X %08X %u", static_cast< int >( k ), st.m_op, have[ 0 ], have[ 1 ],
+                have[ 2 ], have[ 3 ], st.m_fields[ 0 ], st.m_fields[ 1 ], st.m_fields[ 2 ], st.m_fields[ 3 ] );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the fade manager matches retail's VuFadeManager (create 0x4AED60, tick 0x4AEE50, draw gate 0x4AEF70) on %d steps: "
+                     "value / rate / skip, OnFadeOutComplete / OnFadeInComplete",
+            static_cast< int >( g_golden_fade_steps_count ) );
+    else
+        LOG_ERROR( "the fade manager FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_fade( ) && ok;
+    ok = verify_ui_hud_speedometer( ) && ok;
+    ok = verify_ui_hud_element( ) && ok;
+    ok = verify_ui_actions( ) && ok;
     ok = verify_ui_front_end_enter( ) && ok;
     ok = verify_ui_screen_events( ) && ok;
     ok = verify_ui_button( ) && ok;
