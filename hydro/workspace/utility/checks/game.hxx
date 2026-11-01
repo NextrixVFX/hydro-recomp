@@ -74,6 +74,40 @@ inline bool verify_race_game_fsm( )
     for ( std::size_t k = 0; k < g_golden_rgf_loaded_count && k < 3; ++k )
         if ( std::strcmp( k_race_hud_projects[ k ], g_golden_rgf_loaded[ k ] ) != 0 )
             fail( std::string( "HUD load " ) + g_golden_rgf_loaded[ k ] + " differs" );
+    // VuGame's own machines (+0x0C, +0x67C: vugame_fsms_construct) - the same table compare per machine
+    const c_fsm* machines[ 2 ] = { &probe.event, &probe.split };
+    for ( int m = 0; m < 2; ++m )
+    {
+        const golden_rgf_machine_t& gm = g_golden_rgf_machines[ m ];
+        const c_fsm& f = *machines[ m ];
+        if ( f.m_states.size( ) != static_cast< std::size_t >( gm.m_states ) || f.m_conditions.size( ) != static_cast< std::size_t >( gm.m_conditions ) ||
+             f.m_current != gm.m_current || gm.m_time != 0u || f.m_time != 0.0f )
+        {
+            fail( "VuGame machine " + std::to_string( m ) + ": the counts / current / time differ" );
+            continue;
+        }
+        for ( int k = 0; k < gm.m_states; ++k )
+        {
+            const golden_rgf_state_t& g = g_golden_rgf_machine_states[ gm.m_state + k ];
+            const fsm_state_t& s = *f.m_states[ static_cast< std::size_t >( k ) ];
+            bool same = s.m_name == g.m_name && static_cast< int >( s.m_flag ) == g.m_flag && s.m_hash == g.m_hash &&
+                        s.m_transitions.size( ) == static_cast< std::size_t >( g.m_trs );
+            for ( int d = 0; d < 4; ++d )
+                same = same && s.m_address[ d ] == g.m_method[ d ] && g.m_vtable[ d ] == ( g.m_method[ d ] == 0 ? 0u : d == 2 ? 0x73F63Cu : 0x73F64Cu );
+            for ( int t = 0; same && t < g.m_trs; ++t )
+                same = s.m_transitions[ static_cast< std::size_t >( t ) ].first == g_golden_rgf_machine_transitions[ g.m_tr + t ][ 0 ] &&
+                       s.m_transitions[ static_cast< std::size_t >( t ) ].second == g_golden_rgf_machine_transitions[ g.m_tr + t ][ 1 ];
+            if ( !same )
+                fail( "VuGame machine " + std::to_string( m ) + " state " + g.m_name + " differs from the ctor's" );
+        }
+        for ( int k = 0; k < gm.m_conditions; ++k )
+        {
+            const fsm_condition_t& c = f.m_conditions[ static_cast< std::size_t >( k ) ];
+            const golden_rgf_condition_t& g = g_golden_rgf_machine_conditions[ gm.m_condition + k ];
+            if ( c.m_name != g.m_name || c.m_hash != g.m_hash || c.m_value != g.m_value || c.m_pulse != g.m_pulse )
+                fail( "VuGame machine " + std::to_string( m ) + " condition " + g.m_name + " differs" );
+        }
+    }
     // the ctor's words: current = the first state, previous / next / time 0, +0x720 .. +0x734 and +0x744 zero
     if ( probe.fsm.m_current != g_golden_rgf_words[ 0 ] || g_golden_rgf_words[ 1 ] != 0 || g_golden_rgf_words[ 2 ] != 0 ||
          g_golden_rgf_words[ 3 ] != 0 || g_golden_rgf_words[ 4 ] != 1 || probe.buoys != 0 || probe.fsm.m_time != 0.0f )

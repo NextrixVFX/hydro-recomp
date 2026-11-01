@@ -400,6 +400,11 @@ struct race_rules_hooks_t
 
 struct race_rules_t
 {
+    // VuGame's own two machines (its ctor 0x480BA0; begun by 0x4829A0 - the first state, its enter; ticked by
+    // 0x482F10 around slot 7): +0x0C the post-race flow, +0x67C the split / leaderboard display.
+    c_fsm event;                     // +0x0C
+    c_fsm split;                     // +0x67C
+    std::function< void( std::uint32_t address, const char* what ) > unrecreated;   // a VuGame state handler reached
     c_fsm fsm;                       // +0x6F8
     std::uint32_t buoys = 0;         // +0x744
     std::string track;               // the game's +0x68 (VuGame's track name)
@@ -490,8 +495,110 @@ inline void race_rules_post_exit( race_rules_t& r )
         race_rules_platform( r, "achievement DingDong" );
 }
 
+// ---- VuGame's machines (ctor 0x480BA0): the tables -------------------------
+//
+// +0x0C: Event (no handlers) -> Results "EventFinished"; Results {enter
+// 0x484110, exit 0x484250, tick 0x484280, draw 0x4842F0} -> Awards
+// "OnUserNext" (VuGame's OnUserNext 0x483170 pulses it: +0x1D), -> Exit
+// "NoResults"; Awards {0x484320, 0x4844F0, 0x484520, 0x484580} -> Exit
+// "AwardsDone"; Exit. +0x67C (the friend-score / split flow - its handlers are
+// the leaderboard's (OpenFeint: online, a platform service) and the HUD's):
+// GetFriendScores {enter 0x483B90, tick 0x483BE0}, DownloadBlob {enter the
+// nullsub 0x401560, tick 0x483C10}, PersonalBestConfig {enter 0x483C40},
+// Intro {tick 0x483CB0, draw 0x483CF0}, Racing, Split {tick 0x483D00, draw
+// 0x483D40}, Result {enter 0x483D50, tick 0x483E00, draw 0x483E40}, Done; the
+// transitions below. Verified against the ctor run whole (case race_game_fsm).
+// The handlers are NOT recreated: reaching one calls `unrecreated` (UNKNOWN);
+// the nullsub is nothing.
+inline void vugame_fsm_handlers( race_rules_t& r, fsm_state_t& s, std::uint32_t enter, std::uint32_t exit, std::uint32_t tick,
+                                 std::uint32_t draw )
+{
+    s.m_address[ 0 ] = enter, s.m_address[ 1 ] = exit, s.m_address[ 2 ] = tick, s.m_address[ 3 ] = draw;
+    const auto hook = [ &r ]( std::uint32_t a, const std::string& name, const char* verb ) {
+        return [ &r, a, name, verb ] {
+            if ( r.unrecreated )
+                r.unrecreated( a, ( "VuGame " + name + " " + verb ).c_str( ) );
+        };
+    };
+    if ( enter && enter != 0x401560u )
+        s.m_enter = hook( enter, s.m_name, "enter" );
+    if ( exit )
+        s.m_exit = hook( exit, s.m_name, "exit" );
+    if ( tick )
+    {
+        auto h = hook( tick, s.m_name, "tick" );
+        s.m_tick = [ h ]( float ) { h( ); };
+    }
+    if ( draw )
+        s.m_draw = hook( draw, s.m_name, "draw" );
+}
+
+inline void vugame_fsms_construct( race_rules_t& r )
+{
+    r.event = c_fsm{ };
+    r.event.add_state( "Event" );
+    vugame_fsm_handlers( r, r.event.add_state( "Results" ), 0x484110u, 0x484250u, 0x484280u, 0x4842F0u );
+    vugame_fsm_handlers( r, r.event.add_state( "Awards" ), 0x484320u, 0x4844F0u, 0x484520u, 0x484580u );
+    r.event.add_state( "Exit" );
+    r.event.add_transition( "Event", "Results", "EventFinished" );
+    r.event.add_transition( "Results", "Awards", "OnUserNext" );
+    r.event.add_transition( "Results", "Exit", "NoResults" );
+    r.event.add_transition( "Awards", "Exit", "AwardsDone" );
+    r.split = c_fsm{ };
+    vugame_fsm_handlers( r, r.split.add_state( "GetFriendScores" ), 0x483B90u, 0, 0x483BE0u, 0 );
+    vugame_fsm_handlers( r, r.split.add_state( "DownloadBlob" ), 0x401560u, 0, 0x483C10u, 0 );
+    vugame_fsm_handlers( r, r.split.add_state( "PersonalBestConfig" ), 0x483C40u, 0, 0, 0 );
+    vugame_fsm_handlers( r, r.split.add_state( "Intro" ), 0, 0, 0x483CB0u, 0x483CF0u );
+    r.split.add_state( "Racing" );
+    vugame_fsm_handlers( r, r.split.add_state( "Split" ), 0, 0, 0x483D00u, 0x483D40u );
+    vugame_fsm_handlers( r, r.split.add_state( "Result" ), 0x483D50u, 0, 0x483E00u, 0x483E40u );
+    r.split.add_state( "Done" );
+    static const char* const k_split_transitions[ 15 ][ 3 ] = {
+        { "GetFriendScores", "Done", "NoHumansPlaying" },          { "GetFriendScores", "PersonalBestConfig", "UserNotLoggedIn" },
+        { "GetFriendScores", "PersonalBestConfig", "LeaderboardNotFound" }, { "GetFriendScores", "PersonalBestConfig", "OpenFeintFailure" },
+        { "GetFriendScores", "PersonalBestConfig", "NoFriendsFound" }, { "GetFriendScores", "DownloadBlob", "OpponentChosen" },
+        { "DownloadBlob", "PersonalBestConfig", "OpenFeintFailure" }, { "DownloadBlob", "Intro", "OpenFeintSuccess" },
+        { "PersonalBestConfig", "Done", "NoPersonalBestTime" },    { "PersonalBestConfig", "Intro", "" },
+        { "Intro", "Racing", "Expired" },                          { "Racing", "Split", "ShowSplit" },
+        { "Racing", "Result", "ShowResult" },                      { "Split", "Racing", "Expired" },
+        { "Result", "Done", "Expired" } };
+    for ( const auto& t : k_split_transitions )
+        r.split.add_transition( t[ 0 ], t[ 1 ], t[ 2 ] );
+}
+
+// 0x4829A0's tail: each machine's current = its first state, then that state's enter.
+inline void vugame_fsm_begin( c_fsm& f )
+{
+    f.m_current = f.m_states.empty( ) ? -1 : 0;
+    if ( fsm_state_t* s = f.current( ) )
+        if ( s->m_enter )
+            s->m_enter( );
+}
+
+// VuGame's tick 0x482F10 past the bookkeeping: slot 7 answered `running`;
+// false -> +0x0C's "EventFinished" +28 = 1; +0x0C evaluate (0x555AD0), the
+// current state's tick, +0x30 += dt; the same on +0x67C (+0x6A0 += dt); the
+// tick's answer = +0x0C's current state is not "Exit" (0x404AC0 over min(size,
+// 4), then the sizes).
+inline bool vugame_fsms_tick( race_rules_t& r, bool running, float dt )
+{
+    if ( !running )
+        r.event.set_condition( "EventFinished", true );
+    for ( c_fsm* f : { &r.event, &r.split } )
+    {
+        f->evaluate( );
+        if ( fsm_state_t* s = f->current( ) )
+            if ( s->m_tick )
+                s->m_tick( dt );
+        f->m_time = f->m_time + dt;
+    }
+    const fsm_state_t* s = r.event.current( );
+    return !s || s->m_name != "Exit";
+}
+
 inline void race_rules_construct( race_rules_t& r )
 {
+    vugame_fsms_construct( r );
     r.fsm = c_fsm{ };
     r.buoys = 0;
     fsm_state_t& pre = r.fsm.add_state( "PreGame" );

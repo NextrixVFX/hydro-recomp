@@ -1086,6 +1086,12 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     };
     s.rules.hooks.platform = [ &s ]( const std::string& call ) { race_unwired( s, "platform services: " + call + " (saves / online / achievements / audio - hooks)" ); };
     s.rules.track = s.game.track;
+    s.rules.unrecreated = [ &s ]( std::uint32_t address, const char* what )
+    {
+        char text[ 160 ];
+        std::snprintf( text, sizeof( text ), "%s 0x%X - not recreated, not run (UNKNOWN)", what, address );
+        race_unwired( s, text );
+    };
     for ( std::size_t k = 0; k < s.game.boats.size( ) && k < s.start_boats.size( ); ++k )
     {
         race_rules_boat_t rb;
@@ -1101,6 +1107,11 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     {
         // Slot 5 0x4896A0: "(whatever the track) the game's +0x6F8 state machine enters its first state" - PreGame's enter
         // 0x48A7F0, before the +0x4CC loop (which it does not read).
+        // VuGame's begin 0x4829A0: its two machines (+0x0C from +0x18, +0x67C from +0x688) enter their first states.
+        if ( std::strcmp( row, "state enter fsm+0x18" ) == 0 )
+            vugame_fsm_begin( s.rules.event );
+        if ( std::strcmp( row, "state enter fsm+0x688" ) == 0 )
+            vugame_fsm_begin( s.rules.split );
         if ( std::strcmp( row, "state enter fsm+0x704" ) == 0 )
         {
             s.rules_game.circuit = s.start.circuit;

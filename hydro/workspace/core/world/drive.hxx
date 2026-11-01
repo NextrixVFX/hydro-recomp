@@ -1157,10 +1157,13 @@ inline void race_session_game_mode( void* user, float dt )
         LOG_INFO( "race: VuRaceGame state %s -> %s (sync %d)", before.c_str( ), after.c_str( ), s.dynamics ? s.dynamics->syncs : -1 );
     if ( !s.rules.sorted )
         race_unwired( s, "0x48AB20 over more than 32 boats (MSVC's partition / heap sort paths, not recreated) - the places not sorted (UNKNOWN)" );
-    if ( !running )
-        race_unwired( s, "slot 7 answered the Exit state: VuGame's +0x0C machine's EventFinished (not recreated)" );
-    race_unwired( s, "VuGame's own state machines +0x0C / +0x67C (0x480BA0's states: the pause / split-display flow) - not recreated, their evaluate / "
-                     "tick not run (UNKNOWN)" );
+    // VuGame's two machines after slot 7 (world/rules.hxx vugame_fsms_tick: verified tables, handlers hooks).
+    const std::string event_before = s.rules.event.current( ) ? s.rules.event.current( )->m_name : std::string( );
+    const bool game_running = vugame_fsms_tick( s.rules, running, dt );
+    const std::string event_after = s.rules.event.current( ) ? s.rules.event.current( )->m_name : std::string( );
+    if ( event_before != event_after )
+        LOG_INFO( "race: VuGame +0x0C state %s -> %s (sync %d)%s", event_before.c_str( ), event_after.c_str( ), s.dynamics ? s.dynamics->syncs : -1,
+                  game_running ? "" : " - the game's tick answers done" );
     for ( race_rules_boat_t& rb : s.rules_boats )
         std::memcpy( rb.boat + 0x4DC, rb.transform + 0x50, 64 );
     // Ours (dev trace): every boat's progress every 240 game ticks.
