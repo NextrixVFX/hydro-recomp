@@ -1195,6 +1195,22 @@ inline void race_drive_sync_target( race_session_t& s, int child )
 // True when the plug is one of these (consumed); false: not a race-side receiver.
 inline bool race_event_dispatch( race_session_t& s, const std::string& entity, const std::string& plug, const std::uint8_t* params )
 {
+    // VuKeyframeMotionEntity's (VuMotionEntity's) inputs "Activate" 0x61A4F0 / "Deactivate" 0x61A5D0 (world/keymotion.hxx).
+    if ( plug == "Activate" || plug == "Deactivate" )
+        for ( const auto& kp : s.key_motions )
+        {
+            std::string path;
+            for ( const entity_t* e = kp->entity; e && e->m_parent; e = e->m_parent )
+                path = path.empty( ) ? e->m_name : e->m_name + "/" + path;
+            if ( path != entity )
+                continue;
+            if ( plug == "Activate" )
+                key_motion_activate( *kp->k, race_session_key_hooks( *kp ) );
+            else
+                key_motion_deactivate( *kp->k, race_session_key_hooks( *kp ) );
+            LOG_INFO( "race: event %s . %s (sync %d)", entity.c_str( ), plug.c_str( ), s.dynamics ? s.dynamics->syncs : -1 );
+            return true;
+        }
     // VuFloatingMineEntity's "Detonate" (0x439020's plug; thunk 0x4390BE -> vt+0x44 0x438DF0): +0x215 = 1, VuRetVal 0.
     if ( plug == "Detonate" )
         for ( const auto& dp : s.dyn_props )

@@ -132,6 +132,9 @@ struct race_world_t
     std::function< void( const entity_t& owner, bool on ) > prop_drawn;
     // An entity's output plug fired (VuScriptComponent findPlug 0x504770 + the plug's vt+8 = 0x5023A0): c_world's graph.
     std::function< void( const entity_t& owner, const char* plug ) > fire;
+    // An entity's transform moved by a motion component (its owner's draw matrix re-made: the animated prop's 0x61DA50 /
+    // the static model's) - the renderer's hand-off (c_world). Null: not redrawn (logged).
+    std::function< void( const entity_t& owner ) > prop_moved;
     // The audio platform (FMOD's imports - world/sound.hxx; c_world's). Null: no audio calls made (logged).
     const sound_hooks_t* sound = nullptr;
     std::uint32_t viewports = 1;
@@ -242,6 +245,17 @@ struct race_session_t
         race_session_t* session = nullptr;
     };
     std::vector< std::unique_ptr< breakable_live_t > > breakables;
+    // The level's VuKeyframeMotionEntity (world/keymotion.hxx), live from their slot 6 0x5CE9E0.
+    struct key_live_t
+    {
+        entity_t* entity = nullptr;
+        key_motion_t* k = nullptr;
+        entity_t* target_entity = nullptr;   // the "Entity" ref's entity (its VuMotionComponent the target)
+        key_motion_target_t target;
+        race_session_t* session = nullptr;
+    };
+    std::vector< std::unique_ptr< key_live_t > > key_motions;
+    int key_unrecreated = 0;
     int breaks = 0;   // dev count (not retail)
     // VuExplosionManagerImpl g 0x759034's listeners (+4 / +8; world/mine.hxx): the human drivers' +0x80 parts, added by
     // their slot 6 0x40F210 (boat human.hxx human_game_initialize).
@@ -839,6 +853,104 @@ inline void race_session_mine_tick( void* user, float )
     }
 }
 
+// The keyframe motion's hooks (world/keymotion.hxx): the outputs through the world's graph, the tick registration as the
+// session holds it (registered once at game init; the tick runs slot 14 only while active, so an unregistered state is
+// the inactive one), find = the ref's VuMotionComponent (the target set up at game init), the unrecreated count.
+inline key_motion_hooks_t race_session_key_hooks( race_session_t::key_live_t& k )
+{
+    key_motion_hooks_t h;
+    h.user = &k;
+    h.fire = []( void* u, key_motion_t&, const char* plug ) {
+        auto& x = *static_cast< race_session_t::key_live_t* >( u );
+        if ( x.session->world.fire )
+            x.session->world.fire( *x.entity, plug );
+    };
+    h.tick_register = []( void*, key_motion_t&, bool ) { };
+    h.find = []( void* u, key_motion_t& ) -> key_motion_target_t* {
+        auto& x = *static_cast< race_session_t::key_live_t* >( u );
+        return x.target_entity ? &x.target : nullptr;
+    };
+    h.unrecreated = &k.session->key_unrecreated;
+    return h;
+}
+
+// The "Motion" tick 0x61A6E0 -> slot 14 0x5CFE60 while active.
+inline void race_session_key_tick( void* user, float dt )
+{
+    auto& k = *static_cast< race_session_t::key_live_t* >( user );
+    const int before = k.session->key_unrecreated;
+    key_motion_tick( *k.k, dt, race_session_key_hooks( k ) );
+    if ( k.session->key_unrecreated != before )
+        race_unwired( *k.session, "a keyframe motion reached a path not recreated (Curve Type / the key search below every key) - UNKNOWN" );
+}
+
+// VuKeyframeMotionEntity's slot 6 0x5CE9E0 (key_motion_game_init): its VuKeyframeEntity children in order (Time, the
+// transform world), the "Entity" ref (its script component's ref) -> the target entity's VuMotionComponent (vtable
+// 0x74E984; 0x5F5810 answers null without one). The target's IF (VuAnimatedPropEntity's 0x756228 / the props' 0x73A13C
+// shape): slot 0 = setWorldTransform of the owner (race.hxx entity_set_world, notify) then the owner's draw matrix
+// re-made (prop_moved: the animated component 0x61DA50 / the static model's); the rigid component's kinematic step
+// 0x544C50 and the +0x38 call are NOT recreated (counted); slots 1 / 2 (0x546D80 / 0x546DB0: the rigid component's +0xD0
+// bit 1 set / cleared and copied to its body) - no body is built for an animated prop here (UNKNOWN when one is).
+inline void race_session_key_motion( race_session_t& s, entity_t& e )
+{
+    key_motion_state_t* st = static_cast< key_motion_state_t* >( e.m_state.get( ) );
+    if ( st->curve_authored )
+    {
+        race_unwired( s, "a VuKeyframeMotionEntity authoring Curve Type (VuStaticIntEnumProperty 0x74C354's read 0x503600 unread) - UNKNOWN, not run" );
+        return;
+    }
+    auto k = std::make_unique< race_session_t::key_live_t >( );
+    k->entity = &e;
+    k->k = &st->value;
+    k->session = &s;
+    bool linked = false;
+    if ( const script_component_t* sc = script_of( e ) )
+        for ( const script_ref_t& ref : sc->m_refs )
+            if ( std::string( ref.m_row->m_name ) == "Entity" && ref.m_target )
+            {
+                linked = true;
+                for ( const entity_component_t& c : ref.m_target->m_components )
+                    if ( c.m_vtable == 0x74E984u )
+                        k->target_entity = ref.m_target;
+            }
+    if ( k->target_entity )
+    {
+        const transform_component_t* tt = entity_transform( *k->target_entity );
+        k->target.transform = tt ? tt->world : nullptr;
+        k->target.user = k.get( );
+        k->target.update = []( void* u, const float* m, const float*, const float* ) {
+            auto& x = *static_cast< race_session_t::key_live_t* >( u );
+            race_session_t& rs = *x.session;
+            if ( !entity_set_world( *x.target_entity, m, true, { } ) )
+            {
+                race_unwired( rs, "a keyframe motion's target whose world is not modelled - setWorldTransform UNKNOWN, not written" );
+                return;
+            }
+            if ( rs.world.prop_moved )
+                rs.world.prop_moved( *x.target_entity );
+            race_unwired( rs, "a motion target's rigid component kinematic step 0x544C50 / its +0x38 call (not recreated)" );
+        };
+    }
+    std::vector< key_motion_child_t > kids;
+    for ( auto& c : e.m_children )
+    {
+        key_motion_child_t kc;
+        kc.keyframe = c->m_type == "VuKeyframeEntity";
+        if ( kc.keyframe && c->m_state )
+        {
+            const float t = static_cast< keyframe_state_t* >( c->m_state.get( ) )->time;
+            std::memcpy( &kc.time, &t, 4 );
+        }
+        if ( const transform_component_t* ct = entity_transform( *c ) )
+            std::memcpy( kc.transform, ct->world, 64 );
+        kids.push_back( kc );
+    }
+    race_session_t::key_live_t* kp = k.get( );
+    s.key_motions.push_back( std::move( k ) );
+    tick_register( s.ticks, { kp, race_session_key_tick, kp }, "Motion" );
+    key_motion_game_init( *kp->k, kids, linked, race_session_key_hooks( *kp ) );
+}
+
 // VuBreakablePropEntity's Decision tick 0x434A20 (dt), read whole (world/breakable.hxx's head): the breakable
 // component's 0x543640(dt) - its debris fade timer (+0xE8, state +0xE4 1 -> 2 below 0, the debris draw removed): the
 // component's own properties and debris are the renderer's (0x51E790 / 0x5436B0 not recreated), so only the state is
@@ -1078,6 +1190,11 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
             lh.user = &s;
             lh.add = []( void* u, const void* emitter ) { static_cast< race_session_t* >( u )->lens_emitters.push_back( emitter ); };
             lens_water_emitter_start( &e, lh );
+            return;
+        }
+        if ( e.m_type == "VuKeyframeMotionEntity" && e.m_state )
+        {
+            race_session_key_motion( s, e );
             return;
         }
         // VuAudioEmitterEntity's slot 6 0x5F3B30 (world/sound.hxx audio_emitter_game_init: plays when Initially Active).

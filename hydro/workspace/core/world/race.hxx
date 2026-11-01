@@ -190,8 +190,8 @@ inline entity_world_t race_entity_world( const entity_registry_t& registry, std:
             s = logic_state_for( cls );   // world/logic.hxx's classes (above)
         return s ? s : entity_state_for( cls );
     };
-    world.m_properties_load = []( entity_t& e, const value_t& p ) { waypoint_load_properties( e, p ); nuisance_start_load_properties( e, p ); multi_delay_load_properties( e, p ); dynamic_prop_load_properties( e, p ); breakable_load_properties( e, p ); audio_emitter_load_properties( e, p ); logic_load_properties( e, p ); entity_load_properties( e, p ); };
-    world.m_properties_mark = []( entity_t& e ) { waypoint_mark_properties( e ); nuisance_start_mark_properties( e ); multi_delay_mark_properties( e ); dynamic_prop_mark_properties( e ); breakable_mark_properties( e ); audio_emitter_mark_properties( e ); logic_mark_properties( e ); entity_mark_properties( e ); };
+    world.m_properties_load = []( entity_t& e, const value_t& p ) { waypoint_load_properties( e, p ); nuisance_start_load_properties( e, p ); multi_delay_load_properties( e, p ); dynamic_prop_load_properties( e, p ); breakable_load_properties( e, p ); audio_emitter_load_properties( e, p ); key_motion_load_properties( e, p ); logic_load_properties( e, p ); entity_load_properties( e, p ); };
+    world.m_properties_mark = []( entity_t& e ) { waypoint_mark_properties( e ); nuisance_start_mark_properties( e ); multi_delay_mark_properties( e ); dynamic_prop_mark_properties( e ); breakable_mark_properties( e ); audio_emitter_mark_properties( e ); key_motion_mark_properties( e ); logic_mark_properties( e ); entity_mark_properties( e ); };
     return world;
 }
 

@@ -943,6 +943,35 @@ public:
     // inputs the old Games/<track><mode> path took; with Level a bare track name 0x4D3480 names the same projects.
     void load_background( );
 
+    // A motion target moved (session.hxx race_session_key_motion): the animated model component's draw matrix 0x61DA50
+    // = fromScale( transform +0xB0 ) x world +0x50 (transform_draw_matrix) into its item - a rigid (one-bone) item's
+    // placements follow it on its next skin; a static model's placements through prop_draw. A streamed (cloned) item that
+    // is not playing keeps its placement (the renderer's - flagged).
+    void prop_moved( const entity_t& owner )
+    {
+        const transform_component_t* t = entity_transform( const_cast< entity_t& >( owner ) );
+        if ( !t )
+            return;
+        const std::string path = entity_path( owner );
+        for ( animated_t& item : m_animated )
+            if ( item.path == path )
+            {
+                transform_draw_matrix( *t, item.world );
+                if ( !item.playing && item.rigid )
+                {
+                    const std::vector< cached_part_t >& parts = model_for( item.asset );
+                    for ( std::size_t index = 0; index < item.placements.size( ) && index < parts.size( ); ++index )
+                        if ( item.placements[ index ] >= 0 )
+                        {
+                            float node[ 16 ];
+                            math_multiply( node, item.world, parts[ index ].node );
+                            c_engine::move( item.placements[ index ], node );
+                        }
+                }
+            }
+        prop_draw( owner );
+    }
+
     // An entity's graph path: its names below the project root, '/'-joined (the event graph's key).
     static std::string entity_path( const entity_t& owner )
     {
@@ -1069,6 +1098,7 @@ public:
         };
         m_race.world.fire = [ this ]( const entity_t& owner, const char* plug ) { fire( entity_path( owner ), plug ); };
         m_race.world.sound = &m_sound;
+        m_race.world.prop_moved = [ this ]( const entity_t& owner ) { prop_moved( owner ); };
         // VuRaceGame's ctor 0x489030 loads its three HUD projects (0x4B4360) - before the boat load.
         load_huds( );
         m_race.world.hud = [ this ]( int project, race_hud_verb_t verb, float step ) { hud( project, verb, step ); };
@@ -1270,6 +1300,7 @@ public:
         };
         m_race.world.fire = [ this ]( const entity_t& owner, const char* plug ) { fire( entity_path( owner ), plug ); };
         m_race.world.sound = &m_sound;
+        m_race.world.prop_moved = [ this ]( const entity_t& owner ) { prop_moved( owner ); };
         if ( !m_race.active )
             water_frame( dt );
 
