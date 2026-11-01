@@ -776,10 +776,11 @@ inline std::uint32_t key_motion_fnv( const char* s )
     return h;
 }
 
-inline bool verify_key_motion( )
+// One replay of the key_motion layout (key_curve: + the Curve Type after the flags and the +0x90 curve after each state).
+inline int key_motion_replay( const unsigned* words, bool curves, const char* tag, unsigned& scenarios, int& steps )
 {
-    logic_check_t c{ g_golden_kfm_words };
-    int bad = 0, steps = 0, reported = 0, unrecreated = 0;
+    logic_check_t c{ words };
+    int bad = 0, reported = 0, unrecreated = 0;
     {
         const key_motion_t d;
         const std::uint32_t want[ 11 ] = { d.initially_active, d.one_shot, d.active, d.latch, d.target ? 1u : 0u, static_cast< std::uint32_t >( d.curve ),
@@ -820,6 +821,8 @@ inline bool verify_key_motion( )
         e.ease = static_cast< std::uint8_t >( fl[ 3 ] );
         e.affect_position = static_cast< std::uint8_t >( fl[ 4 ] );
         e.affect_rotation = static_cast< std::uint8_t >( fl[ 5 ] );
+        if ( curves )
+            e.curve = static_cast< std::int32_t >( c.next( ) );
         env_t env;
         env.has = has;
         env.target.transform = tnull ? nullptr : tw;
@@ -891,22 +894,52 @@ inline bool verify_key_motion( )
             st.push_back( env.target.claim == nullptr ? 0u : ( env.target.claim == &e ? 1u : 2u ) );
             for ( float x : env.mc )
                 st.push_back( control_w( x ) );
+            if ( curves )
+            {
+                st.insert( st.end( ), { static_cast< std::uint32_t >( e.cubic.size( ) ), static_cast< std::uint32_t >( e.cubic_capacity ),
+                                        e.cubic_valid } );
+                for ( const auto& r : e.cubic )
+                    for ( int j : { 0, 1, 2, 3, 4, 5, 6, 8 } )
+                        st.push_back( r[ static_cast< std::size_t >( j ) ] );
+            }
             const int diff = ( ( op == 1 || op == 2 ) && ret != arg ? 1 : 0 ) + ( env.log == want ? 0 : 1 ) + ( st == want_state ? 0 : 1 )
                              + ( unrecreated != before ? 1 : 0 );
             if ( diff && reported++ < 6 )
-                LOG_ERROR( "key_motion scenario %u step %u (op %u): log %d (%d / %d) state %d (%d / %d words) unrecreated %d", v, s, op,
+                LOG_ERROR( "%s scenario %u step %u (op %u): log %d (%d / %d) state %d (%d / %d words) unrecreated %d", tag, v, s, op,
                            env.log != want, static_cast< int >( env.log.size( ) ), static_cast< int >( want.size( ) ), st != want_state,
                            static_cast< int >( st.size( ) ), static_cast< int >( want_state.size( ) ), unrecreated - before );
             bad += diff;
             ++steps;
         }
     }
-    if ( bad == 0 )
-        LOG_SUCCESS( "VuKeyframeMotionEntity matches retail: %u scenarios, %d steps (slots 6 / 7 / 8, Activate / Deactivate, the Motion tick on "
-                     "Curve Type 0: the keys, the clock, the target's matrix and velocities)", n, steps );
-    else
-        LOG_ERROR( "key_motion FAILED %d (unrecreated %d)", bad, unrecreated );
-    return bad == 0;
+    scenarios = n;
+    if ( bad )
+        LOG_ERROR( "%s FAILED %d (unrecreated %d)", tag, bad, unrecreated );
+    return bad;
+}
+
+inline bool verify_key_motion( )
+{
+    unsigned n = 0;
+    int steps = 0;
+    if ( key_motion_replay( g_golden_kfm_words, false, "key_motion", n, steps ) )
+        return false;
+    LOG_SUCCESS( "VuKeyframeMotionEntity matches retail: %u scenarios, %d steps (slots 6 / 7 / 8, Activate / Deactivate, the Motion tick on "
+                 "Curve Type 0: the keys, the clock, the target's matrix and velocities)", n, steps );
+    return true;
+}
+
+// Curve Type 1 (case key_curve): slot 6's position curve (0x5CEC60 -> 0x61A7A0 -> 0x61AE50: every record word but +0x1C, the
+// count, capacity and valid byte) and the update's cubic branch of 0x5D0440, through the same replay.
+inline bool verify_key_curve( )
+{
+    unsigned n = 0;
+    int steps = 0;
+    if ( key_motion_replay( g_golden_kcv_words, true, "key_curve", n, steps ) )
+        return false;
+    LOG_SUCCESS( "VuKeyframeMotionEntity Curve Type 1 (Cubic) matches retail: %u scenarios, %d steps (the +0x90 spline - 0x5CEC60 / 0x61A7A0 / "
+                 "0x61AE50 - and 0x5D0440's cubic branch: the target's matrix and velocities)", n, steps );
+    return true;
 }
 
 // The settings entities' Trigger handlers (world/settings.hxx) against retail (case settings_triggers): g_vulightmanager's

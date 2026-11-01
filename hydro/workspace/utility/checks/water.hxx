@@ -2571,6 +2571,7 @@ inline bool verify_water_all( )
     ok = verify_force_affector( ) && ok;
     ok = verify_settings_triggers( ) && ok;
     ok = verify_key_motion( ) && ok;
+    ok = verify_key_curve( ) && ok;
     ok = verify_ocean_kernels96( ) && ok;
     ok = verify_water_built_tick( ) && ok;
     ok = verify_water_query96( ) && ok;

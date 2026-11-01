@@ -18,9 +18,12 @@
 // +0x88 the duration, +0x8C the clock; +0x90 .. +0xDC the spline curves of types 1 / 2 / 3; outputs "OnLoop", "OnDone".
 // Slots 6 0x5CE9E0, 7 0x5CEA40, 12 0x5CFE50 (clock = 0), 13 nullsub, 14 0x5CFE60 (the update).
 //
-// NOT RECREATED (counted in `unrecreated`, nothing done): Curve Types 1 / 2 / 3 - their set-up (0x5CEC60 / 0x5CEF20 with the
-// tangents 0x61A7A0; 0x5CF800 with 0x5133B0 / 0x61B120 / 0x61B9E0) and their branches of the evaluation 0x5D0440 (cubic
-// splines; 0x5314C0 / VuMatrix_fromEuler / 0x61B600 / 0x61C550). No race of Hydroelectric authors a Curve Type.
+// Curve Type (table 0x752C18: 0 "Linear", 1 "Cubic", 2 "Cubic Euler", 3 "Spline"): 1 is recreated - the position curve
+// 0x5CEC60 -> 0x61A7A0 -> 0x61AE50 and 0x5D0440's cubic branch (verify_key_curve, case key_curve). Every shipped project's
+// VuKeyframeMotionEntity authors Linear or Cubic (census: 33 Cubic in 9 levels, none in Hydroelectric; no 2 or 3 anywhere).
+// NOT RECREATED (counted in `unrecreated`, nothing done): Curve Types 2 / 3 - their set-up (0x5CEF20, the euler curve +0xA0;
+// 0x5CF800 with 0x5133B0 / 0x61B120 / 0x61B9E0, +0xB0 / +0xD0) and their branches of 0x5D0440 (VuMatrix_fromEuler; 0x61B600
+// / 0x61C550).
 // UNKNOWN (counted): the update's key search when the clock is below every key (a stack word retail never wrote when not
 // looping) - and the velocities' w lanes (stack words; the hook gets 0).
 // SUBSTITUTION: the qsort import (keyframe.hxx control_qsort); __libm_sse2_atan2 / asinf in the angular velocity
@@ -61,6 +64,12 @@ struct key_motion_t
     std::vector< std::array< std::uint32_t, 9 > > keys;     // +0x7C (+0x80 the count)
     std::int32_t capacity = 8;                               // +0x84
     std::uint32_t duration = 0, clock = 0;                   // +0x88 / +0x8C
+    // +0x90 the Curve Type 1 / 2 position curve (0x5CEC60): a VuArray of 36-byte records {x y z w (the key's position), the
+    // second derivatives x y z (0x61A7A0), +0x1C never written (aligned_malloc's bytes: UNKNOWN, held 0 here), the time};
+    // +0x94 the count, +0x98 the capacity (the ctor: 0), +0x9C set by 0x61A7A0.
+    std::vector< std::array< std::uint32_t, 9 > > cubic;
+    std::int32_t cubic_capacity = 0;
+    std::uint8_t cubic_valid = 0;
 };
 
 // One VuKeyframeEntity child as slot 6 reads it: its +0x60 Time and its transform's +0x50 matrix (+0x80 .. +0x8C).
@@ -170,19 +179,140 @@ inline void key_motion_set_key( key_motion_t& e, int i )
     key_motion_apply( e, m, lin, ang );
 }
 
-// 0x5D0440 (Curve Type 0; keys a, b, time t): u = (t - T_a) / (T_b - T_a); the matrix of slerp( q_a, q_b, u ) (0x5314C0,
-// 0x531180) with the translation P_a (1 - u) + P_b u per lane (identity first: VuMatrix_identity 0x410A40).
+// 0x61AE50 (stdcall: x, y, n, yp1, ypn, y2 out, u scratch) - Numerical Recipes' `spline` in float: an end slope whose double
+// is above 9.9e29 (0x6F7838; comisd / jbe: a NaN takes the clamped side) gives the natural end; the inner ratios and the
+// back substitution exactly as retail orders them (1 / p once, multiplied; y2[k] = y2[k + 1] y2[k] + u[k]).
+inline void key_motion_spline( const float* x, const float* y, int n, float yp1, float ypn, float* y2, float* u )
+{
+    const float one = 1.0f, three = 3.0f;
+    if ( static_cast< double >( yp1 ) > 9.9e29 )
+    {
+        y2[ 0 ] = 0.0f;
+        u[ 0 ] = 0.0f;
+    }
+    else
+    {
+        y2[ 0 ] = -0.5f;
+        const float inv = one / ( x[ 1 ] - x[ 0 ] );
+        u[ 0 ] = ( ( y[ 1 ] - y[ 0 ] ) * inv - yp1 ) * ( inv * three );
+    }
+    for ( int i = 1; i <= n - 2; ++i )
+    {
+        const float sig = ( x[ i ] - x[ i - 1 ] ) / ( x[ i + 1 ] - x[ i - 1 ] );
+        const float p = one / ( y2[ i - 1 ] * sig + 2.0f );
+        y2[ i ] = ( sig - one ) * p;
+        const float d = ( y[ i + 1 ] - y[ i ] ) / ( x[ i + 1 ] - x[ i ] ) - ( y[ i ] - y[ i - 1 ] ) / ( x[ i ] - x[ i - 1 ] );
+        u[ i ] = ( ( d * 6.0f ) / ( x[ i + 1 ] - x[ i - 1 ] ) - u[ i - 1 ] * sig ) * p;
+    }
+    float qn = 0.0f, un = 0.0f;
+    if ( !( static_cast< double >( ypn ) > 9.9e29 ) )
+    {
+        const float inv = one / ( x[ n - 1 ] - x[ n - 2 ] );
+        qn = 0.5f;
+        un = ( ypn - ( y[ n - 1 ] - y[ n - 2 ] ) * inv ) * ( inv * three );
+    }
+    y2[ n - 1 ] = ( un - u[ n - 2 ] * qn ) / ( y2[ n - 2 ] * qn + one );
+    for ( int k = n - 2; k >= 0; --k )
+        y2[ k ] = y2[ k + 1 ] * y2[ k ] + u[ k ];
+}
+
+// 0x61A7A0 (thiscall on the curve +0x90; start / end slopes, 3 floats each): fewer than 2 records -> false; per lane x / y / z
+// the times (record +0x20) and the lane's values through 0x61AE50 (scratch = the static 0x759898: times, u, values, y2 -
+// four runs of n floats), y2 into the record's +0x10 / +0x14 / +0x18; +0xC (the valid byte) = 1.
+inline bool key_motion_cubic_fit( key_motion_t& e, const float* start, const float* end )
+{
+    const int n = static_cast< int >( e.cubic.size( ) );
+    if ( n < 2 )
+        return false;
+    std::vector< float > x( n ), y( n ), y2( n ), u( n );
+    for ( int i = 0; i < n; ++i )
+        x[ i ] = control_f( e.cubic[ i ][ 8 ] );
+    for ( int lane = 0; lane < 3; ++lane )
+    {
+        for ( int i = 0; i < n; ++i )
+            y[ i ] = control_f( e.cubic[ i ][ lane ] );
+        key_motion_spline( x.data( ), y.data( ), n, start[ lane ], end[ lane ], y2.data( ), u.data( ) );
+        for ( int i = 0; i < n; ++i )
+            e.cubic[ i ][ 4 + lane ] = control_w( y2[ i ] );
+    }
+    e.cubic_valid = 1;
+    return true;
+}
+
+// 0x5CEC60 (Curve Types 1 and 2: the position curve): count 0, valid 0; with 2 keys or more: the capacity raised to n
+// (a fresh block, nothing copied), one record per key (position x y z w, time); the slopes: Ease In/Out on -> both 0; off ->
+// start = (P_1 - P_0) (1 / (T_1 - T_0)), end = (P_n-1 - P_n-2) (1 / (T_n-1 - T_n-2)) per lane x y z, each 0 unless the later
+// time is above the earlier (comiss / jbe: NaN -> 0); then 0x61A7A0.
+inline void key_motion_cubic_setup( key_motion_t& e )
+{
+    e.cubic.clear( );
+    e.cubic_valid = 0;
+    const int n = static_cast< int >( e.keys.size( ) );
+    if ( n < 2 )
+        return;
+    if ( n > e.cubic_capacity )
+        e.cubic_capacity = n;
+    for ( const auto& k : e.keys )
+        e.cubic.push_back( { k[ 1 ], k[ 2 ], k[ 3 ], k[ 4 ], 0u, 0u, 0u, 0u, k[ 0 ] } );
+    float start[ 3 ] = { 0.0f, 0.0f, 0.0f }, end[ 3 ] = { 0.0f, 0.0f, 0.0f };
+    if ( !e.ease )
+    {
+        auto slope = [ & ]( int a, int b, float* out )
+        {
+            const auto& ka = e.keys[ static_cast< std::size_t >( a ) ];
+            const auto& kb = e.keys[ static_cast< std::size_t >( b ) ];
+            const float ta = control_f( ka[ 0 ] ), tb = control_f( kb[ 0 ] );
+            if ( !_mm_comigt_ss( _mm_set_ss( tb ), _mm_set_ss( ta ) ) )
+                return;
+            const float inv = 1.0f / ( tb - ta );
+            for ( int j = 0; j < 3; ++j )
+                out[ j ] = inv * ( control_f( kb[ 1 + j ] ) - control_f( ka[ 1 + j ] ) );
+        };
+        slope( 0, 1, start );
+        slope( n - 2, n - 1, end );
+    }
+    key_motion_cubic_fit( e, start, end );
+}
+
+// 0x5D0440 (keys a, b, time t): u = (t - T_a) / (T_b - T_a); the rotation = the matrix of slerp( q_a, q_b, u ) (0x5314C0,
+// 0x531180; identity first: VuMatrix_identity 0x410A40) for Curve Types 0 and 1. The translation: type 0 P_a (1 - u) + P_b u
+// per lane; type 1 Numerical Recipes' `splint` on the +0x90 curve: h = its T_b - T_a, r = 1 - u, A = (r r) r - r,
+// B = (u u) u - u, lane = ((h h) (A y2_a + B y2_b)) (1/6) + (P_a r + P_b u).
 inline bool key_motion_pose( const key_motion_t& e, int a, int b, float t, float* m )
 {
     const auto& ka = e.keys[ static_cast< std::size_t >( a ) ];
     const auto& kb = e.keys[ static_cast< std::size_t >( b ) ];
     const float u = ( t - control_f( ka[ 0 ] ) ) / ( control_f( kb[ 0 ] ) - control_f( ka[ 0 ] ) );
-    if ( e.curve != 0 )
+    if ( e.curve != 0 && e.curve != 1 )
         return false;
+    if ( e.curve == 1 && ( static_cast< std::size_t >( b ) >= e.cubic.size( ) ) )
+        return false;   // retail reads past the +0x90 array (fewer than 2 keys never reaches here)
     const float r = 1.0f - u;
-    const float x = control_f( ka[ 1 ] ) * r + control_f( kb[ 1 ] ) * u;
-    const float y = control_f( ka[ 2 ] ) * r + control_f( kb[ 2 ] ) * u;
-    const float z = control_f( ka[ 3 ] ) * r + control_f( kb[ 3 ] ) * u;
+    float x, y, z;
+    if ( e.curve == 0 )
+    {
+        x = control_f( ka[ 1 ] ) * r + control_f( kb[ 1 ] ) * u;
+        y = control_f( ka[ 2 ] ) * r + control_f( kb[ 2 ] ) * u;
+        z = control_f( ka[ 3 ] ) * r + control_f( kb[ 3 ] ) * u;
+    }
+    else
+    {
+        const auto& ca = e.cubic[ static_cast< std::size_t >( a ) ];
+        const auto& cb = e.cubic[ static_cast< std::size_t >( b ) ];
+        const float h = control_f( cb[ 8 ] ) - control_f( ca[ 8 ] );
+        const float h2 = h * h;
+        const float wb = ( u * u ) * u - u, wa = ( r * r ) * r - r;
+        const float sixth = control_f( 0x3E2AAAABu );   // 0x6F761C
+        auto lane = [ & ]( int j )
+        {
+            const float curv = wa * control_f( ca[ 4 + j ] ) + wb * control_f( cb[ 4 + j ] );
+            const float line = control_f( ca[ j ] ) * r + control_f( cb[ j ] ) * u;
+            return ( h2 * curv ) * sixth + line;
+        };
+        x = lane( 0 );
+        y = lane( 1 );
+        z = lane( 2 );
+    }
     float qa[ 4 ], qb[ 4 ], q[ 4 ];
     for ( int j = 0; j < 4; ++j )
     {
@@ -345,7 +475,9 @@ inline void key_motion_game_init( key_motion_t& e, const std::vector< key_motion
                                   const key_motion_hooks_t& h )
 {
     key_motion_gather( e, children );
-    if ( e.curve == 1 || e.curve == 2 || e.curve == 3 )
+    if ( e.curve == 1 || e.curve == 2 )
+        key_motion_cubic_setup( e );
+    if ( e.curve == 2 || e.curve == 3 )
         key_motion_unrecreated( h );
     if ( h.tick_register )
         h.tick_register( h.user, e, true );
@@ -362,6 +494,8 @@ inline void key_motion_game_release( key_motion_t& e, const key_motion_hooks_t& 
     if ( h.tick_register )
         h.tick_register( h.user, e, false );
     e.keys.clear( );
+    e.cubic.clear( );     // +0x94 = 0
+    e.cubic_valid = 0;    // +0x9C = 0
 }
 
 // Slot 8 0x61A4E0 (reset): the one-shot latch cleared.
