@@ -326,6 +326,27 @@ inline std::string ui_hud_state_text( const ui_bound_t& b )
 {
     char text[ 96 ];
     std::uint32_t bits[ 4 ];
+    if ( b.m_hud_button )
+    {
+        const ui_hud_button_t& h = *b.m_hud_button;
+        std::memcpy( &bits[ 0 ], &h.m_point[ 0 ], 4 );
+        std::memcpy( &bits[ 1 ], &h.m_point[ 1 ], 4 );
+        std::memcpy( &bits[ 2 ], &h.m_boing, 4 );
+        std::memcpy( &bits[ 3 ], &h.m_time, 4 );
+        std::snprintf( text, sizeof( text ), "%02x%02x%02x.0x%08X.0x%08X.%d", h.m_down, h.m_held, h.m_up, bits[ 0 ], bits[ 1 ], h.m_state );
+        std::string out = text;
+        if ( h.m_recover )
+        {
+            std::snprintf( text, sizeof( text ), ".0x%08X.0x%08X", bits[ 2 ], bits[ 3 ] );
+            out += text;
+        }
+        return out;
+    }
+    if ( b.m_onscreen )
+    {
+        std::snprintf( text, sizeof( text ), "%02x", b.m_onscreen->m_pressed );
+        return text;
+    }
     if ( b.m_speedometer )
     {
         std::memcpy( &bits[ 1 ], &b.m_speedometer->m_v_offset, 4 );
@@ -358,6 +379,8 @@ inline bool verify_ui_hud_frames( )
     int failed = 0, steps = 0, traces = 0, states = 0, rows = 0, entities = 0, unknown_inputs = 0, unknown_events = 0, hooks_seen = 0;
     int draws = 0, commands = 0, stubs = 0, emitted = 0;
     const ui_texture_t texture_a = { g_golden_hf_textures[ 0 ].m_handle, g_golden_hf_textures[ 0 ].m_width, g_golden_hf_textures[ 0 ].m_height };
+    const golden_img_texture_t& gtb = g_golden_hf_textures[ sizeof( g_golden_hf_textures ) / sizeof( g_golden_hf_textures[ 0 ] ) > 1 ? 1 : 0 ];
+    const ui_texture_t texture_b = { gtb.m_handle, gtb.m_width, gtb.m_height };
     const golden_txt_env_t& txt = g_golden_txt_envs[ 0 ];
     auto bad = [ &failed ]( const char* what, const char* project, int step )
     {
@@ -399,9 +422,32 @@ inline bool verify_ui_hud_frames( )
             bad( "the load", gp.m_asset, -1 );
             continue;
         }
+        ui_impl_t impl;
+        const std::vector< std::uint8_t > crop = ui_unhex( gp.m_crop );
+        if ( crop.size( ) == 64 )
+            std::memcpy( impl.m_crop.m_matrix, crop.data( ), 64 );
+        // batch 17: the controls' environment (the case's touch device / input manager / CN_INVERSE)
+        ui_touch_device_t device;
+        std::vector< std::array< float, 2 > > points;
+        int pause_answer = 0;
+        float inverse[ 16 ];
+        std::memcpy( inverse, g_golden_hf_inverse, sizeof( inverse ) );
         ui_bind_hooks_t hooks;
         hooks.m_string_db = []( const char* ) { return std::string( g_golden_hf_template ); };   // the case's VuStringDB slot 6
         hooks.m_external = []( entity_t&, const char*, const ui_params_t& ) { return ui_ret_t( ); };   // the case answers { 0, 0 }
+        hooks.m_touch_device = &device;
+        hooks.m_crop = &impl.m_crop;
+        hooks.m_inverse = inverse;
+        hooks.m_touch_count = [ &points ] { return static_cast< int >( points.size( ) ); };
+        hooks.m_touch_point = [ &points ]( int k, float out[ 2 ] )
+        {
+            if ( k >= 0 && static_cast< std::size_t >( k ) < points.size( ) )
+            {
+                out[ 0 ] = points[ static_cast< std::size_t >( k ) ][ 0 ];
+                out[ 1 ] = points[ static_cast< std::size_t >( k ) ][ 1 ];
+            }
+        };
+        hooks.m_input = [ &pause_answer ]( int, const char* name ) { return std::strcmp( name, "Pause" ) == 0 && pause_answer != 0; };
         c_ui_race_hud hud( *root, hooks );
         c_ui_binding& bind = hud.binding( );
         bool same = bind.m_bound.size( ) == static_cast< std::size_t >( gp.m_entities );
@@ -434,7 +480,7 @@ inline bool verify_ui_hud_frames( )
         {
             std::vector< std::pair< int, std::string > > have;
             for ( const auto& b : bind.m_bound )
-                if ( b->m_shown || b->m_speedometer )
+                if ( b->m_shown || b->m_speedometer || b->m_hud_button || b->m_onscreen )
                     have.push_back( { b->m_index, ui_hud_state_text( *b ) } );
             bool ok = have.size( ) == static_cast< std::size_t >( count );
             for ( int k = 0; ok && k < count; ++k )
@@ -484,10 +530,27 @@ inline bool verify_ui_hud_frames( )
                 }
         };
         in.m_string = []( const std::string& id ) { return id + "~"; };   // the case's VuStringDB slot 7
-        ui_impl_t impl;
-        const std::vector< std::uint8_t > crop = ui_unhex( gp.m_crop );
-        if ( crop.size( ) == 64 )
-            std::memcpy( impl.m_crop.m_matrix, crop.data( ), 64 );
+        // batch 17: the controls' leaves live - the case's stand-ins (Texture -> texture 0, Pressed -> texture 1 for odd-length names)
+        in.m_control_texture = [ &texture_a, &texture_b ]( const entity_t& who, int which ) -> const ui_texture_t*
+        {
+            return which == 0 ? &texture_a : who.m_name.size( ) % 2 ? &texture_b : nullptr;
+        };
+        const auto parse_floats = []( const char* text, std::vector< float >& out )
+        {
+            out.clear( );
+            for ( const char* at = text; *at; )
+            {
+                char* end = nullptr;
+                const std::uint32_t v = static_cast< std::uint32_t >( std::strtoul( at, &end, 16 ) );
+                if ( end == at )
+                    break;
+                float f;
+                std::memcpy( &f, &v, 4 );
+                out.push_back( f );
+                at = *end ? end + 1 : end;
+            }
+        };
+        std::vector< float > floats;
         for ( int s = 0; s < gp.m_steps; ++s )
         {
             const golden_hf_step_t& st = g_golden_hf_steps[ gp.m_first_step + s ];
@@ -517,8 +580,41 @@ inline bool verify_ui_hud_frames( )
             env.m_control_method = gw.m_method;
             env.m_track_built = gw.m_built != 0;
             env.m_track_circuit = gw.m_circuit != 0;
+            env.m_manager_28 = static_cast< std::uint32_t >( gw.m_manager_28 );
+            env.m_method_present = true;
+            env.m_driver.m_present = gw.m_manager != 0 && gw.m_local >= 0 && gw.m_local < gw.m_boats && gw.m_driver[ 0 ] >= 0;
+            env.m_driver.m_slot12 = gw.m_driver[ 0 ] > 0;
+            env.m_driver.m_8c = static_cast< std::uint8_t >( gw.m_driver[ 1 ] );
+            env.m_driver.m_388 = static_cast< std::uint8_t >( gw.m_driver[ 2 ] );
+            parse_floats( st.m_points, floats );
+            points.clear( );
+            for ( std::size_t k = 0; k + 1 < floats.size( ); k += 2 )
+                points.push_back( { floats[ k ], floats[ k + 1 ] } );
             bind.m_trace.clear( );
-            if ( std::strcmp( st.m_op, "init" ) == 0 )
+            const auto by_name = [ &bind ]( const char* name ) -> entity_t*
+            {
+                for ( const auto& b : bind.m_bound )
+                    if ( b->m_entity->m_name == name )
+                        return b->m_entity;
+                return nullptr;
+            };
+            const bool b17_op = std::strcmp( st.m_op, "touches" ) == 0 || std::strcmp( st.m_op, "down" ) == 0 || std::strcmp( st.m_op, "up" ) == 0 ||
+                                std::strcmp( st.m_op, "move" ) == 0 || std::strcmp( st.m_op, "pause" ) == 0 || std::strcmp( st.m_op, "prio" ) == 0;
+            if ( b17_op )
+            {
+                if ( std::strcmp( st.m_op, "pause" ) == 0 )
+                    pause_answer = std::atoi( st.m_arg );
+                else if ( std::strcmp( st.m_op, "prio" ) == 0 )
+                    device.m_priority = static_cast< std::uint32_t >( std::atoi( st.m_arg ) );
+                else if ( std::strcmp( st.m_op, "touches" ) != 0 )
+                {
+                    parse_floats( st.m_point, floats );
+                    const float pt[ 2 ] = { floats.size( ) > 0 ? floats[ 0 ] : 0.0f, floats.size( ) > 1 ? floats[ 1 ] : 0.0f };
+                    if ( entity_t* who = by_name( st.m_arg ) )
+                        bind.hud_touch( *who, std::strcmp( st.m_op, "down" ) == 0 ? 0 : std::strcmp( st.m_op, "up" ) == 0 ? 1 : 2, pt );
+                }
+            }
+            else if ( std::strcmp( st.m_op, "init" ) == 0 )
                 hud.initialize( );
             else if ( std::strcmp( st.m_op, "release" ) == 0 )
                 hud.release( );
@@ -609,7 +705,9 @@ inline bool verify_ui_hud_frames( )
         LOG_SUCCESS( "c_ui_race_hud matches retail's race HUD frames over %d projects (gameInitialize 0x500B10 + OnProjectInitialized 0x501260, "
                      "VuHUDEntity tick 0x423A20, gameRelease 0x500B80; Show / Hide / SetAlpha / SetStringID, VuTriggerForwarderEntity 0x5E0FC0, "
                      "VuIfEntity, VuIsCircuitTrack 0x42E1F0, VuControlMethodEntity 0x42EAE0 / 0x42EC80, VuStartLightsOutAction 0x405470, the toast, "
-                     "the speedometer): %d entities and %d event-map rows, %d steps, %d trace entries in order (%d hooks, %d world-owned / audio "
+                     "the speedometer, the controls' ticks: on-screen 0x429E10, pause / recover 0x4255B0 + slots 13 / 14 0x4261B0 / 0x4262A0 / "
+                     "0x425DC0 / 0x425F10, touch callbacks 0x425400 / 0x425490 / 0x4254B0, VuTouch list 0x53FB90 / 0x53FA60): %d entities and "
+                     "%d event-map rows, %d steps, %d trace entries in order (%d hooks, %d world-owned / audio "
                      "inputs, %d unrecreated handlers), %d states; %d draws (0x423A70, text / image leaves live over the runtime state): %d leaves "
                      "emitted, %d commands and records byte for byte, %d unrecreated leaves (speedometer / minimap / controls - stubbed) in order",
             static_cast< int >( g_golden_hf_projects_count ), entities, rows, steps, traces, hooks_seen, unknown_inputs, unknown_events, states, draws,

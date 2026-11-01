@@ -5,6 +5,7 @@
 #include <workspace/core/boat/effects.hxx>
 #include <workspace/core/collision/leaves.hxx>
 #include <workspace/core/collision/teardown.hxx>
+#include <workspace/core/collision/arena.hxx>
 
 #include <array>
 #include <cstring>
@@ -1755,4 +1756,261 @@ inline bool verify_bt_misc( )
     }
     LOG_ERROR( "bt_misc FAILED %d of %u", failed, n );
     return false;
+}
+// verify_bt_rows (boat batch 19): engine collision/arena.hxx against
+// cases/boat.py bt_rows - thirteen Bullet rows (0x552F30, 0x5B8E10, 0x5F6700,
+// 0x526B10 + 0x526B40, 0x5AEC10, 0x54C940, 0x56E000, 0x56EA70, 0x56EB20,
+// 0x605FA0, 0x6027A0, 0x602830, 0x527160) run whole on fake objects in one
+// arena: eax (ST0 bits / al), the arena after, gNumAlignedFree, the frees,
+// the deletes, the virtual calls in order (arguments compared, retail's eax
+// and out words answered). bt_rows_verify runs one case's words through
+// `call( kind, m, io, self, args )` (it answers the row's eax).
+template < typename F > inline bool bt_rows_verify( const unsigned* g, const char* tag, const char* what, F&& call )
+{
+    struct arena_t
+    {
+        std::uint32_t base = 0;
+        std::vector< std::uint8_t > bytes;
+        bool bad = false;
+        std::vector< unsigned > frees, deletes;
+        const unsigned* vcalls = nullptr;
+        unsigned nv = 0, at = 0;
+        std::uint8_t* p( std::uint32_t a, unsigned n )
+        {
+            if ( a < base || a + n > base + bytes.size( ) )
+            {
+                bad = true;
+                return nullptr;
+            }
+            return bytes.data( ) + ( a - base );
+        }
+        // The next logged call: self, offset, count, args, eax, nout, outs.
+        const unsigned* next( std::uint32_t s, std::uint32_t off, const std::uint32_t* args, int count )
+        {
+            if ( at >= nv )
+            {
+                bad = true;
+                return nullptr;
+            }
+            const unsigned* c = vcalls;
+            for ( unsigned k = 0; k < at; ++k )
+                c += 5 + c[ 2 ] + c[ 4 + c[ 2 ] ];
+            ++at;
+            bad = bad || c[ 0 ] != s || c[ 1 ] != off || c[ 2 ] != static_cast< unsigned >( count );
+            for ( int k = 0; k < count && !bad; ++k )
+                bad = c[ 3 + k ] != args[ k ];
+            return bad ? nullptr : c;
+        }
+    };
+    const unsigned n = *g++;
+    int failed = 0, calls = 0, frees = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = *g++, address = *g++, self = *g++, base = *g++, eax = *g++, c0 = *g++, c1 = *g++, na = *g++;
+        const unsigned* args = g;
+        g += na;
+        arena_t x;
+        x.base = base;
+        const unsigned nf = *g++;
+        const std::vector< unsigned > want_frees( g, g + nf );
+        g += nf;
+        const unsigned nd = *g++;
+        const std::vector< unsigned > want_deletes( g, g + nd );
+        g += nd;
+        x.nv = *g++;
+        x.vcalls = g;
+        for ( unsigned k = 0; k < x.nv; ++k )
+            g += 5 + g[ 2 ] + g[ 4 + g[ 2 ] ];
+        const unsigned nch = *g++;
+        const unsigned* changed = g;
+        g += 2 * nch;
+        const unsigned nw = *g++;
+        x.bytes.assign( reinterpret_cast< const std::uint8_t* >( g ), reinterpret_cast< const std::uint8_t* >( g + nw ) );
+        g += nw;
+        std::vector< std::uint8_t > want( x.bytes );
+        for ( unsigned k = 0; k < nch; ++k )
+            std::memcpy( want.data( ) + 4 * changed[ 2 * k ], &changed[ 2 * k + 1 ], 4 );
+        std::uint32_t counter = c0;
+        bt_mem_t m;
+        m.user = &x;
+        m.num_aligned_free = &counter;
+        m.rd = []( void* u, std::uint32_t a ) -> std::uint32_t {
+            std::uint32_t w = 0;
+            if ( std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 4 ) )
+                std::memcpy( &w, q, 4 );
+            return w;
+        };
+        m.rd8 = []( void* u, std::uint32_t a ) -> std::uint8_t {
+            std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 1 );
+            return q ? *q : 0;
+        };
+        m.wr = []( void* u, std::uint32_t a, std::uint32_t w ) {
+            if ( std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 4 ) )
+                std::memcpy( q, &w, 4 );
+        };
+        m.wr8 = []( void* u, std::uint32_t a, std::uint8_t b ) {
+            if ( std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 1 ) )
+                *q = b;
+        };
+        m.aligned_free = []( void* u, std::uint32_t q ) { static_cast< arena_t* >( u )->frees.push_back( q ); };
+        m.release = []( void* u, std::uint32_t q ) { static_cast< arena_t* >( u )->deletes.push_back( q ); };
+        m.vcall = []( void* u, std::uint32_t s, std::uint32_t off, const std::uint32_t* a, int count ) -> std::uint32_t {
+            arena_t& y = *static_cast< arena_t* >( u );
+            const unsigned* c = y.next( s, off, a, count );
+            if ( !c )
+                return 0;
+            y.bad = y.bad || c[ 4 + c[ 2 ] ] != 0;
+            return c[ 3 + c[ 2 ] ];
+        };
+        bt_io_t io;
+        io.m = &m;
+        io.vcall_out = []( void* u, std::uint32_t s, std::uint32_t off, const std::uint32_t* a, int count, std::uint32_t* out, int words ) -> std::uint32_t {
+            arena_t& y = *static_cast< arena_t* >( u );
+            const unsigned* c = y.next( s, off, a, count );
+            if ( !c )
+                return 0;
+            if ( c[ 4 + c[ 2 ] ] != static_cast< unsigned >( words ) )
+            {
+                y.bad = true;
+                return 0;
+            }
+            std::memcpy( out, c + 5 + c[ 2 ], 4u * static_cast< unsigned >( words ) );
+            return c[ 3 + c[ 2 ] ];
+        };
+        const std::uint32_t r = call( kind, m, io, self, args );
+        calls += static_cast< int >( x.nv );
+        frees += static_cast< int >( nf );
+        const bool same = !x.bad && x.at == x.nv && r == eax && counter == c1 && x.frees == want_frees && x.deletes == want_deletes && x.bytes == want;
+        if ( !same && ++failed <= 4 )
+        {
+            std::size_t first = 0;
+            while ( first < want.size( ) && x.bytes[ first ] == want[ first ] )
+                ++first;
+            LOG_ERROR( "%s %u (0x%06X): eax 0x%08X (retail 0x%08X), arena %s (first at +0x%X), calls %s, frees %d (retail %u)", tag, v, address, r,
+                       eax, x.bytes == want ? "same" : "differs", static_cast< unsigned >( first ), x.bad || x.at != x.nv ? "differ" : "same",
+                       static_cast< int >( x.frees.size( ) ), nf );
+            if ( first + 16 <= want.size( ) )
+            {
+                std::uint32_t h[ 4 ], w[ 4 ];
+                std::memcpy( h, x.bytes.data( ) + ( first & ~3u ), 16 );
+                std::memcpy( w, want.data( ) + ( first & ~3u ), 16 );
+                LOG_ERROR( "   ours %08X %08X %08X %08X retail %08X %08X %08X %08X", h[ 0 ], h[ 1 ], h[ 2 ], h[ 3 ], w[ 0 ], w[ 1 ], w[ 2 ], w[ 3 ] );
+            }
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "%s match retail: %u calls, %d virtual calls, %d frees", what, n, calls, frees );
+        return true;
+    }
+    LOG_ERROR( "%s FAILED %d of %u", tag, failed, n );
+    return false;
+}
+
+inline bool verify_bt_rows( )
+{
+    return bt_rows_verify( g_golden_bt_rows_words, "bt_rows",
+        "thirteen Bullet rows 0x552F30 .. 0x527160 (collision/arena.hxx: scaling, point collector, three dtors, removeCollisionObject, the "
+        "broadphase's getAabb / getBroadphaseAabb / resetPool, the convex result callbacks, recalculateLocalAabb)",
+        []( unsigned kind, const bt_mem_t& m, const bt_io_t& io, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            switch ( kind )
+            {
+                case 1: bt_convex_internal_set_scaling( m, self, args[ 0 ] ); return 0;
+                case 2: bt_point_collector_add( m, self, args[ 0 ], args[ 1 ], args[ 2 ] ); return 0;
+                case 3: return bt_convex_triangle_callback_delete( m, self, args[ 0 ] );
+                case 4: return bt_compound_shape_delete( m, self, args[ 0 ] );
+                case 5: return bt_bvh_mesh_shape_delete( m, self, args[ 0 ] );
+                case 6: bt_collision_world_remove_object( m, self, args[ 0 ] ); return 0;
+                case 7: bt_dbvt_broadphase_get_aabb( m, args[ 0 ], args[ 1 ], args[ 2 ] ); return 0;
+                case 8: bt_dbvt_broadphase_world_aabb( m, self, args[ 0 ], args[ 1 ] ); return 0;
+                case 9: bt_dbvt_broadphase_reset_pool( m, self ); return 0;
+                case 10: return bt_closest_convex_add_single_result( m, self, args[ 0 ], args[ 1 ] );
+                case 11: return bt_closest_not_me_add_single_result( m, self, args[ 0 ], args[ 1 ] );
+                case 12: return bt_closest_not_me_needs_collision( m, self, args[ 0 ] ) ? 1u : 0u;
+                default: bt_compound_recalculate_local_aabb( io, self ); return 0;
+            }
+        } );
+}
+
+// verify_bt_rows2 (boat batch 19): cases/boat.py bt_rows2 - the polyhedral
+// calculateLocalInertia 0x54B4C0 (vt+0x28 is retail's getMargin leaf 0x43D5C0
+// in the case: fld [this + 0x30] - answered here from the arena) and the
+// btTriangleShape rows 0x5B7D60 / 0x5B7E20 / 0x5B7FA0 / 0x5B7FC0 / 0x5B83D0.
+inline bool verify_bt_rows2( )
+{
+    return bt_rows_verify( g_golden_bt_rows2_words, "bt_rows2",
+        "six Bullet rows 0x54B4C0 / 0x5B7D60 / 0x5B7E20 / 0x5B7FA0 / 0x5B7FC0 / 0x5B83D0 (collision/arena.hxx: the polyhedral "
+        "calculateLocalInertia, btTriangleShape's support / batched support / getPlane / getPlaneEquation / penetration direction)",
+        []( unsigned kind, const bt_mem_t& m, const bt_io_t& io, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            switch ( kind )
+            {
+                case 1:
+                    bt_polyhedral_local_inertia( io, self, args[ 0 ], args[ 1 ],
+                        []( const bt_mem_t& q, std::uint32_t s ) -> std::uint32_t { return q.rd( q.user, s + 0x30 ); } );   // 0x43D5C0
+                    return 0;
+                case 2: bt_triangle_support( m, self, args[ 0 ], args[ 1 ] ); return 0;
+                case 3: bt_triangle_support_batch( m, self, args[ 0 ], args[ 1 ], args[ 2 ] ); return 0;
+                case 4: return bt_triangle_get_plane( m, self, args );
+                case 5: bt_triangle_plane_equation( m, self, args[ 1 ], args[ 2 ] ); return 0;
+                default: bt_triangle_penetration_direction( m, self, args[ 0 ], args[ 1 ] ); return 0;
+            }
+        } );
+}
+
+// verify_bt_rows3 (boat batch 19): cases/boat.py bt_rows3 - 0x5263F0,
+// 0x57B840, 0x552570, 0x624520, 0x56FAD0, 0x413340, 0x551E90.
+inline bool verify_bt_rows3( )
+{
+    return bt_rows_verify( g_golden_bt_rows3_words, "bt_rows3",
+        "seven Bullet rows 0x5263F0 / 0x57B840 / 0x552570 / 0x624520 / 0x56FAD0 / 0x413340 / 0x551E90 (collision/arena.hxx: the polyhedral "
+        "dtor, CProfileNode::Reset, LocalConvexResult, the island manager / sequential solver ctors, btMatrix3x3, btHashMap::findIndex)",
+        []( unsigned kind, const bt_mem_t& m, const bt_io_t&, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            switch ( kind )
+            {
+                case 1: return bt_polyhedral_shape_delete( m, self, args[ 0 ] );
+                case 2: bt_profile_node_reset( m, self ); return 0;
+                case 3: return bt_local_convex_result_construct( m, self, args );
+                case 4: return bt_island_manager_construct( m, self );
+                case 5: return bt_sequential_solver_construct( m, self );
+                case 6: return bt_matrix3x3_construct( m, self, args );
+                default: return bt_hash_map_find_index( m, self, args[ 0 ] );
+            }
+        } );
+}
+
+// verify_bt_rows4 (boat batch 19): cases/boat.py bt_rows4 - btBoxShape::
+// getHalfExtentsWithMargin 0x548B20 (vt+0x28 = retail's leaf 0x43D5C0 in the
+// case: fld [this + 0x30]) and btCollisionDispatcher's ctor 0x56D1B0.
+inline bool verify_bt_rows4( )
+{
+    return bt_rows_verify( g_golden_bt_rows4_words, "bt_rows4",
+        "two Bullet rows 0x548B20 / 0x56D1B0 (collision/arena.hxx: getHalfExtentsWithMargin, the collision dispatcher's ctor with its 36 x 36 "
+        "double-dispatch table)",
+        []( unsigned kind, const bt_mem_t& m, const bt_io_t&, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            if ( kind == 1 )
+                return bt_box_half_extents_with_margin( m, self, args[ 0 ],
+                    []( const bt_mem_t& q, std::uint32_t s ) -> std::uint32_t { return q.rd( q.user, s + 0x30 ); } );   // 0x43D5C0
+            return bt_collision_dispatcher_construct( m, self, args[ 0 ] );
+        } );
+}
+
+// verify_bt_rows5 (boat batch 19): cases/boat.py bt_rows5 - the
+// serialization rows 0x554620 / 0x554670 / 0x43D680 / 0x5AEAC0 / 0x5AF5F0 /
+// 0x5AF640 / 0x605C90.
+inline bool verify_bt_rows5( )
+{
+    return bt_rows_verify( g_golden_bt_rows5_words, "bt_rows5",
+        "seven Bullet serialization rows 0x554620 / 0x554670 / 0x43D680 / 0x5AEAC0 / 0x5AF5F0 / 0x5AF640 / 0x605C90 (collision/arena.hxx)",
+        []( unsigned kind, const bt_mem_t& m, const bt_io_t&, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            switch ( kind )
+            {
+                case 1: return bt_shape_serialize( m, self, args[ 0 ], args[ 1 ] );
+                case 2: bt_shape_serialize_single( m, self, args[ 0 ] ); return 0;
+                case 3: return bt_convex_internal_serialize( m, self, args[ 0 ], args[ 1 ], false );
+                case 4: return bt_convex_internal_serialize( m, self, args[ 0 ], args[ 1 ], true );
+                case 5: bt_bvh_serialize_single_bvh( m, self, args[ 0 ] ); return 0;
+                case 6: bt_bvh_serialize_single_info_map( m, self, args[ 0 ] ); return 0;
+                default: bt_world_serialize_rigid_bodies( m, self, args[ 0 ] ); return 0;
+            }
+        } );
 }

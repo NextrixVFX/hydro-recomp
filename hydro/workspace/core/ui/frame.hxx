@@ -223,6 +223,10 @@ struct ui_frame_inputs_t
     // +0x108 (image +0xB4) alpha - what Show / Hide / SetAlpha left - in place of the loaded Visible / the
     // ctor's 1.0. false: none (the loaded values stay).
     std::function< bool( const entity_t&, std::uint8_t& visible, float& alpha ) > m_shown;
+    // Optional (the race HUD, overlay.hxx, batch 17): a pause / recover / on-screen control's Texture Asset
+    // (which 0) / Pressed Texture Asset (which 1) texture (+0xCC / +0xD0 -> +0x4C -> +0x58; null: no asset or
+    // no texture). Set: those leaves emit through controls.hxx over the binding's runtime state.
+    std::function< const ui_texture_t*( const entity_t&, int which ) > m_control_texture;
 };
 
 // A loaded entity's own / its first UI draw component's property bits.
