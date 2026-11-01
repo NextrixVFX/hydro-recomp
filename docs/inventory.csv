@@ -409,25 +409,25 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4194D0,547,sub_4194D0,,,unattributed,absent,,False,False,race
 0x419700,1502,sub_419700,,,unattributed,verified,hydro/workspace/core/boat/effects.hxx; hydro/workspace/core/world/build.hxx; hydro/workspace/core/world/drive.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x419CE0,132,sub_419CE0,,,unattributed,absent,,False,False,race
-0x419D70,380,VuBoat_selectHullEffect,,,unattributed,cited,hydro/workspace/core/boat/load.hxx,False,False,race
-0x419EF0,256,sub_419EF0,,,unattributed,cited,hydro/workspace/core/boat/load.hxx,False,False,race
-0x419FF0,240,sub_419FF0,,,unattributed,cited,hydro/workspace/core/boat/load.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/core/world/race.hxx,False,False,race
-0x41A0E0,183,sub_41A0E0,,,unattributed,cited,hydro/workspace/core/boat/effects.hxx; hydro/workspace/core/world/pfxsim.hxx,False,False,race
-0x41A1A0,1175,VuBoatEntity_load_Pfx,,,unattributed,absent,,False,False,race
-0x41A640,334,sub_41A640,,,unattributed,cited,hydro/workspace/core/world/pfxsim.hxx,False,False,race
+0x419D70,380,VuBoat_selectHullEffect,,,unattributed,verified,hydro/workspace/core/boat/effects.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
+0x419EF0,256,sub_419EF0,,,unattributed,verified,hydro/workspace/core/boat/effects.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
+0x419FF0,240,sub_419FF0,,,unattributed,verified,hydro/workspace/core/boat/effects.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/core/world/race.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
+0x41A0E0,183,sub_41A0E0,,,unattributed,verified,hydro/workspace/core/boat/effects.hxx; hydro/workspace/core/world/pfxsim.hxx,False,False,race
+0x41A1A0,1175,VuBoatEntity_load_Pfx,,,unattributed,verified,hydro/workspace/core/boat/effects.hxx,False,False,race
+0x41A640,334,sub_41A640,,,unattributed,verified,hydro/workspace/core/boat/effects.hxx; hydro/workspace/core/world/pfxsim.hxx,False,False,race
 0x41A790,826,sub_41A790,,,unattributed,verified,hydro/workspace/core/boat/effects.hxx; hydro/workspace/core/world/drive.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x41AAD0,145,sub_41AAD0,,,unattributed,verified,hydro/workspace/core/boat/effects.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x41AB70,104,sub_41AB70,,,unattributed,verified,hydro/workspace/core/boat/effects.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x41ABE0,101,sub_41ABE0,,,unattributed,verified,hydro/workspace/core/boat/effects.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x41AC50,104,sub_41AC50,,,unattributed,verified,hydro/workspace/core/boat/effects.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x41ACC0,104,sub_41ACC0,,,unattributed,cited,hydro/workspace/core/world/pfxsim.hxx,False,False,race
-0x41AD70,212,sub_41AD70,,,unattributed,absent,,False,False,race
-0x41AE50,66,sub_41AE50,,,unattributed,absent,,False,False,race
-0x41AEA0,146,sub_41AEA0,,,unattributed,absent,,False,False,race
-0x41AF40,242,sub_41AF40,,,unattributed,absent,,False,False,race
-0x41B040,99,sub_41B040,,,unattributed,absent,,False,False,race
+0x41AD70,212,sub_41AD70,,,unattributed,verified,hydro/workspace/core/boat/effects.hxx,False,False,race
+0x41AE50,66,sub_41AE50,,,unattributed,callee,,False,False,race
+0x41AEA0,146,sub_41AEA0,,,unattributed,callee,,False,False,race
+0x41AF40,242,sub_41AF40,,,unattributed,callee,,False,False,race
+0x41B040,99,sub_41B040,,,unattributed,verified,hydro/workspace/core/boat/effects.hxx,False,False,race
 0x41B0B0,46,sub_41B0B0,,,unattributed,absent,,False,False,race
-0x41B0E0,208,sub_41B0E0,,,unattributed,absent,,False,False,race
+0x41B0E0,208,sub_41B0E0,,,unattributed,callee,,False,False,race
 0x41B1B0,112,sub_41B1B0,,,unattributed,verified,hydro/workspace/core/boat/parts.hxx; hydro/workspace/utility/check.hxx,False,False,race
 0x41B220,118,sub_41B220,,,unattributed,absent,,False,False,race
 0x41B2A0,110,sub_41B2A0,,,unattributed,verified,hydro/workspace/core/assets/scene.hxx; hydro/workspace/core/world/build.hxx; hydro/workspace/core/world/surface.hxx; hydro/workspace/core/world/watchers.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
@@ -5111,7 +5111,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x524050,99,sub_524050,,,water (by address),verified,hydro/workspace/core/boat/meshes.hxx,False,False,race
 0x5240C0,618,sub_5240C0,,,water (by address),verified,hydro/workspace/core/boat/construct.hxx; hydro/workspace/core/boat/parts.hxx; hydro/workspace/utility/check.hxx,False,False,race
 0x524330,112,sub_524330,,,unattributed,absent,,False,False,dead
-0x5243A0,165,sub_5243A0,,,unattributed,verified,hydro/workspace/core/boat/load.hxx; hydro/workspace/core/boat/meshes.hxx; hydro/workspace/core/boat/thunk.hxx,False,False,race
+0x5243A0,165,sub_5243A0,,,unattributed,verified,hydro/workspace/core/boat/effects.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/core/boat/meshes.hxx; hydro/workspace/core/boat/thunk.hxx,False,False,race
 0x524450,1434,VuFluidSolver_prepare,,,unattributed,verified,hydro/workspace/core/boat/fluid.hxx; hydro/workspace/core/boat/thunk.hxx; hydro/workspace/core/world/pfxsim.hxx; hydro/workspace/core/world/spray.hxx; hydro/workspace/utility/checks/water.hxx; hydro/workspace/utility/fluid.hxx,False,False,race
 0x5249F0,5777,VuFluidSolver_solve,,,unattributed,verified,hydro/workspace/core/boat/fluid.hxx; hydro/workspace/utility/fluid.hxx,False,False,race
 0x526090,147,sub_526090,,,unattributed,verified,hydro/workspace/core/boat/load.hxx; hydro/workspace/core/boat/meshes.hxx,False,False,race
@@ -5246,7 +5246,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x52EF50,491,loader_0052EF50_load_ParentIndex,,,engine core / math / containers (by address),absent,,False,False,race
 0x52F140,180,sub_52F140,,,engine core / math / containers (by address),absent,,False,False,race
 0x52F200,446,sub_52F200,,,engine core / math / containers (by address),absent,,False,False,race
-0x52F3C0,91,VuSkeleton_findNodeByName,,,engine core / math / containers (by address),absent,,False,False,race
+0x52F3C0,91,VuSkeleton_findNodeByName,,,engine core / math / containers (by address),cited,hydro/workspace/core/boat/effects.hxx,False,False,race
 0x52F420,145,sub_52F420,,,engine core / math / containers (by address),absent,,False,False,race
 0x52F4C0,337,sub_52F4C0,,,engine core / math / containers (by address),absent,,False,False,race
 0x52F620,104,sub_52F620,,,engine core / math / containers (by address),cited,hydro/workspace/core/world/blend.hxx; hydro/workspace/core/world/session.hxx,False,False,dead
