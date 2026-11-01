@@ -10,7 +10,8 @@
 // of: a constant in eax (getShapeType / calculateSerializeBufferSize / a
 // count), a name (getName: the text's address and its text), this + k, the
 // word or byte at this + k, a byte constant in al, nothing, ST0 = 1.0, or the
-// word at this + k = 0; `pop` is what its ret pops (stdcall-cleaned
+// word at this + k = 0, the first argument stored at this + k, or the word at
+// this + k plus a constant; `pop` is what its ret pops (stdcall-cleaned
 // arguments). al forms leave eax's upper bytes as they were (UNKNOWN to the
 // caller), so do nop / one / store_zero for all of eax.
 enum class bt_leaf_kind_t
@@ -24,6 +25,8 @@ enum class bt_leaf_kind_t
     nop,
     one,
     store_zero,
+    store_arg,   // the first stack argument's word at this + k (mov or movss)
+    load_add,    // the word at this + k, plus value
 };
 
 struct bt_leaf_t
@@ -78,6 +81,10 @@ inline constexpr bt_leaf_t k_bt_leaves[] = {
     { 0x605C50u, bt_leaf_kind_t::load, 0xACu, 0x0u, 0, nullptr },   // VuDynamicsWorldImpl+23; btDiscreteDynamicsWorld+23
     { 0x605C60u, bt_leaf_kind_t::load, 0xB8u, 0x0u, 0, nullptr },   // VuDynamicsWorldImpl+24; btDiscreteDynamicsWorld+24
     { 0x5749C0u, bt_leaf_kind_t::store_zero, 0x7Cu, 0x0u, 0, nullptr },   // btSequentialImpulseConstraintSolver+4
+    { 0x5269A0u, bt_leaf_kind_t::load_add, 0x80u, 0x10u, 0, nullptr },   // btConvexTriangleMeshShape+6
+    { 0x5523C0u, bt_leaf_kind_t::store_arg, 0x50u, 0x0u, 4, nullptr },   // btCollisionWorld+2; VuDynamicsWorldImpl+2; btDiscreteDynamicsWorld+2 ...
+    { 0x575820u, bt_leaf_kind_t::store_arg, 0x4u, 0x0u, 4, nullptr },   // VuDynamicsDebugDrawerImpl+10
+    { 0x5AF6C0u, bt_leaf_kind_t::store_arg, 0xCu, 0x0u, 4, nullptr },   // btBvhTriangleMeshShape+9; btTriangleMeshShape+9
 };
 
 inline const bt_leaf_t* bt_leaf_find( std::uint32_t address )
@@ -99,7 +106,7 @@ struct bt_leaf_result_t
     float st0 = 0.0f;
 };
 
-inline bt_leaf_result_t bt_leaf_call( const bt_leaf_t& l, std::uint8_t* object, std::uint32_t self )
+inline bt_leaf_result_t bt_leaf_call( const bt_leaf_t& l, std::uint8_t* object, std::uint32_t self, std::uint32_t arg0 = 0 )
 {
     bt_leaf_result_t r;
     switch ( l.kind )
@@ -133,6 +140,14 @@ inline bt_leaf_result_t bt_leaf_call( const bt_leaf_t& l, std::uint8_t* object, 
         break;
     case bt_leaf_kind_t::store_zero:
         std::memset( object + l.k, 0, 4 );
+        break;
+    case bt_leaf_kind_t::store_arg:
+        std::memcpy( object + l.k, &arg0, 4 );
+        break;
+    case bt_leaf_kind_t::load_add:
+        std::memcpy( &r.eax, object + l.k, 4 );
+        r.eax += l.value;
+        r.eax_mask = 0xFFFFFFFFu;
         break;
     }
     return r;

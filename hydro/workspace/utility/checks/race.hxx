@@ -2784,7 +2784,7 @@ inline bool verify_bt_leaves( )
         std::memcpy( object, g, 0x200 ); g += 0x80;
         std::uint8_t before[ 0x200 ];
         std::memcpy( before, object, 0x200 );
-        const unsigned eax = *g++, st0 = *g++, pop = *g++;
+        const unsigned arg0 = *g++, eax = *g++, st0 = *g++, pop = *g++;
         std::vector< std::pair< unsigned, unsigned > > changed( *g++ );
         for ( auto& c : changed )
         {
@@ -2797,7 +2797,7 @@ inline bool verify_bt_leaves( )
         bool same = l != nullptr;
         if ( same )
         {
-            const bt_leaf_result_t r = bt_leaf_call( *l, object, self );
+            const bt_leaf_result_t r = bt_leaf_call( *l, object, self, arg0 );
             same = ( r.eax & r.eax_mask ) == ( eax & r.eax_mask ) && l->pop == pop;
             if ( r.st0_set )
             {
