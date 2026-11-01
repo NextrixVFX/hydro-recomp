@@ -10,8 +10,10 @@
 // the scrapes (0x4ADC00) and empties the arrays.
 
 #include <workspace/core/boat/events.hxx>
+#include <workspace/core/boat/surface.hxx>
 #include <workspace/core/world/pfxmgr.hxx>
 
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -119,16 +121,134 @@ inline void collision_contact_added( collision_manager_t& m, const std::uint8_t*
     r.strength = s;
 }
 
-// The surface-pair tables init 0x4AD110 loads from "SurfaceTableDB" (0x4AD690,
-// not recreated here): +0x14 the surface type count (g_vudynamicsimpl
-// vt+0x4C), then four types x types arrays of 64-byte names - +0x18
-// "ImpactSfx", +0x24 "ScrapeSfx", +0x30 "ImpactPfx" (prefix "Generic/Impact/"),
-// +0x3C "ScrapePfx" ("Generic/Scrape/"); cell (a, b) = entry a x types + b.
+// The surface-pair tables init 0x4AD110 loads from "SurfaceTableDB" (0x4AD690
+// below): +0x14 the surface type count (g_vudynamicsimpl vt+0x4C), then four
+// VuArray<char[64]> (data, count, capacity) - +0x18 "ImpactSfx", +0x24
+// "ScrapeSfx", +0x30 "ImpactPfx" (prefix "Generic/Impact/"), +0x3C
+// "ScrapePfx" ("Generic/Scrape/"); cell (a, b) = entry a x types + b.
+using collision_name_t = std::array< char, 64 >;
+
 struct collision_tables_t
 {
     std::int32_t types = 0;
-    std::vector< std::string > impact_sfx, scrape_sfx, impact_pfx, scrape_pfx;
+    vu_array_t< collision_name_t > impact_sfx, scrape_sfx, impact_pfx, scrape_pfx;
 };
+
+// VuArray<char[64]>::resize 0x4AE420 (thiscall(array, n), retn 4): when n >
+// the capacity, capacity = max( n, capacity + capacity / 2 ) (a new block, the
+// count's entries copied, the old freed); count = n.
+inline void collision_names_resize( vu_array_t< collision_name_t >& a, std::int32_t n )
+{
+    if ( n > a.capacity )
+    {
+        const std::int32_t c = a.capacity;
+        const std::int32_t grow = c + c / 2;
+        vu_array_reserve( a, n > grow ? n : grow );
+    }
+    a.count = n;
+}
+
+// One table's load 0x4AD690 (thiscall manager; key, table, prefix; retn 0xC)
+// on the asset's document (+0x58): resize to types x types, memset the count's
+// cells to 0; t = document["VuDBAsset"][key] (0x4FBDF0). An element read
+// (0x4FBC10) is the array's i-th for an array (tag 5) and 0 <= i < size, else
+// the null container; a name is a string's (tag 4) text, else "". Row ids:
+// for i < count( t ) (0x4FBC40: an array's size, else 0): ids_r[ i ] = the
+// surface id (g_vudynamicsimpl vt+0x54 = boat/surface.hxx surface_id, a
+// BYTE) of t[ i ][ 0 ] - the first element only when t[ i ] is an array with
+// one or more; column ids: for j < count( t[ 0 ] ): ids_c[ j ] = the id of
+// t[ 0 ][ j ]. Then for 1 <= r < count( t ), 1 <= c < count( t[ r ] ):
+// strcpy_s( buf, 256, prefix ), strcat_s( buf, 256, t[ r ][ c ] ),
+// strncpy_s( cell( ids_r[ r ], ids_c[ c ] ), 64, buf, 63 ) - at most 63
+// characters and the NUL; the bytes after it keep what the cell held. NOT
+// MODELLED: a prefix + name of 256 or more (strcat_s's invalid-parameter
+// path) and more than 256 rows / columns (the two 256-byte id arrays on the
+// stack overrun) - SurfaceTableDB has 16 x 16.
+inline void collision_table_load( collision_tables_t& t, vu_array_t< collision_name_t >& table, const value_t& document, const char* key,
+                                  const char* prefix, const surface_table_t& surfaces )
+{
+    collision_names_resize( table, t.types * t.types );
+    for ( std::int32_t i = 0; i < table.count; ++i )
+        table.data[ static_cast< std::size_t >( i ) ].fill( 0 );
+    static const value_t null{};
+    auto count = []( const value_t& v ) { return v.tag == 5 ? static_cast< std::int32_t >( v.list.size( ) ) : 0; };
+    auto element = []( const value_t& v, std::int32_t i ) -> const value_t& {
+        return v.tag == 5 && i >= 0 && i < static_cast< std::int32_t >( v.list.size( ) ) ? v.list[ static_cast< std::size_t >( i ) ] : null;
+    };
+    auto name = []( const value_t& v ) { return v.tag == 4 ? v.text.c_str( ) : ""; };
+    const value_t& rows = member( member( document, "VuDBAsset" ), key );
+    std::uint8_t ids_r[ 256 ] = {}, ids_c[ 256 ] = {};
+    for ( std::int32_t i = 0; i < count( rows ) && i < 256; ++i )
+    {
+        const value_t& row = element( rows, i );
+        const value_t& first = row.tag == 5 && !row.list.empty( ) ? row.list[ 0 ] : null;
+        ids_r[ i ] = surface_id( surfaces, name( first ) );
+    }
+    const value_t& head = element( rows, 0 );
+    for ( std::int32_t j = 0; j < count( head ) && j < 256; ++j )
+        ids_c[ j ] = surface_id( surfaces, name( element( head, j ) ) );
+    for ( std::int32_t r = 1; r < count( rows ) && r < 256; ++r )
+    {
+        const value_t& row = element( rows, r );
+        for ( std::int32_t c = 1; c < count( row ) && c < 256; ++c )
+        {
+            const std::string buf = std::string( prefix ) + name( element( row, c ) );
+            collision_name_t& cell = table.data[ static_cast< std::size_t >( ids_c[ c ] + t.types * ids_r[ r ] ) ];
+            const std::size_t n = buf.size( ) < 63 ? buf.size( ) : 63;
+            std::memcpy( cell.data( ), buf.data( ), n );
+            cell[ n ] = '\0';
+        }
+    }
+}
+
+// The ctor 0x4ACDF0 (create 0x4ACD30: new 0x60, +8 .. +0x54 zeroed first):
+// vtables 0x745434 / the listener's 0x74542C, +8 .. +0x14 zero, the four
+// tables with capacity 8 (count 0), the impacts and the scrapes with capacity
+// 8 then reserved to 32; then g 0x759020 vt+0x18 ( "CollisionManager", {50,
+// 10, 40, 80} ) - the dev stats page registration (a dev hook, not made).
+inline void collision_manager_construct( collision_manager_t& m, collision_tables_t& t )
+{
+    m = collision_manager_t( );
+    t = collision_tables_t( );
+    for ( vu_array_t< collision_name_t >* a : { &t.impact_sfx, &t.scrape_sfx, &t.impact_pfx, &t.scrape_pfx } )
+        vu_array_reserve( *a, 8 );
+    vu_array_reserve( m.impacts, 8 );
+    vu_array_reserve( m.scrapes, 8 );
+    vu_array_reserve( m.impacts, 32 );
+    vu_array_reserve( m.scrapes, 32 );
+}
+
+// The init 0x4AD110 (thiscall manager -> true). HOOKS: g_vudynamicsimpl slot
+// 13 (vt+0x34) addContactListener( manager + 4 ), the asset manager's load of
+// "SurfaceTableDB" (0x4AE5A0 on g 0x759004; +0x10 = the asset, whose +0x58
+// document `asset` answers), the tick manager's (g 0x759008 vt+0x20)
+// registration of the tick 0x4AD970 in the "Decision" phase. +0x14 =
+// g_vudynamicsimpl vt+0x4C = surface_count( surfaces ); the four loads in
+// the order ImpactSfx, ScrapeSfx, ImpactPfx, ScrapePfx.
+struct collision_init_hooks_t
+{
+    void* user = nullptr;
+    void ( *add_listener )( void* user ) = nullptr;
+    const value_t* ( *asset )( void* user, const char* name ) = nullptr;
+    void ( *register_tick )( void* user, const char* phase ) = nullptr;
+};
+
+inline bool collision_manager_init( collision_tables_t& t, const surface_table_t& surfaces, const collision_init_hooks_t& h )
+{
+    if ( h.add_listener != nullptr )
+        h.add_listener( h.user );
+    t.types = surface_count( surfaces );
+    static const value_t none{};
+    const value_t* doc = h.asset != nullptr ? h.asset( h.user, "SurfaceTableDB" ) : nullptr;
+    const value_t& d = doc != nullptr ? *doc : none;
+    collision_table_load( t, t.impact_sfx, d, "ImpactSfx", "", surfaces );
+    collision_table_load( t, t.scrape_sfx, d, "ScrapeSfx", "", surfaces );
+    collision_table_load( t, t.impact_pfx, d, "ImpactPfx", "Generic/Impact/", surfaces );
+    collision_table_load( t, t.scrape_pfx, d, "ScrapePfx", "Generic/Scrape/", surfaces );
+    if ( h.register_tick != nullptr )
+        h.register_tick( h.user, "Decision" );
+    return true;
+}
 
 // The impact tick's outside world. AUDIO (platform: FMOD's event API, hooks):
 // +8 is the "Global/Collisions/Collisions_Player" event group (0x4AD970 fetches
@@ -171,7 +291,7 @@ inline void collision_impact_tick( collision_manager_t& m, const collision_table
         const collision_impact_t& r = m.impacts.data[ static_cast< std::size_t >( i ) ];
         const std::size_t cell = static_cast< std::size_t >( r.part_a * t.types + r.part_b );
         std::uint32_t event = 0;
-        if ( k.get_event != nullptr && k.get_event( k.user, t.impact_sfx[ cell ].c_str( ), event ) )
+        if ( k.get_event != nullptr && k.get_event( k.user, t.impact_sfx.data[ cell ].data( ), event ) )
         {
             if ( k.set_position != nullptr )
                 k.set_position( k.user, event, r.point );
@@ -181,7 +301,7 @@ inline void collision_impact_tick( collision_manager_t& m, const collision_table
             if ( k.start != nullptr )
                 k.start( k.user, event );
         }
-        const int e = pfx_manager_create( pm, t.impact_pfx[ cell ].c_str( ), ops );
+        const int e = pfx_manager_create( pm, t.impact_pfx.data[ cell ].data( ), ops );
         if ( e < 0 )
             continue;
         const std::uint32_t handle = pfx_manager_handle( pm, e );

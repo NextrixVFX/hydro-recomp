@@ -383,10 +383,10 @@ struct cim_log_t
     }
 };
 
-inline unsigned cim_cell( const std::vector< std::string >& names, const char* s )
+inline unsigned cim_cell( const vu_array_t< collision_name_t >& names, const char* s )
 {
-    for ( std::size_t c = 0; c < names.size( ); ++c )
-        if ( names[ c ].c_str( ) == s )
+    for ( std::size_t c = 0; c < names.data.size( ); ++c )
+        if ( names.data[ c ].data( ) == s )
             return static_cast< unsigned >( c );
     return 0xFFFFu;
 }
@@ -400,8 +400,11 @@ inline bool verify_collision_impact( )
     const unsigned nc = *s++;
     for ( unsigned c = 0; c < nc; ++c, s += 2 )
     {
-        t.impact_sfx.push_back( s[ 0 ] ? "sfx_" + std::to_string( c ) : "" );
-        t.impact_pfx.push_back( s[ 1 ] ? "Generic/Impact/p" + std::to_string( c ) : "" );
+        const std::string a = s[ 0 ] ? "sfx_" + std::to_string( c ) : "", b = s[ 1 ] ? "Generic/Impact/p" + std::to_string( c ) : "";
+        t.impact_sfx.data.emplace_back( );
+        t.impact_pfx.data.emplace_back( );
+        std::memcpy( t.impact_sfx.data.back( ).data( ), a.c_str( ), a.size( ) + 1 );
+        std::memcpy( t.impact_pfx.data.back( ).data( ), b.c_str( ), b.size( ) + 1 );
     }
     pfx_heap_t heap;
     heap.add( arg + 0x1000u, 0xE000u );
@@ -501,5 +504,69 @@ inline bool verify_collision_impact( )
                      "processes, %u entries", nt, np, ne );
     else
         LOG_ERROR( "collision_impact FAILED %d", bad );
+    return bad == 0;
+}
+// VuCollisionManager's ctor 0x4ACDF0 / init 0x4AD110 (world/collide.hxx collision_manager_construct / _init, the loads 0x4AD690)
+// against retail (case collision_init) on the pack's SurfaceTableDB, with boat/surface.hxx's table built from SurfaceDB.
+inline bool verify_collision_init( )
+{
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    std::vector< std::uint8_t > sdb, stdb;
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) || !archive.read( "VuDBAsset/SurfaceDB", sdb ) || !archive.read( "VuDBAsset/SurfaceTableDB", stdb ) )
+    {
+        LOG_ERROR( "collision_init: the pack's SurfaceDB / SurfaceTableDB are not readable" );
+        return false;
+    }
+    const value_t surface_db = c_reader( sdb ).parse( );
+    const value_t table_db = c_reader( stdb ).parse( );
+    surface_table_t surfaces;
+    surface_table_build( surfaces, &surface_db );
+    const unsigned* s = g_golden_cin_words;
+    collision_manager_t m;
+    collision_tables_t t;
+    collision_manager_construct( m, t );
+    int bad = 0;
+    const vu_array_t< collision_name_t >* tables[ 4 ] = { &t.impact_sfx, &t.scrape_sfx, &t.impact_pfx, &t.scrape_pfx };
+    for ( int k = 0; k < 4; ++k )   // ctor words +0x18 + 0xC k: data present, count, capacity
+        bad += ( s[ 6 + 3 * k ] != 1u ) + ( s[ 7 + 3 * k ] != static_cast< unsigned >( tables[ k ]->count ) ) +
+               ( s[ 8 + 3 * k ] != static_cast< unsigned >( tables[ k ]->capacity ) );
+    bad += ( s[ 19 ] != static_cast< unsigned >( m.impacts.count ) ) + ( s[ 20 ] != static_cast< unsigned >( m.impacts.capacity ) );
+    bad += ( s[ 22 ] != static_cast< unsigned >( m.scrapes.count ) ) + ( s[ 23 ] != static_cast< unsigned >( m.scrapes.capacity ) );
+    s += 24;
+    struct log_t
+    {
+        const value_t* doc;
+        unsigned listener = 0, asset = 0, tick = 0;
+    } log{ &table_db };
+    collision_init_hooks_t h;
+    h.user = &log;
+    h.add_listener = []( void* u ) { static_cast< log_t* >( u )->listener = 1; };
+    h.asset = []( void* u, const char* name ) -> const value_t* {
+        log_t& l = *static_cast< log_t* >( u );
+        l.asset = std::strcmp( name, "SurfaceTableDB" ) == 0 ? 1u : 0u;
+        return l.doc;
+    };
+    h.register_tick = []( void* u, const char* phase ) { static_cast< log_t* >( u )->tick = std::strcmp( phase, "Decision" ) == 0 ? 1u : 0u; };
+    const bool ok = collision_manager_init( t, surfaces, h );
+    bad += ( ok ? 1u : 0u ) != s[ 0 ];
+    bad += s[ 1 ] != 1u;   // +0x10 = the asset the hook answered
+    bad += static_cast< unsigned >( t.types ) != s[ 2 ];
+    bad += ( log.listener != s[ 3 ] ) + ( log.asset != s[ 4 ] ) + ( log.tick != s[ 5 ] );
+    s += 6;
+    int cells = 0;
+    for ( int k = 0; k < 4; ++k )
+    {
+        const unsigned count = *s++, capacity = *s++;
+        bad += ( count != static_cast< unsigned >( tables[ k ]->count ) ) + ( capacity != static_cast< unsigned >( tables[ k ]->capacity ) );
+        for ( unsigned c = 0; c < count && c < tables[ k ]->data.size( ); ++c, ++cells )
+            bad += std::memcmp( tables[ k ]->data[ c ].data( ), s + 16 * c, 64 ) != 0;
+        s += 16 * count;
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "collision_manager_construct / _init match VuCollisionManager's 0x4ACDF0 / 0x4AD110 (0x4AD690, 0x4AE420) on SurfaceTableDB: "
+                     "%d types, %d cells of 64 bytes", t.types, cells );
+    else
+        LOG_ERROR( "collision_init FAILED %d", bad );
     return bad == 0;
 }
