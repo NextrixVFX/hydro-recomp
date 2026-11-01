@@ -2707,10 +2707,12 @@ inline bool verify_property_save( )
 #include <workspace/utility/checks/watchers.hxx>
 #include <workspace/utility/checks/wrapper.hxx>
 #include <workspace/utility/checks/logic.hxx>
+#include <workspace/utility/checks/render.hxx>
 
 inline bool verify_water_all( )
 {
     bool ok = true;
+    ok = verify_render_all( ) && ok;
     ok = verify_pfx_all( ) && ok;
     ok = verify_water_template_maps( ) && ok;
     ok = verify_pfx_system_instance( ) && ok;
