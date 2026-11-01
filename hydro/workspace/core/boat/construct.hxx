@@ -353,7 +353,7 @@ inline boat_graph_t boat_construct( const value_t& constant_db )
         vu_rigid_body_construct( body, cinfo.image, 16, -1, unique, boat_motion_get, &motion );
         body_word( body, 0x1F4 ) = 0;   // +500 the motion state: a pointer
         body_word( body, 0 ) = 0x0074CFF0u;   // the VuRigidBody vtable, retail's last store over the btRigidBody one
-        std::memcpy( g.objects[ k ].image.data( ) + 16, &body, sizeof( body ) );
+        std::memcpy( g.objects[ k ].image.data( ) + 16, &body, 0x2D4 );   // the body's 0x2D4 bytes (sizeof is 0x2E0: 16-byte alignment padding)
         boat_ref( g, k, 16 + 500, 0, 92 );
         boat_ref( g, k, 16 + 704, 0, 0 );
         boat_ref( g, k, 16 + 708, 0, 100 );
