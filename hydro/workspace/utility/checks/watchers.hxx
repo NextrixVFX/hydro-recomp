@@ -372,11 +372,77 @@ inline bool verify_static_pfx_motion( )
         LOG_ERROR( "static_pfx_motion FAILED %d of %u", failed, n );
     return failed == 0;
 }
+// g_pfx_types (world/pfxclass.hxx) against the three getType slots (case pfx_types: called, the chain walked).
+inline bool verify_pfx_types( )
+{
+    int bad = 0;
+    const std::size_t n = sizeof( g_pfx_types ) / sizeof( g_pfx_types[ 0 ] );
+    for ( std::size_t i = 0; i < g_golden_pty_count; ++i )
+    {
+        const golden_water_type_t& g = g_golden_pty[ i ];
+        const water_type_t* t = nullptr;
+        for ( std::size_t k = 0; k < n; ++k )
+            if ( g_pfx_types[ k ].address == g.address )
+                t = &g_pfx_types[ k ];
+        if ( t == nullptr || t->descriptor != g.descriptor || std::strcmp( t->chain, g.chain ) != 0 )
+        {
+            ++bad;
+            LOG_ERROR( "pfx_types 0x%X: descriptor / chain differ (retail 0x%X %s)", g.address, g.descriptor, g.chain );
+        }
+    }
+    bad += n != g_golden_pty_count ? 1 : 0;
+    if ( bad == 0 )
+        LOG_SUCCESS( "g_pfx_types match the pfx classes' %d getType slots 0x552D40 / 0x5CAA20 / 0x5CB950 (descriptor and chain each)",
+            static_cast< int >( n ) );
+    else
+        LOG_ERROR( "pfx_types FAILED %d", bad );
+    return bad == 0;
+}
+
+// water_point_entity_layout / water_point_entity_emit / water_texture_settings_apply against 0x5D4CB0 / 0x5D4B40 / 0x5D2B00
+// (case water_small): per point entity the layout box (w lanes excepted), the pending byte and the answer; per settings
+// call the renderer block's 10 words around the copy and the answer.
+inline bool verify_water_small( )
+{
+    const unsigned* s = g_golden_wsl_words;
+    int bad = 0;
+    const unsigned np = *s++;
+    for ( unsigned v = 0; v < np; ++v, s += 11 )
+    {
+        water_point_entity_t e{};
+        e.desc[ 7 ] = s[ 0 ];
+        water_layout_box_t box{};
+        water_point_entity_layout( e, box );
+        for ( int k = 0; k < 8; ++k )
+            bad += box.known[ k ] && box.word[ k ] != s[ 1 + k ];
+        const std::uint32_t out = water_point_entity_emit( e );
+        bad += ( e.pending ? 1u : 0u ) != s[ 9 ] || out != s[ 10 ];
+    }
+    const unsigned nt = *s++;
+    for ( unsigned v = 0; v < nt; ++v, s += 20 )
+    {
+        std::uint32_t block[ 10 ];
+        for ( int k = 0; k < 10; ++k )
+            block[ k ] = 0x11111111u;
+        const std::uint32_t out = water_texture_settings_apply( s[ 8 ] != 0, s, block + 1 );
+        for ( int k = 0; k < 10; ++k )
+            bad += block[ k ] != s[ 9 + k ];
+        bad += out != s[ 19 ];
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "water_point_entity_layout / _emit and water_texture_settings_apply match 0x5D4CB0 / 0x5D4B40 / 0x5D2B00: %u point entities, "
+                     "%u settings calls", np, nt );
+    else
+        LOG_ERROR( "water_small FAILED %d", bad );
+    return bad == 0;
+}
 inline bool verify_watchers_all( )
 {
     bool ok = true;
     ok = verify_water_controls( ) && ok;
     ok = verify_water_surface_motion( ) && ok;
     ok = verify_static_pfx_motion( ) && ok;
+    ok = verify_pfx_types( ) && ok;
+    ok = verify_water_small( ) && ok;
     return ok;
 }

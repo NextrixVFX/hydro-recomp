@@ -451,3 +451,12 @@ inline const pfx_class_t* pfx_class_find( const char* name )
     }
     return nullptr;
 }
+
+// The pfx classes' getType slots outside the node classes above (6 bytes: mov
+// eax, descriptor; ret) - surface.hxx's water_type_t: the static VuRTTI
+// descriptor and the chain it names.
+inline const water_type_t g_pfx_types[] = {
+    { 0x552D40u, 0x736970u, "VuPfxEntity|VuEntity" },
+    { 0x5CAA20u, 0x736B50u, "VuPfxAsset|VuGenericDataAsset|VuAsset" },
+    { 0x5CB950u, 0x736B70u, "VuPfxProjectEntity|VuEntity" },
+};

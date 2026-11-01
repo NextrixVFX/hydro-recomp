@@ -290,3 +290,41 @@ inline bool pfx_static_motion( entity_t& e, const pfx_static_entity_t& p, const 
         o.set_matrix( o.user, p.instance, motion_matrix );
     return ran;
 }
+// ---------------------------------------------------------------------------
+// SMALL HANDLERS.
+//
+// VuPointWaveEntity's Emit plug 0x5D4B40 (thiscall entity; VuRetVal* out,
+// params; retn 8): the pending byte +0x9C = 1 (the tick 0x5D4C50 emits on it),
+// the answer the empty VuRetVal (type word 0).
+inline std::uint32_t water_point_entity_emit( water_point_entity_t& e )
+{
+    e.pending = true;
+    return 0u;
+}
+
+// VuPointWaveEntity's Range End watcher 0x5D4CB0 (the ctor installs it on
+// that property, +0x8C = desc word 7 here): its Vu3dLayoutComponent (+0x64)
+// box +0x18 .. +0x37 = (-R, -R, -0.0 (0x80000000), w) .. (R, R, 0, w) - -R by
+// xorps 0x6F7CD0; both w lanes are stack words never written (UNKNOWN).
+inline void water_point_entity_layout( const water_point_entity_t& e, water_layout_box_t& layout )
+{
+    const std::uint32_t r = e.desc[ 7 ];
+    const std::uint32_t box[ 8 ] = { r ^ 0x80000000u, r ^ 0x80000000u, 0x80000000u, 0u, r, r, 0u, 0u };
+    for ( int k = 0; k < 8; ++k )
+    {
+        layout.word[ k ] = box[ k ];
+        layout.known[ k ] = k != 3 && k != 7;
+    }
+}
+
+// VuWaterTextureSettingsEntity's plug 0x5D2B00 (thiscall entity; out,
+// params; retn 8): when g_vuwater (0x759058) exists, the entity's +0x60 ..
+// +0x7F (four movq) to the water renderer's (water +0x1C -> [0]) settings
+// +4 .. +0x23 - the renderer is the platform's: `settings` is that block
+// (8 words), untouched without the water. Answers the empty VuRetVal (0).
+inline std::uint32_t water_texture_settings_apply( bool water, const std::uint32_t* entity_words, std::uint32_t* settings )
+{
+    if ( water )
+        std::memcpy( settings, entity_words, 32 );
+    return 0u;
+}
