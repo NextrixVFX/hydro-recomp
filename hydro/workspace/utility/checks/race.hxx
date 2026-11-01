@@ -11,6 +11,7 @@
 #include <workspace/core/boat/surface.hxx>
 #include <workspace/core/boat/nuisance.hxx>
 #include <workspace/core/boat/contact.hxx>
+#include <workspace/core/boat/events.hxx>
 
 #include <algorithm>
 #include <array>
@@ -2383,6 +2384,43 @@ inline bool verify_nuisance_start_ctor( )
     LOG_ERROR( "nuisance_start_ctor FAILED %d checks", failed );
     return false;
 }
+// VuBoatEntity's OnCameraShake 0x41E7B0 / OnRumble 0x41E950 (-> 0x41E2E0) against retail (oracle case boat_events):
+// the camera's shake words and the driver's rumble pair, bit for bit.
+inline bool verify_boat_events( )
+{
+    const unsigned* g = g_golden_boat_events_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++, vtable = *g++;
+        std::uint8_t drv[ 0x100 ] = {}, cam[ 0x300 ] = {}, params[ 0x84 ] = {};
+        std::memcpy( drv + 0xC8, g, 8 ); g += 2;
+        std::memcpy( cam + 0x2E4, g, 28 ); g += 7;
+        std::memcpy( params, g, 32 ); g += 8;
+        std::memcpy( params + 0x80, g, 4 ); g += 1;
+        const unsigned* after = g;
+        g += 10;
+        if ( fn == 1 )
+            boat_on_camera_shake( cam, params );
+        else
+            boat_on_rumble( drv, vtable, params );
+        unsigned mine[ 10 ];
+        std::memcpy( mine, cam + 0x2E4, 28 );
+        std::memcpy( mine + 7, drv + 0xC8, 8 );
+        mine[ 9 ] = 1;
+        if ( !std::equal( mine, mine + 10, after ) && ++failed <= 8 )
+            LOG_ERROR( "boat_events vector %u (handler %u): +0x2E4 0x%08X (retail 0x%08X), +0x2E8 0x%08X (0x%08X), +0xC8 0x%08X (0x%08X), +0xCC 0x%08X (0x%08X)",
+                       v, fn, mine[ 0 ], after[ 0 ], mine[ 1 ], after[ 1 ], mine[ 7 ], after[ 7 ], mine[ 8 ], after[ 8 ] );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuBoatEntity OnCameraShake 0x41E7B0 / OnRumble 0x41E950 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "boat_events FAILED %d of %u vectors", failed, nv );
+    return false;
+}
 // The contact-added callback 0x574E90 -> 0x5751F0 -> 0x519720 against retail (oracle case contact_added): the manifold
 // point after (every word, bit for bit), the return, and each listener / callback call's record (but its stale-stack
 // words) with the case's scripted write-backs replayed.
@@ -2747,6 +2785,7 @@ inline bool verify_race_all( )
     ok = verify_boat_manager_game( ) && ok;
     ok = verify_nuisance_start( ) && ok;
     ok = verify_nuisance_start_ctor( ) && ok;
+    ok = verify_boat_events( ) && ok;
     ok = verify_contact_added( ) && ok;
     ok = verify_boat_rtti( ) && ok;
     ok = verify_human_explosion( ) && ok;
