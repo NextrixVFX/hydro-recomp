@@ -1,6 +1,6 @@
 #pragma once
 
-#include <workspace/core/ui/select.hxx>
+#include <workspace/core/ui/expand.hxx>
 
 #include <cstdint>
 #include <string>
@@ -23,6 +23,7 @@ struct ui_dock_t
     bool m_allow_special = false;   // +0x2E0
     const value_t* m_boat_db = nullptr;
     const value_t* m_skin_db = nullptr;
+    const value_t* m_champ_db = nullptr;   // gameutil +20 (slot 21 only)
 };
 
 // A DB entry: document ["VuDBAsset"] (lookup) then std::map::find by the
@@ -284,4 +285,79 @@ inline bool ui_dock_initialize( ui_dock_t& d, ui_config_env_t& env, const value_
         return false;
     h.sound( "Global/Voice/vo_menu_ChooseYourBoat" );
     return !d.m_base.m_fault;
+}
+
+// 0x4D3D40 (thiscall gameutil, boat, mode): BoatDB's entry for the boat; null
+// -> false; false when an element of its "DisallowedModes" (an array) has the
+// mode as its text; else true.
+inline bool ui_dock_mode_allowed( const ui_dock_t& d, const std::string& boat, const std::string& mode )
+{
+    const value_t& entry = ui_db_entry( d.m_boat_db, boat );
+    if ( entry.tag == 0 )
+        return false;
+    const value_t& modes = member( entry, "DisallowedModes" );
+    for ( int j = 0; j < ui_json_size( modes ); ++j )
+        if ( ui_json_text( ui_json_element( modes, j ) ) == mode )
+            return false;
+    return true;
+}
+
+// Slot 21 (+84) 0x44D450 (thiscall this, option, choice): whether slot 4's copy
+// drops the choice. Mode = GameConfig.Mode's text, Course = GameConfig.Course's.
+// "Boat" (exactly): BoatDB's Class text for the value; kept only when the
+// package test 0x4D3B80 passes, the class is not "S" unless "Allow Special
+// Boats" (+0x2E0), and 0x4D3D40 allows the mode - then Slalom with Course
+// "CourseA" / "CourseB" / "CourseC" keeps only the class "A" / "B" / "C"
+// (exactly), Championship keeps only the class equal to ChampDB [GameConfig.
+// Championship's text] ["Class"]'s text; others keep it. "Skin": SkinDB's entry
+// for the value - RubberDucky drops one with no "Team" (tag 0), any other mode
+// drops one with a "Team". Anything else is kept.
+inline bool ui_dock_excluded( const ui_dock_t& d, const value_t& root, const value_t& option, const value_t& choice,
+                              const std::function< bool( const std::string& ) >& package )
+{
+    const std::string& mode = ui_json_text( member( member( root, "GameConfig" ), "Mode" ) );
+    const std::string& course = ui_json_text( member( member( root, "GameConfig" ), "Course" ) );
+    const std::string& name = ui_json_text( member( option, "Name" ) );
+    const std::string& value = ui_json_text( member( choice, "Value" ) );
+    if ( name == "Boat" )
+    {
+        const std::string& cls = ui_json_text( member( ui_db_entry( d.m_boat_db, value ), "Class" ) );
+        if ( !ui_db_package_ok( d.m_boat_db, value, package ) || ( !d.m_allow_special && cls == "S" ) || !ui_dock_mode_allowed( d, value, mode ) )
+            return true;
+        if ( mode == "Slalom" )
+        {
+            if ( course == "CourseA" && cls != "A" )
+                return true;
+            if ( course == "CourseB" && cls != "B" )
+                return true;
+            if ( course == "CourseC" && cls != "C" )
+                return true;
+            return false;
+        }
+        if ( mode == "Championship" )
+        {
+            const std::string& champ = ui_json_text( member( member( root, "GameConfig" ), "Championship" ) );
+            return cls != ui_json_text( member( ui_db_entry( d.m_champ_db, champ ), "Class" ) );
+        }
+        return false;
+    }
+    if ( name == "Skin" )
+    {
+        const value_t& entry = ui_db_entry( d.m_skin_db, value );
+        if ( mode == "RubberDucky" )
+            return member( entry, "Team" ).tag == 0;
+        return member( entry, "Team" ).tag != 0;
+    }
+    return false;
+}
+
+// VuBoatConfigEntity's slot 4 (0x448120 -> 0x449640) into `doc` / the combos.
+inline bool ui_dock_build( ui_dock_t& d, ui_config_env_t& env, value_t& doc, const value_t* option_db, const std::string& entry, std::uint32_t flags,
+                           const ui_profile_t& p, const ui_config_hooks_t& h )
+{
+    ui_config_class_t cls;
+    ui_dock_class( cls, d, env, p, h );
+    value_t& root = *env.m_root;
+    auto excluded = [ &d, &root, &p ]( const value_t& option, const value_t& choice ) { return ui_dock_excluded( d, root, option, choice, p.package ); };
+    return ui_config_build( d.m_base, env, doc, option_db, entry, excluded, flags, cls, p, h );
 }

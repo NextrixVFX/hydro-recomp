@@ -224,6 +224,11 @@ struct ui_profile_t
     std::function< bool( const value_t& option, std::string& out ) > next_choice;
     std::function< bool( const std::string& value ) > progress;
     std::function< bool( ) > store_beta;
+    std::function< bool( const std::string& asset ) > package;  // the asset factory 0x759004 slot +0x90
+    // The progress manager's best placing (rank out; it starts at 0x7FFFFFFF):
+    // slot +88 (championship name) and slot +48 (mode, track, course, 0, ...).
+    std::function< int( const std::string& championship ) > champ_rank;
+    std::function< int( const std::string& mode, const std::string& track, const std::string& course ) > race_rank;
     bool has_progress = true;
     bool has_unlock = true;
 };
@@ -241,6 +246,8 @@ struct ui_config_combo_t
     int m_index = 0;
     float m_shown = 0.0f;
     std::vector< std::uint8_t > m_locked;
+    std::string m_string_id;                  // +4
+    std::vector< std::string > m_choice_ids;  // each entry's VuString
 };
 
 // The selector entity's fields the walk reads.
@@ -285,6 +292,10 @@ struct ui_config_hooks_t
     std::function< void( ) > touch;
     std::function< bool( const std::string& plug, const ui_params_t& p ) > fire;
     std::function< void( const char* event ) > sound;
+    // VuGameConfigEntity: the trophy model set 0x520080 (a model asset property:
+    // the asset factory) and the 3D draw manager g 0x7590B8 slot +40 add.
+    std::function< void( const char* model ) > trophy;
+    std::function< void( ) > draw_add;
 };
 
 // VuParams' bool add 0x4051A0: with size + 5 <= 128, type 3 then one byte.
