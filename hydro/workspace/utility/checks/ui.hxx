@@ -2,6 +2,7 @@
 
 #include <workspace/core/ui/action.hxx>
 #include <workspace/core/ui/entity.hxx>
+#include <workspace/core/ui/hud.hxx>
 #include <workspace/core/ui/button.hxx>
 #include <workspace/core/ui/flow.hxx>
 #include <workspace/core/ui/screen.hxx>
@@ -761,9 +762,82 @@ inline bool verify_ui_actions( )
     return failed == 0;
 }
 
+// c_ui_hud_element (hydro core/ui/hud.hxx) against retail's VuHUDElementEntity
+// slot 12 0x423F40 (oracle case hud_element_text): every Type 0..8 over the
+// hand-made worlds - the text, the alpha +264, the StringDB keys asked for.
+inline bool verify_ui_hud_element( )
+{
+    std::vector< std::string > keys;
+    ui_hud_hooks_t hooks;
+    hooks.m_string = [ &keys ]( const char* key )
+    {
+        keys.push_back( key );
+        return std::string( "<" ) + key + ">";
+    };
+    int failed = 0;
+    c_ui_hud_element fresh( hooks );
+    std::uint32_t alpha_bits = 0;
+    std::memcpy( &alpha_bits, &fresh.m_alpha, 4 );
+    if ( alpha_bits != g_golden_hud_initial_alpha || fresh.m_type != g_golden_hud_initial_type )
+    {
+        LOG_ERROR( "ui hud element: the ctor's alpha / Type differ from retail" );
+        ++failed;
+    }
+    const auto bits = []( unsigned w )
+    {
+        float f;
+        std::memcpy( &f, &w, 4 );
+        return f;
+    };
+    for ( std::size_t k = 0; k < g_golden_hud_vectors_count; ++k )
+    {
+        const golden_hud_vector_t& want = g_golden_hud_vectors[ k ];
+        const golden_hud_world_t& gw = g_golden_hud_worlds[ want.m_world ];
+        std::vector< ui_hud_boat_t > store( static_cast< std::size_t >( gw.m_boats ) );
+        ui_hud_world_t world;
+        world.m_manager = gw.m_manager != 0;
+        world.m_settings = gw.m_settings != 0;
+        world.m_local = gw.m_local;
+        world.m_boat_count = gw.m_count;
+        world.m_units = gw.m_units;
+        for ( int b = 0; b < gw.m_boats; ++b )
+        {
+            const golden_hud_boat_t& g = g_golden_hud_boats[ gw.m_first_boat + b ];
+            ui_hud_boat_t& o = store[ static_cast< std::size_t >( b ) ];
+            o.m_lap = g.m_lap;
+            o.m_time_1200 = bits( g.m_time_1200 );
+            o.m_time_1204 = bits( g.m_time_1204 );
+            o.m_time_1208 = bits( g.m_time_1208 );
+            o.m_place = g.m_place;
+            o.m_laps = g.m_laps;
+            o.m_wrong_way = bits( g.m_wrong_way );
+            world.m_boats.push_back( g.m_present ? &o : nullptr );
+        }
+        c_ui_hud_element e( hooks );
+        e.m_type = want.m_type;
+        e.m_alpha = bits( 0x12345678u );
+        keys.clear( );
+        const std::string& text = e.text( world );
+        std::memcpy( &alpha_bits, &e.m_alpha, 4 );
+        bool same = text == want.m_text && &text == &e.m_text && alpha_bits == want.m_alpha && keys.size( ) == static_cast< std::size_t >( want.m_keys );
+        for ( int n = 0; same && n < want.m_keys; ++n )
+            same = keys[ static_cast< std::size_t >( n ) ] == g_golden_hud_keys[ want.m_first_key + n ];
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui hud element: world '%s' Type %d gave '%s', retail '%s'", gw.m_name, want.m_type, text.c_str( ), want.m_text );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_hud_element matches retail's VuHUDElementEntity text 0x423F40 (+ the time formatter 0x53F5E0) on %d vectors: "
+                     "every Type over %d worlds - the text, the alpha +264, the StringDB keys",
+            static_cast< int >( g_golden_hud_vectors_count ), static_cast< int >( sizeof( g_golden_hud_worlds ) / sizeof( g_golden_hud_worlds[ 0 ] ) ) );
+    else
+        LOG_ERROR( "the HUD element's text FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_hud_element( ) && ok;
     ok = verify_ui_actions( ) && ok;
     ok = verify_ui_front_end_enter( ) && ok;
     ok = verify_ui_screen_events( ) && ok;
