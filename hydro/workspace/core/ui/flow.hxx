@@ -76,13 +76,59 @@ struct ui_params_reader_t
 struct front_end_engine_t
 {
     // g_vufademanager 0x758FC4: +4 the fade duration, +8 the fade value, +12
-    // its rate. Its own tick (which moves +8 and ends the fade) is NOT read:
-    // whoever owns it drives +12.
-    struct
+    // its rate, +16 a frame-skip count (ui_fade_t below, with its tick).
+    struct ui_fade_t
     {
         float m_duration = 0.0f;
         float m_value = 0.0f;
         float m_rate = 0.0f;
+        std::uint32_t m_skip = 0;
+
+        // The create 0x4AED60: duration 1.0, the rest 0 (the ConstantDB's
+        // FadeManagerDefaultDuration replaces +4 at init 0x4AEDB0).
+        static ui_fade_t created( )
+        {
+            ui_fade_t f;
+            f.m_duration = 1.0f;
+            return f;
+        }
+
+        // The tick 0x4AEE50 (phase "Final"; its own dt argument is unused):
+        // a pending skip is spent first; else, with a rate that is not 0
+        // (ucomiss: NaN counts as not equal), value += rate x the tick
+        // manager's delta (g 0x759008 slot 15 - `delta` here); past 1.0
+        // "OnFadeOutComplete" is broadcast and value = 1, below 0
+        // "OnFadeInComplete" and value = 0, the rate 0 either way. `broadcast`
+        // is VuEventManager's by-name broadcast 0x505650 (empty VuParams).
+        void tick( float delta, const std::function< void( const char* ) >& broadcast )
+        {
+            if ( m_skip != 0 )
+            {
+                --m_skip;
+                return;
+            }
+            if ( m_rate == 0.0f )
+                return;
+            m_value = m_rate * delta + m_value;
+            if ( m_value > 1.0f )
+            {
+                if ( broadcast )
+                    broadcast( "OnFadeOutComplete" );
+                m_value = 1.0f;
+                m_rate = 0.0f;
+            }
+            else if ( 0.0f > m_value )
+            {
+                if ( broadcast )
+                    broadcast( "OnFadeInComplete" );
+                m_value = 0.0f;
+                m_rate = 0.0f;
+            }
+        }
+
+        // The draw 0x4AEF70 runs only while value > 0: a full-screen quad of
+        // colour (0, 0, 0, value) - the quad itself is the rendering layer.
+        bool draws( ) const { return m_value > 0.0f; }
     } m_fade;
     // g_vugameutil 0x758FF8: +100 the last screen operation ("set" / "push" /
     // "pop"), +124 the screen it named; +68 the music channel and +72 its

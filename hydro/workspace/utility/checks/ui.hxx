@@ -894,9 +894,69 @@ inline bool verify_ui_hud_speedometer( )
     return failed == 0;
 }
 
+// front_end_engine_t::ui_fade_t (hydro core/ui/flow.hxx) against retail's
+// VuFadeManager create 0x4AED60 and tick 0x4AEE50 (oracle case fade_tick):
+// the four fields after every step, the draw gate 0x4AEF70, the broadcasts.
+inline bool verify_ui_fade( )
+{
+    using fade_t = front_end_engine_t::ui_fade_t;
+    fade_t f = fade_t::created( );
+    std::vector< std::string > log;
+    const std::function< void( const char* ) > broadcast = [ &log ]( const char* name ) { log.push_back( name ); };
+    const auto words = [ &f ]( std::uint32_t out[ 4 ] )
+    {
+        std::memcpy( &out[ 0 ], &f.m_duration, 4 );
+        std::memcpy( &out[ 1 ], &f.m_value, 4 );
+        std::memcpy( &out[ 2 ], &f.m_rate, 4 );
+        out[ 3 ] = f.m_skip;
+    };
+    int failed = 0;
+    std::uint32_t have[ 4 ];
+    words( have );
+    if ( std::memcmp( have, g_golden_fade_initial, sizeof( have ) ) != 0 )
+    {
+        LOG_ERROR( "ui fade: the create's fields differ from retail" );
+        ++failed;
+    }
+    for ( std::size_t k = 0; k < g_golden_fade_steps_count; ++k )
+    {
+        const golden_fade_step_t& st = g_golden_fade_steps[ k ];
+        log.clear( );
+        if ( std::strcmp( st.m_op, "write" ) == 0 )
+        {
+            if ( st.m_offset == 16 )
+                f.m_skip = st.m_word;
+            else
+                std::memcpy( st.m_offset == 8 ? &f.m_value : &f.m_rate, &st.m_word, 4 );
+        }
+        else
+        {
+            float delta;
+            std::memcpy( &delta, &st.m_word, 4 );
+            f.tick( delta, broadcast );
+        }
+        words( have );
+        bool same = std::memcmp( have, st.m_fields, sizeof( have ) ) == 0 && f.draws( ) == ( st.m_draws != 0 ) &&
+                    log.size( ) == static_cast< std::size_t >( st.m_logs );
+        for ( int n = 0; same && n < st.m_logs; ++n )
+            same = log[ static_cast< std::size_t >( n ) ] == g_golden_fade_logs[ st.m_first_log + n ];
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui fade: step %d (%s) gave %08X %08X %08X %u, retail %08X %08X %08X %u", static_cast< int >( k ), st.m_op, have[ 0 ], have[ 1 ],
+                have[ 2 ], have[ 3 ], st.m_fields[ 0 ], st.m_fields[ 1 ], st.m_fields[ 2 ], st.m_fields[ 3 ] );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the fade manager matches retail's VuFadeManager (create 0x4AED60, tick 0x4AEE50, draw gate 0x4AEF70) on %d steps: "
+                     "value / rate / skip, OnFadeOutComplete / OnFadeInComplete",
+            static_cast< int >( g_golden_fade_steps_count ) );
+    else
+        LOG_ERROR( "the fade manager FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_fade( ) && ok;
     ok = verify_ui_hud_speedometer( ) && ok;
     ok = verify_ui_hud_element( ) && ok;
     ok = verify_ui_actions( ) && ok;
