@@ -790,6 +790,228 @@ inline void wake_vertex( const wake_wave_t& wave, float x, float y, float* displ
     height = ( ( sine * weight ) * wave.scale ) + height;
 }
 
+// The x87 fold + fsincos the wake's +96 kernel runs on its phase (0x52D5B7 ..
+// 0x52D610): |p| - (int)(|p| / 2pi) * 2pi - pi, negated when p < 0, then
+// fsincos stored as floats - wave_x87_sin / cos (see their note).
+inline void wake_fold_sincos( float phase, float& sine, float& cosine )
+{
+    const float a = std::fabs( phase );
+    float f = ( a - static_cast< float >( static_cast< int >( a * 0.15915494f ) ) * 6.2831855f ) - 3.1415927f;
+    if ( ocean_gt( 0.0f, phase ) )
+        f = -f;
+    // wave_x87_sin / cos's form (defined further down): the host double, narrowed
+    sine = static_cast< float >( std::sin( static_cast< double >( f ) ) );
+    cosine = static_cast< float >( std::cos( static_cast< double >( f ) ) );
+}
+
+// VuWaterWakeWave's +96 kernel @0x52d1d0 (slot 3 0x52c260 with ctx+0x60 set;
+// its tag variant @0x52dcc0 is this body behind the tag test - MEASURED by
+// case wake_kernels96, not read from an instruction diff), on the renderer's
+// records (+0 x, +4 y, +8 height, +0xC / +0x10 the in-plane gradient, +0x14
+// foam). The base kernel's blend of the two segment records at t, then: the
+// height takes sin * min( ratio, 1 ) * amplitude - WITHOUT the base's +0x54
+// scale; the gradient is the x / y derivative of every blended term through
+// dt/dx = ( B.dir * D - ( B.dir - A.dir ) * dB ) / D^2 (D = dB - dA), the
+// radius r clamped below by FLT_EPSILON, the maxss clamp's zero slope, the
+// minss clamp's zero slope past ratio 1; the foam takes min( ratio, 1 ) times
+// a factor that starts at 0.25, becomes ( 1 - k ) + k * 0.25 inside the inner
+// ratio (k = rn / inner) and is scaled by the outer fade. Transliterated term
+// for term, operand order kept; where the arithmetic is not a derivative of
+// what the height uses (the amplitude terms reuse the final weight, the outer
+// fade's slope has no minus) it is retail's, kept.
+inline void wake_vertex96( const wake_wave_t& wave, float x, float y, float& height, float* flow, float& foam )
+{
+    const wake_record_t& A = wave.a;
+    const wake_record_t& B = wave.b;
+    const float dA = ( ( y - A.y ) * A.direction_y ) + ( ( x - A.x ) * A.direction_x );
+    const float dB = ( B.direction_x * ( x - B.x ) ) + ( B.direction_y * ( y - B.y ) );
+    if ( !ocean_gt( 0.0f, dB * dA ) )
+        return;
+    const float D = dB - dA;
+    const float t = dB / D;
+    const float s = 1.0f - t;
+    const float py = ( A.y * t ) + ( s * B.y );
+    const float px = ( A.x * t ) + ( B.x * s );
+    const float rad = ( B.radius * s ) + ( A.radius * t );
+    const float ey = y - py;
+    const float ex = x - px;
+    const float d2 = ( ey * ey ) + ( ex * ex );
+    const float R2 = rad * rad;
+    if ( !ocean_gt( R2, d2 ) )
+        return;
+    const float age = ( B.age * s ) + ( A.age * t );
+    const float spd = ( s * B.speed ) + ( t * A.speed );
+    const float r = _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( d2 ) ) );
+    const float rq = r - ( wave.inner_ratio * rad );
+    const float m = _mm_cvtss_f32( _mm_max_ss( _mm_setzero_ps( ), _mm_set_ss( rq ) ) );
+    const float local = age - ( m / spd );
+    if ( !ocean_gt( local, 0.0f ) )
+        return;
+    const float life = ( B.life * s ) + ( A.life * t );
+    if ( !ocean_gt( life, age ) )
+        return;
+    float amp = ( B.amplitude * s ) + ( A.amplitude * t );
+    const float freq = ( B.frequency * s ) + ( A.frequency * t );
+    float ff = 0.25f;   // the foam factor
+    float k1 = 1.0f;
+    float k2 = 1.0f;
+    const float fade = ( B.fade_time * s ) + ( A.fade_time * t );
+    const float rn = r / rad;
+    if ( ocean_gt( wave.inner_ratio, rn ) )
+    {
+        k1 = rn / wave.inner_ratio;
+        amp = k1 * amp;
+        ff = ( 1.0f - k1 ) + ( k1 * 0.25f );
+    }
+    if ( ocean_gt( rn, wave.outer_ratio ) )
+    {
+        k2 = ( 1.0f - rn ) / ( 1.0f - wave.outer_ratio );
+        amp = k2 * amp;
+        ff = k2 * ff;
+    }
+    const float left = life - age;
+    const float ratio = left / fade;
+    const float w = _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( ratio ), _mm_set_ss( 1.0f ) ) );
+    const float W = w * amp;
+    float sine;
+    float cosine;
+    wake_fold_sincos( ( freq * local ) + 3.1415927f, sine, cosine );
+    height = ( sine * W ) + height;
+
+    // the derivatives of t and s
+    const float inv_d2 = 1.0f / ( D * D );
+    const float dtx = ( ( B.direction_x * D ) - ( ( B.direction_x - A.direction_x ) * dB ) ) * inv_d2;
+    const float dsx = -dtx;
+    const float dty = ( ( B.direction_y * D ) - ( ( B.direction_y - A.direction_y ) * dB ) ) * inv_d2;
+    const float dsy = -dty;
+    // of the blended point and radius
+    const float dpx_dy = ( A.x * dty ) + ( B.x * dsy );
+    const float dpy_dx = ( A.y * dtx ) + ( B.y * dsx );
+    const float dpy_dy = ( A.y * dty ) + ( B.y * dsy );
+    const float dpx_dx = ( A.x * dtx ) + ( B.x * dsx );
+    const float drad_dx = ( dtx * A.radius ) + ( dsx * B.radius );
+    const float drad_dy = ( dty * A.radius ) + ( dsy * B.radius );
+    const float dex_dx = 1.0f - dpx_dx;
+    const float dex_dy = -dpx_dy;
+    const float dey_dy = 1.0f - dpy_dy;
+    const float dey_dx = -dpy_dx;
+    const float dage_dx = ( dtx * A.age ) + ( dsx * B.age );
+    const float dage_dy = ( dty * A.age ) + ( dsy * B.age );
+    const float dspd_dx = ( dtx * A.speed ) + ( dsx * B.speed );
+    const float dspd_dy = ( dty * A.speed ) + ( dsy * B.speed );
+    // of r ( FLT_EPSILON below: maxss( r, 1.1920929e-7 ) )
+    const float rr = _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( r ), _mm_set_ss( 1.1920929e-7f ) ) );
+    const float ex2 = ex * 2.0f;
+    const float inv2r = 1.0f / ( rr * 2.0f );
+    const float ey2 = ey * 2.0f;
+    const float dr_dx = ( ( ey2 * dey_dx ) + ( ex2 * dex_dx ) ) * inv2r;
+    const float dr_dy = ( ( ey2 * dey_dy ) + ( ex2 * dex_dy ) ) * inv2r;
+    float dm_dx = dr_dx - ( drad_dx * wave.inner_ratio );
+    float dm_dy = dr_dy - ( drad_dy * wave.inner_ratio );
+    if ( ocean_gt( 0.0f, rq ) )
+    {
+        dm_dx = 0.0f;
+        dm_dy = 0.0f;
+    }
+    // of local = age - m / speed
+    const float inv_s2 = 1.0f / ( spd * spd );
+    const float dq_dx = ( ( dm_dx * spd ) - ( m * dspd_dx ) ) * inv_s2;
+    const float dq_dy = ( ( dm_dy * spd ) - ( m * dspd_dy ) ) * inv_s2;
+    const float dlocal_dx = dage_dx - dq_dx;
+    const float dlocal_dy = dage_dy - dq_dy;
+    const float dlife_dx = ( dtx * A.life ) + ( dsx * B.life );
+    const float dlife_dy = ( dty * A.life ) + ( dsy * B.life );
+    const float dfreq_dx = ( A.frequency * dtx ) + ( B.frequency * dsx );
+    const float dfreq_dy = ( A.frequency * dty ) + ( B.frequency * dsy );
+    const float dfade_dy = ( A.fade_time * dty ) + ( B.fade_time * dsy );
+    const float dfade_dx = ( A.fade_time * dtx ) + ( B.fade_time * dsx );
+    // of rn = r / rad
+    const float inv_r2 = 1.0f / R2;
+    const float drn_dx = ( ( dr_dx * rad ) - ( rr * drad_dx ) ) * inv_r2;
+    const float drn_dy = ( ( dr_dy * rad ) - ( rr * drad_dy ) ) * inv_r2;
+    // of the amplitude (accumulators from zero)
+    float da_dx = 0.0f;
+    float da_dy = 0.0f;
+    if ( ocean_gt( wave.inner_ratio, rn ) )
+    {
+        const float inv = 1.0f / wave.inner_ratio;
+        const float z = k1 * da_dx;
+        da_dx = ( ( drn_dx * inv ) * W ) + z;
+        da_dy = ( ( drn_dy * inv ) * W ) + z;
+    }
+    if ( ocean_gt( rn, wave.outer_ratio ) )
+    {
+        const float inv = 1.0f / ( 1.0f - wave.outer_ratio );
+        const float ax = da_dx * k2;
+        const float ay = da_dy * k2;
+        da_dx = ( ( drn_dx * inv ) * W ) + ax;
+        da_dy = ( ( drn_dy * inv ) * W ) + ay;
+    }
+    // of w = min( left / fade, 1 )
+    const float inv_f2 = 1.0f / ( fade * fade );
+    float dw_dx = ( ( ( dlife_dx - dage_dx ) * fade ) - ( left * dfade_dx ) ) * inv_f2;
+    float dw_dy = ( ( ( dlife_dy - dage_dy ) * fade ) - ( left * dfade_dy ) ) * inv_f2;
+    if ( ocean_gt( ratio, 1.0f ) )
+    {
+        dw_dx = 0.0f;
+        dw_dy = 0.0f;
+    }
+    const float cw = cosine * W;
+    const float gx = ( ( w * da_dx ) + ( dw_dx * W ) ) * sine;
+    const float phx = ( dfreq_dx * local ) + ( dlocal_dx * freq );
+    flow[ 0 ] = ( gx + ( phx * cw ) ) + flow[ 0 ];
+    const float gy = ( ( w * da_dy ) + ( dw_dy * W ) ) * sine;
+    const float phy = ( dfreq_dy * local ) + ( dlocal_dy * freq );
+    flow[ 1 ] = ( gy + ( phy * cw ) ) + flow[ 1 ];
+    foam = ( w * ff ) + foam;
+}
+
+// VuWaterFlatWakeWave's +96 kernel @0x52e7d0 (slot 3 0x52ca30 with ctx+0x60
+// set; tag variant @0x52eae0 the same body behind the tag test - instruction
+// diff read with census/vdiff.py: register / slot allocation and one commuted
+// addss): the wake's blend and gates, then FOAM ONLY - min( ratio, 1 ) times the
+// same foam factor as the wake's +96 kernel.
+inline void flat_wake_vertex96( const wake_wave_t& wave, float x, float y, float& foam )
+{
+    const wake_record_t& A = wave.a;
+    const wake_record_t& B = wave.b;
+    const float dA = ( A.direction_y * ( y - A.y ) ) + ( A.direction_x * ( x - A.x ) );
+    const float dB = ( ( x - B.x ) * B.direction_x ) + ( B.direction_y * ( y - B.y ) );
+    if ( !ocean_gt( 0.0f, dB * dA ) )
+        return;
+    const float t = dB / ( dB - dA );
+    const float s = 1.0f - t;
+    const float px = ( A.x * t ) + ( B.x * s );
+    const float py = ( A.y * t ) + ( B.y * s );
+    const float rad = ( B.radius * s ) + ( A.radius * t );
+    const float ex = x - px;
+    const float ey = y - py;
+    const float d2 = ( ey * ey ) + ( ex * ex );
+    if ( !ocean_gt( rad * rad, d2 ) )
+        return;
+    const float age = ( B.age * s ) + ( A.age * t );
+    const float spd = ( B.speed * s ) + ( A.speed * t );
+    const float r = _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( d2 ) ) );
+    const float m = _mm_cvtss_f32( _mm_max_ss( _mm_setzero_ps( ), _mm_set_ss( r - ( wave.inner_ratio * rad ) ) ) );
+    if ( !ocean_gt( age - ( m / spd ), 0.0f ) )
+        return;
+    const float life = ( B.life * s ) + ( A.life * t );
+    if ( !ocean_gt( life, age ) )
+        return;
+    const float rn = r / rad;
+    const float fade = ( B.fade_time * s ) + ( A.fade_time * t );
+    float ff = 0.25f;
+    if ( ocean_gt( wave.inner_ratio, rn ) )
+    {
+        const float k = rn / wave.inner_ratio;
+        ff = ( 1.0f - k ) + ( k * 0.25f );
+    }
+    if ( ocean_gt( rn, wave.outer_ratio ) )
+        ff = ( ( 1.0f - rn ) / ( 1.0f - wave.outer_ratio ) ) * ff;
+    const float w = _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( ( life - age ) / fade ), _mm_set_ss( 1.0f ) ) );
+    foam = ( w * ff ) + foam;
+}
+
 // The tick both wake waves share @0x52c210 (thiscall, float dt; al): both
 // records age by dt, and the wave stays alive unless its refcount (+4) is 1 AND
 // both records are past their life.

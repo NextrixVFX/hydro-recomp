@@ -1776,9 +1776,62 @@ inline bool verify_ocean_field( )
     return failed == 0;
 }
 
+// The wakes' +96 kernels (case wake_kernels96): wake_vertex96 against 0x52D1D0 (tag 0x52DCC0) and flat_wake_vertex96
+// against 0x52E7D0 (tag 0x52EAE0) on hand-built waves - height, flow x, flow y and foam of every record, bit for bit;
+// the tag variants run the same body only where the record's tag equals ctx+0x5C (1).
+inline bool verify_wake_kernels96( )
+{
+    int checked = 0, failed = 0, live = 0;
+    const std::size_t np = g_golden_wk96_points_per;
+    for ( std::size_t index = 0; index < g_golden_wk96_count; ++index )
+    {
+        const bool flat = g_golden_wk96_kind[ 2 * index ] == 1u;
+        const bool tagged = g_golden_wk96_kind[ 2 * index + 1 ] == 1u;
+        const float* p = g_golden_wk96_params + 29 * index;
+        wake_wave_t wave{};
+        wave.inner_ratio = p[ 0 ];
+        wave.outer_ratio = p[ 1 ];
+        wave.scale = p[ 2 ];
+        std::memcpy( &wave.a, p + 3, sizeof( wave.a ) );
+        std::memcpy( &wave.b, p + 16, sizeof( wave.b ) );
+        for ( std::size_t i = 0; i < np; ++i )
+        {
+            const float x = g_golden_wk96_points[ 2 * ( np * index + i ) ];
+            const float y = g_golden_wk96_points[ 2 * ( np * index + i ) + 1 ];
+            float height = 2.0f;
+            float flow[ 2 ] = { 0.25f, -0.5f };
+            float foam = 1.5f;
+            if ( !tagged || g_golden_wk96_tags[ np * index + i ] == 1u )
+            {
+                if ( flat )
+                    flat_wake_vertex96( wave, x, y, foam );
+                else
+                    wake_vertex96( wave, x, y, height, flow, foam );
+            }
+            const float ours[ 4 ] = { height, flow[ 0 ], flow[ 1 ], foam };
+            const float* want = g_golden_wk96_out + 4 * ( np * index + i );
+            ++checked;
+            if ( want[ 3 ] != 1.5f )
+                ++live;
+            if ( std::memcmp( ours, want, sizeof( ours ) ) != 0 && ++failed <= 6 )
+                LOG_ERROR( "wake +96 %s variant %d set %d point %d: ours %.9g %.9g %.9g %.9g retail %.9g %.9g %.9g %.9g", flat ? "flat" : "wake",
+                    tagged ? 1 : 0, static_cast< int >( index ), static_cast< int >( i ), ours[ 0 ], ours[ 1 ], ours[ 2 ], ours[ 3 ], want[ 0 ], want[ 1 ],
+                    want[ 2 ], want[ 3 ] );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "wake_vertex96 / flat_wake_vertex96 match the wakes' +96 kernels 0x52D1D0 / 0x52E7D0 (tag 0x52DCC0 / 0x52EAE0) bit for "
+                     "bit on %d records (%d producing output)",
+            checked, live );
+    else
+        LOG_ERROR( "wake +96 kernels FAILED %d of %d records", failed, checked );
+    return failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
+    ok = verify_wake_kernels96( ) && ok;
     ok = verify_ocean_field( ) && ok;
     ok = verify_ocean_kernels96( ) && ok;
     ok = verify_water_built_tick( ) && ok;

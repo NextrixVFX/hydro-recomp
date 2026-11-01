@@ -294,7 +294,7 @@ inline void ocean_evolve( ocean_field_t& f, double time )
             const float x = static_cast< float >( static_cast< double >( f.omega[ at ] ) * time ) + 3.1415927f;
             const float a = std::fabs( x );
             float w = ( a - static_cast< float >( static_cast< int >( a * 0.15915494f ) ) * 6.2831855f ) - 3.1415927f;
-            if ( ocean_gt( 0.0f, x ) )
+            if ( ocean_gt( 0.0f, x ) )   // unreached for omega >= 0, time >= 0 (perturbation: removing it moves nothing)
                 w = -w;
             const float c = wave_x87_cos( w );
             const float s = wave_x87_sin( w );
