@@ -339,6 +339,12 @@
     <ClInclude Include="workspace\core\world\kernel.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\world\keyframe.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\world\lens.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\world\livery.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
