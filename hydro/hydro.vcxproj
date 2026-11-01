@@ -190,6 +190,7 @@
     <ClInclude Include="workspace\core\world\pfxload.hxx" />
     <ClInclude Include="workspace\core\world\pfxmgr.hxx" />
     <ClInclude Include="workspace\core\world\pfxsim.hxx" />
+    <ClInclude Include="workspace\core\world\pfxstatic.hxx" />
     <ClInclude Include="workspace\core\world\query.hxx" />
     <ClInclude Include="workspace\core\world\race.hxx" />
     <ClInclude Include="workspace\core\world\session.hxx" />
@@ -199,6 +200,7 @@
     <ClInclude Include="workspace\core\world\tick.hxx" />
     <ClInclude Include="workspace\core\world\transform.hxx" />
     <ClInclude Include="workspace\core\world\tree.hxx" />
+    <ClInclude Include="workspace\core\world\wake.hxx" />
     <ClInclude Include="workspace\core\world\water.hxx" />
     <ClInclude Include="workspace\core\world\wave.hxx" />
     <ClInclude Include="workspace\core\world\world.hxx" />
@@ -207,6 +209,7 @@
     <ClInclude Include="workspace\utility\checks\pfx.hxx" />
     <ClInclude Include="workspace\utility\checks\race.hxx" />
     <ClInclude Include="workspace\utility\checks\ui.hxx" />
+    <ClInclude Include="workspace\utility\checks\wake.hxx" />
     <ClInclude Include="workspace\utility\checks\water.hxx" />
     <ClInclude Include="workspace\utility\checks\world.hxx" />
   </ItemGroup>
