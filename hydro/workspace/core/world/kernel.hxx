@@ -42,11 +42,13 @@
 // the renderer's raw records (ctx.records / ctx.stride): +8 height, +0xC /
 // +0x10 the in-plane gradient, +0x14 foam.
 //
+// The rectangular / circular ocean waves (slot 3 0x59DA30 / 0x59DEC0, the same
+// switch: 0x59ED30 / 0x59F2B0 (0x59F840 / 0x59FB80), 0x59FED0 / 0x5A03F0
+// (0x5A0920 / 0x5A0C40)) read the build's field (world/field.hxx, b.oceans) as
+// the view snapshot of the wave's clock words - rebuild the view after every
+// water_built_tick.
+//
 // NOT RECREATED, so the hook answers false (UNKNOWN) and the query with it:
-//   - the rectangular / circular ocean waves: their kernels are verified
-//     (ocean_patch_vertex) but they read the bezier patch field the ctor's
-//     BuildSpectrum 0x59D220 / EvolveField 0x59D4D0 / BuildBezierPatches
-//     0x59D6C0 make, which is not recreated;
 //   - wake / flow waves: none is made by water_build_world and their creation
 //     at run time is not recreated. Point waves come from
 //     water_create_point_wave (surface.hxx, 0x528E10).
@@ -60,7 +62,32 @@ struct water_wave_kernel_t
     bump_t bump{};
     banked_turn_t banked{};
     point_wave_t point{};
+    ocean_patch_t ocean{};   // patches[] point into the build's field (b.oceans): null = not built
 };
+
+// The rectangular / circular ocean kernels' members (wave.hxx's ocean_patch_t
+// note names each offset) from the wave's words, the patch buffers from its
+// field (world/field.hxx).
+inline void water_ocean_kernel( water_kind_t kind, const water_words_t& w, const ocean_field_t& f, ocean_patch_t& k )
+{
+    k.shift = static_cast< int >( w.word[ 108 / 4 ] );
+    k.mask = static_cast< int >( w.word[ 116 / 4 ] );
+    k.scale = w.f( 120 );
+    k.sine = w.f( 128 );
+    k.cosine = w.f( 132 );
+    std::memcpy( &k.now, &w.word[ 136 / 4 ], 8 );
+    k.current = static_cast< int >( w.word[ 164 / 4 ] );
+    k.previous = static_cast< int >( w.word[ 168 / 4 ] );
+    std::memcpy( &k.time[ 0 ], &w.word[ 176 / 4 ], 8 );
+    std::memcpy( &k.time[ 1 ], &w.word[ 192 / 4 ], 8 );
+    k.centre_x = w.f( 208 );
+    k.centre_y = w.f( 212 );
+    const int shape = kind == water_kind_rectangular ? 4 : 2;
+    for ( int i = 0; i < shape; ++i )
+        k.shape[ i ] = w.f( 224 + 4 * i );
+    k.patches[ 0 ] = f.n ? f.patches[ 0 ].data( ) : nullptr;
+    k.patches[ 1 ] = f.n ? f.patches[ 1 ].data( ) : nullptr;
+}
 
 // The members each kernel reads, from the wave's words by retail offset (the
 // offsets are wave.hxx's, one per kernel note).
@@ -205,6 +232,10 @@ inline void water_view_build( const water_built_t& b, water_view_t& v )
         q.radius = h.radius;
         v.water.waves.push_back( q );
         v.kernels.push_back( water_wave_kernel( b.wave_kind[ i ], b.waves[ i ] ) );
+        const water_kind_t kind = b.wave_kind[ i ];
+        if ( kind == water_kind_rectangular || kind == water_kind_circular )
+            if ( const water_built_t::ocean_t* o = water_ocean_of( b, static_cast< int >( i ) ) )
+                water_ocean_kernel( kind, b.waves[ i ], o->field, v.kernels.back( ).ocean );
     }
 }
 
@@ -224,12 +255,24 @@ inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
         case water_kind_bump:
         case water_kind_banked:
         case water_kind_point: break;
-        default: return false;   // ocean (its field is not built) or a kind not built
+        case water_kind_rectangular:
+        case water_kind_circular:
+            if ( !k.ocean.patches[ 0 ] )
+                return false;   // no field (complexity 0)
+            break;
+        default: return false;   // a kind not built
         }
         for ( int i = 0; i < ctx.count; ++i )
         {
             if ( ctx.flag100 && ctx.tags[ i ] != ctx.tag )
                 continue;
+            if ( k.kind == water_kind_rectangular || k.kind == water_kind_circular )
+            {
+                // 0x59F840 / 0x59FB80, 0x5A0920 / 0x5A0C40: height and flow only
+                ocean_patch_vertex96( k.ocean, k.kind == water_kind_circular, *water_record( ctx, i, 0 ), *water_record( ctx, i, 4 ),
+                    *water_record( ctx, i, 8 ), water_record( ctx, i, 0xC ) );
+                continue;
+            }
             const float x = *water_record( ctx, i, 0 );
             const float y = *water_record( ctx, i, 4 );
             float& height = *water_record( ctx, i, 8 );
@@ -255,7 +298,12 @@ inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
     case water_kind_bump:
     case water_kind_banked:
     case water_kind_point: break;
-    default: return false;   // ocean (its field is not built) or a kind not built
+    case water_kind_rectangular:
+    case water_kind_circular:
+        if ( !k.ocean.patches[ 0 ] )
+            return false;   // no field (complexity 0)
+        break;
+    default: return false;   // a kind not built
     }
     for ( int i = 0; i < ctx.count; ++i )
     {
@@ -264,6 +312,10 @@ inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
         water_vertex_t& x = ctx.vertices[ i ];
         switch ( k.kind )
         {
+        case water_kind_rectangular:   // 0x59ED30 / 0x59F2B0
+        case water_kind_circular:      // 0x59FED0 / 0x5A03F0
+            ocean_patch_vertex( k.ocean, k.kind == water_kind_circular, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height );
+            break;
         case water_kind_whirlpool: whirlpool_vertex( k.whirlpool, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height ); break;
         case water_kind_directional: directional_vertex( k.directional, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height ); break;
         case water_kind_ramp: ramp_vertex( k.ramp, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height ); break;

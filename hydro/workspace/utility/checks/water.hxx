@@ -3,6 +3,9 @@
 #include <workspace/core/world/tree.hxx>
 #include <workspace/core/world/kernel.hxx>
 
+#include <map>
+#include <string>
+
 // The water area's oracle-backed checks (one file per parallel agent; included by check.hxx after every
 // shared check, so anything above is usable here). verify_water_all runs them all.
 
@@ -1568,9 +1571,268 @@ inline bool verify_ocean_kernels96( )
     return failed == 0;
 }
 
+// FNV-1a 64 over words' little-endian bytes (the oracle's _fnv64).
+inline std::uint64_t water_fnv64( const void* data, std::size_t words )
+{
+    const unsigned char* p = static_cast< const unsigned char* >( data );
+    std::uint64_t h = 0xCBF29CE484222325ull;
+    for ( std::size_t i = 0; i < words * 4; ++i )
+    {
+        h ^= p[ i ];
+        h *= 0x100000001B3ull;
+    }
+    return h;
+}
+
+// THE OCEAN FIELD on Hydroelectric's 9 ocean waves (case ocean_field): water_build_world's ocean waves (their field
+// built by world/field.hxx's ocean_field_update as the ctor 0x59CB10 -> 0x59CCB0 does), then three water_built_tick
+// (0x59CC00's rebuild: EvolveField 0x59D4D0, rlft3 0x608BB0 + fourn 0x608880, 0x59D640, BuildBezierPatches 0x59D6C0),
+// then each wave's slot 3 through water_view_kernel in both modes. Compared: the parameter words, the clock words after
+// the ctor and each tick, FNV-1a 64 of every array (omega, h0, cells, data, speq, both buffers' heights and patches
+// after the ctor; data, speq and the current buffer after each tick), the first wave's arrays word for word, and every
+// slot 3 output (24 points per wave per mode) bit for bit.
+inline bool verify_ocean_field( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "ocean_field: the document did not load" );
+        return false;
+    }
+    water_built_t built{};
+    water_build_world( *tree, built, []( entity_t& e ) { return entity_transform( e ); } );
+    std::vector< int > oceans;
+    for ( std::size_t i = 0; i < built.waves.size( ); ++i )
+        if ( built.wave_kind[ i ] == water_kind_rectangular || built.wave_kind[ i ] == water_kind_circular )
+            oceans.push_back( static_cast< int >( i ) );
+    int failed = 0, compared = 0;
+    std::size_t hashed = 0;
+    std::map< std::string, int > tally;   // failures by what, for the FAILED line
+    auto cmp = [ & ]( const char* what, int wave, int at, std::uint64_t ours, std::uint64_t theirs ) {
+        ++compared;
+        if ( ours != theirs )
+            ++tally[ what ];
+        if ( ours != theirs && ++failed <= 12 )
+            LOG_ERROR( "ocean_field %s wave %d / %d: ours 0x%llX retail 0x%llX", what, wave, at, static_cast< unsigned long long >( ours ),
+                static_cast< unsigned long long >( theirs ) );
+    };
+    if ( oceans.size( ) != g_golden_of_count )
+    {
+        LOG_ERROR( "ocean_field: %u ocean waves built, retail %u", static_cast< unsigned >( oceans.size( ) ), static_cast< unsigned >( g_golden_of_count ) );
+        return false;
+    }
+    const std::size_t per_words = 16 + 9 * g_golden_of_ticks;
+    const std::size_t per_hash = 9 + 4 * g_golden_of_ticks;
+    const int clock_at[ 8 ] = { 0x88, 0x8C, 0xA4, 0xA8, 0xB0, 0xB4, 0xC0, 0xC4 };
+    auto check_clock = [ & ]( const char* what, int k, const water_words_t& w, const unsigned* want ) {
+        for ( int j = 0; j < 8; ++j )
+            cmp( what, k, j, w.word[ clock_at[ j ] / 4 ], want[ j ] );
+    };
+    for ( std::size_t k = 0; k < oceans.size( ); ++k )
+    {
+        const int ki = static_cast< int >( k );
+        const water_words_t& w = built.waves[ static_cast< std::size_t >( oceans[ k ] ) ];
+        const unsigned* gw = g_golden_of_words + per_words * k;
+        const unsigned long long* gh = g_golden_of_hash + per_hash * k;
+        cmp( "kind", ki, 0, built.wave_kind[ static_cast< std::size_t >( oceans[ k ] ) ] == water_kind_circular ? 1u : 0u, g_golden_of_kind[ k ] );
+        for ( int j = 0; j < 8; ++j )
+            cmp( "parameter", ki, j, w.word[ 0x4C / 4 + j ], gw[ j ] );
+        check_clock( "ctor clock", ki, w, gw + 8 );
+        const water_built_t::ocean_t* o = water_ocean_of( built, oceans[ k ] );
+        if ( !o || o->field.n == 0 )
+        {
+            cmp( "field built", ki, 0, 0, 1 );
+            continue;
+        }
+        const ocean_field_t& f = o->field;
+        const std::pair< const void*, std::size_t > arrays[ 9 ] = { { f.omega.data( ), f.omega.size( ) }, { f.h0.data( ), f.h0.size( ) },
+            { f.cells.data( ), f.cells.size( ) }, { f.data.data( ), f.data.size( ) }, { f.speq.data( ), f.speq.size( ) },
+            { f.heights[ 0 ].data( ), f.heights[ 0 ].size( ) }, { f.patches[ 0 ].data( ), f.patches[ 0 ].size( ) },
+            { f.heights[ 1 ].data( ), f.heights[ 1 ].size( ) }, { f.patches[ 1 ].data( ), f.patches[ 1 ].size( ) } };
+        static const char* const names[ 9 ] = { "omega", "h0", "cells", "data", "speq", "heights0", "patches0", "heights1", "patches1" };
+        for ( int j = 0; j < 9; ++j )
+        {
+            cmp( names[ j ], ki, 0, water_fnv64( arrays[ j ].first, arrays[ j ].second ), gh[ j ] );
+            hashed += arrays[ j ].second;
+        }
+        if ( k == 0 )
+        {
+            auto words = [ & ]( const char* what, const void* ours, const unsigned* want, std::size_t count ) {
+                const unsigned* u = static_cast< const unsigned* >( ours );
+                for ( std::size_t i = 0; i < count; ++i )
+                    cmp( what, 0, static_cast< int >( i ), u[ i ], want[ i ] );
+            };
+            words( "omega word", f.omega.data( ), g_golden_of_first_omega, g_golden_of_first_omega_count );
+            words( "h0 word", f.h0.data( ), g_golden_of_first_h0, g_golden_of_first_h0_count );
+            words( "data word", f.data.data( ), g_golden_of_first_data, g_golden_of_first_data_count );
+            words( "heights word", f.heights[ 0 ].data( ), g_golden_of_first_heights0, g_golden_of_first_heights0_count );
+            words( "patch word", f.patches[ 0 ].data( ), g_golden_of_first_patches0, g_golden_of_first_patches0_count );
+        }
+    }
+    water_built_hooks_t hooks{};
+    hooks.render = []( void* ) {};
+    for ( std::size_t t = 0; t < g_golden_of_ticks; ++t )
+    {
+        const int missing = water_built_tick( built, g_golden_of_dt[ t ], hooks );
+        cmp( "unrecreated paths", -1, static_cast< int >( t ), static_cast< std::uint64_t >( missing ), 0 );
+        for ( std::size_t k = 0; k < oceans.size( ); ++k )
+        {
+            const int ki = static_cast< int >( k );
+            const water_words_t& w = built.waves[ static_cast< std::size_t >( oceans[ k ] ) ];
+            const unsigned* gw = g_golden_of_words + per_words * k + 16 + 9 * t;
+            const unsigned long long* gh = g_golden_of_hash + per_hash * k + 9 + 4 * t;
+            bool listed = false;
+            for ( int e = built.hold.list; e >= 0; e = built.hold.pool[ e ].next )
+                listed = listed || built.hold.pool[ e ].leaf == oceans[ k ];
+            cmp( "alive", ki, static_cast< int >( t ), listed ? 1u : 0u, gw[ 0 ] );
+            check_clock( "tick clock", ki, w, gw + 1 );
+            const water_built_t::ocean_t* o = water_ocean_of( built, oceans[ k ] );
+            if ( !o || o->field.n == 0 )
+                continue;
+            const ocean_field_t& f = o->field;
+            const int cur = static_cast< int >( w.word[ 0xA4 / 4 ] & 1u );
+            cmp( "tick data", ki, static_cast< int >( t ), water_fnv64( f.data.data( ), f.data.size( ) ), gh[ 0 ] );
+            cmp( "tick speq", ki, static_cast< int >( t ), water_fnv64( f.speq.data( ), f.speq.size( ) ), gh[ 1 ] );
+            cmp( "tick heights", ki, static_cast< int >( t ), water_fnv64( f.heights[ cur ].data( ), f.heights[ cur ].size( ) ), gh[ 2 ] );
+            cmp( "tick patches", ki, static_cast< int >( t ), water_fnv64( f.patches[ cur ].data( ), f.patches[ cur ].size( ) ), gh[ 3 ] );
+            hashed += f.data.size( ) + f.speq.size( ) + f.heights[ cur ].size( ) + f.patches[ cur ].size( );
+        }
+    }
+    water_view_t view{};
+    water_view_build( built, view );
+    const std::size_t np = g_golden_of_points_per;
+    int outputs = 0, live = 0;
+    for ( std::size_t k = 0; k < oceans.size( ); ++k )
+    {
+        const int ki = static_cast< int >( k );
+        const float* pts = g_golden_of_points + 2 * np * k;
+        std::vector< water_vertex_t > v( np );
+        for ( std::size_t i = 0; i < np; ++i )
+        {
+            v[ i ] = water_vertex_t{};
+            v[ i ].pos[ 0 ] = pts[ 2 * i ];
+            v[ i ].pos[ 1 ] = pts[ 2 * i + 1 ];
+            v[ i ].disp[ 0 ] = 0.25f;
+            v[ i ].disp[ 1 ] = -0.5f;
+            v[ i ].disp[ 2 ] = 1.5f;
+            v[ i ].height = 2.0f;
+        }
+        water_query_t ctx{};
+        ctx.count = static_cast< int >( np );
+        ctx.vertices = v.data( );
+        cmp( "slot 3 answered", ki, 0, water_view_kernel( &view, oceans[ k ], ctx ) ? 1u : 0u, 1u );
+        for ( std::size_t i = 0; i < np; ++i )
+        {
+            const float ours[ 4 ] = { v[ i ].disp[ 0 ], v[ i ].disp[ 1 ], v[ i ].disp[ 2 ], v[ i ].height };
+            const float* want = g_golden_of_base + 4 * ( np * k + i );
+            for ( int j = 0; j < 4; ++j )
+            {
+                std::uint32_t a, b;
+                std::memcpy( &a, &ours[ j ], 4 );
+                std::memcpy( &b, &want[ j ], 4 );
+                cmp( "base out", ki, static_cast< int >( 4 * i + j ), a, b );
+            }
+            ++outputs;
+            live += want[ 3 ] != 2.0f ? 1 : 0;
+        }
+        std::vector< unsigned char > rec( np * 32, 0x77 );
+        for ( std::size_t i = 0; i < np; ++i )
+        {
+            const float r[ 6 ] = { pts[ 2 * i ], pts[ 2 * i + 1 ], 2.0f, 0.25f, -0.5f, 1.5f };
+            std::memcpy( &rec[ 32 * i ], r, sizeof( r ) );
+        }
+        water_query_t c96{};
+        c96.count = static_cast< int >( np );
+        c96.flag96 = 1;
+        c96.records = rec.data( );
+        c96.stride = 32;
+        cmp( "slot 3 +96 answered", ki, 0, water_view_kernel( &view, oceans[ k ], c96 ) ? 1u : 0u, 1u );
+        for ( std::size_t i = 0; i < np; ++i )
+        {
+            const float* want = g_golden_of_k96 + 5 * ( np * k + i );
+            for ( int j = 0; j < 5; ++j )
+            {
+                std::uint32_t a, b;
+                std::memcpy( &a, &rec[ 32 * i + 8 + 4 * ( j < 4 ? j : 3 ) ], 4 );
+                std::memcpy( &b, &want[ j ], 4 );
+                cmp( "+96 out", ki, static_cast< int >( 5 * i + j ), a, b );
+            }
+            ++outputs;
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ocean field (world/field.hxx: 0x59CCB0's arrays, cells 0x59D010, dispersion 0x59D170, BuildSpectrum 0x59D220 + ran1 / "
+                     "Vu_GaussianDeviate 0x50FD90, EvolveField 0x59D4D0, rlft3 0x608BB0 + fourn 0x608880, heights 0x59D640, "
+                     "BuildBezierPatches 0x59D6C0; the tick 0x59CC00's rebuild) matches retail on Hydroelectric's %d ocean waves: %d "
+                     "comparisons, %u array words hashed, %d slot 3 outputs (%d base points with a height)",
+            static_cast< int >( oceans.size( ) ), compared, static_cast< unsigned >( hashed ), outputs, live );
+    else
+    {
+        std::string by;
+        for ( const auto& t : tally )
+            by += " " + t.first + "=" + std::to_string( t.second );
+        LOG_ERROR( "ocean_field FAILED %d of %d comparisons:%s", failed, compared, by.c_str( ) );
+    }
+    return failed == 0;
+}
+
+// The wakes' +96 kernels (case wake_kernels96): wake_vertex96 against 0x52D1D0 (tag 0x52DCC0) and flat_wake_vertex96
+// against 0x52E7D0 (tag 0x52EAE0) on hand-built waves - height, flow x, flow y and foam of every record, bit for bit;
+// the tag variants run the same body only where the record's tag equals ctx+0x5C (1).
+inline bool verify_wake_kernels96( )
+{
+    int checked = 0, failed = 0, live = 0;
+    const std::size_t np = g_golden_wk96_points_per;
+    for ( std::size_t index = 0; index < g_golden_wk96_count; ++index )
+    {
+        const bool flat = g_golden_wk96_kind[ 2 * index ] == 1u;
+        const bool tagged = g_golden_wk96_kind[ 2 * index + 1 ] == 1u;
+        const float* p = g_golden_wk96_params + 29 * index;
+        wake_wave_t wave{};
+        wave.inner_ratio = p[ 0 ];
+        wave.outer_ratio = p[ 1 ];
+        wave.scale = p[ 2 ];
+        std::memcpy( &wave.a, p + 3, sizeof( wave.a ) );
+        std::memcpy( &wave.b, p + 16, sizeof( wave.b ) );
+        for ( std::size_t i = 0; i < np; ++i )
+        {
+            const float x = g_golden_wk96_points[ 2 * ( np * index + i ) ];
+            const float y = g_golden_wk96_points[ 2 * ( np * index + i ) + 1 ];
+            float height = 2.0f;
+            float flow[ 2 ] = { 0.25f, -0.5f };
+            float foam = 1.5f;
+            if ( !tagged || g_golden_wk96_tags[ np * index + i ] == 1u )
+            {
+                if ( flat )
+                    flat_wake_vertex96( wave, x, y, foam );
+                else
+                    wake_vertex96( wave, x, y, height, flow, foam );
+            }
+            const float ours[ 4 ] = { height, flow[ 0 ], flow[ 1 ], foam };
+            const float* want = g_golden_wk96_out + 4 * ( np * index + i );
+            ++checked;
+            if ( want[ 3 ] != 1.5f )
+                ++live;
+            if ( std::memcmp( ours, want, sizeof( ours ) ) != 0 && ++failed <= 6 )
+                LOG_ERROR( "wake +96 %s variant %d set %d point %d: ours %.9g %.9g %.9g %.9g retail %.9g %.9g %.9g %.9g", flat ? "flat" : "wake",
+                    tagged ? 1 : 0, static_cast< int >( index ), static_cast< int >( i ), ours[ 0 ], ours[ 1 ], ours[ 2 ], ours[ 3 ], want[ 0 ], want[ 1 ],
+                    want[ 2 ], want[ 3 ] );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "wake_vertex96 / flat_wake_vertex96 match the wakes' +96 kernels 0x52D1D0 / 0x52E7D0 (tag 0x52DCC0 / 0x52EAE0) bit for "
+                     "bit on %d records (%d producing output)",
+            checked, live );
+    else
+        LOG_ERROR( "wake +96 kernels FAILED %d of %d records", failed, checked );
+    return failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
+    ok = verify_wake_kernels96( ) && ok;
+    ok = verify_ocean_field( ) && ok;
     ok = verify_ocean_kernels96( ) && ok;
     ok = verify_water_built_tick( ) && ok;
     ok = verify_water_query96( ) && ok;

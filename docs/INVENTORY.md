@@ -20,8 +20,8 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 |---|---:|---:|
 | verified | 796 | 380181 |
 | callee | 904 | 260069 |
-| cited | 204 | 104022 |
-| absent | 6734 | 1481988 |
+| cited | 207 | 104371 |
+| absent | 6731 | 1481639 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -35,7 +35,7 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 | entity / component / script framework | 1094 | 98 | 182 | 41 | 773 | 29917 of 207438 |
 | HUD / UI / fonts | 648 | 39 | 153 | 6 | 450 | 22721 of 184315 |
 | game modes / race | 766 | 23 | 64 | 3 | 676 | 6249 of 179957 |
-| rendering / gfx | 552 | 63 | 48 | 17 | 424 | 22658 of 126915 |
+| rendering / gfx | 552 | 63 | 48 | 20 | 421 | 22658 of 126915 |
 | water | 325 | 75 | 55 | 20 | 175 | 35867 of 96416 |
 | boat | 264 | 29 | 48 | 16 | 171 | 16648 of 87400 |
 | engine core / math / containers | 391 | 15 | 12 | 11 | 353 | 3771 of 76072 |
@@ -58,8 +58,8 @@ Over-approximate (a referenced vtable brings every slot) and under-approximate (
 
 | tier | functions | verified | callee | cited | absent | runtime / STL / thunk | platform layer | game + engine logic not verified |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| race | 4905 | 743 | 589 | 198 | 3375 | 68 | 610 | 3554 |
-| game | 2431 | 51 | 314 | 6 | 2060 | 77 | 313 | 1991 |
+| race | 4905 | 743 | 589 | 200 | 3373 | 68 | 610 | 3554 |
+| game | 2431 | 51 | 314 | 7 | 2059 | 77 | 313 | 1991 |
 | service | 452 | 0 | 0 | 0 | 452 | 45 | 98 | 309 |
 | dead | 850 | 2 | 1 | 0 | 847 | 61 | 126 | 661 |
 

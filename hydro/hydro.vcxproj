@@ -146,6 +146,7 @@
     <ClInclude Include="workspace\core\world\animate.hxx" />
     <ClInclude Include="workspace\core\world\control.hxx" />
     <ClInclude Include="workspace\core\world\entities.hxx" />
+    <ClInclude Include="workspace\core\world\field.hxx" />
     <ClInclude Include="workspace\core\world\graph.hxx" />
     <ClInclude Include="workspace\core\world\kernel.hxx" />
     <ClInclude Include="workspace\core\world\models.hxx" />

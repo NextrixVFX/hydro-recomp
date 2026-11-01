@@ -882,7 +882,8 @@ private:
     }
 
     // The emitter draws from ran1, the same Park-Miller-behind-a-shuffle
-    // generator the ocean's spectrum uses: VuPfxEmitFountain_emit @0x55D030
+    // generator the ocean's spectrum uses (on its own stack state, not this
+    // global - world/field.hxx): VuPfxEmitFountain_emit @0x55D030
     // inlines its step over the globals at 0x736810 (seed), 0x736814 (last)
     // and 0x736818 (the 32 entry table). What stood here before was an
     // invented linear congruential generator (1664525 / 1013904223), which
@@ -1538,9 +1539,10 @@ private:
     // Effects reported as unbuilt, so each is named once.
     std::set< std::string > m_unsupported;
     int m_card = -1;
-    // Retail has ONE of these as a global, shared with the ocean's spectrum.
-    // Ours is per-subsystem, so our draws do not interleave with the ocean's
-    // the way retail's do - a known structural difference, flagged in
-    // random.hxx, not something to change on a guess.
+    // Retail has ONE of these as a global (0x736810). CORRECTION (read from
+    // BuildSpectrum 0x59D220): the ocean's spectrum does NOT share it - it
+    // seeds its own ran1 on its stack every call (world/field.hxx). Ours is
+    // per-subsystem; whether other retail users interleave with the pfx
+    // global is flagged in random.hxx, not something to change on a guess.
     static inline c_random m_random{};
 };
