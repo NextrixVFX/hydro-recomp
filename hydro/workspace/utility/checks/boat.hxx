@@ -780,7 +780,7 @@ inline bool verify_boat_load_sections( )
         for ( int k = 0; k < 9; ++k )
             img[ k ] = blocks[ k ].before;
         vu_rigid_body_t body;
-        std::memcpy( &body, img[ 1 ].data( ), sizeof( body ) );
+        std::memcpy( &body, img[ 1 ].data( ), 0x2D4 );   // the image's 0x2D4 bytes: sizeof( vu_rigid_body_t ) is 0x2E0 (16-byte alignment)
         boat_engine_t engine;
         std::memcpy( engine.object.image, img[ 5 ].data( ), 0x104 );
         boat_load_t io{};
@@ -907,7 +907,7 @@ inline bool verify_boat_load_sections( )
                 }
             }
         }
-        std::memcpy( img[ 1 ].data( ), &body, sizeof( body ) );
+        std::memcpy( img[ 1 ].data( ), &body, 0x2D4 );
         std::memcpy( img[ 5 ].data( ), engine.object.image, 0x104 );
         // Masked: string fields (24 bytes), the engine's container words.
         const std::vector< int > strings[ 9 ] = {
@@ -1016,7 +1016,7 @@ inline bool verify_boat_transform( )
             s += sizes[ k ] / 4;
         }
         vu_rigid_body_t body;
-        std::memcpy( &body, b[ 2 ].data( ), sizeof( body ) );
+        std::memcpy( &body, b[ 2 ].data( ), 0x2D4 );   // not sizeof (0x2E0, padded)
         unsigned calls = 0;
         boat_transform_hooks_t hooks;
         hooks.user = &calls;
@@ -1024,7 +1024,7 @@ inline bool verify_boat_transform( )
         float world[ 16 ];
         std::memcpy( world, b[ 1 ].data( ) + 0x50, 64 );
         boat_transform_changed( b[ 0 ].data( ), world, body, b[ 3 ].data( ), b[ 4 ].data( ), hooks );
-        std::memcpy( b[ 2 ].data( ), &body, sizeof( body ) );
+        std::memcpy( b[ 2 ].data( ), &body, 0x2D4 );
         int bad = calls != manager ? 0x7000 : -1;
         for ( int k = 0; k < 5 && bad < 0; ++k )
         {

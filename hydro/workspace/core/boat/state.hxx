@@ -805,7 +805,7 @@ inline void boat_decision_tick( boat_decision_t& d, float dt, const boat_decisio
         std::int32_t pieces;
         std::memcpy( &pieces, debris + 0xA0, 4 );
         if ( pieces > 0 && hooks.piece_follow )
-            hooks.piece_follow( hooks.user );   // NOT recreated: 0x5344A0, the velocities, 0x50E660
+            hooks.piece_follow( hooks.user );   // boat/effects.hxx boat_debris_follow (case debris_follow)
         const float clock = state_f( boat, 0x46C ) + dt;
         state_put_f( boat, 0x46C, clock );
         if ( gt( clock, 10.0f ) && boat[ 0x32F ] == 0 && boat[ 0x46B ] )
