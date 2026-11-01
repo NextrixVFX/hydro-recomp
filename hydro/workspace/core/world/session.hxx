@@ -4,10 +4,12 @@
 #include <workspace/core/boat/fleet.hxx>
 #include <workspace/core/boat/load.hxx>
 #include <workspace/core/boat/meshes.hxx>
+#include <workspace/core/boat/nuisance.hxx>
 #include <workspace/core/boat/rays.hxx>
 #include <workspace/core/boat/respawn.hxx>
 #include <workspace/core/boat/thunk.hxx>
 #include <workspace/core/dynamics/contact.hxx>
+#include <workspace/core/trigger/volume.hxx>
 #include <workspace/core/ui/config.hxx>
 #include <workspace/core/world/blend.hxx>
 #include <workspace/core/world/bodies.hxx>
@@ -74,6 +76,9 @@ struct race_session_boat_t
     // The hull draw (c_world): each model instance's placements, the one shown.
     std::vector< int > placements[ 3 ];
     int shown = -2;
+    // Ours: the session this boat is in (the transform watcher's 0x536350 reaches the trigger manager through it).
+    struct race_session_t* owner = nullptr;
+    int index = -1;
 };
 
 // What the world lends the race's ticks, refreshed by c_world every frame
@@ -94,6 +99,9 @@ struct race_world_t
     water_built_t* water = nullptr;   // written by the hulls' wake update 0x417D80 (world/drive.hxx)
     const water_view_t* view = nullptr;
     std::function< void( float ) > water_tick;
+    // The "Triggers" tick 0x536460's trigger half: every listed trigger's vt+0x30 over the manager's
+    // instigators (c_world's trigger list - world.hxx race_triggers), run after the instigator step.
+    std::function< void( ) > triggers;
     std::uint32_t viewports = 1;
     std::int32_t control_method = 0;
     std::int32_t display_w = 1280;
@@ -160,7 +168,51 @@ struct race_session_t
     // The ray test's view of the dynamics world (boat rays.hxx; world/drive.hxx race_drive_ray).
     boat_ray_world_t rays;
     std::vector< std::unique_ptr< gfx_zone_t > > gfx_entities;
+    // The event graph's race-side receivers, by the entity's path below the project root (c_world's graph keys):
+    // the gfx-settings entities' "Trigger" (0x5A7230 zones / 0x5D2980 the global) and the nuisance start entities'
+    // "DriverTarget" / "DriverDisable" (0x42FF90 / 0x430020).
+    struct gfx_plug_t
+    {
+        gfx_zone_t* zone = nullptr;
+        bool global = false;
+    };
+    std::map< std::string, gfx_plug_t > gfx_by_path;
+    struct nuisance_plug_t
+    {
+        nuisance_start_t* state = nullptr;
+        int child = -1;   // the session boat the start entity's +0x7C is (-1: none made)
+    };
+    std::map< std::string, nuisance_plug_t > nuisance_by_path;
+    // g_vutriggermanager 0x759064's instigators (trigger/volume.hxx).
+    trigger_manager_t triggers;
+    // Retail's 32-bit words for the weak references the nuisance plugs link (boat nuisance.hxx vu_words_t): a
+    // boat's entity is the token race_entity_token(k), its driver token + 0x1000 (+0x220 holds it), every other
+    // word 0 until written. The entity repository g 0x759080 (hash -> entity) is not recreated: a VuParams
+    // entity's hash word is the token here, the repository's find the identity on a boat's token.
+    std::map< std::uint32_t, std::uint32_t > words;
 };
+
+// The model's entity / driver tokens (see race_session_t::words).
+inline std::uint32_t race_entity_token( int k )
+{
+    return 0x00100000u * static_cast< std::uint32_t >( k + 1 );
+}
+inline int race_entity_of_token( const race_session_t& s, std::uint32_t token )
+{
+    if ( token == 0 || ( token & 0x000FFFFFu ) != 0 )
+        return -1;
+    const int k = static_cast< int >( token / 0x00100000u ) - 1;
+    return k >= 0 && static_cast< std::size_t >( k ) < s.boats.size( ) ? k : -1;
+}
+
+// An entity's path the way the event graph names it: its names below the project root, '/'-joined.
+inline std::string race_entity_path( const entity_t* e )
+{
+    std::string path;
+    for ( ; e && e->m_parent; e = e->m_parent )
+        path = path.empty( ) ? e->m_name : e->m_name + "/" + path;
+    return path;
+}
 
 // The Decision tick 0x41EFF0 and the Viewports tick 0x4AB0A0 composed on the
 // session (world/drive.hxx).
@@ -474,6 +526,7 @@ inline bool race_session_gfx_game_initialize( race_session_t& s, entity_t& e )
         tick_register( s.ticks, { z.get( ), race_session_gfx_tick, z.get( ) }, "Build" );
     if ( rect || ellip )
         s.blender.zones.push_back( z.get( ) );
+    s.gfx_by_path[ race_entity_path( &e ) ] = { z.get( ), !( rect || ellip ) };
     s.gfx_entities.push_back( std::move( z ) );
     return true;
 }
@@ -600,6 +653,44 @@ inline void race_session_dev_trace( const race_session_t& s, int before )
                      n, b->name.c_str( ), q[ 0 ], q[ 1 ], q[ 2 ], holds, holds >= 0 ? w.surfaces[ holds ].height : 0.0f, under,
                      known ? "" : "UNKNOWN", holds >= 0 ? o.height : 0.0f );
     }
+}
+
+// The transform watcher's 0x536350 (the instigator update, trigger/volume.hxx) for a boat of the session.
+inline boat_transform_hooks_t race_session_transform_hooks( race_session_boat_t& b )
+{
+    boat_transform_hooks_t h;
+    h.user = &b;
+    h.instigator_update = []( void* u ) {
+        race_session_boat_t& r = *static_cast< race_session_boat_t* >( u );
+        if ( r.owner )
+            trigger_instigator_update( r.owner->triggers, r.io.instigator );
+    };
+    return h;
+}
+
+// VuInstigatorComponent's gameInitialize 0x531F50 on the boat's +0x70 (its gameInitialize's last call).
+inline void race_session_register_instigator( race_session_t& s, race_session_boat_t& b )
+{
+    std::uint8_t* t = race_session_image( b, 0, 0x50 );
+    if ( !b.io.instigator || !t )
+    {
+        race_unwired( s, "the instigator's gameInitialize 0x531F50 on a boat with no instigator / transform image - not registered (UNKNOWN)" );
+        return;
+    }
+    trigger_instigator_initialize( s.triggers, b.io.instigator, t, b.index );
+    b.instigator_registered = b.io.instigator[ 0x28 ];
+}
+
+// The "Triggers" phase: the trigger manager's tick 0x536460 (registered by its init 0x536110 at the engine's
+// start) - the instigator step, then every listed trigger's vt+0x30 (the world's list).
+inline void race_session_triggers( void* user, float )
+{
+    race_session_t& s = *static_cast< race_session_t* >( user );
+    trigger_instigators_step( s.triggers );
+    if ( s.world.triggers )
+        s.world.triggers( );
+    else
+        race_unwired( s, "the Triggers tick 0x536460 with no trigger list (no world) - the crossing tests not run (UNKNOWN)" );
 }
 
 // The DynamicsSync / DynamicsKick ticks 0x4F8A20 / 0x4F8A90 (world/dynamics.hxx).
@@ -746,7 +837,8 @@ inline bool race_session_game_data( const std::string& mode, const std::string& 
 // the world's track manager built from it. False (logged) when a boat cannot
 // be made.
 inline bool race_session_start( race_session_t& s, const std::string& mode, const value_t& game_data, const race_session_dbs_t& db,
-                                const c_archive& archive, entity_t& tree, const track_manager_t* track, fleet_random_t& random )
+                                const c_archive& archive, entity_t& tree, const track_manager_t* track, fleet_random_t& random,
+                                const std::function< void( ) >& project_initialized = { } )
 {
     s = race_session_t{ };
     s.dynamics = std::make_unique< race_dynamics_t >( );   // the engine init's VuDynamicsImpl (0x4F8050) + 0x4024E0's gravity
@@ -778,6 +870,8 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     hooks.post_load = [ & ]( entity_t& e, const value_t& entry )
     {
         auto b = std::make_unique< race_session_boat_t >( );
+        b->owner = &s;
+        b->index = static_cast< int >( s.boats.size( ) );
         const race_boat_state_t& st = *static_cast< const race_boat_state_t* >( e.m_state.get( ) );
         b->name = e.m_name;
         b->boat = st.boat;
@@ -805,7 +899,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
                 return;
             }
             boat_transform_changed( r.graph.objects[ 0 ].image.data( ), reinterpret_cast< const float* >( t + 0x50 ), r.body, r.io.camera,
-                                    r.io.instigator, boat_transform_hooks_t{ } );
+                                    r.io.instigator, race_session_transform_hooks( r ) );
         };
         const bool known = race_boat_post_load( image, st.driver_type, entry, *db.constant_db, r.driver, ph );
         if ( !known )
@@ -840,13 +934,13 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     // VuWater's tick 0x529E30 in "Water" (VuWater made by the engine init, before the race: c_world's
     // water_tick - surface.hxx water_built_tick and the queries' view).
     tick_register( s.ticks, { &s.world, race_session_water, &s }, "Water" );
+    // The trigger manager's tick 0x536460 in "Triggers" (its init 0x536110, the engine's start).
+    tick_register( s.ticks, { &s.triggers, race_session_triggers, &s }, "Triggers" );
 
     // The level's gameInitialize walk (after the tick manager: the gfx-settings entities register their Build ticks),
     // on the blender as the engine's init 0x52F620 leaves it.
     gfx_blender_init( s.blender );
     race_session_level_bodies( s, tree, archive );
-    if ( !s.gfx_entities.empty( ) )
-        race_unwired( s, "the gfx-settings entities' Trigger inputs (0x5A7230 / the global's 0x5D2980) - the race runs no event graph: never fired (UNKNOWN), the blender keeps 0x41B400's record" );
 
     // The grid: every VuGridPositionEntity's transform world, through 0x43A740,
     // in the tree's pre-order (the project's gameInitialize walk; the list is
@@ -865,6 +959,11 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
             self( self, *child );
     };
     walk( walk, tree );
+
+    // 0x4BA060 after the project's gameInitialize 0x500B10: 0x501260(root, "OnProjectInitialized") - the event every
+    // VuOnProjectInitializedEntity answers by firing its "Trigger" (the world's graph) - then VuGame's begin.
+    if ( project_initialized )
+        project_initialized( );
 
     // VuGame's begin 0x4829A0.
     s.start.laps = s.game.laps;
@@ -906,7 +1005,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
             return;
         }
         boat_transform_changed( r.graph.objects[ 0 ].image.data( ), reinterpret_cast< const float* >( t + 0x50 ), r.body, r.io.camera,
-                                r.io.instigator, boat_transform_hooks_t{ } );
+                                r.io.instigator, race_session_transform_hooks( r ) );
     };
     sh.game_initialize = [ &s ]( int k )
     {
@@ -917,6 +1016,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         ih.kind = s.start_boats[ static_cast< std::size_t >( k ) ].kind;
         race_session_tick_t* user = tick_users[ static_cast< std::size_t >( k ) ].get( );
         ih.slot17 = [ &s, &b ] { race_session_enable( s, b, true ); };
+        ih.instigator = [ &s, &b ] { race_session_register_instigator( s, b ); };
         race_boat_game_initialize( &b, s.ticks, { &b, race_session_decision, user }, { &b, race_session_build, user }, b.draw_added, ih );
     };
     sh.add_driver = [ &s ]( int k )
@@ -996,7 +1096,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
                 std::memmove( t + 0x90, t + 0xA0, 16 );
                 if ( notify && r.sections )
                     boat_transform_changed( r.graph.objects[ 0 ].image.data( ), reinterpret_cast< const float* >( t + 0x50 ), r.body, r.io.camera,
-                                            r.io.instigator, boat_transform_hooks_t{ } );
+                                            r.io.instigator, race_session_transform_hooks( r ) );
                 else if ( notify )
                     ++s.stopped_transform;
             };
@@ -1021,9 +1121,12 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
                 ih.kind = sb.kind;
                 race_session_tick_t* user = tick_users.back( ).get( );
                 ih.slot17 = [ &s, &b ] { race_session_enable( s, b, true ); };
+                ih.instigator = [ &s, &b ] { race_session_register_instigator( s, b ); };
                 race_boat_game_initialize( &b, s.ticks, { &b, race_session_decision, user }, { &b, race_session_build, user }, b.draw_added, ih );
             };
             nuisance_start_game_initialize( start->m_name, *static_cast< const nuisance_start_t* >( start->m_state.get( ) ), nh );
+            s.nuisance_by_path[ race_entity_path( start ) ] = { static_cast< nuisance_start_t* >( start->m_state.get( ) ),
+                                                                s.boats.size( ) == before + 1 ? static_cast< int >( before ) : -1 };
             if ( s.boats.size( ) == before + 1 )
                 LOG_INFO( "race: nuisance boat %s (%s) from %s (0x42FDC0)", child->m_name.c_str( ), s.boats[ before ]->boat.c_str( ),
                           start->m_name.c_str( ) );
@@ -1033,6 +1136,15 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
             LOG_INFO( "race: %d VuAiNuisanceDriverStartEntity, %d nuisance boat(s) made", static_cast< int >( starts.size( ) ),
                       static_cast< int >( s.nuisance.size( ) ) );
     }
+    // The model's words for the weak references (race_session_t::words): each boat's +0x220 = its driver, the
+    // driver's +0 = its vtable.
+    for ( std::size_t k = 0; k < s.boats.size( ); ++k )
+        if ( s.boats[ k ]->driver && !s.boats[ k ]->driver->graph.empty( ) )
+        {
+            const std::uint32_t e = race_entity_token( static_cast< int >( k ) );
+            s.words[ e + 0x220 ] = e + 0x1000u;
+            s.words[ e + 0x1000u ] = load_word( s.boats[ k ]->driver->graph[ 0 ].image.data( ), 0 );
+        }
     race_drive_setup( s, db.constant_db );
     LOG_INFO( "race: the dynamics world holds %d rigid bod(ies) / %d collision object(s) / %d step callback(s) after the boats' slot 17 0x421980; gravity z 0x%08X",
               static_cast< int >( s.dynamics->world.bodies.size( ) ), static_cast< int >( s.dynamics->collision.objects.size( ) ),

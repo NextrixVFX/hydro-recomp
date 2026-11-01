@@ -2,7 +2,9 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <string>
+#include <vector>
 
 // One entry of the trigger manager's instigator list (0x759064: +4 the array,
 // +8 the count, 0x34 bytes each): +8 its mask, +0xC the previous position,
@@ -15,6 +17,116 @@ struct trigger_instigator_t
     float cur[ 3 ];
     float rate;
 };
+
+// ---- the trigger manager's instigators (g_vutriggermanager 0x759064) --------
+//
+// One record per registered VuInstigatorComponent (0x2C bytes; +8 its owner
+// entity, +0x10 the mask, +0x14 / +0x18 / +0x1C the offset in the owner's
+// frame, +0x24 the radius, +0x28 registered): +0 the component, +4 the owner's
+// transform component (owner +0x50; its world at +0x50 .. +0x8C), then the
+// crossing record trigger_instigator_t reads (+8 mask, +0xC previous, +0x1C its
+// radius, +0x20 current, +0x30 its radius). The words +0x18 / +0x2C are the high
+// half of a movq from an uninitialised stack slot - never read, not modelled.
+// `owner` is ours: the race boat index the component's +8 entity is.
+struct trigger_record_t
+{
+    std::uint8_t* component = nullptr;
+    const std::uint8_t* transform = nullptr;
+    trigger_instigator_t at{};
+    int owner = -1;
+};
+
+struct trigger_manager_t
+{
+    std::vector< trigger_record_t > instigators;   // +4 / +8 / +0xC
+};
+
+inline float trigger_word_f( const std::uint8_t* p, int at )
+{
+    float f;
+    std::memcpy( &f, p + at, 4 );
+    return f;
+}
+
+// The point every instigator step computes (0x531F50 / 0x536350 / 0x536460,
+// the same sequence in each): the component's offset through the transform's
+// world rows, x = ((m+0x60 oy + m+0x50 ox) + m+0x70 oz) + m+0x80 per axis.
+inline void trigger_instigator_point( const std::uint8_t* component, const std::uint8_t* transform, float* out )
+{
+    const float ox = trigger_word_f( component, 0x14 ), oy = trigger_word_f( component, 0x18 ), oz = trigger_word_f( component, 0x1C );
+    for ( int k = 0; k < 3; ++k )
+        out[ k ] = ( ( trigger_word_f( transform, 0x60 + 4 * k ) * oy + trigger_word_f( transform, 0x50 + 4 * k ) * ox ) +
+                     trigger_word_f( transform, 0x70 + 4 * k ) * oz ) + trigger_word_f( transform, 0x80 + 4 * k );
+}
+
+// VuInstigatorComponent's gameInitialize 0x531F50 (thiscall comp): unless
+// registered (+0x28), a record {comp, transform, +0x10 mask, the point as both
+// positions, +0x24 as both radii} pushed on the back (0x5366C0 grows the array
+// by half, at least to the count); then +0x28 = 1 either way.
+inline void trigger_instigator_initialize( trigger_manager_t& m, std::uint8_t* component, const std::uint8_t* transform, int owner )
+{
+    if ( component[ 0x28 ] == 0 )
+    {
+        trigger_record_t r;
+        r.component = component;
+        r.transform = transform;
+        r.owner = owner;
+        std::memcpy( &r.at.mask, component + 0x10, 4 );
+        trigger_instigator_point( component, transform, r.at.cur );
+        std::memcpy( r.at.prev, r.at.cur, sizeof( r.at.prev ) );
+        r.at.radius = r.at.rate = trigger_word_f( component, 0x24 );
+        m.instigators.push_back( r );
+    }
+    component[ 0x28 ] = 1;
+}
+
+// 0x536350 (thiscall manager; comp; retn 4): EVERY record of that component
+// (the walk does not stop at the first) gets the point as both its previous
+// and its current position; the radii are left.
+inline void trigger_instigator_update( trigger_manager_t& m, const std::uint8_t* component )
+{
+    for ( trigger_record_t& r : m.instigators )
+    {
+        if ( r.component != component )
+            continue;
+        trigger_instigator_point( r.component, r.transform, r.at.cur );
+        std::memcpy( r.at.prev, r.at.cur, sizeof( r.at.prev ) );
+    }
+}
+
+// 0x5362A0 (thiscall manager; comp; retn 4): the FIRST record of that
+// component is overwritten by the last one (rep movsd, 13 dwords) and the count
+// drops by one - the order is not kept. No match: nothing. +0x28 is the
+// caller's to clear.
+inline void trigger_instigator_release( trigger_manager_t& m, const std::uint8_t* component )
+{
+    for ( std::size_t k = 0; k < m.instigators.size( ); ++k )
+    {
+        if ( m.instigators[ k ].component != component )
+            continue;
+        m.instigators[ k ] = m.instigators.back( );
+        m.instigators.pop_back( );
+        return;
+    }
+}
+
+// The "Triggers" tick 0x536460's first loop (registered by the manager's init
+// 0x536110 in phase "Triggers"): each record's previous position / radius =
+// its current ones, then the current = the point of its component through its
+// stored transform, the radius = the component's +0x24 now. (The rest of the
+// tick - +0x1C = 1, every listed trigger's vt+0x30, +0x1C = 0, the pending
+// adds appended / removes 0x4AB7D0 applied, the dev draw vt+0x34 under g
+// 0x759047 - is the caller's: the trigger list is c_world's.)
+inline void trigger_instigators_step( trigger_manager_t& m )
+{
+    for ( trigger_record_t& r : m.instigators )
+    {
+        std::memcpy( r.at.prev, r.at.cur, sizeof( r.at.prev ) );
+        r.at.radius = r.at.rate;
+        trigger_instigator_point( r.component, r.transform, r.at.cur );
+        r.at.rate = trigger_word_f( r.component, 0x24 );
+    }
+}
 
 // VuTriggerPlaneEntity_testCrossings 0x5D1570 for one instigator, operation
 // for operation. `world` is the trigger transform's world (+0x50: X row 0..2,

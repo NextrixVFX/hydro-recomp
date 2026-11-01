@@ -532,10 +532,15 @@ private:
     static bool plug_returns_value( const std::string& type, const std::string& plug );
 
     // fire: graph.hxx
-    retval_t fire( const std::string& owner, const std::string& plug, int depth = 0 );
+    // `params`: the VuParams the output packs (0x80 data bytes, +0x80 the size; null = none), handed to every link.
+    retval_t fire( const std::string& owner, const std::string& plug, int depth = 0, const std::uint8_t* params = nullptr );
 
     // dispatch: graph.hxx
-    retval_t dispatch( const std::string& entity, const std::string& plug, int depth = 0 );
+    retval_t dispatch( const std::string& entity, const std::string& plug, int depth = 0, const std::uint8_t* params = nullptr );
+
+    // project_initialized / race_triggers: graph.hxx
+    void project_initialized( );
+    void race_triggers( );
 
     // set_boolean: graph.hxx
     retval_t set_boolean( const std::string& entity, bool value, int depth );
@@ -916,6 +921,10 @@ public:
         m_vantage_ready = false;
         m_authored_camera = false;
         m_authored_far = 500.0f;
+        // A race defers OnProjectInitialized to retail's place (0x4BA060: after the boats' load and the project's
+        // gameInitialize, before begin - race_session_start's callback); otherwise it goes out at the end of the load.
+        m_defer_project_initialized = race && front_end && race_game_kind( race_game_data_text( util, nullptr, "GameType" ) ) == race_game_kind_t::race;
+        m_project_initialized = false;
         load_project( path.c_str( ) );
         m_loaded = true;
         LOG_SUCCESS( "scene %s (0x4D3480 from the %s GameData)", name.c_str( ), front_end ? "front end's" : "scaffold" );
@@ -960,9 +969,16 @@ public:
         if ( !m_tree )
         {
             LOG_WARNING( "race: the project's entity tree did not load; no race" );
+            if ( !m_project_initialized )
+                project_initialized( );
             return;
         }
-        if ( !race_session_start( m_race, mode, game_data, dbs, m_archive, *m_tree, track( ), m_vurandom ) )
+        m_race.world.triggers = [ this ] { race_triggers( ); };
+        const bool started = race_session_start( m_race, mode, game_data, dbs, m_archive, *m_tree, track( ), m_vurandom,
+                                                 [ this ] { project_initialized( ); } );
+        if ( !m_project_initialized )
+            project_initialized( );   // the session stopped before 0x4BA060 reached it: the event still goes out
+        if ( !started )
             return;
         // The queries' view of VuWater as the load left it: the race's first frame reads VuWater (DynamicsSync,
         // Decision) before its first "Water" phase rebuilds the view.
@@ -1131,6 +1147,7 @@ public:
         m_race.world.water = &m_water;
         m_race.world.view = &m_water_view;
         m_race.world.water_tick = [ this ]( float step ) { water_frame( step ); };
+        m_race.world.triggers = [ this ] { race_triggers( ); };
         if ( !m_race.active )
             water_frame( dt );
 
@@ -1186,7 +1203,9 @@ public:
         // The crossing test wants the position of whatever the plane's Trigger
         // Type accepts. With no boat in the scene the dev vantage stands in,
         // so flying the orbit through a plane still exercises the real test.
-        m_triggers.update( m_target, [ this ]( const std::string& path, const std::string& plug ) { fire( path, plug ); } );
+        // In a race the crossings are the Triggers tick's (race_triggers, on the boats' instigators); the probe is ours.
+        if ( !m_race.active )
+            m_triggers.update( m_target, [ this ]( const std::string& path, const std::string& plug ) { fire( path, plug ); } );
         update_delays( dt );
         update_rotators( dt );
         update_attaches( );
@@ -1310,6 +1329,7 @@ private:
     bool m_track_built = false;
     // The race (world/session.hxx) and the databases it reads, as parsed documents.
     race_session_t m_race{};
+    bool m_defer_project_initialized = false, m_project_initialized = false;
     value_t m_boat_db, m_track_db, m_constant_db, m_skin_db;
     // The water renderer (world/grid.hxx): its templates, this frame's records, and OUR draw of them - one
     // geometry holding the records expanded per index (a triangle list, capacity k_water_draw_vertices,

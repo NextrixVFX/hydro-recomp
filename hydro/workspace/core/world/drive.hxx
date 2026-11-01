@@ -100,6 +100,7 @@ struct race_drive_t
 };
 
 inline void race_drive_contact_setup( race_session_t& s );
+inline void race_drive_release_target( race_drive_t& r );
 
 inline void race_unwired( race_session_t& s, const std::string& what )
 {
@@ -352,8 +353,13 @@ inline void race_drive_driver( void* user, float dt )
         h.ai.controls.user = &s;
         h.ai.controls.misfire = []( void* u ) { race_unwired( *static_cast< race_session_t* >( u ), "audio: the BoostMisfire sound 0x41E060 (FMOD - platform)" ); };
         h.ai.controls.voice = []( void* u, const char* ) { race_unwired( *static_cast< race_session_t* >( u ), "the voice-over manager g 0x758FEC vt+0x1C (not wired)" ); };
-        h.user = &s;
-        h.release_target = []( void* u ) { race_unwired( *static_cast< race_session_t* >( u ), "the nuisance driver's weak-reference release 0x40E4D0 (not wired)" ); };
+        // The boat's DB "AudioLines" (0x41D500 - the asset system, not wired): the count is answered -1 (the not-a-list
+        // answer, so no line is picked) and logged UNKNOWN.
+        h.line_count = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the nuisance driver's AudioLines from the boat's DB 0x41D500 (the asset system, not wired) - answered -1, no line (UNKNOWN)" ); return -1; };
+        // The weak reference's release 0x40E4D0 (vt+0 of +0xE4) on the session's words (boat nuisance.hxx); the target
+        // views go with it.
+        h.user = &r;
+        h.release_target = []( void* u ) { race_drive_release_target( race_drive_of( u ) ); };
         nuisance_driver_tick( *s.track, r.nuisance_pilot, t, r.nuisance_target, *s.random, dt, h );
         return;
     }
@@ -505,7 +511,7 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         r->respawn_hooks.user = r.get( );
         r->respawn_hooks.water = race_drive_water;
         r->respawn_hooks.transform_children = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the respawn's 0x534C00(0) on the boat's transform (not wired)" ); };
-        r->respawn_hooks.instigator = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the trigger manager's 0x536350 (instigator update, not wired)" ); };
+        r->respawn_hooks.instigator = []( void* u ) { race_drive_t& d = race_drive_of( u ); trigger_instigator_update( d.session->triggers, race_drive_boat( d ).io.instigator ); };
         r->respawn_hooks.enable = []( void* u ) { race_session_enable( *race_drive_of( u ).session, race_drive_boat( race_drive_of( u ) ), true ); };
         r->respawn_hooks.driver_50 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the driver's vt+0x50 after a respawn (not recreated)" ); };
         r->respawn_hooks.recovered = []( void* u, std::uint32_t ) { race_unwired( *race_drive_of( u ).session, "the OnBoatRecovered broadcast (VuEventManager, not wired)" ); };
@@ -739,4 +745,86 @@ inline void race_drive_viewports( race_session_t& s )
     boat_viewport_t out;
     if ( !boat_manager_viewport_tick( s.manager.lists, out, hooks ) )
         race_unwired( s, "the boat manager's viewport index +0x58 is negative - UNKNOWN" );
+}
+
+// The weak reference's release 0x40E4D0 on the nuisance driver's +0xE4 (boat nuisance.hxx vu_weak_ref_release on
+// the session's words) - what the driver tick's own release (0x40E060, no sector after) and DriverDisable reach;
+// the target's views (nuisance_target_t) cleared with it.
+inline vu_words_t race_session_words( race_session_t& s )
+{
+    vu_words_t w;
+    w.get = [ &s ]( std::uint32_t a ) {
+        const auto it = s.words.find( a );
+        return it == s.words.end( ) ? 0u : it->second;
+    };
+    w.put = [ &s ]( std::uint32_t a, std::uint32_t v ) { s.words[ a ] = v; };
+    return w;
+}
+
+inline void race_drive_release_target( race_drive_t& r )
+{
+    race_session_t& s = *r.session;
+    vu_weak_ref_release( race_session_words( s ), race_entity_token( static_cast< int >( r.index ) ) + 0x1000u + 0xE4u );
+    r.nuisance_pilot.target = false;
+    r.nuisance_target = nuisance_target_t{ };
+}
+
+// The driver's +0xF0 (its weak reference's target) onto the drive's views: the target boat's transform
+// component (+0x50) and body (+0x21C).
+inline void race_drive_sync_target( race_session_t& s, int child )
+{
+    if ( child < 0 || static_cast< std::size_t >( child ) >= s.drives.size( ) || !s.drives[ static_cast< std::size_t >( child ) ] )
+        return;
+    race_drive_t& r = *s.drives[ static_cast< std::size_t >( child ) ];
+    const std::uint32_t target = race_session_words( s ).get( race_entity_token( child ) + 0x1000u + 0xF0u );
+    const int k = race_entity_of_token( s, target );
+    r.nuisance_pilot.target = k >= 0;
+    r.nuisance_target = nuisance_target_t{ };
+    if ( k < 0 )
+        return;
+    race_session_boat_t& b = *s.boats[ static_cast< std::size_t >( k ) ];
+    r.nuisance_target.transform = race_session_image( b, 0, 0x50 );
+    r.nuisance_target.body = reinterpret_cast< const std::uint8_t* >( &b.body );
+}
+
+// The event graph's race-side input plugs (slot 2 on them; c_world's dispatch hands over what is not its own):
+// - a gfx-settings entity's "Trigger": the zones' slot 13 0x5A7230 (gfx_zone_trigger) / the global's 0x5D2980
+//   (gfx_global_trigger: its record into the blender);
+// - VuAiNuisanceDriverStartEntity's "DriverTarget" 0x42FF90 / "DriverDisable" 0x430020 (boat nuisance.hxx, on the
+//   session's words; `params` the event's VuParams - 0x80 data bytes, +0x80 the size - null: an empty one).
+// True when the plug is one of these (consumed); false: not a race-side receiver.
+inline bool race_event_dispatch( race_session_t& s, const std::string& entity, const std::string& plug, const std::uint8_t* params )
+{
+    const auto g = s.gfx_by_path.find( entity );
+    if ( g != s.gfx_by_path.end( ) && plug == "Trigger" )
+    {
+        if ( g->second.global )
+            gfx_global_trigger( s.blender, g->second.zone->record );
+        else
+            gfx_zone_trigger( *g->second.zone );
+        LOG_INFO( "race: event %s . Trigger (%s)", entity.c_str( ), g->second.global ? "0x5D2980: its record into the blender" : "0x5A7230" );
+        return true;
+    }
+    const auto n = s.nuisance_by_path.find( entity );
+    if ( n != s.nuisance_by_path.end( ) && n->second.state && ( plug == "DriverTarget" || plug == "DriverDisable" ) )
+    {
+        static const std::uint8_t empty[ 0x84 ] = { };
+        const std::uint8_t* p = params ? params : empty;
+        const std::uint32_t child = n->second.child >= 0 ? race_entity_token( n->second.child ) : 0u;
+        const auto find = [ &s ]( std::uint32_t h ) { return race_entity_of_token( s, h ) >= 0 ? h : 0u; };
+        const vu_words_t w = race_session_words( s );
+        if ( plug == "DriverTarget" )
+            nuisance_start_driver_target( *n->second.state, child, p, find, w );
+        else
+            nuisance_start_driver_disable( *n->second.state, child, p, find, w );
+        race_drive_sync_target( s, n->second.child );
+        const int who = race_entity_of_token( s, vu_params_entity( p ) );
+        LOG_INFO( "race: event %s . %s from %s - target now %s%s", entity.c_str( ), plug.c_str( ),
+                  who >= 0 ? s.boats[ static_cast< std::size_t >( who ) ]->name.c_str( ) : "(no entity)",
+                  n->second.child >= 0 && s.drives[ static_cast< std::size_t >( n->second.child ) ] &&
+                          s.drives[ static_cast< std::size_t >( n->second.child ) ]->nuisance_pilot.target
+                      ? "set" : "none", n->second.state->disabled ? ", disabled" : "" );
+        return true;
+    }
+    return false;
 }

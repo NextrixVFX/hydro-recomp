@@ -522,6 +522,16 @@ inline void c_world::bind_animations( )
     // "OnProjectInitialized" once and every
     // VuOnProjectInitializedEntity's hook @0x5efa60 fires its "Trigger"
     // output in response; the graph does the rest.
+    if ( !m_defer_project_initialized )
+        project_initialized( );
+}
+
+// 0x501260(root, "OnProjectInitialized") as 0x4BA060 raises it: every VuOnProjectInitializedEntity's hook @0x5efa60
+// fires its "Trigger" output (the walk's order is the tree's pre-order; ours is m_initialized's - the collection
+// order, the same walk).
+inline void c_world::project_initialized( )
+{
+    m_project_initialized = true;
     for ( const std::string& path : m_initialized )
         fire( path, "Trigger" );
     LOG_INFO( "project initialized: %u entities fired, %d props playing, %d events delivered to a handler, %d not",
