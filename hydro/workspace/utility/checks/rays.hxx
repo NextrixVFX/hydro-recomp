@@ -905,3 +905,108 @@ inline bool verify_boat_pfx( )
     LOG_ERROR( "boat_pfx FAILED %d of %d", failed, static_cast< int >( g_golden_boat_pfx_count ) );
     return false;
 }
+// verify_boat_debris (boat batch 17): the debris tick 0x411A50 + the parts
+// 0x51F1C0 (boat/effects.hxx boat_debris_tick) against cases/boat.py
+// boat_debris: every part image after, the pfx call log, the aabb's x y z
+// lanes (its w lanes are a stack word retail never writes).
+inline bool verify_boat_debris( )
+{
+    int failed = 0, calls = 0, parts = 0, pieces = 0;
+    for ( std::size_t v = 0; v < g_golden_boat_debris_count; ++v )
+    {
+        const unsigned* g = g_golden_boat_debris_words + g_golden_boat_debris_offsets[ v ];
+        auto f = [ & ]( ) { float x; std::memcpy( &x, g++, 4 ); return x; };
+        const float dt = f( );
+        boat_debris_t d;
+        d.gravity = f( );
+        d.timer = f( );
+        d.out = static_cast< std::uint8_t >( *g++ );
+        const unsigned np = *g++;
+        std::vector< std::array< float, 8 > > boxes( np + 8 );
+        for ( unsigned k = 0; k < np; ++k )
+        {
+            boat_debris_part_t p;
+            std::memcpy( p.image, g, 0xD8 );
+            g += 0xD8 / 4;
+            std::memcpy( boxes[ k ].data( ), g, 32 );
+            g += 8;
+            d.parts.push_back( p );
+        }
+        for ( unsigned k = 0; k < np; ++k )
+            d.parts[ k ].model_aabb = boxes[ k ].data( );
+        const unsigned nq = *g++;
+        std::vector< std::array< float, 16 > > mats( nq );
+        std::vector< std::array< float, 8 > > qbox( nq ), sbox( nq );
+        std::vector< std::array< float, 3 > > offs( nq );
+        for ( unsigned k = 0; k < nq; ++k )
+        {
+            boat_debris_piece_t q;
+            std::memcpy( mats[ k ].data( ), g, 64 );
+            g += 16;
+            q.matrix = mats[ k ].data( );
+            if ( *g++ )
+            {
+                std::memcpy( qbox[ k ].data( ), g, 32 );
+                g += 8;
+                q.model_aabb = qbox[ k ].data( );
+            }
+            std::memcpy( offs[ k ].data( ), g, 12 );
+            g += 3;
+            q.offset = offs[ k ].data( );
+            if ( *g++ )
+            {
+                std::memcpy( sbox[ k ].data( ), g, 32 );
+                g += 8;
+                q.pfx = 0x100u + k;
+            }
+            d.pieces.push_back( q );
+        }
+        const unsigned nlog = *g++;
+        const unsigned* want = g;
+        for ( unsigned e = 0; e < nlog; ++e )
+            g += 3 + g[ 2 ];
+        const std::vector< unsigned > want_log( want, g );
+        struct ctx_t
+        {
+            boat_pfx_check_t k;
+            std::vector< std::array< float, 8 > >* boxes;
+        } c{ { }, &sbox };
+        boat_pfx_ops_t o;
+        o.user = &c;
+        o.set_matrix = []( void* u, std::uint32_t s, const float* m ) { boat_pfx_check_put( &static_cast< ctx_t* >( u )->k, 2, s, m, 16 ); };
+        o.tick = []( void* u, std::uint32_t s, float t ) { boat_pfx_check_put( &static_cast< ctx_t* >( u )->k, 13, s, &t, 1 ); };
+        o.aabb = []( void* u, std::uint32_t s ) -> const std::uint32_t* {
+            ctx_t& x = *static_cast< ctx_t* >( u );
+            boat_pfx_check_put( &x.k, 7, s, nullptr, 0 );
+            return reinterpret_cast< const std::uint32_t* >( ( *x.boxes )[ s - 0x100u ].data( ) );
+        };
+        boat_debris_tick( d, dt, o );
+        bool same = c.k.log == want_log;
+        for ( unsigned k = 0; k < np; ++k )
+        {
+            same = same && std::memcmp( d.parts[ k ].image, g, 0xD8 ) == 0;
+            g += 0xD8 / 4;
+        }
+        for ( int i = 0; i < 8; ++i )
+            if ( i != 3 && i != 7 )
+                same = same && std::memcmp( &d.aabb[ i ], g + i, 4 ) == 0;
+        calls += static_cast< int >( nlog );
+        parts += d.timer > 0.0f ? static_cast< int >( np ) : 0;
+        pieces += d.out ? static_cast< int >( nq ) : 0;
+        if ( !same && ++failed <= 4 )
+        {
+            unsigned ax;
+            std::memcpy( &ax, &d.aabb[ 0 ], 4 );
+            LOG_ERROR( "boat_debris %u: log %s, aabb x 0x%08X (retail 0x%08X)", static_cast< unsigned >( v ), c.k.log == want_log ? "same" : "differs",
+                       ax, g[ 0 ] );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the boat's debris tick 0x411A50 + parts 0x51F1C0 (boat_debris_tick / boat_debris_parts_tick) match retail: %d ticks, "
+                     "%d parts stepped, %d pieces placed, %d pfx calls", static_cast< int >( g_golden_boat_debris_count ), parts, pieces, calls );
+        return true;
+    }
+    LOG_ERROR( "boat_debris FAILED %d of %d", failed, static_cast< int >( g_golden_boat_debris_count ) );
+    return false;
+}

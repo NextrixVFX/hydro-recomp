@@ -3,6 +3,9 @@
 #include <workspace/core/boat/events.hxx>
 #include <workspace/core/boat/fluid.hxx>
 #include <workspace/core/boat/hull.hxx>
+#include <workspace/core/boat/math.hxx>
+#include <workspace/core/boat/state.hxx>
+#include <workspace/core/assets/scene.hxx>
 #include <workspace/core/world/pfxsim.hxx>
 
 #include <cstdint>
@@ -335,4 +338,135 @@ inline boat_pfx_ops_t boat_pfx_runtime_ops( pfx_runtime_t& rt )
         pfx_system_tick( rt.heap, s, dt, rt.hooks );
     };
     return o;
+}
+
+// ---------------------------------------------------------------------------
+// The boat's debris object (boat +0x238; +0 the boat): its +4 sub-object's
+// parts (0x51F1C0: +0x68 gravity, +0x6C count, +0x70 the 0xD8-byte parts),
+// +0x94 "pieces out", +0x9C / +0xA0 the VuPiece pointers, the aabb +0xA8 ..
+// +0xC7, +0xC8 the parts' timer (boat_decision_tick runs it down).
+
+// One 0xD8-byte part (its image) and its model's local aabb (the model at
+// part +0: its +0x70, 8 floats). Part +4 the base matrix, +0x44 the pivot,
+// +0x54 the position, +0x64 the euler angles, +0x74 the velocity, +0x84 the
+// angular velocity, +0x94 the world matrix it rebuilds, +0xD4 the damping.
+struct boat_debris_part_t
+{
+    std::uint8_t image[ 0xD8 ]{};
+    const float* model_aabb = nullptr;
+};
+
+// 0x51F1C0 (thiscall the sub-object; aabb*; xmm1 dt; retn 4): with g = -(+0x68)
+// (xorps), h = (dt x 0.5) x dt, h0 = h x 0, hz = h x g, c0 = dt x 0, cz = g x dt,
+// per part (operand order as its mulss / addss):
+//   k = minss( +0xD4 x dt, 1 );
+//   +0x54 = +0x54 + (h0 + +0x74 dt), +0x58 = (h0 + +0x78 dt) + +0x58,
+//   +0x5C = (hz + +0x7C dt) + +0x5C (the OLD velocity);
+//   +0x74 = (c0 + +0x74)(1 - k), +0x78 = (c0 + +0x78)(1 - k), +0x7C = (+0x7C + cz)(1 - k);
+//   +0x64.. += dt x +0x84 / +0x88 dt / +0x8C dt (dt x a for x, a x dt for y z);
+//   +0x94 = identity . fromEuler( +0x64 ) (VuMatrix_fromEuler 0x435640), row 3 =
+//   the position, then translation( -pivot ) . it, then +4 . it;
+//   0x5175E0( aabb, model +0x70, +0x94 ).
+inline void boat_debris_parts_tick( float gravity, std::vector< boat_debris_part_t >& parts, float* aabb, float dt )
+{
+    std::uint32_t gw;
+    std::memcpy( &gw, &gravity, 4 );
+    const float g = water_bits( gw ^ 0x80000000u );
+    const float h = sse_mul( sse_mul( dt, 0.5f ), dt );
+    const float c0 = sse_mul( dt, 0.0f ), h0 = sse_mul( h, 0.0f ), hz = sse_mul( h, g ), cz = sse_mul( g, dt );
+    for ( boat_debris_part_t& p : parts )
+    {
+        std::uint8_t* e = p.image;
+        const float k = fluid_min( sse_mul( state_f( e, 0xD4 ), dt ), 1.0f );
+        const float vx = state_f( e, 0x74 ), vy = state_f( e, 0x78 ), vz = state_f( e, 0x7C );
+        state_put_f( e, 0x54, sse_add( state_f( e, 0x54 ), sse_add( h0, sse_mul( vx, dt ) ) ) );
+        state_put_f( e, 0x58, sse_add( sse_add( h0, sse_mul( vy, dt ) ), state_f( e, 0x58 ) ) );
+        state_put_f( e, 0x5C, sse_add( sse_add( hz, sse_mul( vz, dt ) ), state_f( e, 0x5C ) ) );
+        const float keep = sse_sub( 1.0f, k );
+        state_put_f( e, 0x74, sse_mul( sse_add( c0, vx ), keep ) );
+        state_put_f( e, 0x78, sse_mul( sse_add( c0, vy ), keep ) );
+        state_put_f( e, 0x7C, sse_mul( sse_add( vz, cz ), keep ) );
+        state_put_f( e, 0x64, sse_add( sse_mul( dt, state_f( e, 0x84 ) ), state_f( e, 0x64 ) ) );
+        state_put_f( e, 0x68, sse_add( sse_mul( state_f( e, 0x88 ), dt ), state_f( e, 0x68 ) ) );
+        state_put_f( e, 0x6C, sse_add( sse_mul( state_f( e, 0x8C ), dt ), state_f( e, 0x6C ) ) );
+        float id[ 16 ], r[ 16 ], m[ 16 ], t[ 16 ], euler[ 3 ];
+        vu_identity( id );
+        std::memcpy( euler, e + 0x64, 12 );
+        vu_matrix_from_euler( r, euler );
+        hull_multiply( id, m, r );
+        std::memcpy( m + 12, e + 0x54, 12 );
+        float pivot[ 3 ];
+        for ( int a = 0; a < 3; ++a )
+        {
+            std::uint32_t w;
+            std::memcpy( &w, e + 0x44 + 4 * a, 4 );
+            pivot[ a ] = water_bits( w ^ 0x80000000u );
+        }
+        hull_translation( t, pivot );
+        hull_multiply( t, m, m );
+        float base[ 16 ];
+        std::memcpy( base, e + 4, 64 );
+        hull_multiply( base, m, m );
+        std::memcpy( e + 0x94, m, 64 );
+        scene_aabb_grow( aabb, p.model_aabb, m );
+    }
+}
+
+// One VuPiece as 0x411A50 reads it: +8 its matrix (16), +0x58 its model (the
+// local aabb its +0x5C; none: the engine's zero aabb 0x7593F0), +0x1B0 the
+// offset (3), +0x228 its pfx system (0 = none).
+struct boat_debris_piece_t
+{
+    const float* matrix = nullptr;
+    const float* model_aabb = nullptr;
+    const float* offset = nullptr;
+    std::uint32_t pfx = 0;
+};
+
+struct boat_debris_t
+{
+    float gravity = 0.0f;                        // +4 +0x68
+    std::vector< boat_debris_part_t > parts;     // +4 +0x6C / +0x70
+    std::uint8_t out = 0;                        // +0x94
+    std::vector< boat_debris_piece_t > pieces;   // +0x9C / +0xA0
+    float aabb[ 8 ]{};                           // +0xA8 .. +0xC7 (w lanes +0xB4 / +0xC4: never known, see below)
+    float timer = 0.0f;                          // +0xC8
+};
+
+// 0x411A50 (__usercall: ecx the debris, xmm1 dt), Build step 5: the aabb reset
+// (+0xA8 .. +0xB0 FLT_MAX, +0xB8 .. +0xC0 -FLT_MAX; +0xB4 / +0xC4 take a stack
+// word the function never writes: UNKNOWN, not written here); when +0xC8 > 0
+// (comiss) the parts (0x51F1C0); while +0x94, per piece: 0x5175E0( aabb, the
+// model's aabb, piece +8 ), and with a pfx: setMatrix( translation( +0x1B0 ) .
+// +8 ) (0x410AB0, VuMatrix_multiply), tick( dt ), and its aabb (slot 7: no
+// empty test here) merged - minss( own, its ) / maxss.
+inline void boat_debris_tick( boat_debris_t& d, float dt, const boat_pfx_ops_t& o )
+{
+    for ( int k = 0; k < 3; ++k )
+    {
+        d.aabb[ k ] = water_bits( 0x7F7FFFFFu );
+        d.aabb[ 4 + k ] = water_bits( 0xFF7FFFFFu );
+    }
+    if ( d.timer > 0.0f )   // comiss / jbe: an ordered > (NaN and +-0 skip)
+        boat_debris_parts_tick( d.gravity, d.parts, d.aabb, dt );
+    if ( d.out == 0 )
+        return;
+    for ( const boat_debris_piece_t& p : d.pieces )
+    {
+        scene_aabb_grow( d.aabb, p.model_aabb != nullptr ? p.model_aabb : scene_zero_aabb( ), p.matrix );
+        if ( p.pfx == 0 )
+            continue;
+        float t[ 16 ], m[ 16 ];
+        hull_translation( t, p.offset );
+        hull_multiply( t, m, p.matrix );
+        o.set_matrix( o.user, p.pfx, m );
+        o.tick( o.user, p.pfx, dt );
+        float its[ 8 ];
+        std::memcpy( its, o.aabb( o.user, p.pfx ), 32 );
+        for ( int k = 0; k < 3; ++k )
+        {
+            d.aabb[ k ] = fluid_min( d.aabb[ k ], its[ k ] );
+            d.aabb[ 4 + k ] = fluid_max( d.aabb[ 4 + k ], its[ 4 + k ] );
+        }
+    }
 }
