@@ -2747,6 +2747,7 @@ inline bool verify_water_all( )
     ok = verify_repository_tree( ) && ok;
     ok = verify_tick_slots( ) && ok;
     ok = verify_entity_dtors( ) && ok;
+    ok = verify_framework_dtors( ) && ok;
     ok = verify_voice_over( ) && ok;
     ok = verify_audio_emitter( ) && ok;
     ok = verify_force_affector( ) && ok;

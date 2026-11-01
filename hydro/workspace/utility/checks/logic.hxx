@@ -1583,6 +1583,67 @@ inline bool verify_entity_dtors( )
     return bad == 0;
 }
 
+// entity/repository.hxx vu_framework_delete against retail's component / plug / ref / project deleting dtors (case
+// framework_dtors): fake objects in one region; the region's words after and every call out in order.
+inline bool verify_framework_dtors( )
+{
+    logic_check_t c{ g_golden_fdt_words };
+    const unsigned n = c.next( );
+    const std::uint32_t base = c.next( );
+    const unsigned count = c.next( );
+    int bad = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = c.next( ), self = c.next( ), flags = c.next( );
+        edt_check_memory_t m;
+        m.base = base;
+        m.words.assign( count, 0u );
+        for ( unsigned k = c.next( ); k > 0; --k )
+        {
+            const unsigned i = c.next( );
+            m.words[ i ] = c.next( );
+        }
+        std::vector< std::uint32_t > after = m.words;
+        for ( unsigned k = c.next( ); k > 0; --k )
+        {
+            const unsigned i = c.next( );
+            after[ i ] = c.next( );
+        }
+        std::vector< std::vector< std::uint32_t > > want( c.next( ) );
+        for ( auto& e : want )
+        {
+            e.resize( c.next( ) );
+            for ( auto& x : e )
+                x = c.next( );
+        }
+        std::vector< std::vector< std::uint32_t > > got;
+        vu_dtor_hooks_t h;
+        h.free = [ & ]( std::uint32_t b ) { got.push_back( { 0u, b } ); };
+        h.call = [ & ]( std::uint32_t o, std::uint32_t slot, std::int64_t arg )
+        {
+            got.push_back( { 1u, o, slot, static_cast< std::uint32_t >( arg ) } );
+            if ( slot == 0 && arg < 0 )   // a weak reference's slot 0: unlinked from its target's +8 list (the case's stub does the same)
+                m[ m[ o + 8 ] + 8 ] = m[ o + 4 ];
+        };
+        h.asset_release = [ & ]( std::uint32_t a ) { got.push_back( { 2u, a } ); };
+        h.event_remove = [ & ]( std::uint32_t k, std::uint32_t val ) { got.push_back( { 3u, k, val } ); };
+        h.instigator_remove = [ & ]( std::uint32_t comp ) { got.push_back( { 4u, 0x30000000u + 0x20C0u, comp } ); };   // the case's g 0x759064
+        h.json_clear = [ & ]( std::uint32_t j ) { got.push_back( { 5u, j } ); };
+        const bool ok = vu_framework_delete( m, static_cast< vu_framework_dtor_t >( kind ), self, flags, h );
+        const bool same = ok && m.words == after && got == want && !m.outside;
+        if ( !same && bad++ < 6 )
+            LOG_ERROR( "framework_dtors vector %u (kind %u): %s, memory %s, calls %s (%u, retail %u)", v, kind, ok ? "ended" : "UNKNOWN",
+                       m.words == after ? "ok" : "differs", got == want ? "ok" : "differ", static_cast< unsigned >( got.size( ) ),
+                       static_cast< unsigned >( want.size( ) ) );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "the framework dtors match retail (0x423770 0x4268F0/0x539610 0x50B960/0x50B990 0x531D90/0x531DC0 0x534280/0x5342B0 "
+                     "0x503B70/0x503BA0 0x4052E0/0x502180/0x502340 0x542680/0x5426B0/0x504980 0x4B4330/0x4B4290 0x5EFA30 0x4032A0): %u vectors", n );
+    else
+        LOG_ERROR( "framework_dtors FAILED %d", bad );
+    return bad == 0;
+}
+
 // world/logic.hxx tick_is_paused / tick_delta / tick_real_delta against VuTickManagerImpl slots 14 / 15 / 16 (case
 // tick_slots: retail's ctor, the four fields poked per vector).
 inline bool verify_tick_slots( )
