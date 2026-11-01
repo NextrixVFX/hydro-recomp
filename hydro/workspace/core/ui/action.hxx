@@ -90,3 +90,17 @@ public:
     // HOOK: VuEventManager_broadcast 0x505690 (immediate: each subscriber runs inside the call).
     std::function< void( std::uint32_t, const ui_params_t& ) > m_broadcast;
 };
+
+// VuSetGameModeUIAction (create 0x472790; ctor 0x472650 over VuUIAction
+// 0x470750; vtable 0x73E6E0): +92 "Game Mode", a VuStringProperty (0x406B70,
+// the base string node vtable 0x7374B8), default "". Its Trigger runs slot 12
+// 0x472740: gameutil +80 (`root`) ["GameConfig"] ["Mode"] (0x4FC090 twice:
+// each made a map if it is not) = the text up to its first NUL (0x4FC640);
+// VuRetVal 0 (its type word only). No broadcast; the trigger's params are
+// never read. (Kept out of ui_action_kind_of: the wiring's dispatch does not
+// reach it yet.)
+inline std::uint32_t ui_set_game_mode( value_t& root, const std::string& mode )
+{
+    ui_json_set_string( ui_json_child( ui_json_child( root, "GameConfig" ), "Mode" ), mode.c_str( ) );
+    return 0;
+}
