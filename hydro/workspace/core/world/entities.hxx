@@ -64,6 +64,8 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     std::vector< trigger_t > fresh_triggers;
     int pfx_placed = 0;
     int pfx_unplaced = 0;
+    std::map< std::string, std::uint32_t > fresh_static_pfx;
+    std::map< std::string, entity_t* > fresh_entities;   // every entity by its graph path (the audio receivers read their state)
     int triggers_unplaced = 0;
     // The logic / action / motion / settings consumers (engine entity/actions.hxx).
     std::vector< rotator_t > fresh_rotators;
@@ -243,6 +245,8 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
         if ( e.m_ctor && e.m_type == "VuIfEntity" )
             fresh_ifs.insert( trail );
         // The logic entities (world/logic.hxx): their state is the tree's (race.hxx logic_state_t).
+        if ( !trail.empty( ) )
+            fresh_entities[ trail ] = &e;
         if ( logic_state_of( e ) && !trail.empty( ) )
             fresh_logic[ trail ] = &e;
         // VuTriggerPlaneEntity / VuTriggerBoxEntity (engine entity/trigger.hxx):
@@ -294,7 +298,9 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
             {
                 float color[ 4 ];
                 static_pfx_color( p, color );
-                m_pfx.add_static( m_archive, p.effect_name, t->world, p.pfx_scale, color, p.initially_active != 0 );
+                // +0x94 for its Start / Stop / Kill plugs (graph.hxx): 0 when the create answered none - then
+                // each plug's guard does nothing, as retail's.
+                fresh_static_pfx[ trail ] = m_pfx.add_static( m_archive, p.effect_name, t->world, p.pfx_scale, color, p.initially_active != 0 );
                 ++pfx_placed;
             }
         }
@@ -327,41 +333,8 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
                     g.fog_end, m_authored_far );
             c_engine::fog( g.fog_start, g.fog_end, red, green, blue );
         }
-        // The rig: the hull shader's gAmbLightColor from VuAmbientLightEntity's
-        // Color, gDirLightFrontColor / gDirLightBackColor from
-        // VuDirectionalLightEntity's (the shader's light is TWO-SIDED), each
-        // VuColor's R, G, B bytes / 255. The light carries no direction
-        // property: gDirLightWorld is its transform world, and the sun
-        // direction handed to the renderer is that world's -Z row - WHICH
-        // axis retail uses is not reversed (the light object at +0x5C and
-        // its draw are unread), so that choice is ours and flagged. Its
-        // Specular Color is loaded and not consumed. With several lights
-        // of a kind the last in tree order wins - retail's light manager,
-        // which picks, is unread.
-        if ( e.m_type == "VuAmbientLightEntity" && e.m_state )
-        {
-            const std::uint32_t c = static_cast< const ambient_light_state_t* >( e.m_state.get( ) )->value.color;
-            for ( int k = 0; k < 3; ++k )
-                m_rig.ambient( )[ k ] = static_cast< float >( ( c >> ( 8 * k ) ) & 0xFF ) / 255.0f;
-            m_rig.mark_lit( );
-        }
-        if ( e.m_type == "VuDirectionalLightEntity" && e.m_state )
-        {
-            const directional_light_t& l = static_cast< const directional_light_state_t* >( e.m_state.get( ) )->value;
-            for ( int k = 0; k < 3; ++k )
-            {
-                m_rig.front( )[ k ] = static_cast< float >( ( l.front_color >> ( 8 * k ) ) & 0xFF ) / 255.0f;
-                m_rig.back( )[ k ] = static_cast< float >( ( l.back_color >> ( 8 * k ) ) & 0xFF ) / 255.0f;
-            }
-            const transform_component_t* t = entity_transform( e );
-            if ( t && !e.m_world_unknown )
-            {
-                std::memcpy( m_rig.sun_world( ), t->world, sizeof( t->world ) );
-                const float direction[ 3 ] = { -t->world[ 8 ], -t->world[ 9 ], -t->world[ 10 ] };
-                c_engine::sun( direction );
-                m_rig.mark_sun( );
-            }
-        }
+        // The rig is no longer read at load: the lights' game-start "Trigger" handlers write g_vulightmanager (world/settings.hxx,
+        // the water agent's - case settings_triggers) and the renderer takes its words from there (graph.hxx).
         // The model-draw components, drawn at the matrix their owner leaves
         // in them (transform_draw_matrix: fromScale x world). An empty
         // Model Asset draws nothing.
@@ -470,6 +443,8 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     m_initialized = std::move( fresh_initialized );
     m_ifs = std::move( fresh_ifs );
     m_logic = std::move( fresh_logic );
+    m_static_pfx = std::move( fresh_static_pfx );
+    m_entities = std::move( fresh_entities );
     // Dev trace: each logic entity's links (both ends are recorded, so its inputs' senders are here too).
     for ( const auto& pair : m_graph )
         if ( m_logic.count( pair.first.first ) != 0 )
@@ -598,7 +573,6 @@ inline void c_world::load_project( const char* asset )
     math_identity( identity );
     visit( *entity, identity );
     load_entity_tree( asset, *project_node );
-    m_rig.report( );
     for ( const auto& pair : m_type_census )
         LOG_VERBOSE( "census %-40s %d", pair.first.c_str( ), pair.second );
     // Hand the authored rig to the renderer. Until this runs the engine

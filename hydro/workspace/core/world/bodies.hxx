@@ -5,6 +5,7 @@
 #include <workspace/core/collision/compound.hxx>
 #include <workspace/core/collision/concave.hxx>
 #include <workspace/core/collision/cylinder.hxx>
+#include <workspace/core/collision/rebuild.hxx>
 #include <workspace/core/collision/support.hxx>
 #include <workspace/core/dynamics/body.hxx>
 #include <workspace/core/collision/world.hxx>
@@ -27,9 +28,10 @@
 // centre-of-mass compound (0x5269C0 / 0x526BF0) and a mass's inertia through the
 // shape's vt+0x1C (compound 0x5275F0, cylinder 0x5AE2D0, convex hull 0x54B4C0),
 // checked by the case dynamic_prop_bodies. 1 / 2 (sphere 0x43D700, box
-// 0x547D80), a non-unit scale on a BVH mesh or a compound (setLocalScaling,
-// vt+0x14: 0x5AF300 / the compound's) and the triangle mesh's inertia are NOT
-// recreated: such a body is UNKNOWN (refused, never stood in for).
+// 0x547D80), a non-unit scale on a compound (setLocalScaling vt+0x14, the
+// compound's) and the triangle mesh's inertia are NOT recreated: such a body is
+// UNKNOWN (refused, never stood in for). A BVH mesh's non-unit scale runs 0x5AF300
+// with its rebuild (boat batch 23's collision/rebuild.hxx), one btOptimizedBvh per body.
 
 // One built body: the component's shape (+0xF8), the VuRigidBody (+0x100), the
 // VuStridingMesh (+0xA0) its shape reads, and the body's collision object in
@@ -42,6 +44,7 @@ struct level_body_t
     striding_mesh_t mesh{ };                         // +0xA0 (scaling +0xB0 = (1, 1, 1, 0) from the ctor)
     quantized_bvh_t bvh{ };                          // the asset's +0xA8, as the walk reads it
     bvh_mesh_shape_t concave{ };
+    optimized_bvh_t rebuilt{ };                      // the btOptimizedBvh setLocalScaling 0x5AF300 builds (concave.bvh then points at it)
     convex_shape_t convex{ };
     convex_shape_t cylinder{ };                      // types 3 - 5 (0x5AE160)
     compound_shape_t compound{ };                    // +0xF8 when the offset differs from the centre (+0xFC the child)
@@ -50,6 +53,8 @@ struct level_body_t
     collision_object_t collision{ };
     std::uint32_t flags_d8 = 0;                      // component +0xD8 after the build
     bool in_world = false;                           // component +0x104
+    const void* owner = nullptr;                     // the owning entity (the session's: its Show / Hide plugs)
+    bool built = false;                              // a body exists (component +0x100 non-null)
     level_body_t( ) = default;
     level_body_t( const level_body_t& ) = delete;    // the compound holds a pointer to its own child
     level_body_t& operator=( const level_body_t& ) = delete;
@@ -285,13 +290,21 @@ inline bool bodies_create( level_body_t& b, rigid_component_t& c, const collisio
     // The transform's scale: each lane `ucomiss` against 1.0 - not equal or unordered -> setLocalScaling (vt+0x14).
     if ( !( scale[ 0 ] == 1.0f && scale[ 1 ] == 1.0f && scale[ 2 ] == 1.0f ) )
     {
-        if ( !convex || b.has_compound )
+        if ( b.has_compound )
         {
-            why = "createRigidBody 0x544100: setLocalScaling on a BVH mesh (0x5AF300) / a compound is not recreated";
+            why = "createRigidBody 0x544100: setLocalScaling on a compound is not recreated";
             return false;
         }
         const float s[ 4 ] = { scale[ 0 ], scale[ 1 ], scale[ 2 ], 0.0f };
-        shape_set_triangle_mesh_scaling( b.convex, b.mesh, s );
+        if ( convex )
+            shape_set_triangle_mesh_scaling( b.convex, b.mesh, s );
+        // btBvhTriangleMeshShape::setLocalScaling 0x5AF300 with its rebuild branch (engine collision/rebuild.hxx, the
+        // boat agent's verified overload - case bvh_build): a new btOptimizedBvh over the rescaled mesh, one per body.
+        else if ( bvh_mesh_set_local_scaling( b.concave, b.mesh, s, b.rebuilt ) < 0 )
+        {
+            why = "createRigidBody 0x544100: setLocalScaling 0x5AF300's BVH rebuild refused";
+            return false;
+        }
     }
     // The mass (+0xEC) > 0 (comiss) with a shape: its calculateLocalInertia (vt+0x1C) into a zeroed vector.
     float inertia[ 4 ] = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -382,6 +395,7 @@ inline bool bodies_prop_game_initialize( level_body_t& b, rigid_component_t& c, 
     bool built = false;
     if ( !bodies_create( b, c, asset, world, scale, unique_id, hooks, why, built ) )
         return false;
+    b.built = built;
     if ( visible )
     {
         draw( );

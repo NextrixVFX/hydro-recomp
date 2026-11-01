@@ -129,6 +129,90 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
         return retval_t{};
     }
 
+    // VuStaticPfxEntity's input plugs (ctor 0x5EAA40): Start 0x5EB200, Stop 0x5EB220, Kill 0x5EB250 on its +0x94
+    // system (world/pfxstatic.hxx, via c_effects::plug); each returns the empty VuRetVal.
+    const auto effect = m_static_pfx.find( entity );
+    if ( effect != m_static_pfx.end( ) )
+    {
+        const int which = plug == "Start" ? 0 : plug == "Stop" ? 1 : plug == "Kill" ? 2 : -1;
+        if ( which < 0 )
+        {
+            count_unhandled( entity, plug );
+            return retval_t{};
+        }
+        m_pfx.plug( effect->second, which );
+        ++m_fired;
+        return retval_t{};
+    }
+
+    // The lights' game-start "Trigger" (world/settings.hxx, the water agent's - case settings_triggers): VuAmbientLightEntity
+    // 0x5EF780 / VuDirectionalLightEntity 0x5EEEC0 write g_vulightmanager 0x759094's +0xCC .. +0xF8 (m_lights). The
+    // manager's consumer is the renderer's (not recreated): OUR light setup reads its words - the hull shader's ambient /
+    // front / back colours (each VuColor's R, G, B bytes / 255; the shader's light is two-sided), the sun direction +0xE0
+    // (the transform's row 2 negated, retail's own), Specular (+0xF8) not consumed. With several lights of a kind the last
+    // trigger wins (the manager holds one of each).
+    const auto lt = plug == "Trigger" ? m_entities.find( entity ) : m_entities.end( );
+    if ( lt != m_entities.end( ) && lt->second->m_state &&
+         ( lt->second->m_type == "VuAmbientLightEntity" || lt->second->m_type == "VuDirectionalLightEntity" ) )
+    {
+        const entity_t& le = *lt->second;
+        const auto to_rgb = []( std::uint32_t c, float* out ) {
+            for ( int k = 0; k < 3; ++k )
+                out[ k ] = static_cast< float >( ( c >> ( 8 * k ) ) & 0xFF ) / 255.0f;
+        };
+        if ( le.m_type == "VuAmbientLightEntity" )
+        {
+            ambient_light_trigger( static_cast< const ambient_light_state_t* >( le.m_state.get( ) )->value.color, m_lights );
+            to_rgb( m_lights.ambient, m_rig.ambient( ) );
+            m_rig.mark_lit( );
+        }
+        else
+        {
+            const transform_component_t* t = entity_transform( const_cast< entity_t& >( le ) );
+            if ( !t || le.m_world_unknown )
+            {
+                count_unhandled( entity, plug );
+                return retval_t{};
+            }
+            const directional_light_t& l = static_cast< const directional_light_state_t* >( le.m_state.get( ) )->value;
+            std::uint32_t words[ 16 ];
+            std::memcpy( words, t->world, 64 );
+            directional_light_trigger( words, l.front_color, l.back_color, l.specular_color, m_lights );
+            to_rgb( m_lights.front, m_rig.front( ) );
+            to_rgb( m_lights.back, m_rig.back( ) );
+            std::memcpy( m_rig.sun_world( ), t->world, 64 );
+            float direction[ 3 ];
+            std::memcpy( direction, m_lights.direction, 12 );
+            c_engine::sun( direction );
+            m_rig.mark_sun( );
+            m_rig.mark_lit( );
+        }
+        if ( c_engine::option( "no-rig" ) == nullptr )
+            c_engine::rig( m_rig.ambient( ), m_rig.front( ), m_rig.back( ) );
+        ++m_fired;
+        return retval_t{};
+    }
+
+    // VuAudioEmitterEntity's inputs (world/sound.hxx, the water agent's - case audio_emitter): Start 0x5F3B80 (play at the
+    // transform's world position, +0x80) and Stop 0x5F3BE0, on the entity's state (world/emitters.hxx) and the audio platform.
+    const auto em = m_entities.find( entity );
+    if ( em != m_entities.end( ) && em->second->m_type == "VuAudioEmitterEntity" && em->second->m_state )
+    {
+        audio_emitter_t& a = static_cast< audio_emitter_state_t* >( em->second->m_state.get( ) )->value;
+        const transform_component_t* t = entity_transform( *em->second );
+        if ( plug == "Start" && t && !em->second->m_world_unknown )
+            audio_emitter_start( a, t->world + 12, m_sound );
+        else if ( plug == "Stop" )
+            audio_emitter_stop( a, m_sound );
+        else
+        {
+            count_unhandled( entity, plug );
+            return retval_t{};
+        }
+        ++m_fired;
+        return retval_t{};
+    }
+
     // VuSetFrontEndCameraEntity. "Trigger" is its ONE input plug, named
     // inside the init helper @0x409570 which binds
     // VuMethod1<VuSetFrontEndCameraEntity,VuRetVal,VuParams const&> to the
@@ -146,33 +230,33 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
     // buffer is reused but never accumulates. The interpolation broadcast
     // is UNCONDITIONAL: there is no Modify boolean for it.
     //
-    // COVERAGE GAP, NAMED: the four subscribers live on the front-end
-    // camera, which needs the menus. Nothing in the build hooks
-    // "OnSetFrontEndCamera*" yet, so the eye, target and far plane are
-    // applied straight to the scene viewer - OUR vantage, not retail's -
-    // and Interpolation Time is carried but not acted on, because no
-    // interpolation code has been read.
+    // The handler 0x408F90: world/background.hxx front_end_trigger (verified,
+    // case front_end_trigger). The subscriber is VuBackground's rig while one
+    // exists; a broadcast nobody subscribes to does nothing. UNKNOWN: the
+    // vectors' w lanes (+0x74 / +0x84: the VuVector3 property's, not loaded
+    // here) - written 0; the rig never reads them back into a camera
+    // (front_rig_place / camera_view read x y z).
     const auto shot = m_front_end.find( entity );
     if ( shot != m_front_end.end( ) )
     {
         if ( plug == "Trigger" )
         {
             const front_end_camera_t& set = shot->second;
-            if ( set.modify_eye )
-                std::memcpy( m_eye, set.eye, sizeof( m_eye ) );
-            if ( set.modify_target )
-                std::memcpy( m_target, set.target, sizeof( m_target ) );
-            if ( set.modify_far )
-                m_far = set.far_plane;
-            if ( set.modify_eye || set.modify_target || set.modify_far )
-                m_authored_camera = true;
-            ++m_fired;
-            LOG_SUCCESS( "event: %s set the front end camera  eye %s target %s far %s  interpolation %.3f (carried, not applied)",
-                entity.c_str( ),
-                set.modify_eye ? "yes" : "no",
-                set.modify_target ? "yes" : "no",
-                set.modify_far ? "yes" : "no",
-                set.interpolation_time );
+            front_end_trigger_t t;
+            t.interpolation = set.interpolation_time;
+            t.modify[ 0 ] = set.modify_eye ? 1 : 0;
+            t.modify[ 1 ] = set.modify_target ? 1 : 0;
+            t.modify[ 2 ] = set.modify_far ? 1 : 0;
+            std::memcpy( t.eye, set.eye, sizeof( set.eye ) );
+            std::memcpy( t.target, set.target, sizeof( set.target ) );
+            t.far_plane = set.far_plane;
+            front_end_trigger( t, [ this ]( std::uint32_t hash, const std::uint8_t* p ) {
+                if ( background_event( m_background, hash, p ) )
+                    ++m_fired;
+            } );
+            LOG_INFO( "event: %s . Trigger 0x408F90: eye %s target %s far %s interpolation %.3f -> %s", entity.c_str( ),
+                      set.modify_eye ? "yes" : "no", set.modify_target ? "yes" : "no", set.modify_far ? "yes" : "no", set.interpolation_time,
+                      m_background.rig ? "VuBackground's rig" : "no subscriber" );
             return retval_t{};
         }
         count_unhandled( entity, plug );
@@ -681,7 +765,23 @@ inline void c_world::on_animation_event( const std::string& owner, const std::st
     // (json PfxName/Pos/Rot), Show and Hide (the prop's vtable slots 12
     // and 13, @0x5ecf90 / @0x5ecfe0, unread). Any other name does nothing
     // in retail either.
-    if ( name == "PlayAudioEvent" || name == "PlayPfxModelSpace" || name == "Show" || name == "Hide" )
+    // PlayAudioEvent (world/sound.hxx prop_play_audio_event, the water agent's): json EventName / Pos through the prop's
+    // transform +0x50 and its +0xB0 scale, on the audio platform.
+    if ( name == "PlayAudioEvent" )
+    {
+        const auto e = m_entities.find( owner );
+        const transform_component_t* t = e != m_entities.end( ) ? entity_transform( *e->second ) : nullptr;
+        if ( !t || e->second->m_world_unknown )
+        {
+            count_unhandled( owner, name );
+            return;
+        }
+        static const value_t none;
+        prop_play_audio_event( params ? *params : none, t->world, t->scale, m_sound );
+        ++m_fired;
+        return;
+    }
+    if ( name == "PlayPfxModelSpace" || name == "Show" || name == "Hide" )
         count_unhandled( owner, name );
 }
 

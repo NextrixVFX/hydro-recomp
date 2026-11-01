@@ -2,6 +2,11 @@
 
 #include <workspace/core/world/race.hxx>
 #include <workspace/core/world/strings.hxx>
+#include <workspace/core/world/background.hxx>
+#include <workspace/core/world/action.hxx>
+#include <workspace/core/world/mine.hxx>
+
+#include <cstdio>
 
 // The world area's second checks file (checks/world.hxx is at its size limit): the race session's
 // pieces from world batch 24 on. Included at the end of checks/world.hxx; verify_session_all runs
@@ -180,9 +185,345 @@ inline bool verify_string_db( )
     return failed == 0;
 }
 
+// front_end_trigger (world/background.hxx: VuSetFrontEndCameraEntity's Trigger 0x408F90) against retail's handler on
+// 24 entity images (every Modify combination x 3 value sets; oracle case front_end_trigger): the broadcasts in order -
+// the name hash, the VuParams size word and its defined bytes - and the answer (VuRetVal 0: graph.hxx returns retval_t{}).
+inline bool verify_front_end_trigger( )
+{
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_front_end_trigger_count; ++k )
+    {
+        const golden_front_end_trigger_t& want = g_golden_front_end_trigger[ k ];
+        front_end_trigger_t e;
+        std::memcpy( &e.interpolation, &want.interpolation, 4 );
+        for ( int m = 0; m < 3; ++m )
+            e.modify[ m ] = static_cast< std::uint8_t >( want.modify[ m ] );
+        std::memcpy( e.eye, want.eye, 16 );
+        std::memcpy( e.target, want.target, 16 );
+        std::memcpy( &e.far_plane, &want.far_plane, 4 );
+        int n = 0;
+        bool bad = false;
+        front_end_trigger( e, [ & ]( std::uint32_t hash, const std::uint8_t* p ) {
+            std::int32_t size;
+            std::memcpy( &size, p + 0x80, 4 );
+            if ( n >= want.count )
+            {
+                bad = true;
+                ++n;
+                return;
+            }
+            const golden_front_end_broadcast_t& b = g_golden_front_end_broadcasts[ want.first + n++ ];
+            std::uint8_t expect[ 20 ];
+            std::memcpy( expect, b.words, 20 );
+            if ( hash != b.hash || size != b.size || size < 0 || size > 20 || std::memcmp( p, expect, static_cast< std::size_t >( size ) ) != 0 )
+                bad = true;
+        } );
+        bad = bad || n != want.count || want.retval != 0u || want.eax_is_out != 1;
+        if ( bad && ++failed <= 8 )
+            LOG_ERROR( "front end trigger %d (modify %d %d %d): %d broadcasts, retail %d (or a hash / size / byte differs)", static_cast< int >( k ),
+                       want.modify[ 0 ], want.modify[ 1 ], want.modify[ 2 ], n, want.count );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "front_end_trigger matches VuSetFrontEndCameraEntity's Trigger 0x408F90 on %d entity images (broadcast order, hashes, "
+                     "VuParams bytes and sizes, VuRetVal 0), bit for bit", static_cast< int >( g_golden_front_end_trigger_count ) );
+    else
+        LOG_ERROR( "the front end trigger FAILED on %d of %d images", failed, static_cast< int >( g_golden_front_end_trigger_count ) );
+    return failed == 0;
+}
+
+// c_action_mode (world/action.hxx: VuActionGameMode's ctor 0x4B9160 / enter 0x4B9630 / tick 0x4B99E0 and the state
+// delegates it recreates) against retail's on 3 scripts (oracle case action_mode): per step the state, the FSM time, the
+// answer, the fade manager's value / rate / skip words and the calls into the hooks (the same tokens the case logs).
+inline bool verify_action_mode( )
+{
+    const auto bits = []( float f ) { std::uint32_t u; std::memcpy( &u, &f, 4 ); return u; };
+    const auto real = []( std::uint32_t u ) { float f; std::memcpy( &f, &u, 4 ); return f; };
+    int failed = 0, compared = 0;
+    for ( std::size_t k = 0; k < g_golden_action_script_count; ++k )
+    {
+        const golden_action_script_t& want = g_golden_action_scripts[ k ];
+        action_fade_t fade;
+        fade.m_duration = real( want.duration );
+        std::string calls;
+        int display[ 2 ] = { 0, 0 };
+        const auto note = [ &calls ]( const std::string& s ) { calls += ( calls.empty( ) ? "" : "," ) + s; };
+        action_mode_hooks_t h;
+        h.erase_dev_restart = [ & ] { note( "0x4FC140" ); };
+        h.viewports = [ & ]( int on ) { note( "0x530BB0:" + std::to_string( on ) ); };
+        h.load_loading_screen = [ & ] { note( "0x4D3690" ); note( "0x4B4360" ); return false; };
+        h.load_snap = [ & ] { note( "0x4B4360" ); return false; };
+        h.loading_assets = [ & ] { note( "0x4D3410" ); note( "0x4D2440" ); };
+        h.loading_more = [ ] { return false; };   // the case's asset list +0xE8 is null
+        h.clock = [ ] { return 12.5; };
+        h.broadcast_float = [ & ]( const char* name, float v ) {
+            char t[ 64 ];
+            std::snprintf( t, sizeof( t ), "bc:%08X:8:00000002:%08X", fsm_hash( name ), bits( v ) );
+            note( t );
+        };
+        h.load_level = [ & ] { note( "0x4BA060" ); };
+        h.action_game_data = [ & ] { note( "0x4D2DE0" ); };
+        h.pause_tick = [ & ]( float ) { note( "0x4BB540" ); };
+        h.snap_pause = [ & ]( bool on ) { note( on ? "0x4BABA0" : "0x4BAC50" ); };
+        h.display = [ & ]( int& w, int& hh ) { w = display[ 0 ]; hh = display[ 1 ]; };
+        c_action_mode mode( fade, want.dev_restart != 0, h );
+        bool bad = calls != want.ctor_calls;
+        calls.clear( );
+        mode.enter( );
+        bad = bad || calls != want.enter_calls || std::string( mode.state( ) ) != want.enter_state || bits( fade.m_value ) != want.enter_fade[ 0 ] ||
+              bits( fade.m_rate ) != want.enter_fade[ 1 ] || fade.m_skip != want.enter_fade[ 2 ];
+        for ( int s = 0; s < want.count; ++s )
+        {
+            const golden_action_step_t& step = g_golden_action_steps[ want.first + s ];
+            calls.clear( );
+            display[ 0 ] = step.w;
+            display[ 1 ] = step.h;
+            if ( step.has_rate )
+                fade.m_rate = real( step.rate );
+            if ( step.event == 1 )
+                mode.on_end_action_game( );
+            else if ( step.event == 2 )
+                mode.on_restart_action_game( );
+            const std::string answer = mode.tick( real( step.dt ) );
+            ++compared;
+            const bool wrong = std::string( mode.state( ) ) != step.state || bits( mode.m_fsm.m_time ) != step.time || answer != step.answer ||
+                               bits( fade.m_value ) != step.fade[ 0 ] || bits( fade.m_rate ) != step.fade[ 1 ] || fade.m_skip != step.fade[ 2 ] ||
+                               calls != step.calls;
+            if ( wrong && failed < 8 )
+                LOG_ERROR( "action mode script %d step %d: state %s time 0x%08X answer '%s' fade %08X %08X %u calls '%s'; retail %s 0x%08X '%s' %08X %08X %u '%s'",
+                           static_cast< int >( k ), s, mode.state( ), bits( mode.m_fsm.m_time ), answer.c_str( ), bits( fade.m_value ), bits( fade.m_rate ),
+                           fade.m_skip, calls.c_str( ), step.state, step.time, step.answer, step.fade[ 0 ], step.fade[ 1 ], step.fade[ 2 ], step.calls );
+            bad = bad || wrong;
+        }
+        if ( bad )
+            ++failed;
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_action_mode matches VuActionGameMode's ctor 0x4B9160 / enter 0x4B9630 / tick 0x4B99E0 on %d scripts (%d steps: state, "
+                     "FSM time, answer, fade words, hook calls), bit for bit", static_cast< int >( g_golden_action_script_count ), compared );
+    else
+        LOG_ERROR( "the action mode FAILED on %d of %d scripts", failed, static_cast< int >( g_golden_action_script_count ) );
+    return failed == 0;
+}
+
+// dynamic_prop_load_properties' mine half (world/dynprop.hxx) against retail's VuEntity::load 0x5009D0 on every
+// VuFloatingMineEntity in the templates / projects plus hand-built ones (oracle case mine_properties): the nine explosion
+// floats, the seven wave floats (bit for bit) and the two names.
+inline bool verify_mine_properties( )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_mine_properties_document );
+    static std::vector< value_t > documents;
+    documents.push_back( c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_mine_properties_document_bytes ) ).parse( ) );
+    static const entity_registry_t registry = build_entity_registry( { } );
+    entity_world_t world = race_entity_world( registry, nullptr );
+    const std::unique_ptr< entity_t > tree = entity_load_project( member( documents.back( ), "VuProject" ), "Data/Projects/Check.vuprj", world );
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_mine_properties_count; ++k )
+    {
+        const golden_entity_targets_t& want = g_golden_mine_properties[ k ];
+        const entity_t* e = nullptr;
+        if ( tree )
+            for ( auto& child : tree->m_children )
+                if ( child->m_name == want.m_child )
+                    e = child.get( );
+        const dynamic_prop_state_t* s = e && e->m_state && e->m_type == "VuFloatingMineEntity" ? static_cast< const dynamic_prop_state_t* >( e->m_state.get( ) ) : nullptr;
+        if ( !s || !s->mine || want.m_count != 16 )
+        {
+            LOG_ERROR( "mine properties: %s (%s) missing, without state or not 16 words", want.m_child, want.m_source );
+            ++failed;
+            continue;
+        }
+        std::uint32_t got[ 16 ];
+        std::memcpy( got, s->value.explosion, 36 );
+        std::memcpy( got + 9, s->value.wave, 28 );
+        bool bad = s->value.explosion_pfx != want.m_texts[ 0 ] || s->value.explosion_audio != want.m_texts[ 1 ];
+        for ( int w = 0; w < 16; ++w )
+            bad = bad || got[ w ] != want.m_values[ w ];
+        if ( bad && ++failed <= 8 )
+            LOG_ERROR( "mine properties: %s (%s) differ from retail's (pfx '%s' / '%s', audio '%s' / '%s')", want.m_child, want.m_source,
+                       s->value.explosion_pfx.c_str( ), want.m_texts[ 0 ], s->value.explosion_audio.c_str( ), want.m_texts[ 1 ] );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "dynamic_prop_load_properties (mine) matches VuFloatingMineEntity's loads on %d entities (16 floats + 2 names), bit for bit",
+                     static_cast< int >( g_golden_mine_properties_count ) );
+    else
+        LOG_ERROR( "the mine properties FAILED on %d of %d entities", failed, static_cast< int >( g_golden_mine_properties_count ) );
+    return failed == 0;
+}
+
+// explosion_add / mine_contact (world/mine.hxx) against retail's VuExplosionManagerImpl add 0x510180 (fake listeners:
+// the hits in order and their scale words) and VuFloatingMineEntity's contact callback 0x438E10 (the request byte, the
+// component's +0xD0, the body's +0xD8) - oracle case mine_explode.
+inline bool verify_mine_explode( )
+{
+    struct lis_t
+    {
+        const golden_mine_listener_t* g;
+        int index;
+        std::vector< std::pair< int, std::uint32_t > >* hits;
+    };
+    int failed = 0, hits_total = 0;
+    for ( std::size_t k = 0; k < g_golden_mine_add_count; ++k )
+    {
+        const golden_mine_add_t& want = g_golden_mine_adds[ k ];
+        std::uint8_t params[ 0x38 ] = { };
+        std::memcpy( params, want.position, 12 );
+        std::memcpy( params + 0x10, &want.outer, 4 );
+        std::memcpy( params + 0x14, &want.inner, 4 );
+        std::vector< std::pair< int, std::uint32_t > > got;
+        std::vector< lis_t > owners( static_cast< std::size_t >( want.count ) );
+        std::vector< explosion_listener_t > ls;
+        for ( int i = 0; i < want.count; ++i )
+        {
+            owners[ static_cast< std::size_t >( i ) ] = { &g_golden_mine_listeners[ want.first + i ], i, &got };
+            explosion_listener_t l;
+            l.user = &owners[ static_cast< std::size_t >( i ) ];
+            l.position = []( void* u, float* out ) { std::memcpy( out, static_cast< lis_t* >( u )->g->position, 16 ); };
+            l.radius = []( void* u ) { float r; std::memcpy( &r, &static_cast< lis_t* >( u )->g->radius, 4 ); return r; };
+            l.hit = []( void* u, const std::uint8_t*, float scale ) {
+                std::uint32_t w;
+                std::memcpy( &w, &scale, 4 );
+                static_cast< lis_t* >( u )->hits->push_back( { static_cast< lis_t* >( u )->index, w } );
+            };
+            ls.push_back( l );
+        }
+        explosion_add( params, ls, hull_sqrt );
+        bool bad = static_cast< int >( got.size( ) ) != want.hits;
+        for ( int h = 0; !bad && h < want.hits; ++h )
+            bad = got[ static_cast< std::size_t >( h ) ].first != g_golden_mine_hits[ want.hit_first + h ].listener ||
+                  got[ static_cast< std::size_t >( h ) ].second != g_golden_mine_hits[ want.hit_first + h ].scale;
+        hits_total += want.hits;
+        if ( bad && ++failed <= 8 )
+            LOG_ERROR( "explosion add %d: %d hits, retail %d (or a listener / scale differs)", static_cast< int >( k ), static_cast< int >( got.size( ) ), want.hits );
+    }
+    for ( std::size_t k = 0; k < g_golden_mine_contact_count; ++k )
+    {
+        const golden_mine_contact_t& want = g_golden_mine_contacts[ k ];
+        mine_contact_t in;
+        in.owner = want.owner != 0;
+        in.owner_is_boat = want.owner == 1;
+        in.driver_answer = ( want.driver & 0xFFu ) != 0u;
+        in.other_flags = want.flags;
+        rigid_component_t c;
+        c.flags_d0 = want.d0;
+        std::uint8_t body[ 0x2E0 ] = { };
+        std::uint8_t request = 0;
+        mine_contact( in, request, c, want.body ? body : nullptr );
+        std::uint32_t d8;
+        std::memcpy( &d8, body + 0xD8, 4 );
+        if ( ( request != want.request || c.flags_d0 != want.out_d0 || d8 != want.out_d8 ) && ++failed <= 8 )
+            LOG_ERROR( "mine contact %d (owner %d flags 0x%X driver 0x%X): request %d +0xD0 0x%X +0xD8 0x%X, retail %d 0x%X 0x%X", static_cast< int >( k ),
+                       want.owner, want.flags, want.driver, request, c.flags_d0, d8, want.request, want.out_d0, want.out_d8 );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "explosion_add / mine_contact match retail's 0x510180 (%d explosions, %d hits) and 0x438E10 (%d contacts), bit for bit",
+                     static_cast< int >( g_golden_mine_add_count ), hits_total, static_cast< int >( g_golden_mine_contact_count ) );
+    else
+        LOG_ERROR( "the mine explosion FAILED on %d vectors", failed );
+    return failed == 0;
+}
+
+// breakable_load_properties (world/breakable.hxx) against retail's VuEntity::load on the breakable templates /
+// projects plus hand-built ones (oracle case breakable_properties): Initially Visible, the 7 floats, the 2 names.
+inline bool verify_breakable_properties( )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_breakable_properties_document );
+    static std::vector< value_t > documents;
+    documents.push_back( c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_breakable_properties_document_bytes ) ).parse( ) );
+    static const entity_registry_t registry = build_entity_registry( { } );
+    entity_world_t world = race_entity_world( registry, nullptr );
+    const std::unique_ptr< entity_t > tree = entity_load_project( member( documents.back( ), "VuProject" ), "Data/Projects/Check.vuprj", world );
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_breakable_properties_count; ++k )
+    {
+        const golden_entity_targets_t& want = g_golden_breakable_properties[ k ];
+        const entity_t* e = nullptr;
+        if ( tree )
+            for ( auto& child : tree->m_children )
+                if ( child->m_name == want.m_child )
+                    e = child.get( );
+        const breakable_state_t* s = e && e->m_state && e->m_type == "VuBreakablePropEntity" ? static_cast< const breakable_state_t* >( e->m_state.get( ) ) : nullptr;
+        if ( !s || want.m_count != 8 )
+        {
+            LOG_ERROR( "breakable properties: %s (%s) missing, without state or not 8 words", want.m_child, want.m_source );
+            ++failed;
+            continue;
+        }
+        const breakable_t& v = s->value;
+        std::uint32_t got[ 8 ];
+        got[ 0 ] = v.visible;
+        std::memcpy( got + 1, &v.threshold_mph, 4 );
+        std::memcpy( got + 2, v.shake, 16 );
+        std::memcpy( got + 6, v.rumble, 8 );
+        bool bad = v.pfx != want.m_texts[ 0 ] || v.sfx != want.m_texts[ 1 ];
+        for ( int w = 0; w < 8; ++w )
+            bad = bad || got[ w ] != want.m_values[ w ];
+        if ( bad && ++failed <= 8 )
+            LOG_ERROR( "breakable properties: %s (%s) differ from retail's", want.m_child, want.m_source );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "breakable_load_properties matches VuBreakablePropEntity's loads on %d entities (8 words + 2 names), bit for bit",
+                     static_cast< int >( g_golden_breakable_properties_count ) );
+    else
+        LOG_ERROR( "the breakable properties FAILED on %d of %d entities", failed, static_cast< int >( g_golden_breakable_properties_count ) );
+    return failed == 0;
+}
+
+// breakable_contact (world/breakable.hxx) against retail's 0x434730 on 600 hand-built contacts (oracle case
+// breakable_contact): the request byte, the kept velocity (when one is kept), the component's +0xD0, the own body's
+// +0xD8 and whether the target became the other's owner (the caller's weak ref: set iff a request and an owner).
+inline bool verify_breakable_contact( )
+{
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_breakable_contact_count; ++k )
+    {
+        const golden_breakable_contact_t& want = g_golden_breakable_contact[ k ];
+        std::uint8_t own[ 0x2E0 ] = { }, other[ 0x2E0 ] = { };
+        const int at[ 9 ] = { 0x40, 0x44, 0x48, 0x140, 0x144, 0x148, 0x150, 0x154, 0x158 };
+        for ( int i = 0; i < 9; ++i )
+        {
+            std::memcpy( own + at[ i ], &want.own[ i ], 4 );
+            std::memcpy( other + at[ i ], &want.other[ i ], 4 );
+        }
+        std::memcpy( own + 0xD8, &want.own[ 9 ], 4 );
+        std::memcpy( own + 0x2D0, &want.own[ 10 ], 4 );
+        std::memcpy( other + 0xD8, &want.other[ 9 ], 4 );
+        std::memcpy( other + 0x2D0, &want.other[ 10 ], 4 );
+        float threshold, point[ 3 ], normal[ 3 ], velocity[ 3 ] = { 0.0f, 0.0f, 0.0f };
+        std::memcpy( &threshold, &want.threshold, 4 );
+        std::memcpy( point, want.point, 12 );
+        std::memcpy( normal, want.normal, 12 );
+        rigid_component_t c;
+        c.flags_d0 = want.d0;
+        std::uint8_t request = 0;
+        const int r = breakable_contact( threshold, own, other, point, normal, request, velocity, c, own );
+        std::uint32_t d8, vw[ 3 ];
+        std::memcpy( &d8, own + 0xD8, 4 );
+        std::memcpy( vw, velocity, 12 );
+        const int target = request && want.other[ 11 ] ? 1 : 0;
+        const bool bad = request != want.request || c.flags_d0 != want.out_d0 || d8 != want.out_d8 || target != want.target ||
+                         ( r == 1 ? std::memcmp( vw, want.velocity, 12 ) != 0 : ( want.velocity[ 0 ] | want.velocity[ 1 ] | want.velocity[ 2 ] ) != 0u );
+        if ( bad && ++failed <= 8 )
+            LOG_ERROR( "breakable contact %d: request %d (retail %d) +0xD0 0x%X (0x%X) +0xD8 0x%X (0x%X) velocity %08X %08X %08X (%08X %08X %08X)",
+                       static_cast< int >( k ), request, want.request, c.flags_d0, want.out_d0, d8, want.out_d8, vw[ 0 ], vw[ 1 ], vw[ 2 ],
+                       want.velocity[ 0 ], want.velocity[ 1 ], want.velocity[ 2 ] );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "breakable_contact matches VuBreakablePropEntity's contact callback 0x434730 on %d contacts, bit for bit",
+                     static_cast< int >( g_golden_breakable_contact_count ) );
+    else
+        LOG_ERROR( "the breakable contact FAILED on %d of %d contacts", failed, static_cast< int >( g_golden_breakable_contact_count ) );
+    return failed == 0;
+}
+
 inline bool verify_session_all( )
 {
     bool ok = true;
+    ok = verify_breakable_properties( ) && ok;
+    ok = verify_breakable_contact( ) && ok;
+    ok = verify_mine_explode( ) && ok;
+    ok = verify_mine_properties( ) && ok;
+    ok = verify_action_mode( ) && ok;
+    ok = verify_front_end_trigger( ) && ok;
     ok = verify_logic_properties( ) && ok;
     ok = verify_string_db( ) && ok;
     ok = verify_prop_contact( ) && ok;

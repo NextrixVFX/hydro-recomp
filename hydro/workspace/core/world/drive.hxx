@@ -519,6 +519,22 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         d.floor = nullptr;
         // The driver step.
         r->human = d.human;
+        // VuHumanDriver's slot 6 0x40F210 (boat human.hxx human_game_initialize): its +0x80 listener onto the explosion
+        // manager g 0x759034 (vt+0x1C 0x510290: push_back) - slot 0 position 0x40F4F0, slot 1 radius 0x40F520, slot 2 hit
+        // 0x40F5A0 (the lens-water manager's vt+0x28 inside it: a hook).
+        if ( d.human )
+            human_game_initialize( driver, [ &s, rp = r.get( ) ]( std::uint8_t* ) {
+                explosion_listener_t l;
+                l.user = rp;
+                l.position = []( void* u, float* out ) { human_explosion_position( static_cast< race_drive_t* >( u )->d.transform, out ); };
+                l.radius = []( void* u ) { return human_explosion_radius( static_cast< race_drive_t* >( u )->d.boat ); };
+                l.hit = []( void* u, const std::uint8_t* params, float scale ) {
+                    race_drive_t& x = *static_cast< race_drive_t* >( u );
+                    human_explosion_hit( x.d.driver, x.d.camera, params, scale,
+                                         [ &x ]( float ) { race_unwired( *x.session, "the lens-water manager g 0x759048 vt+0x28 (an explosion's lens splash - render)" ); } );
+                };
+                s.explosion_listeners.push_back( l );
+            } );
         r->ai = vtable == 0x737B5Cu;
         if ( vtable == 0x737C4Cu )
         {
@@ -786,6 +802,44 @@ inline void race_contact_added( void* user, solver_contact_point_t& cp, solver_r
                                                    reinterpret_cast< const std::uint8_t* >( other ), rec.pos, rec.normal, owner ) )
                             ++d->session->prop_hits;
                     };
+                    // A mine's +0xB4 part is its own 0x438E10 (world/mine.hxx mine_contact; the base 0x437F40 is not called).
+                    // The other body's owner (+0x2C0): a session boat (its driver vt+0x38 0x404BD0: true for the five known
+                    // driver vtables) or a level body (its component's entity: not a boat - its +0x2D0 bit 0 decides).
+                    if ( d->mine )
+                    {
+                        mine_contact_t mc;
+                        for ( const auto& b : s.boats )
+                            if ( &b->body.body == other )
+                            {
+                                mc.owner = mc.owner_is_boat = true;
+                                std::uint32_t vt = 0;
+                                if ( b->driver && b->driver->known && !b->driver->graph.empty( ) )
+                                    std::memcpy( &vt, b->driver->graph[ 0 ].image.data( ), 4 );
+                                boat_driver_kind_t kind;
+                                if ( !boat_driver_kind( vt, kind ) )
+                                {
+                                    race_unwired( s, "a mine contact with a boat whose driver vtable is none of the five - UNKNOWN, not run" );
+                                    return;
+                                }
+                                mc.driver_answer = true;
+                            }
+                        if ( !mc.owner )
+                            for ( const auto& lbp : s.level_bodies )
+                                if ( &lbp->body.body == other )
+                                {
+                                    mc.owner = true;
+                                    std::memcpy( &mc.other_flags, reinterpret_cast< const std::uint8_t* >( other ) + 0x2D0, 4 );
+                                }
+                        if ( !mc.owner )
+                        {
+                            race_unwired( s, "a mine contact with a body that is no session boat / level body - its owner UNKNOWN, not run" );
+                            return;
+                        }
+                        if ( mine_contact( mc, d->request, *d->c, reinterpret_cast< std::uint8_t* >( &d->body->body ) ) )
+                            LOG_INFO( "race: mine '%s' touched (sync %d) - the explode request set", d->entity->m_name.c_str( ),
+                                      s.dynamics ? s.dynamics->syncs : -1 );
+                        return;
+                    }
                     if ( !d->buoy )
                     {
                         base( );
@@ -824,6 +878,30 @@ inline void race_contact_added( void* user, solver_contact_point_t& cp, solver_r
                         if ( s.world.broadcast )
                             s.world.broadcast( k_buoy_hit_event, &p );
                     }
+                };
+            }
+        // A breakable's +0x7C part: 0x434730 (world/breakable.hxx breakable_contact). The other's owner (+0x2C0) for the
+        // weak ref: a session boat or a level body (its component's entity); anything else is UNKNOWN (not run).
+        for ( const auto& bp : s.breakables )
+            if ( &bp->body->body.body == self )
+            {
+                race_session_t::breakable_live_t* b = bp.get( );
+                return [ &s, b, self, other ]( contact_record_t& rec ) {
+                    bool owner = false;
+                    for ( const auto& x : s.boats )
+                        owner = owner || &x->body.body == other;
+                    for ( const auto& lbp : s.level_bodies )
+                        owner = owner || &lbp->body.body == other;
+                    if ( !owner )
+                    {
+                        race_unwired( s, "a breakable contact with a body that is no session boat / level body - its owner UNKNOWN, not run" );
+                        return;
+                    }
+                    std::uint8_t* own = reinterpret_cast< std::uint8_t* >( self );
+                    const int r = breakable_contact( b->p->threshold_mph, own, reinterpret_cast< const std::uint8_t* >( other ), rec.pos, rec.normal,
+                                                     b->request, b->velocity, *b->c, own );
+                    if ( r != 0 )
+                        b->target = other;
                 };
             }
         return nullptr;
@@ -1117,6 +1195,62 @@ inline void race_drive_sync_target( race_session_t& s, int child )
 // True when the plug is one of these (consumed); false: not a race-side receiver.
 inline bool race_event_dispatch( race_session_t& s, const std::string& entity, const std::string& plug, const std::uint8_t* params )
 {
+    // VuPropEntity's inputs (ctor 0x5464C0, plug inits 0x546EE0): "Show" 0x546380 - the static model component (+0x70) onto
+    // the 3D draw manager unless its +0x1E, the body (+0x74 -> +0x100) into the dynamics world unless added (+0x104);
+    // "Hide" 0x5463E0 - the reverse. VuRetVal 0. (The draw manager is the renderer's: prop_drawn.)
+    if ( plug == "Show" || plug == "Hide" )
+        for ( const auto& lb : s.level_bodies )
+        {
+            const entity_t* o = static_cast< const entity_t* >( lb->owner );
+            if ( !o || ( o->m_type != "VuPropEntity" && o->m_type != "VuBreakablePropEntity" ) )
+                continue;
+            std::string path;
+            for ( const entity_t* e = o; e && e->m_parent; e = e->m_parent )
+                path = path.empty( ) ? e->m_name : e->m_name + "/" + path;
+            if ( path != entity )
+                continue;
+            const bool show = plug == "Show";
+            if ( s.world.prop_drawn )
+                s.world.prop_drawn( *o, show );
+            if ( show && !lb->in_world && lb->built )
+                lb->in_world = vu_dynamics_add_rigid_body( s.dynamics->impl, lb->body );
+            else if ( !show && lb->in_world )
+            {
+                vu_dynamics_remove_rigid_body( s.dynamics->impl, lb->body );
+                lb->in_world = false;
+            }
+            return true;
+        }
+    // VuKeyframeMotionEntity's (VuMotionEntity's) inputs "Activate" 0x61A4F0 / "Deactivate" 0x61A5D0 (world/keymotion.hxx).
+    if ( plug == "Activate" || plug == "Deactivate" )
+        for ( const auto& kp : s.key_motions )
+        {
+            std::string path;
+            for ( const entity_t* e = kp->entity; e && e->m_parent; e = e->m_parent )
+                path = path.empty( ) ? e->m_name : e->m_name + "/" + path;
+            if ( path != entity )
+                continue;
+            if ( plug == "Activate" )
+                key_motion_activate( *kp->k, race_session_key_hooks( *kp ) );
+            else
+                key_motion_deactivate( *kp->k, race_session_key_hooks( *kp ) );
+            LOG_INFO( "race: event %s . %s (sync %d)", entity.c_str( ), plug.c_str( ), s.dynamics ? s.dynamics->syncs : -1 );
+            return true;
+        }
+    // VuFloatingMineEntity's "Detonate" (0x439020's plug; thunk 0x4390BE -> vt+0x44 0x438DF0): +0x215 = 1, VuRetVal 0.
+    if ( plug == "Detonate" )
+        for ( const auto& dp : s.dyn_props )
+        {
+            if ( !dp->mine )
+                continue;
+            std::string path;
+            for ( const entity_t* e = dp->entity; e && e->m_parent; e = e->m_parent )
+                path = path.empty( ) ? e->m_name : e->m_name + "/" + path;
+            if ( path != entity )
+                continue;
+            dp->request = 1;
+            return true;
+        }
     const auto g = s.gfx_by_path.find( entity );
     if ( g != s.gfx_by_path.end( ) && plug == "Trigger" )
     {
@@ -1260,6 +1394,7 @@ inline void race_session_game_mode( void* user, float dt )
     // VuGame's two machines after slot 7 (world/rules.hxx vugame_fsms_tick: verified tables, handlers hooks).
     const std::string event_before = s.rules.event.current( ) ? s.rules.event.current( )->m_name : std::string( );
     const bool game_running = vugame_fsms_tick( s.rules, running, dt );
+    s.game_answer = game_running;
     const std::string event_after = s.rules.event.current( ) ? s.rules.event.current( )->m_name : std::string( );
     if ( event_before != event_after )
         LOG_INFO( "race: VuGame +0x0C state %s -> %s (sync %d)%s", event_before.c_str( ), event_after.c_str( ), s.dynamics ? s.dynamics->syncs : -1,

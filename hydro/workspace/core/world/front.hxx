@@ -37,6 +37,122 @@
 // - the string DB / sign-in hooks of the exit's builders are unset (the AI
 //   names: VuStringDB not recreated; the player's name: platform sign-in).
 
+// --front-end: what VuFrontEndGameMode's enter 0x4BF630 reaches through the
+// game mode manager's slot 9 0x4CBF10 - VuBackground's ctor 0x4BDEB0
+// (world/background.hxx), the Screens/Background project as the scene and the
+// rig's camera as the view (world.hxx scene_frame). The rest of the enter
+// (the screens, SnapMode, the FSM: ui/flow.hxx c_front_end, the UI agent's)
+// is not run here - so nothing fires the screens' VuSetFrontEndCameraEntity
+// triggers and the rig keeps its ctor's view until something does. Ours:
+// the option itself (a dev entry; retail enters the front end from the
+// title sequence). The hooks, each as retail reaches it:
+// - 0x4B4360's load = load_project (the race's own loader: the tree, the walk-
+//   time stand-ins for the entities' gameInitialize the world already models
+//   - water, pfx, triggers, logic - and their bookkeeping);
+// - 0x500B10 = the root's +0x14 |= 4 (0x500B75; the per-entity slot 6 walk is
+//   what load_project ran); 0x501260 = project_initialized( );
+// - g 0x758FF4 vt+0x1C = the track build load_entity_tree already ran
+//   (track_build_from_tree; Background authors no waypoints if the log says so);
+// - g 0x759080 vt+0x18 (the repository), 0x530BB0, import 0x64C314, the tick
+//   registration (scene_frame calls the tick): platform / unread - hooks.
+inline void c_world::load_background( )
+{
+    m_race = race_session_t{ };
+    const race_session_dbs_t dbs = race_dbs( );
+    wipe_scene( );
+    m_background = background_t{ };
+    m_vantage_ready = false;
+    m_authored_camera = false;
+    m_authored_far = 500.0f;
+    m_defer_project_initialized = true;   // 0x501260 is the ctor's own step, after 0x500B10
+    m_project_initialized = false;
+    m_background_env = camera_env_t{ };
+    if ( dbs.constant_db )
+        m_background_env.vertical_fov = race_drive_fov_value( member( member( member( *dbs.constant_db, "VuDBAsset" ), "Camera" ), "VerticalFOV" ) );
+    background_hooks_t h;
+    h.user = this;
+    h.load_project = []( void* u ) {
+        c_world& w = *static_cast< c_world* >( u );
+        w.m_tree.reset( );
+        w.load_project( "VuProjectAsset/Screens/Background" );
+        return w.m_tree != nullptr;
+    };
+    h.root_flags = []( void* u ) { return static_cast< c_world* >( u )->m_tree->m_flags; };
+    h.game_initialize = []( void* u ) { static_cast< c_world* >( u )->m_tree->m_flags |= 4u; };
+    h.game_release = []( void* u ) { static_cast< c_world* >( u )->m_tree->m_flags &= ~4u; };
+    h.project_initialized = []( void* u ) { static_cast< c_world* >( u )->project_initialized( ); };
+    background_construct( m_background, m_background_env, h );
+    m_loaded = true;
+    LOG_SUCCESS( "front end: VuBackground 0x4BDEB0 - Screens/Background %s, the rig at its ctor's view (eye -1 -3 2, target 0 0 0.5)%s",
+                 m_background.project ? "loaded" : "NOT loaded", m_track_built ? "; a track was built from it" : "" );
+}
+
+// A front-end race through VuActionGameMode (world/action.hxx): the fade manager
+// g 0x758FC4 as its create 0x4AED60 + init 0x4AEDB0 leave it (duration 1.0, then
+// ConstantDB VuDBAsset / UI / FadeManagerDefaultDuration: tag 1 cvtdq2ps, 2 the
+// float, 7 fild; anything else keeps 1.0); the mode's ctor with GameData's
+// DevRestart, its enter 0x4B9630, then the ticks that take it to LoadLevel -
+// whose enter 0x4BA060 is `level` (the load) - before the first frame. From
+// then on scene_frame hands the session's Decision tick to the mode (Begin ->
+// Run once the fade is over: only then does VuGame's tick 0x482F10 run).
+// HOOKS (each named): the loading screen's project (0x4D3690 + 0x4B4360) and
+// SnapMode - not loaded here (the UI's); the asset preload list +0xE8 (the asset
+// manager: our assets load on demand from the pack - an empty list, so
+// LoadingScreen is done on its first tick); OnLoadProgress (its subscriber is the
+// loading screen: none); the tutorial check (g 0x758FB8 +0x28 / the profile
+// "TutorialShown": profiles are re-made for the platform - nothing); 0x4D2DE0,
+// 0x530BB0, the pause menu tick 0x4BB540 (UI), the snap pause (platform), the
+// music channel (FMOD). The two pre-frame ticks pass dt 0 (ours: retail's are the
+// loading frames' own; the FSM time they add is zeroed by the moves).
+inline void c_world::action_start( value_t& game_data, const race_session_dbs_t& dbs, const std::function< void( ) >& level )
+{
+    m_fade = action_fade_t::created( );
+    if ( dbs.constant_db )
+    {
+        const value_t& d = member( member( member( *dbs.constant_db, "VuDBAsset" ), "UI" ), "FadeManagerDefaultDuration" );
+        if ( d.tag == 1 )
+            m_fade.m_duration = static_cast< float >( d.integer );
+        else if ( d.tag == 2 )
+            m_fade.m_duration = d.real;
+        else if ( d.tag == 7 )
+            m_fade.m_duration = static_cast< float >( d.int64 );
+    }
+    const value_t& dev = member( game_data, "DevRestart" );
+    m_action_level = level;
+    action_mode_hooks_t h;
+    h.erase_dev_restart = [ &game_data ] {
+        auto& o = game_data.object;
+        for ( auto it = o.begin( ); it != o.end( ); ++it )
+            if ( it->first == "DevRestart" )
+            {
+                o.erase( it );
+                break;
+            }
+    };
+    h.load_level = [ this ] {
+        if ( m_action_level )
+            m_action_level( );
+    };
+    h.loading_more = [ ] { return false; };
+    h.game_tick = [ this ]( float dt ) {
+        race_session_game_mode( &m_race, dt );
+        return m_race.game_answer;
+    };
+    h.display = [ this ]( int& w, int& hh ) {
+        w = m_race.world.display_w;
+        hh = m_race.world.display_h;
+    };
+    h.broadcast_float = [ ]( const char* name, float v ) { LOG_VERBOSE( "action mode: %s %.3f (no subscriber: the loading screen is not loaded)", name, v ); };
+    m_action = std::make_unique< c_action_mode >( m_fade, dev.tag == 3 && dev.integer != 0, h );
+    m_action->enter( );
+    for ( int k = 0; k < 4 && std::string( m_action->state( ) ) != "LoadLevel"; ++k )
+        m_action->tick( 0.0f );
+    m_action_level = nullptr;   // LoadLevel is never entered again (no transition leads back to it)
+    m_action_reported.clear( );
+    LOG_INFO( "action mode: VuActionGameMode in %s (fade duration %.3f) - Begin runs on the first frame, Run once the fade is over",
+              m_action->state( ), m_fade.m_duration );
+}
+
 // The loaded front-end screen of an asset through the UI's world (the UI
 // property loads ui_front_end_screen reads), or null (logged).
 inline std::unique_ptr< entity_t > c_world::front_end_screen( const std::string& name )

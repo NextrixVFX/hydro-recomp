@@ -28,6 +28,9 @@
 #include <workspace/core/world/drive.hxx>
 #include <workspace/core/world/water.hxx>
 #include <workspace/core/world/watchers.hxx>
+#include <workspace/core/world/background.hxx>
+#include <workspace/core/world/action.hxx>
+#include <workspace/core/world/settings.hxx>
 #include <workspace/core/assets/texture.hxx>
 #include <workspace/utility/logger.hxx>
 #include <workspace/utility/trace.hxx>
@@ -939,10 +942,56 @@ public:
     // end run and retail has no counterpart (its dev config's ActionGameData is the null container,
     // 0x4FDB70): SCAFFOLD, ours - GameData {Level: --race, GameType: --mode (else "Race"), Course: --course}, the
     // inputs the old Games/<track><mode> path took; with Level a bare track name 0x4D3480 names the same projects.
+    void load_background( );
+
+    // A motion target moved (session.hxx race_session_key_motion): the animated model component's draw matrix 0x61DA50
+    // = fromScale( transform +0xB0 ) x world +0x50 (transform_draw_matrix) into its item - a rigid (one-bone) item's
+    // placements follow it on its next skin; a static model's placements through prop_draw. A streamed (cloned) item that
+    // is not playing keeps its placement (the renderer's - flagged).
+    void prop_moved( const entity_t& owner )
+    {
+        const transform_component_t* t = entity_transform( const_cast< entity_t& >( owner ) );
+        if ( !t )
+            return;
+        const std::string path = entity_path( owner );
+        for ( animated_t& item : m_animated )
+            if ( item.path == path )
+            {
+                transform_draw_matrix( *t, item.world );
+                if ( !item.playing && item.rigid )
+                {
+                    const std::vector< cached_part_t >& parts = model_for( item.asset );
+                    for ( std::size_t index = 0; index < item.placements.size( ) && index < parts.size( ); ++index )
+                        if ( item.placements[ index ] >= 0 )
+                        {
+                            float node[ 16 ];
+                            math_multiply( node, item.world, parts[ index ].node );
+                            c_engine::move( item.placements[ index ], node );
+                        }
+                }
+            }
+        prop_draw( owner );
+    }
+
+    // An entity's graph path: its names below the project root, '/'-joined (the event graph's key).
+    static std::string entity_path( const entity_t& owner )
+    {
+        std::string path;
+        for ( const entity_t* e = &owner; e && e->m_parent; e = e->m_parent )
+            path = path.empty( ) ? e->m_name : e->m_name + "/" + path;
+        return path;
+    }
+    void action_start( value_t& game_data, const race_session_dbs_t& dbs, const std::function< void( ) >& level );
+
     void load_scene( const char* track, const char* mode, const char* course = nullptr )
     {
         if ( !m_opened )
             load( );
+        if ( c_engine::option( "front-end" ) != nullptr )
+        {
+            load_background( );
+            return;
+        }
         m_race = race_session_t{ };
         race_session_dbs_t dbs = race_dbs( );
         const auto text = []( const char* v ) { return std::string( v ? v : "" ); };
@@ -964,6 +1013,10 @@ public:
             if ( course != nullptr && course[ 0 ] != '\0' )
                 ui_json_set_string( ui_json_child( game_data, "Course" ), course );
         }
+        // VuActionGameMode 0x4BA060 (LoadLevel's enter): the body below. A front-end race runs it through the action mode
+        // (world/action.hxx); every other path (the scaffold, --front-end-defaults to a non-race) calls it directly.
+        const auto level = [ & ]( )
+        {
         const std::string name = race_project_name( util, nullptr, [ this ]( const std::string& type, const std::string& n ) {
             for ( const std::string& rest : m_archive.names( type + "/" + n ) )   // names() strips the prefix: exact = ""
                 if ( rest.empty( ) )
@@ -1000,6 +1053,12 @@ public:
             LOG_WARNING( "0x4BA060: the %s game's ctor (0x48BEC0 / 0x48ED30 / 0x484A20) is NOT recreated - no game object", type.c_str( ) );
             break;
         }
+        };
+        m_action.reset( );
+        if ( race && front_end )
+            action_start( game_data, dbs, level );
+        else
+            level( );
     }
 
     // BoatDB / TrackDB / ConstantDB (and SkinDB for the skin pass) from the pack.
@@ -1033,6 +1092,14 @@ public:
         }
         m_race.world.triggers = [ this ] { race_triggers( ); };
         m_race.world.prop_draw = [ this ]( const entity_t& owner ) { prop_draw( owner ); };
+        m_race.world.prop_drawn = [ this ]( const entity_t& owner, bool on ) {
+            for ( static_draw_item_t& item : m_static_draws )
+                if ( item.owner == &owner )
+                    item.off = !on;
+        };
+        m_race.world.fire = [ this ]( const entity_t& owner, const char* plug ) { fire( entity_path( owner ), plug ); };
+        m_race.world.sound = &m_sound;
+        m_race.world.prop_moved = [ this ]( const entity_t& owner ) { prop_moved( owner ); };
         // VuRaceGame's ctor 0x489030 loads its three HUD projects (0x4B4360) - before the boat load.
         load_huds( );
         m_race.world.hud = [ this ]( int project, race_hud_verb_t verb, float step ) { hud( project, verb, step ); };
@@ -1227,6 +1294,14 @@ public:
         m_race.world.water_tick = [ this ]( float step ) { water_frame( step ); };
         m_race.world.triggers = [ this ] { race_triggers( ); };
         m_race.world.prop_draw = [ this ]( const entity_t& owner ) { prop_draw( owner ); };
+        m_race.world.prop_drawn = [ this ]( const entity_t& owner, bool on ) {
+            for ( static_draw_item_t& item : m_static_draws )
+                if ( item.owner == &owner )
+                    item.off = !on;
+        };
+        m_race.world.fire = [ this ]( const entity_t& owner, const char* plug ) { fire( entity_path( owner ), plug ); };
+        m_race.world.sound = &m_sound;
+        m_race.world.prop_moved = [ this ]( const entity_t& owner ) { prop_moved( owner ); };
         if ( !m_race.active )
             water_frame( dt );
 
@@ -1236,7 +1311,24 @@ public:
         // target / far (c_engine::camera): the camera's own projection +0x30 / view +0x70 (fov, roll) are not
         // consumed - SUBSTITUTION, the renderer's. The far plane stays the gfx settings' (the camera's +0x17C is
         // boat +0x408, which the Build tick 0x41F330 fills). No race: dev_vantage's orbit / freecam (scaffold).
+        // The game mode manager's Decision tick: the action mode (world/action.hxx) when this race has one.
+        if ( m_action )
+            m_race.world.game_mode = [ this ]( float step ) {
+                const std::string& next = m_action->tick( step );
+                if ( m_action_reported != m_action->state( ) )
+                {
+                    m_action_reported = m_action->state( );
+                    LOG_INFO( "action mode: %s (sync %d)%s%s", m_action_reported.c_str( ), m_race.dynamics ? m_race.dynamics->syncs : -1,
+                              next.empty( ) ? "" : " - the next game mode: ", next.c_str( ) );
+                }
+            };
+        else
+            m_race.world.game_mode = nullptr;
         race_session_frame( m_race, dt );
+        // g_vufademanager's "Final" tick 0x4AEE50 (ui/flow.hxx ui_fade_t; delta = the tick manager's = dt): after the
+        // frame's other phases. Its two broadcasts (OnFadeOutComplete / OnFadeInComplete) reach no subscriber here.
+        if ( m_action )
+            m_fade.tick( dt, nullptr );
         // Dev trace (--verbose, ours): the event census at the session's milestone frames - the logic handlers run
         // and every plug fire that reached no handler, by class . plug.
         if ( g_verbose && m_race.active && ( m_race.frames == 960 || m_race.frames == 1920 || m_race.frames == 3840 || m_race.frames == 7680 ) )
@@ -1252,6 +1344,17 @@ public:
             std::memcpy( m_eye, m_race.viewport_camera + 0x00, sizeof( m_eye ) );
             std::memcpy( m_target, m_race.viewport_camera + 0x10, sizeof( m_target ) );
             m_far = m_authored_far;
+        }
+        else if ( m_background.rig )
+        {
+            // --front-end: VuBackground's Decision tick 0x4BE1A0 (world/background.hxx), then the view from the
+            // camera it publishes at g 0x758FB8 +0x2C0 (the rig's +0xC): eye +0, target +0x10, far +0x17C. The
+            // renderer takes eye / target / far only (as for the race's viewport camera - SUBSTITUTION, the renderer's).
+            background_tick( m_background, dt, m_background_env );
+            const std::uint8_t* cam = m_background.rig->camera( );
+            std::memcpy( m_eye, cam + 0x00, sizeof( m_eye ) );
+            std::memcpy( m_target, cam + 0x10, sizeof( m_target ) );
+            std::memcpy( &m_far, cam + 0x17C, sizeof( m_far ) );
         }
         else
             dev_vantage( dt );
@@ -1451,6 +1554,7 @@ private:
         // node matrix (placed = draw matrix x node, models.hxx place_model).
         const entity_t* owner = nullptr;
         std::vector< std::array< float, 16 > > nodes[ 3 ];
+        bool off = false;   // the component off the 3D draw manager (its +0x1E cleared: a hide 0x545F20)
     };
 
     // One Vu3dDrawAnimatedModelComponent instance. The clip and phase are
@@ -1622,6 +1726,37 @@ private:
     // The engine's logic entities (world/logic.hxx) by path: their tree state (race.hxx logic_state_t), dispatched
     // by graph.hxx; m_logic_fired counts their handlers run.
     std::map< std::string, entity_t* > m_logic;
+    std::map< std::string, std::uint32_t > m_static_pfx;   // VuStaticPfxEntity path -> its +0x94 instance (0: none)
+    std::map< std::string, entity_t* > m_entities;   // every tree entity by its graph path
+    light_manager_t m_lights;                        // g_vulightmanager 0x759094's +0xCC .. +0xF8 (world/settings.hxx)
+    // THE AUDIO PLATFORM (FMOD's imports, world/sound.hxx sound_hooks_t): there is none on this platform yet - every call
+    // retail would make is counted (and logged once per kind); getEvent answers a failure (1, not FMOD_OK) as FMOD does
+    // when an event cannot be made, so nothing is started or held.
+    sound_hooks_t m_sound = make_sound_hooks( this );
+    int m_sound_calls[ 6 ] = { };   // getEvent, setCallback, stop, start, set3DAttributes, setWorldTransform
+    static sound_hooks_t make_sound_hooks( c_world* self )
+    {
+        sound_hooks_t h;
+        h.user = self;
+        h.get_event = []( void* u, const char* name, std::uint32_t, std::uint32_t* ev, const void* ) {
+            c_world& w = *static_cast< c_world* >( u );
+            if ( w.m_sound_calls[ 0 ]++ == 0 )
+                LOG_WARNING( "audio: FMOD getEvent('%s') - no audio platform: answered failure (further calls counted)", name );
+            *ev = 0u;
+            return 1;
+        };
+        h.set_callback = []( void* u, std::uint32_t, std::uint32_t, const void* ) { ++static_cast< c_world* >( u )->m_sound_calls[ 1 ]; };
+        h.stop = []( void* u, std::uint32_t, bool ) { ++static_cast< c_world* >( u )->m_sound_calls[ 2 ]; };
+        h.start = []( void* u, std::uint32_t ) { ++static_cast< c_world* >( u )->m_sound_calls[ 3 ]; };
+        h.attributes = []( void* u, std::uint32_t, const float*, const float*, const float* ) { ++static_cast< c_world* >( u )->m_sound_calls[ 4 ]; };
+        return h;
+    }
+    std::unique_ptr< c_action_mode > m_action;   // the game mode manager's current mode in a front-end race (world/action.hxx)
+    action_fade_t m_fade;                        // g_vufademanager 0x758FC4
+    std::function< void( ) > m_action_level;     // LoadLevel's enter while load_scene runs
+    std::string m_action_reported;
+    background_t m_background;           // g 0x758FF0 +0x44 (world/background.hxx; --front-end)
+    camera_env_t m_background_env;       // the rig's display / VerticalFOV
     int m_logic_fired = 0;
     // Their game environment: the gameutil +0x50 root (load_scene's), no SKU (the asset manager's vt+0x7C: a platform
     // answer, not supplied) and no entity repository (find / word: not wired) - those filters count unrecreated.
