@@ -18,10 +18,10 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 2751 | 968893 |
-| callee | 716 | 170806 |
-| cited | 568 | 170574 |
-| absent | 4603 | 915987 |
+| verified | 2777 | 980649 |
+| callee | 719 | 170734 |
+| cited | 563 | 169130 |
+| absent | 4579 | 905747 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -30,12 +30,12 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 
 | subsystem | functions | verified | callee | cited | absent | verified bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| unattributed | 1845 | 549 | 263 | 134 | 899 | 314673 of 695394 |
+| unattributed | 1845 | 558 | 263 | 126 | 898 | 316474 of 695394 |
 | physics (Bullet) | 646 | 444 | 17 | 47 | 138 | 128607 of 256657 |
-| entity / component / script framework | 1094 | 473 | 121 | 71 | 429 | 110704 of 207438 |
+| entity / component / script framework | 1094 | 475 | 119 | 73 | 427 | 111307 of 207438 |
 | HUD / UI / fonts | 648 | 198 | 79 | 44 | 327 | 81703 of 184315 |
-| game modes / race | 766 | 134 | 41 | 56 | 535 | 70097 of 179957 |
-| rendering / gfx | 552 | 100 | 35 | 44 | 373 | 32744 of 126915 |
+| game modes / race | 766 | 148 | 44 | 56 | 518 | 79153 of 179957 |
+| rendering / gfx | 552 | 101 | 37 | 45 | 369 | 33040 of 126915 |
 | water | 325 | 213 | 29 | 38 | 45 | 61251 of 96416 |
 | boat | 264 | 191 | 22 | 22 | 29 | 69611 of 87400 |
 | engine core / math / containers | 391 | 55 | 13 | 30 | 293 | 12883 of 76072 |
@@ -58,8 +58,8 @@ Over-approximate (a referenced vtable brings every slot) and under-approximate (
 
 | tier | functions | verified | callee | cited | absent | runtime / STL / thunk | platform layer | game + engine logic not verified |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| race | 4905 | 2184 | 507 | 455 | 1759 | 68 | 610 | 2193 |
-| game | 2431 | 565 | 207 | 111 | 1548 | 77 | 313 | 1494 |
+| race | 4905 | 2206 | 507 | 450 | 1742 | 68 | 610 | 2171 |
+| game | 2431 | 569 | 210 | 111 | 1541 | 77 | 313 | 1491 |
 | service | 452 | 0 | 0 | 0 | 452 | 45 | 98 | 309 |
 | dead | 850 | 2 | 2 | 2 | 844 | 61 | 126 | 661 |
 
