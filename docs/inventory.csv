@@ -4304,7 +4304,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4EE030,223,sub_4EE030,VuAssetFactoryImpl,VuAssetFactoryImpl+13,assets,absent,,False,False,race
 0x4EE110,88,sub_4EE110,VuAssetFactoryImpl,VuAssetFactoryImpl+15,assets,absent,,False,False,race
 0x4EE170,569,sub_4EE170,VuAssetFactoryImpl,VuAssetFactoryImpl+16,assets,absent,,False,False,race
-0x4EE3B0,1197,VuAssetFactoryImpl_load_Langs,VuAssetFactoryImpl,VuAssetFactoryImpl+17,assets,absent,,False,False,race
+0x4EE3B0,1197,VuAssetFactoryImpl_load_Langs,VuAssetFactoryImpl,VuAssetFactoryImpl+17,assets,cited,engine/workspace/core/collision/rebuild.hxx,False,False,race
 0x4EE860,130,sub_4EE860,,,assets (by address),absent,,False,False,race
 0x4EE8F0,1086,sub_4EE8F0,VuAssetFactoryImpl,VuAssetFactoryImpl+18,assets,absent,,False,False,race
 0x4EED30,1333,VuAssetFactoryImpl_load_Assets,VuAssetFactoryImpl,VuAssetFactoryImpl+19,assets,absent,,False,False,race
@@ -4963,11 +4963,11 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5159D0,56,sub_5159D0,,,unattributed,callee,,False,False,race
 0x515A10,463,sub_515A10,,,unattributed,callee,,False,False,race
 0x515BE0,264,sub_515BE0,,,unattributed,absent,,False,False,race
-0x515CF0,6,sub_515CF0,VuAsset,VuAsset+0,assets,absent,,False,False,race
+0x515CF0,6,sub_515CF0,VuAsset,VuAsset+0,assets,callee,,False,False,race
 0x515D00,91,sub_515D00,,,assets (by address),cited,hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/core/world/query.hxx,False,False,race
 0x515D60,5,sub_515D60,VuAnimatedModelAsset; VuAnimationAsset; VuAsset; VuAssetListAsset; VuAudioBankAsset; VuAudioProjectAsset; VuAudioStreamAsset; VuCollisionMeshAsset; VuCompiledShaderAsset; VuCubeTextureAsset; VuDBAsset; VuDevHostComm; VuFluidsMeshAsset; VuFontAsset; VuGenericAsset; VuGenericDataAsset; VuPfxAsset; VuProjectAsset; VuShaderAsset; VuStaticModelAsset; VuStringAsset; VuTemplateAsset; VuTextureAsset; VuTimedEventAsset; VuWaterMapAsset; VuXmlAsset; btCollisionObject; btGhostObject; btPairCachingGhostObject,VuAnimationAsset+2; VuAnimationAsset+4; VuAsset+2; VuAsset+4; VuCollisionMeshAsset+2; VuCollisionMeshAsset+4,physics (Bullet),callee,,False,False,race
 0x515D70,34,sub_515D70,VuAsset,VuAsset+1,assets,absent,,False,False,race
-0x515DA0,6,sub_515DA0,VuAnimationAsset,VuAnimationAsset+0,assets,absent,,False,False,race
+0x515DA0,6,sub_515DA0,VuAnimationAsset,VuAnimationAsset+0,assets,callee,,False,False,race
 0x515E10,122,sub_515E10,VuAnimationAsset,VuAnimationAsset+1,assets,absent,,False,False,race
 0x515E90,32,sub_515E90,,,assets (by address),absent,,False,False,race
 0x515EB0,20,sub_515EB0,,,assets (by address),absent,,False,False,race
@@ -4995,14 +4995,14 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5177A0,410,sub_5177A0,,,unattributed,verified,hydro/workspace/core/assets/scene.hxx; hydro/workspace/core/boat/fluid.hxx; hydro/workspace/core/world/surface.hxx,False,False,race
 0x517940,380,sub_517940,,,unattributed,absent,,False,False,race
 0x517AC0,1493,sub_517AC0,,,unattributed,absent,,False,False,race
-0x5180A0,2123,sub_5180A0,VuSimpleStridingMesh; VuStridingMesh; btStridingMeshInterface,VuStridingMesh+1; btStridingMeshInterface+1; VuSimpleStridingMesh+1,physics (Bullet),verified,engine/workspace/core/collision/concave.hxx; engine/workspace/core/collision/support.hxx,False,False,race
+0x5180A0,2123,sub_5180A0,VuSimpleStridingMesh; VuStridingMesh; btStridingMeshInterface,VuStridingMesh+1; btStridingMeshInterface+1; VuSimpleStridingMesh+1,physics (Bullet),verified,engine/workspace/core/collision/concave.hxx; engine/workspace/core/collision/rebuild.hxx; engine/workspace/core/collision/support.hxx,False,False,race
 0x5188F0,35,sub_5188F0,LocalSupportVertexCallback; Z::1::ABVbtVector3::UBEXPAVbtTriangleCallback::btTriangleMeshShape::?1??processAllTriangles::.?AUFilteredCallback; Z::2::_NABVbtVector3::QAEXPAVbtStridingMeshInterface::btOptimizedBvh::?1??build::.?AUNodeTriangleCallback; Z::2::_NABVbtVector3::QAEXPAVbtStridingMeshInterface::btOptimizedBvh::?2??build::.?AUQuantizedNodeTriangleCallback; btInternalTriangleIndexCallback,btInternalTriangleIndexCallback+0; LocalSupportVertexCallback+0; Z::2::_NABVbtVector3::QAEXPAVbtStridingMeshInterface::btOptimizedBvh::?2??build::.?AUQuantizedNodeTriangleCallback+0; Z::2::_NABVbtVector3::QAEXPAVbtStridingMeshInterface::btOptimizedBvh::?1??build::.?AUNodeTriangleCallback+0; Z::1::ABVbtVector3::UBEXPAVbtTriangleCallback::btTriangleMeshShape::?1??processAllTriangles::.?AUFilteredCallback+0,physics (Bullet),callee,,False,False,race
 0x518920,1067,sub_518920,VuSimpleStridingMesh; VuStridingMesh; btStridingMeshInterface,VuStridingMesh+13; btStridingMeshInterface+13; VuSimpleStridingMesh+13,physics (Bullet),absent,,False,False,race
-0x518D50,6,sub_518D50,VuCollisionMeshAsset,VuCollisionMeshAsset+0,physics (Bullet),callee,,False,False,race
+0x518D50,6,sub_518D50,VuCollisionMeshAsset,VuCollisionMeshAsset+0,physics (Bullet),verified,engine/workspace/core/assets/rtti.hxx,False,False,race
 0x518D60,133,sub_518D60,VuCollisionMeshAsset,VuCollisionMeshAsset+1,physics (Bullet),absent,,False,False,race
 0x518DF0,205,sub_518DF0,,,physics (Bullet) (by address),absent,,False,False,race
 0x518EC0,142,sub_518EC0,,,physics (Bullet) (by address),absent,,False,False,race
-0x518F50,20,sub_518F50,,,physics (Bullet) (by address),absent,,False,False,race
+0x518F50,20,sub_518F50,,,physics (Bullet) (by address),cited,engine/workspace/core/collision/rebuild.hxx,False,False,race
 0x518F70,339,sub_518F70,,,physics (Bullet) (by address),verified,hydro/workspace/core/boat/meshes.hxx,False,False,race
 0x5190D0,220,sub_5190D0,,,physics (Bullet) (by address),absent,,False,False,race
 0x5191B0,119,sub_5191B0,,,physics (Bullet) (by address),absent,,False,False,race
@@ -5011,7 +5011,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5193F0,185,sub_5193F0,,,physics (Bullet) (by address),absent,,False,False,race
 0x5194B0,614,sub_5194B0,,,physics (Bullet) (by address),absent,,False,False,race
 0x519720,1425,sub_519720,,,unattributed,verified,hydro/workspace/core/boat/contact.hxx; hydro/workspace/utility/checks/race.hxx,False,False,race
-0x519CC0,4352,VuGfxScene_load_File,,,unattributed,absent,,False,False,race
+0x519CC0,4352,VuGfxScene_load_File,,,unattributed,cited,engine/workspace/core/collision/rebuild.hxx,False,False,race
 0x51ADC0,245,sub_51ADC0,,,unattributed,absent,,False,False,race
 0x51AEC0,37,sub_51AEC0,,,unattributed,absent,,False,False,dead
 0x51AEF0,46,sub_51AEF0,VuOptimizedBvh; btOptimizedBvh,VuOptimizedBvh+0; btOptimizedBvh+0,physics (Bullet),absent,,False,False,race
@@ -5092,7 +5092,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x521DE0,87,sub_521DE0,,,unattributed,absent,,False,False,dead
 0x521E40,221,sub_521E40,,,unattributed,verified,hydro/workspace/core/boat/damage.hxx; hydro/workspace/core/world/livery.hxx,False,False,race
 0x521F20,1947,loader_00521F20_load_Constants,,,unattributed,verified,hydro/workspace/core/world/livery.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
-0x5226C0,6,sub_5226C0,VuFluidsMeshAsset,VuFluidsMeshAsset+0,water,callee,,False,False,race
+0x5226C0,6,sub_5226C0,VuFluidsMeshAsset,VuFluidsMeshAsset+0,water,verified,engine/workspace/core/assets/rtti.hxx,False,False,race
 0x5226D0,74,sub_5226D0,VuFluidsMeshAsset,VuFluidsMeshAsset+1,water,absent,,False,False,race
 0x522720,59,sub_522720,,,water (by address),absent,,False,False,race
 0x522760,20,sub_522760,,,water (by address),absent,,False,False,race
@@ -5150,8 +5150,8 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x527B40,4,sub_527B40,btCompoundShape,btCompoundShape+10,physics (Bullet),verified,engine/workspace/core/collision/compound.hxx,False,False,race
 0x527B50,35,sub_527B50,btCollisionShape; btTriangleMeshShape,btCollisionShape+0; btTriangleMeshShape+0,physics (Bullet),callee,,False,False,race
 0x527B80,194,sub_527B80,,,physics (Bullet) (by address),verified,engine/workspace/core/dynamics/body.hxx; engine/workspace/utility/boat.hxx; hydro/workspace/core/boat/construct.hxx; hydro/workspace/core/world/bodies.hxx,False,False,race
-0x527C50,105,sub_527C50,VuStridingMesh,VuStridingMesh+3,rendering / gfx,verified,engine/workspace/core/collision/bvh.hxx; engine/workspace/core/collision/support.hxx; engine/workspace/core/dynamics/wrapper.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/core/boat/meshes.hxx,False,False,race
-0x527CC0,12,sub_527CC0,VuStridingMesh,VuStridingMesh+6,rendering / gfx,verified,engine/workspace/core/collision/support.hxx,False,False,race
+0x527C50,105,sub_527C50,VuStridingMesh,VuStridingMesh+3,rendering / gfx,verified,engine/workspace/core/collision/bvh.hxx; engine/workspace/core/collision/rebuild.hxx; engine/workspace/core/collision/support.hxx; engine/workspace/core/dynamics/wrapper.hxx; hydro/workspace/core/boat/load.hxx; hydro/workspace/core/boat/meshes.hxx,False,False,race
+0x527CC0,12,sub_527CC0,VuStridingMesh,VuStridingMesh+6,rendering / gfx,verified,engine/workspace/core/collision/rebuild.hxx; engine/workspace/core/collision/support.hxx,False,False,race
 0x527CD0,103,sub_527CD0,VuSimpleStridingMesh,VuSimpleStridingMesh+3,rendering / gfx,verified,engine/workspace/core/dynamics/wrapper.hxx; hydro/workspace/utility/checks/wrapper.hxx,False,False,race
 0x527D40,12,sub_527D40,VuSimpleStridingMesh,VuSimpleStridingMesh+6,rendering / gfx,verified,engine/workspace/core/dynamics/wrapper.hxx; hydro/workspace/utility/checks/wrapper.hxx,False,False,race
 0x527D50,300,sub_527D50,,,rendering / gfx (by address),absent,,False,False,race
@@ -5376,7 +5376,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5394A0,249,sub_5394A0,,,input (by address),absent,,False,False,game
 0x5395A0,105,sub_5395A0,,,input (by address),absent,,False,False,game
 0x539610,123,sub_539610,,,input (by address),absent,,False,False,race
-0x539690,6,sub_539690,VuTextureAsset,VuTextureAsset+0,HUD / UI / fonts,absent,,False,False,race
+0x539690,6,sub_539690,VuTextureAsset,VuTextureAsset+0,HUD / UI / fonts,callee,,False,False,race
 0x539700,122,sub_539700,VuTextureAsset,VuTextureAsset+1,HUD / UI / fonts,absent,,False,False,race
 0x539780,5,sub_539780,,,HUD / UI / fonts (by address),absent,,True,False,dead
 0x539790,32,VuTextureAsset_create,,,HUD / UI / fonts (by address),absent,,False,False,race
@@ -5486,7 +5486,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x53FD10,34,sub_53FD10,VuBaseAssetProperty,VuBaseAssetProperty+0,assets,absent,,False,False,race
 0x53FD40,139,sub_53FD40,,,assets (by address),absent,,False,False,race
 0x53FDD0,75,sub_53FDD0,VuBaseAssetProperty,VuBaseAssetProperty+11,assets,callee,,False,False,race
-0x53FE20,6,sub_53FE20,VuCompiledShaderAsset,VuCompiledShaderAsset+0,rendering / gfx,absent,,False,False,race
+0x53FE20,6,sub_53FE20,VuCompiledShaderAsset,VuCompiledShaderAsset+0,rendering / gfx,callee,,False,False,race
 0x53FE30,122,sub_53FE30,VuCompiledShaderAsset,VuCompiledShaderAsset+1,rendering / gfx,absent,,False,False,race
 0x53FEB0,119,sub_53FEB0,,,rendering / gfx (by address),absent,,False,False,race
 0x53FF30,19,sub_53FF30,,,rendering / gfx (by address),absent,,False,False,race
@@ -5555,7 +5555,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x542750,92,sub_542750,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/script.hxx; hydro/workspace/core/game/plugs.hxx,False,False,race
 0x5427B0,113,sub_5427B0,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/script.hxx,False,False,race
 0x542830,208,sub_542830,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/script.hxx; hydro/workspace/core/world/motion.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
-0x542900,6,sub_542900,VuStaticModelAsset,VuStaticModelAsset+0,rendering / gfx,absent,,False,False,race
+0x542900,6,sub_542900,VuStaticModelAsset,VuStaticModelAsset+0,rendering / gfx,callee,,False,False,race
 0x542970,122,sub_542970,VuStaticModelAsset,VuStaticModelAsset+1,rendering / gfx,absent,,False,False,race
 0x5429F0,32,sub_5429F0,,,rendering / gfx (by address),absent,,False,False,race
 0x542A10,25,sub_542A10,,,rendering / gfx (by address),absent,,False,False,race
@@ -5579,7 +5579,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x543FC0,126,sub_543FC0,,,physics (Bullet) (by address),absent,,False,False,race
 0x544040,8,sub_544040,VuRigidBodyComponent,VuRigidBodyComponent+3,physics (Bullet),verified,engine/workspace/core/entity/rigid.hxx,False,False,race
 0x544050,164,sub_544050,,,physics (Bullet) (by address),verified,hydro/workspace/core/world/dynprop.hxx,False,False,race
-0x544100,2328,sub_544100,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/compound.hxx; engine/workspace/core/entity/rigid.hxx; hydro/workspace/core/world/bodies.hxx; hydro/workspace/core/world/drive.hxx; hydro/workspace/core/world/dynprop.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
+0x544100,2328,sub_544100,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/compound.hxx; engine/workspace/core/collision/rebuild.hxx; engine/workspace/core/entity/rigid.hxx; hydro/workspace/core/world/bodies.hxx; hydro/workspace/core/world/drive.hxx; hydro/workspace/core/world/dynprop.hxx; hydro/workspace/utility/checks/rays.hxx; hydro/workspace/utility/checks/world.hxx,False,False,race
 0x544A20,84,sub_544A20,,,unattributed,callee,,False,False,race
 0x544A80,227,sub_544A80,,,unattributed,callee,,False,False,race
 0x544B70,209,sub_544B70,,,unattributed,callee,,False,False,race
@@ -5785,7 +5785,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x554A30,274,sub_554A30,,,save / settings / profile (by address),absent,,False,False,race
 0x554B50,379,sub_554B50,,,save / settings / profile (by address),absent,,False,False,service
 0x554CD0,301,sub_554CD0,,,save / settings / profile (by address),absent,,False,False,race
-0x554E00,6,sub_554E00,VuProjectAsset,VuProjectAsset+0,assets,absent,,False,False,race
+0x554E00,6,sub_554E00,VuProjectAsset,VuProjectAsset+0,assets,callee,,False,False,race
 0x554E90,50,sub_554E90,VuProjectAsset,VuProjectAsset+1,assets,absent,,False,False,race
 0x554ED0,25,sub_554ED0,,,assets (by address),absent,,False,False,race
 0x554EF0,20,sub_554EF0,,,assets (by address),absent,,False,False,race
@@ -5900,9 +5900,9 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x55C070,137,sub_55C070,,,unattributed,absent,,False,False,race
 0x55C100,64,sub_55C100,,,unattributed,absent,,False,False,race
 0x55C140,92,sub_55C140,,,unattributed,absent,,False,False,race
-0x55C1A0,6,sub_55C1A0,VuGenericDataAsset,VuGenericDataAsset+0,assets,absent,,False,False,race
+0x55C1A0,6,sub_55C1A0,VuGenericDataAsset,VuGenericDataAsset+0,assets,callee,,False,False,race
 0x55C1E0,60,sub_55C1E0,VuAssetListAsset; VuGenericDataAsset; VuShaderAsset; VuStringAsset; VuTemplateAsset,VuGenericDataAsset+1; VuAssetListAsset+1; VuStringAsset+1; VuTemplateAsset+1; VuShaderAsset+1,rendering / gfx,absent,,False,False,race
-0x55C220,6,sub_55C220,VuDBAsset,VuDBAsset+0,assets,absent,,False,False,race
+0x55C220,6,sub_55C220,VuDBAsset,VuDBAsset+0,assets,callee,,False,False,race
 0x55C230,74,sub_55C230,VuDBAsset,VuDBAsset+1,assets,absent,,False,False,race
 0x55C280,60,sub_55C280,,,assets (by address),absent,,False,False,race
 0x55C2C0,108,sub_55C2C0,,,assets (by address),cited,hydro/workspace/core/world/pfxmgr.hxx,False,False,race
@@ -6012,7 +6012,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x563DA0,309,sub_563DA0,VuPfxBoatSpringConstraint; VuPfxEmitBoatHull; VuPfxEmitBoatThrustQuadFountain; VuPfxEmitDirectionalQuadFountain; VuPfxEmitFountain; VuPfxEmitGeomFountain; VuPfxEmitQuadFountain; VuPfxGeomPattern; VuPfxGroup; VuPfxNode; VuPfxPattern; VuPfxProcess; VuPfxQuadPattern; VuPfxSpringConstraint; VuPfxSystem; VuPfxTickAlpha; VuPfxTickAlphaInOut; VuPfxTickDampenVelocity; VuPfxTickLinearAcceleration; VuPfxTickScale; VuPfxTickWorldScaleZ; VuPfxTrailPattern,VuPfxNode+3; VuPfxBoatSpringConstraint+3; VuPfxEmitBoatThrustQuadFountain+3; VuPfxProcess+3; VuPfxEmitBoatHull+3; VuPfxGroup+3,boat,absent,,False,False,race
 0x563EE0,1217,loader_00563EE0_load_BaseType,,,boat (by address),verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x5643B0,274,sub_5643B0,,,boat (by address),absent,,False,False,race
-0x5644D0,6,sub_5644D0,VuAssetListAsset,VuAssetListAsset+0,assets,absent,,False,False,race
+0x5644D0,6,sub_5644D0,VuAssetListAsset,VuAssetListAsset+0,assets,callee,,False,False,race
 0x5644E0,39,sub_5644E0,,,assets (by address),absent,,False,False,race
 0x564510,583,sub_564510,,,assets (by address),absent,,False,False,race
 0x564760,114,sub_564760,,,assets (by address),absent,,False,False,race
@@ -6298,9 +6298,9 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5828A0,506,sub_5828A0,,,unattributed,absent,,False,False,race
 0x582AA0,446,sub_582AA0,,,unattributed,absent,,False,False,race
 0x582C60,65,sub_582C60,,,unattributed,absent,,False,False,race
-0x582CB0,1374,sub_582CB0,,,unattributed,cited,engine/workspace/core/collision/arena.hxx; engine/workspace/core/collision/concave.hxx,False,False,race
-0x583210,810,sub_583210,Z::2::_NABVbtVector3::QAEXPAVbtStridingMeshInterface::btOptimizedBvh::?1??build::.?AUNodeTriangleCallback,Z::2::_NABVbtVector3::QAEXPAVbtStridingMeshInterface::btOptimizedBvh::?1??build::.?AUNodeTriangleCallback+1,rendering / gfx,absent,,False,False,race
-0x583540,789,sub_583540,Z::2::_NABVbtVector3::QAEXPAVbtStridingMeshInterface::btOptimizedBvh::?2??build::.?AUQuantizedNodeTriangleCallback,Z::2::_NABVbtVector3::QAEXPAVbtStridingMeshInterface::btOptimizedBvh::?2??build::.?AUQuantizedNodeTriangleCallback+1,rendering / gfx,absent,,False,False,race
+0x582CB0,1374,sub_582CB0,,,unattributed,verified,engine/workspace/core/collision/arena.hxx; engine/workspace/core/collision/concave.hxx; engine/workspace/core/collision/rebuild.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
+0x583210,810,sub_583210,Z::2::_NABVbtVector3::QAEXPAVbtStridingMeshInterface::btOptimizedBvh::?1??build::.?AUNodeTriangleCallback,Z::2::_NABVbtVector3::QAEXPAVbtStridingMeshInterface::btOptimizedBvh::?1??build::.?AUNodeTriangleCallback+1,rendering / gfx,cited,engine/workspace/core/collision/rebuild.hxx,False,False,race
+0x583540,789,sub_583540,Z::2::_NABVbtVector3::QAEXPAVbtStridingMeshInterface::btOptimizedBvh::?2??build::.?AUQuantizedNodeTriangleCallback,Z::2::_NABVbtVector3::QAEXPAVbtStridingMeshInterface::btOptimizedBvh::?2??build::.?AUQuantizedNodeTriangleCallback+1,rendering / gfx,verified,engine/workspace/core/collision/rebuild.hxx,False,False,race
 0x583860,1388,sub_583860,,,rendering / gfx (by address),absent,,False,False,race
 0x583DD0,555,sub_583DD0,,,unattributed,verified,hydro/workspace/core/boat/meshes.hxx,False,False,race
 0x584000,3337,sub_584000,,,unattributed,absent,,False,False,race
@@ -6309,14 +6309,14 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x585BC0,536,sub_585BC0,,,unattributed,verified,hydro/workspace/core/boat/meshes.hxx,False,False,race
 0x585DE0,503,sub_585DE0,,,unattributed,verified,hydro/workspace/core/boat/meshes.hxx,False,False,race
 0x585FE0,571,sub_585FE0,,,unattributed,verified,hydro/workspace/core/boat/meshes.hxx,False,False,race
-0x586220,251,sub_586220,,,unattributed,verified,hydro/workspace/core/boat/meshes.hxx,False,False,race
+0x586220,251,sub_586220,,,unattributed,verified,engine/workspace/core/collision/rebuild.hxx; hydro/workspace/core/boat/meshes.hxx,False,False,race
 0x586320,44,sub_586320,btQuantizedBvh,btQuantizedBvh+0,physics (Bullet),verified,engine/workspace/core/collision/teardown.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
-0x586350,286,sub_586350,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
+0x586350,286,sub_586350,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; engine/workspace/core/collision/rebuild.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x586470,451,sub_586470,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/teardown.hxx,False,False,race
-0x586640,616,sub_586640,,,physics (Bullet) (by address),cited,engine/workspace/core/collision/arena.hxx,False,False,race
-0x5868B0,891,sub_5868B0,,,physics (Bullet) (by address),absent,,False,False,race
-0x586C30,1106,sub_586C30,,,unattributed,absent,,False,False,race
-0x587090,1143,sub_587090,,,unattributed,absent,,False,False,race
+0x586640,616,sub_586640,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; engine/workspace/core/collision/rebuild.hxx,False,False,race
+0x5868B0,891,sub_5868B0,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/rebuild.hxx,False,False,race
+0x586C30,1106,sub_586C30,,,unattributed,verified,engine/workspace/core/collision/rebuild.hxx,False,False,race
+0x587090,1143,sub_587090,,,unattributed,verified,engine/workspace/core/collision/rebuild.hxx,False,False,race
 0x587510,515,sub_587510,,,unattributed,verified,engine/workspace/core/collision/bvh.hxx; engine/workspace/utility/meshes.hxx,False,False,race
 0x587720,217,sub_587720,,,unattributed,cited,engine/workspace/core/collision/bvh.hxx,False,False,race
 0x587800,300,sub_587800,,,unattributed,cited,engine/workspace/core/collision/bvh.hxx,False,False,race
@@ -6324,15 +6324,15 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x587E60,1910,sub_587E60,,,unattributed,verified,engine/workspace/core/collision/raytest.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x5885E0,246,sub_5885E0,,,unattributed,verified,engine/workspace/core/collision/bvh.hxx; engine/workspace/utility/meshes.hxx,False,False,race
 0x5886E0,194,sub_5886E0,,,unattributed,cited,engine/workspace/core/collision/bvh.hxx,False,False,race
-0x5887B0,186,sub_5887B0,,,unattributed,absent,,False,False,race
-0x588870,92,sub_588870,,,unattributed,verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
+0x5887B0,186,sub_5887B0,,,unattributed,verified,engine/workspace/core/collision/rebuild.hxx,False,False,race
+0x588870,92,sub_588870,,,unattributed,verified,engine/workspace/core/collision/arena.hxx; engine/workspace/core/collision/rebuild.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x5888D0,2727,sub_5888D0,VuOptimizedBvh; btOptimizedBvh; btQuantizedBvh,VuOptimizedBvh+2; btOptimizedBvh+2; btQuantizedBvh+2,physics (Bullet),absent,,False,False,race
 0x589380,1432,sub_589380,VuOptimizedBvh; btOptimizedBvh; btQuantizedBvh,VuOptimizedBvh+4; btOptimizedBvh+4; btQuantizedBvh+4,physics (Bullet),absent,,False,False,race
 0x589920,1608,sub_589920,VuOptimizedBvh; btOptimizedBvh; btQuantizedBvh,VuOptimizedBvh+5; btOptimizedBvh+5; btQuantizedBvh+5,physics (Bullet),absent,,False,False,race
 0x589F70,789,sub_589F70,VuOptimizedBvh; btOptimizedBvh; btQuantizedBvh,VuOptimizedBvh+1; btOptimizedBvh+1; btQuantizedBvh+1,physics (Bullet),absent,,False,False,race
-0x58A290,536,sub_58A290,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
-0x58A4B0,183,sub_58A4B0,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
-0x58A570,157,sub_58A570,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
+0x58A290,536,sub_58A290,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; engine/workspace/core/collision/rebuild.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
+0x58A4B0,183,sub_58A4B0,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; engine/workspace/core/collision/rebuild.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
+0x58A570,157,sub_58A570,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/arena.hxx; engine/workspace/core/collision/rebuild.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x58A610,6,sub_58A610,VuPfxSystem,VuPfxSystem+1,particles,callee,,False,False,race
 0x58A620,40,sub_58A620,VuPfxSystem,VuPfxSystem+0,particles,verified,hydro/workspace/core/world/pfxload.hxx,False,False,race
 0x58A650,29,sub_58A650,VuPfxSystemInstance,VuPfxSystemInstance+3,particles,verified,hydro/workspace/core/world/pfxclass.hxx; hydro/workspace/core/world/pfxsim.hxx,False,False,race
@@ -6669,7 +6669,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5A7DB0,596,sub_5A7DB0,,,rendering / gfx (by address),absent,,False,False,race
 0x5A8010,48,sub_5A8010,,,rendering / gfx (by address),absent,,False,False,race
 0x5A8040,73,sub_5A8040,,,rendering / gfx (by address),absent,,False,False,race
-0x5A8090,6,sub_5A8090,VuAnimatedModelAsset,VuAnimatedModelAsset+0,rendering / gfx,absent,,False,False,race
+0x5A8090,6,sub_5A8090,VuAnimatedModelAsset,VuAnimatedModelAsset+0,rendering / gfx,callee,,False,False,race
 0x5A8110,147,sub_5A8110,VuAnimatedModelAsset,VuAnimatedModelAsset+1,rendering / gfx,absent,,False,False,race
 0x5A81B0,39,sub_5A81B0,,,rendering / gfx (by address),absent,,False,False,race
 0x5A81E0,25,sub_5A81E0,,,rendering / gfx (by address),absent,,False,False,race
@@ -6695,7 +6695,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5A90F0,1268,sub_5A90F0,,,rendering / gfx (by address),absent,,False,False,race
 0x5A95F0,105,sub_5A95F0,,,rendering / gfx (by address),absent,,False,False,race
 0x5A9660,385,sub_5A9660,,,rendering / gfx (by address),absent,,False,False,game
-0x5A97F0,6,sub_5A97F0,VuStringAsset,VuStringAsset+0,assets,absent,,False,False,race
+0x5A97F0,6,sub_5A97F0,VuStringAsset,VuStringAsset+0,assets,callee,,False,False,race
 0x5A9800,39,sub_5A9800,,,assets (by address),absent,,False,False,race
 0x5A9830,86,sub_5A9830,,,assets (by address),absent,,False,False,race
 0x5A98B0,40,sub_5A98B0,,,assets (by address),absent,,False,False,race
@@ -6820,7 +6820,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5ADBE0,311,sub_5ADBE0,,,unattributed,absent,,False,False,race
 0x5ADD20,113,sub_5ADD20,VuD3d11Gfx; VuMetroD3d11Gfx,VuMetroD3d11Gfx+1; VuD3d11Gfx+1,rendering / gfx,absent,,False,False,race
 0x5ADDA0,187,sub_5ADDA0,,,rendering / gfx (by address),absent,,False,False,race
-0x5ADE60,6,sub_5ADE60,VuCubeTextureAsset,VuCubeTextureAsset+0,HUD / UI / fonts,absent,,False,False,race
+0x5ADE60,6,sub_5ADE60,VuCubeTextureAsset,VuCubeTextureAsset+0,HUD / UI / fonts,callee,,False,False,race
 0x5ADED0,122,sub_5ADED0,VuCubeTextureAsset,VuCubeTextureAsset+1,HUD / UI / fonts,absent,,False,False,race
 0x5ADF50,32,VuCubeTextureAsset_create,,,HUD / UI / fonts (by address),cited,hydro/workspace/core/assets/texture.hxx,False,False,race
 0x5ADF70,19,VuCubeTextureAsset_destroy,,,HUD / UI / fonts (by address),absent,,False,False,race
@@ -6851,9 +6851,9 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5AF050,152,sub_5AF050,,,physics (Bullet) (by address),absent,,False,False,race
 0x5AF0F0,134,sub_5AF0F0,btBvhTriangleMeshShape,btBvhTriangleMeshShape+14,physics (Bullet),verified,engine/workspace/core/collision/bvh.hxx; engine/workspace/core/collision/concave.hxx; engine/workspace/utility/meshes.hxx,False,False,race
 0x5AF180,382,sub_5AF180,Z::1::ABVbtVector3::UBEXPAVbtTriangleCallback::btBvhTriangleMeshShape::?1??processAllTriangles::.?AUMyNodeOverlapCallback,Z::1::ABVbtVector3::UBEXPAVbtTriangleCallback::btBvhTriangleMeshShape::?1??processAllTriangles::.?AUMyNodeOverlapCallback+1,rendering / gfx,verified,engine/workspace/core/collision/bvh.hxx; engine/workspace/utility/meshes.hxx,False,False,race
-0x5AF300,120,sub_5AF300,btBvhTriangleMeshShape,btBvhTriangleMeshShape+5,physics (Bullet),verified,engine/workspace/core/collision/concave.hxx; hydro/workspace/core/world/bodies.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
-0x5AF380,114,sub_5AF380,,,physics (Bullet) (by address),cited,engine/workspace/core/collision/concave.hxx,False,False,race
-0x5AF400,119,sub_5AF400,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/bvh.hxx; engine/workspace/core/collision/concave.hxx; hydro/workspace/core/world/bodies.hxx,False,False,race
+0x5AF300,120,sub_5AF300,btBvhTriangleMeshShape,btBvhTriangleMeshShape+5,physics (Bullet),verified,engine/workspace/core/collision/concave.hxx; engine/workspace/core/collision/rebuild.hxx; hydro/workspace/core/world/bodies.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
+0x5AF380,114,sub_5AF380,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/concave.hxx; engine/workspace/core/collision/rebuild.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
+0x5AF400,119,sub_5AF400,,,physics (Bullet) (by address),verified,engine/workspace/core/collision/bvh.hxx; engine/workspace/core/collision/concave.hxx; engine/workspace/core/collision/rebuild.hxx; hydro/workspace/core/world/bodies.hxx,False,False,race
 0x5AF480,356,sub_5AF480,btBvhTriangleMeshShape,btBvhTriangleMeshShape+12,physics (Bullet),absent,,False,False,race
 0x5AF5F0,71,sub_5AF5F0,btBvhTriangleMeshShape,btBvhTriangleMeshShape+17,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
 0x5AF640,71,sub_5AF640,btBvhTriangleMeshShape,btBvhTriangleMeshShape+18,physics (Bullet),verified,engine/workspace/core/collision/arena.hxx; hydro/workspace/utility/checks/rays.hxx,False,False,race
@@ -6963,7 +6963,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5BA930,206,sub_5BA930,,,unattributed,verified,engine/workspace/core/collision/dispatch.hxx,False,False,race
 0x5BAA00,1362,sub_5BAA00,btManifoldResult,btManifoldResult+3,physics (Bullet),verified,engine/workspace/core/dynamics/contact.hxx,False,False,race
 0x5BAF60,361,sub_5BAF60,btGjkEpaPenetrationDepthSolver,btGjkEpaPenetrationDepthSolver+1,physics (Bullet),verified,engine/workspace/core/collision/gjk.hxx; engine/workspace/core/collision/polytope.hxx; engine/workspace/utility/narrow.hxx,False,False,race
-0x5BB0D0,6,sub_5BB0D0,VuTemplateAsset,VuTemplateAsset+0,assets,absent,,False,False,race
+0x5BB0D0,6,sub_5BB0D0,VuTemplateAsset,VuTemplateAsset+0,assets,callee,,False,False,race
 0x5BB0E0,39,sub_5BB0E0,,,assets (by address),absent,,False,False,race
 0x5BB110,11,sub_5BB110,VuFoliageManager,VuFoliageManager+4,engine core / math / containers,absent,,False,False,race
 0x5BB120,46,sub_5BB120,,,engine core / math / containers (by address),absent,,False,False,game
@@ -7064,9 +7064,9 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5C3080,77,sub_5C3080,,,rendering / gfx (by address),absent,,False,False,dead
 0x5C30D0,818,sub_5C30D0,,,rendering / gfx (by address),callee,,False,False,race
 0x5C3410,902,sub_5C3410,,,rendering / gfx (by address),absent,,False,False,race
-0x5C37A0,6,sub_5C37A0,VuGenericAsset,VuGenericAsset+0,assets,absent,,False,False,race
+0x5C37A0,6,sub_5C37A0,VuGenericAsset,VuGenericAsset+0,assets,callee,,False,False,race
 0x5C37B0,83,sub_5C37B0,VuAudioStreamAsset; VuGenericAsset,VuAudioStreamAsset+1; VuGenericAsset+1,audio,absent,,False,False,race
-0x5C3810,6,sub_5C3810,VuAudioStreamAsset,VuAudioStreamAsset+0,audio,absent,,False,False,race
+0x5C3810,6,sub_5C3810,VuAudioStreamAsset,VuAudioStreamAsset+0,audio,callee,,False,False,race
 0x5C3820,46,sub_5C3820,,,audio (by address),absent,,False,False,race
 0x5C3850,161,sub_5C3850,,,audio (by address),absent,,False,False,race
 0x5C3900,20,sub_5C3900,,,audio (by address),absent,,False,False,race
@@ -7140,7 +7140,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5C7660,74,sub_5C7660,,,unattributed,absent,,False,False,service
 0x5C76B0,50,sub_5C76B0,,,unattributed,absent,,False,False,service
 0x5C76F0,331,sub_5C76F0,,,unattributed,absent,,False,False,service
-0x5C7840,6,sub_5C7840,VuXmlAsset,VuXmlAsset+0,assets,absent,,False,False,race
+0x5C7840,6,sub_5C7840,VuXmlAsset,VuXmlAsset+0,assets,callee,,False,False,race
 0x5C7850,160,sub_5C7850,,,assets (by address),absent,,False,False,race
 0x5C78F0,34,sub_5C78F0,VuXmlAsset,VuXmlAsset+1,assets,absent,,False,False,race
 0x5C7920,164,sub_5C7920,,,assets (by address),absent,,False,False,race
@@ -7149,7 +7149,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5C7A90,418,loader_005C7A90_load_File,,,assets (by address),absent,,False,False,race
 0x5C7C40,126,sub_5C7C40,VuXmlAsset,VuXmlAsset+5,assets,absent,,False,False,race
 0x5C7CC0,48,sub_5C7CC0,VuXmlAsset,VuXmlAsset+6,assets,absent,,False,False,race
-0x5C7CF0,6,sub_5C7CF0,VuWaterMapAsset,VuWaterMapAsset+0,water,callee,,False,False,race
+0x5C7CF0,6,sub_5C7CF0,VuWaterMapAsset,VuWaterMapAsset+0,water,verified,engine/workspace/core/assets/rtti.hxx,False,False,race
 0x5C7D00,81,sub_5C7D00,VuWaterMapAsset,VuWaterMapAsset+1,water,verified,hydro/workspace/core/world/query.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x5C7D60,59,sub_5C7D60,,,water (by address),absent,,False,False,race
 0x5C7DA0,20,sub_5C7DA0,,,water (by address),absent,,False,False,race
@@ -7161,7 +7161,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5C8930,370,sub_5C8930,,,water (by address),absent,,False,False,race
 0x5C8AB0,138,sub_5C8AB0,,,water (by address),absent,,False,False,race
 0x5C8B40,91,sub_5C8B40,,,water (by address),absent,,False,False,race
-0x5C8BA0,6,sub_5C8BA0,VuTimedEventAsset,VuTimedEventAsset+0,assets,absent,,False,False,race
+0x5C8BA0,6,sub_5C8BA0,VuTimedEventAsset,VuTimedEventAsset+0,assets,callee,,False,False,race
 0x5C8BB0,180,sub_5C8BB0,,,assets (by address),absent,,False,False,race
 0x5C8C70,94,sub_5C8C70,VuTimedEventAsset,VuTimedEventAsset+1,assets,absent,,False,False,race
 0x5C8CD0,120,sub_5C8CD0,,,assets (by address),absent,,False,False,race
@@ -7190,29 +7190,29 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5CA7A0,186,sub_5CA7A0,,,unattributed,absent,,False,False,race
 0x5CA860,262,sub_5CA860,,,unattributed,absent,,False,False,race
 0x5CA970,98,sub_5CA970,,,unattributed,absent,,False,False,race
-0x5CA9E0,6,sub_5CA9E0,VuShaderAsset,VuShaderAsset+0,rendering / gfx,absent,,False,False,race
+0x5CA9E0,6,sub_5CA9E0,VuShaderAsset,VuShaderAsset+0,rendering / gfx,callee,,False,False,race
 0x5CA9F0,39,sub_5CA9F0,,,rendering / gfx (by address),absent,,False,False,race
-0x5CAA20,6,sub_5CAA20,VuPfxAsset,VuPfxAsset+0,particles,verified,hydro/workspace/utility/checks/watchers.hxx,False,False,race
+0x5CAA20,6,sub_5CAA20,VuPfxAsset,VuPfxAsset+0,particles,verified,engine/workspace/core/assets/rtti.hxx; hydro/workspace/utility/checks/watchers.hxx,False,False,race
 0x5CAA30,153,sub_5CAA30,,,particles (by address),verified,hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x5CAAD0,34,sub_5CAAD0,VuPfxAsset,VuPfxAsset+1,particles,verified,hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x5CAB00,39,sub_5CAB00,,,particles (by address),cited,hydro/workspace/core/world/pfxmgr.hxx,False,False,race
 0x5CAB30,77,sub_5CAB30,VuPfxAsset,VuPfxAsset+5,particles,verified,hydro/workspace/core/world/effects.hxx; hydro/workspace/core/world/pfxload.hxx; hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
 0x5CAB80,57,sub_5CAB80,VuPfxAsset,VuPfxAsset+6,particles,verified,hydro/workspace/core/world/pfxload.hxx; hydro/workspace/core/world/pfxmgr.hxx; hydro/workspace/utility/checks/pfx.hxx,False,False,race
-0x5CABC0,6,sub_5CABC0,VuFontAsset,VuFontAsset+0,HUD / UI / fonts,absent,,False,False,race
+0x5CABC0,6,sub_5CABC0,VuFontAsset,VuFontAsset+0,HUD / UI / fonts,callee,,False,False,race
 0x5CAC30,130,sub_5CAC30,VuFontAsset,VuFontAsset+1,HUD / UI / fonts,absent,,False,False,race
 0x5CACC0,32,sub_5CACC0,,,HUD / UI / fonts (by address),absent,,False,False,race
 0x5CACE0,20,sub_5CACE0,,,HUD / UI / fonts (by address),absent,,False,False,race
 0x5CAD00,340,loader_005CAD00_load_File,,,HUD / UI / fonts (by address),absent,,False,False,race
 0x5CAE60,165,sub_5CAE60,VuFontAsset,VuFontAsset+5,HUD / UI / fonts,absent,,False,False,race
 0x5CAF10,38,sub_5CAF10,VuFontAsset,VuFontAsset+6,HUD / UI / fonts,absent,,False,False,race
-0x5CAF40,6,sub_5CAF40,VuAudioProjectAsset,VuAudioProjectAsset+0,audio,absent,,False,False,race
+0x5CAF40,6,sub_5CAF40,VuAudioProjectAsset,VuAudioProjectAsset+0,audio,callee,,False,False,race
 0x5CAF50,116,sub_5CAF50,VuAudioProjectAsset,VuAudioProjectAsset+1,audio,absent,,False,False,race
 0x5CAFD0,32,sub_5CAFD0,,,audio (by address),absent,,False,False,race
 0x5CAFF0,20,sub_5CAFF0,,,audio (by address),absent,,False,False,race
 0x5CB070,418,loader_005CB070_load_File,,,audio (by address),absent,,False,False,race
 0x5CB220,270,sub_5CB220,VuAudioProjectAsset,VuAudioProjectAsset+5,audio,absent,,False,False,race
 0x5CB330,24,sub_5CB330,VuAudioProjectAsset,VuAudioProjectAsset+6,audio,absent,,False,False,race
-0x5CB350,6,sub_5CB350,VuAudioBankAsset,VuAudioBankAsset+0,audio,absent,,False,False,race
+0x5CB350,6,sub_5CB350,VuAudioBankAsset,VuAudioBankAsset+0,audio,callee,,False,False,race
 0x5CB360,138,sub_5CB360,VuAudioBankAsset,VuAudioBankAsset+1,audio,absent,,False,False,race
 0x5CB3F0,35,sub_5CB3F0,,,audio (by address),absent,,False,False,race
 0x5CB420,20,sub_5CB420,,,audio (by address),absent,,False,False,race
@@ -7914,7 +7914,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5F4480,434,sub_5F4480,,,rendering / gfx (by address),absent,,False,False,game
 0x5F4640,162,sub_5F4640,,,rendering / gfx (by address),absent,,False,False,game
 0x5F46F0,153,sub_5F46F0,,,rendering / gfx (by address),absent,,False,False,game
-0x5F4790,6,sub_5F4790,VuSubstituteAssetEntity,VuSubstituteAssetEntity+1,assets,absent,,False,False,race
+0x5F4790,6,sub_5F4790,VuSubstituteAssetEntity,VuSubstituteAssetEntity+1,assets,callee,,False,False,race
 0x5F47A0,115,sub_5F47A0,,,assets (by address),callee,,False,False,race
 0x5F4820,114,sub_5F4820,,,assets (by address),callee,,False,False,race
 0x5F48A0,518,sub_5F48A0,,,assets (by address),callee,,False,False,race
