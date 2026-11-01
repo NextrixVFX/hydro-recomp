@@ -364,3 +364,143 @@ inline bool verify_boat_contact( )
     LOG_ERROR( "boat_contact FAILED %d of %u contacts", failed, nv );
     return false;
 }
+// verify_piece_fluid: piece_fluid_step (boat damage.hxx: VuPiece's fluid step
+// 0x412E30) on the case's piece, solver, water and body: the body after (its
+// stale w lanes as verify_boat_records masks them), the solver's +0x50 and
+// +0x54 .. +0xFF (w lanes of the vectors masked), the fake kernel's calls.
+inline bool verify_piece_fluid( )
+{
+    int failed = 0, capped = 0, wet = 0, calls = 0;
+    for ( std::size_t index = 0; index < g_golden_piece_fluid_count; ++index )
+    {
+        const unsigned* s = g_golden_piece_fluid_words + g_golden_piece_fluid_offsets[ index ];
+        auto u = [ & ]( ) { return *s++; };
+        auto f = [ & ]( ) { float x; std::memcpy( &x, s++, 4 ); return x; };
+        const float dt = f( );
+        std::vector< std::uint8_t > piece( 0x220 ), body( 672 );
+        for ( int k = 0; k < 3; ++k )
+            state_put_f( piece.data( ), 0x1B0 + 4 * k, f( ) );
+        std::uint8_t* sv = piece.data( ) + 0x78;
+        for ( int k = 0; k < 3; ++k )
+            state_put_f( sv, 4 + 4 * k, f( ) );      // +4 the offset
+        for ( int k = 0; k < 6; ++k )
+            state_put_f( sv, 0x14 + 4 * k, f( ) );   // +0x14 drag, buoyancy, velocity scale, the axis drags
+        state_put_f( sv, 0x100, f( ) );              // the floor
+        std::memset( sv + 84, 0x77, 256 - 84 );
+        const bool is_wet = u( ) != 0;
+        const float height = f( );
+        water_t water;
+        water.skip_waves = false;
+        water.surface_root = is_wet ? 0 : -1;
+        water.nodes.resize( u( ) );
+        for ( water_node_t& node : water.nodes )
+        {
+            for ( float& x : node.rect )
+                x = f( );
+            node.first = static_cast< int >( u( ) );
+            node.second = static_cast< int >( u( ) );
+            node.tag = u( );
+        }
+        const int wave_root = static_cast< int >( u( ) );
+        fluid_fake_t fake;
+        water.waves.resize( u( ) );
+        for ( water_wave_t& w : water.waves )
+        {
+            w.centre[ 0 ] = f( );
+            w.centre[ 1 ] = f( );
+            w.radius = f( );
+            fake.k.push_back( f( ) );
+        }
+        fluids_mesh_t mesh;
+        mesh.verts.resize( 4 * u( ) );
+        for ( float& x : mesh.verts )
+            x = f( );
+        mesh.edges.resize( 2 * u( ) );
+        for ( std::uint32_t& x : mesh.edges )
+            x = u( );
+        mesh.triangles.resize( 15 * u( ) );
+        for ( std::uint32_t& x : mesh.triangles )
+            x = u( );
+        mesh.total_area = f( );
+        for ( int k = 0; k < 3; ++k )
+        {
+            float lo = mesh.verts[ k ], hi = mesh.verts[ k ];
+            for ( std::size_t v = 0; v < mesh.verts.size( ); v += 4 )
+            {
+                lo = mesh.verts[ v + k ] < lo ? mesh.verts[ v + k ] : lo;
+                hi = mesh.verts[ v + k ] > hi ? mesh.verts[ v + k ] : hi;
+            }
+            mesh.aabb_min[ k ] = lo;
+            mesh.aabb_max[ k ] = hi;
+        }
+        mesh.aabb_min[ 3 ] = mesh.aabb_max[ 3 ] = 1.0f;
+        std::memcpy( body.data( ), s, 672 );
+        s += 168;
+        const unsigned* after = s;
+        s += 168;
+        const unsigned b50 = u( );
+        const unsigned* sw = s;
+        s += 43;
+        const unsigned ncalls = u( );
+        water_surface_t surface{ };
+        surface.height = height;
+        surface.below = surface.above = 50.0f;
+        surface.inverse[ 0 ] = surface.inverse[ 5 ] = surface.inverse[ 10 ] = surface.inverse[ 15 ] = 1.0f;
+        for ( int k = 0; k < 3; ++k )
+            surface.inverse[ 12 + k ] = -state_f( body.data( ), 0x40 + 4 * k );
+        surface.floor = -100.0f;
+        surface.half_x = surface.half_y = 400.0f;
+        surface.wave_root = wave_root;
+        water.surfaces.push_back( surface );
+        fluid_solver_t solver{ };
+        solver.mesh = &mesh;
+        solver.vertices.resize( mesh.verts.size( ) / 4 );
+        solver.edges.resize( mesh.edges.size( ) / 2 );
+        std::memset( solver.vertices.data( ), 0x77, solver.vertices.size( ) * sizeof( water_vertex_t ) );
+        std::memset( solver.edges.data( ), 0x77, solver.edges.size( ) * sizeof( fluid_edge_t ) );
+        std::memset( &solver.volume, 0x77, 4 );
+        std::memset( &solver.area, 0x77, 4 );
+        std::memset( &solver.min_depth, 0x77, 4 );
+        std::memset( solver.acc, 0x77, sizeof( solver.acc ) );
+        float gravity[ 3 ] = { 0.0f, 0.0f, -19.612f };
+        const std::vector< std::uint8_t > before = body;
+        const char* what = nullptr;
+        int bad = -1;
+        if ( !piece_fluid_step( solver, piece.data( ), body.data( ), water, fluid_fake_kernel, &fake, fluid_fake_gravity, gravity, dt ) )
+            what = "a path not recreated was reached";
+        for ( int k = 0; k < 672 && !what; k += 4 )
+        {
+            const bool w_lane = ( k >= 432 && k < 464 && ( k - 432 ) % 16 == 12 ) || k == 348;
+            if ( !w_lane && std::memcmp( body.data( ) + k, after + k / 4, 4 ) != 0 )
+                what = "a rigid body word", bad = k;
+        }
+        if ( !what && sv[ 0x50 ] != b50 )
+            what = "solver +0x50";
+        for ( int k = 0; k < 43 && !what; ++k )
+        {
+            const int offset = 84 + 4 * k;
+            if ( !( offset >= 96 && ( offset - 96 ) % 16 == 12 ) && std::memcmp( sv + offset, sw + k, 4 ) != 0 )
+                what = "a solver word", bad = offset;
+        }
+        if ( !what && fake.log.size( ) != 3 * ncalls )
+            what = "the number of kernel calls";
+        for ( unsigned k = 0; k < 3 * ncalls && !what; ++k )
+            if ( s[ k ] != fake.log[ k ] )
+                what = "a kernel call";
+        calls += static_cast< int >( ncalls );
+        wet += is_wet ? 1 : 0;
+        // capped: the body's total force moved by less than the solver's force (a scale below 1 was applied)
+        const float fx = state_f( body.data( ), 0x1B0 ) - state_f( before.data( ), 0x1B0 );
+        capped += !what && solver.acc[ 0 ] != 0.0f && std::fabs( fx ) < std::fabs( solver.acc[ 0 ] * state_f( before.data( ), 0x170 ) ) * 0.999f ? 1 : 0;
+        if ( what && ++failed <= 6 )
+            LOG_ERROR( "piece_fluid vector %d: %s (+%d)", static_cast< int >( index ), what, bad );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuPiece's fluid step 0x412E30 (VuFluidSolver_prepare / solve, the capped force and torque) matches retail: %d steps, %d wet, "
+                     "%d capped, %d kernel calls", static_cast< int >( g_golden_piece_fluid_count ), wet, capped, calls );
+        return true;
+    }
+    LOG_ERROR( "piece_fluid FAILED %d of %d steps", failed, static_cast< int >( g_golden_piece_fluid_count ) );
+    return false;
+}
