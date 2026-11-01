@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/boat/load.hxx>
+#include <workspace/core/boat/surface.hxx>
 #include <workspace/core/collision/concave.hxx>
 
 #include <cstdint>
@@ -231,6 +232,17 @@ struct boat_mesh_library_t
     void* user = nullptr;
     void ( *call )( void* user, std::uint32_t address, const char* self, const std::string& arg ) = nullptr;
     std::uint8_t ( *surface )( void* user, const std::string& name ) = nullptr;
+    // The surface-type table (surface.hxx: g_vudynamicsimpl +0x38, built by
+    // 0x574EC0 from SurfaceDB). When set it answers 0x4F88A0 (slot 2) in
+    // place of `surface`.
+    const surface_table_t* surfaces = nullptr;
+
+    std::uint8_t surface_of( const std::string& name ) const
+    {
+        if ( surfaces )
+            return surface_id( *surfaces, name.c_str( ) );
+        return surface ? surface( user, name ) : 0;
+    }
 
     struct entry_t
     {
@@ -276,7 +288,7 @@ inline std::uint32_t boat_mesh_create( void* user, const char* type, const std::
     if ( std::strcmp( type, "VuCollisionMeshAsset" ) == 0 )
     {
         e.collision = std::make_unique< collision_mesh_asset_t >( );
-        const auto surface = [ &lib ]( const std::string& n ) -> std::uint8_t { return lib.surface ? lib.surface( lib.user, n ) : 0; };
+        const auto surface = [ &lib ]( const std::string& n ) -> std::uint8_t { return lib.surface_of( n ); };
         if ( !collision_mesh_load( s, *e.collision, surface ) )
             return 0;
     }
@@ -319,8 +331,7 @@ inline void boat_mesh_hooks( boat_mesh_library_t& lib, boat_load_hooks_t& hooks 
             lib.call( lib.user, address, self, arg );
     };
     hooks.surface = []( void* u, const std::string& name ) -> std::uint8_t {
-        boat_mesh_library_t& lib = *static_cast< boat_mesh_library_t* >( u );
-        return lib.surface ? lib.surface( lib.user, name ) : 0;
+        return static_cast< boat_mesh_library_t* >( u )->surface_of( name );
     };
     hooks.mesh = []( void* u, std::uint32_t handle, striding_mesh_t& out ) {
         const collision_mesh_asset_t* a = static_cast< boat_mesh_library_t* >( u )->collision_of( handle );

@@ -8,6 +8,7 @@
 #include <workspace/core/boat/manager.hxx>
 #include <workspace/core/boat/powerup.hxx>
 #include <workspace/core/boat/meshes.hxx>
+#include <workspace/core/boat/surface.hxx>
 
 #include <algorithm>
 #include <array>
@@ -1863,6 +1864,91 @@ inline bool verify_powerup_db( )
     return false;
 }
 
+// The surface-type table against retail (oracle case surface_table): surface_table_build on the documents parsed
+// here (the real SurfaceDB, synthetic ones, an empty / non-object VuDBAsset, none) - the map in order (name, id), the
+// types (friction bits, colour) - then surface_count, surface_name for n = -1 .. count + 1 and surface_id on every name
+// and some misses; the factory's create / release only when there is an asset.
+inline bool verify_surface_table( )
+{
+    const unsigned* g = g_golden_surface_table_words;
+    auto text = [ &g ]( ) {
+        const unsigned n = *g++;
+        std::string s( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        return s;
+    };
+    std::vector< value_t > docs( *g++ );
+    for ( value_t& d : docs )
+    {
+        const unsigned n = *g++;
+        const std::uint8_t* raw = reinterpret_cast< const std::uint8_t* >( g );
+        d = c_reader( std::vector< std::uint8_t >( raw, raw + n ) ).parse( );
+        g += ( n + 3 ) / 4;
+    }
+    const unsigned nv = *g++;
+    int failed = 0, compared = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const std::int32_t doc = static_cast< std::int32_t >( *g++ );
+        const unsigned vtable = *g++;
+        surface_table_t t;
+        const value_t* root = doc >= 0 && static_cast< std::size_t >( doc ) < docs.size( ) ? &docs[ doc ] : nullptr;
+        bool same = surface_table_build( t, root ) && vtable == 0x74FA94u;
+        const unsigned nm = *g++;
+        same = same && nm == t.ids.size( );
+        for ( unsigned k = 0; k < nm; ++k, ++compared )
+        {
+            const std::string name = text( );
+            const unsigned id = *g++;
+            same = same && k < t.ids.size( ) && t.ids[ k ].first == name && t.ids[ k ].second == id;
+        }
+        const unsigned nt = *g++;
+        same = same && nt == t.types.size( );
+        for ( unsigned k = 0; k < nt; ++k, g += 2, ++compared )
+        {
+            std::uint32_t f = 0;
+            if ( k < t.types.size( ) )
+                std::memcpy( &f, &t.types[ k ].friction, 4 );
+            same = same && k < t.types.size( ) && f == g[ 0 ] && t.types[ k ].color == g[ 1 ];
+        }
+        const unsigned want_count = *g++;
+        same = same && static_cast< unsigned >( surface_count( t ) ) == want_count;
+        const unsigned nn = *g++;
+        for ( unsigned k = 0; k < nn; ++k, ++compared )
+        {
+            const std::string* mine = surface_name( t, static_cast< std::int32_t >( k ) - 1 );
+            if ( *g++ )
+            {
+                const std::string want = text( );
+                same = same && mine && *mine == want;
+            }
+            else
+                same = same && !mine;
+        }
+        const unsigned np = *g++;
+        for ( unsigned k = 0; k < np; ++k, ++compared )
+        {
+            const std::string name = text( );
+            const unsigned want = *g++;
+            same = same && surface_id( t, name.c_str( ) ) == want;
+        }
+        const unsigned nl = *g++;
+        same = same && nl == ( root ? 2u : 0u );
+        for ( unsigned k = 0; k < nl; ++k, g += 2 )
+            same = same && g[ 0 ] == k + 1 && g[ 1 ] == 1;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "surface_table vector %u (document %d): %zu names (retail %u), %zu types (%u)", v, doc, t.ids.size( ), nm, t.types.size( ), nt );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "The surface-type table (VuDynamicsContactManagerImpl 0x574EC0 + slots 0 / 1 / 2) matches retail on the real SurfaceDB "
+                     "and synthetic documents: %u vectors, %d values", nv, compared );
+        return true;
+    }
+    LOG_ERROR( "surface_table FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -1885,5 +1971,6 @@ inline bool verify_race_all( )
     ok = verify_powerup_world( ) && ok;
     ok = verify_trigger_apply( ) && ok;
     ok = verify_powerup_db( ) && ok;
+    ok = verify_surface_table( ) && ok;
     return ok;
 }
