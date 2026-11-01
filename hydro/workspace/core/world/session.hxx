@@ -1073,7 +1073,13 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         else
             race_unwired( s, "the race HUD projects (VuRaceGame +0x738 / +0x73C / +0x740) with no world to load them - not run (UNKNOWN)" );
     };
-    s.rules.hooks.platform = [ &s ]( const char* what ) { race_unwired( s, std::string( "platform services: " ) + what + " (saves / online / achievements / audio - hooks)" ); };
+    s.rules.hooks.broadcast = [ &s ]( const char* name, bool )
+    {
+        if ( s.world.broadcast )
+            s.world.broadcast( name );
+    };
+    s.rules.hooks.platform = [ &s ]( const std::string& call ) { race_unwired( s, "platform services: " + call + " (saves / online / achievements / audio - hooks)" ); };
+    s.rules.track = s.game.track;
     for ( std::size_t k = 0; k < s.game.boats.size( ) && k < s.start_boats.size( ); ++k )
     {
         race_rules_boat_t rb;

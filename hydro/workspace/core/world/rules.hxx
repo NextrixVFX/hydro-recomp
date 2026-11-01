@@ -7,11 +7,13 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <memory>
 #include <string>
 #include <vector>
+#include <emmintrin.h>
 #include <xmmintrin.h>
 
 // THE RACE RULES - VuGame's per-frame race bookkeeping and VuRaceGame's own
@@ -357,25 +359,50 @@ inline void race_rules_hide_finished( const std::vector< std::uint8_t* >& ais, c
 //     vt+0x1C), its tick (the root, when it is a VuHUDEntity - RTTI 0x7362AC -
 //     vt+0x30(dt)) and its draw (vt+0x34(1.0)) - the HUD's update / drawing is
 //     the UI's; the project load / init / release run through the world.
-//   platform(name): PostGame's enter 0x48AB70 after its HUD - the broadcast
-//     "OnSetAllowPause" {false}, the progress manager's vt+0x34 (race results to
-//     the save), the leaderboard 0x4B0650 ("Race", -(int)(time x 1000)) when the
-//     human did not quit (+0x334 clear), the voice-over vt+0x1C ("FinishFirst" /
-//     "FinishSecond" / "FinishThird" / "FinishLast" / "FinishLessThanThird") and
-//     vt+0x20 "DidNotUseBoost"; its exit 0x48ADE0's "DingDong" achievement -
-//     saves / online / achievements / audio: platform services (BRIEF).
+//   broadcast(name, value): PostGame's enter 0x48AB70 after its HUD broadcasts
+//     "OnSetAllowPause" (VuEventManager_broadcast 0x505690, VuParams {bool
+//     false}: 5 bytes) - to the world's subscribers.
+//   platform(call): the rest of 0x48AB70, with a human (boat manager +0x28 not
+//     0; human = its +0x24 [0]): the progress manager g 0x758FD8 vt+0x34 (the
+//     track +0x68, the boat +0x160, 0, place +0x4CC, +0x4B4, +0x4B8 - the save),
+//     the leaderboard 0x4B0650 (track + "Race", -(int)(+0x4B4 x 1000), as int64)
+//     when +0x334 is clear, the voice-over g 0x758FEC vt+0x1C (the line chosen
+//     below) and vt+0x20 "DidNotUseBoost" (place > 0, +0x328 > 0 ordered, +0x32D
+//     clear); its exit 0x48ADE0's achievement 0x4AA1A0 "DingDong" (the track
+//     "Hydroelectric", the human first, +0x744 == 0x1F) - saves / online /
+//     achievements / audio: platform services (BRIEF). The calls reach the hook
+//     as text ("progress <track> <place> <4B4 hex> <4B8 hex>", "leaderboard
+//     <name> <value>", "vo <line>", "vo20 <line>", "achievement <name>").
+// All of it oracle-verified (case race_game_fsm: the ctor run whole, then the
+// machine driven through retail's own handlers).
 enum class race_hud_verb_t { initialize, release, tick };
+
+// The ctor's project loads (0x4B4360, in order: +0x738 / +0x73C / +0x740) and
+// its two event methods (0x5156E0, VuMethod1<VuRaceGame, void, VuParams const&>
+// vtable 0x73F8EC, in order) - VuGame's base 0x480BA0 registers its own
+// OnUserNext / OnCheatFinish before them.
+inline constexpr const char* k_race_hud_projects[ 3 ] = { "HUDs/RacePreGameHUD", "HUDs/RaceGameHUD", "HUDs/RacePostGameHUD" };
+
+struct race_rules_event_t
+{
+    const char* name;
+    std::uint32_t method;
+};
+
+inline constexpr race_rules_event_t k_race_rules_events[ 2 ] = { { "OnStartLightsOut", 0x48A780u }, { "OnCheckPointBuoyHit", 0x48A7B0u } };
 
 struct race_rules_hooks_t
 {
     std::function< void( int project, race_hud_verb_t verb, float dt ) > hud;
-    std::function< void( const char* what ) > platform;
+    std::function< void( const char* name, bool value ) > broadcast;
+    std::function< void( const std::string& call ) > platform;
 };
 
 struct race_rules_t
 {
     c_fsm fsm;                       // +0x6F8
     std::uint32_t buoys = 0;         // +0x744
+    std::string track;               // the game's +0x68 (VuGame's track name)
     race_rules_hooks_t hooks;
     // The tick's inputs, refreshed by the caller before slot 7: the game's
     // boats, the boat manager's human list.
@@ -410,6 +437,59 @@ inline void race_rules_clock_and_place( race_rules_t& r, float dt )
         r.sorted = false;
 }
 
+inline void race_rules_platform( race_rules_t& r, const std::string& call )
+{
+    if ( r.hooks.platform )
+        r.hooks.platform( call );
+}
+
+// 0x48AB70's tail past the HUD and the broadcast (see the hooks above). The
+// leaderboard value: mulss by 1000.0 (0x6F7828), fld / fistp (round to
+// nearest; out of range the integer indefinite 0x80000000 - cvtss2si gives
+// the same), neg, cdq. The voice-over line: "FinishLessThanThird" unless the
+// human finished (+0x32F); then place 0 / 1 / 2 "FinishFirst" / "FinishSecond"
+// / "FinishThird", else "FinishLast" only when the place EQUALS the boat count
+// (+0x3C - cmp / cmovne: as retail has it), else "FinishLessThanThird".
+inline void race_rules_post_results( race_rules_t& r )
+{
+    if ( r.humans.empty( ) )
+        return;
+    const std::uint8_t* h = r.humans[ 0 ];
+    const std::int32_t place = rules_i32( h, 0x4CC );
+    char text[ 160 ];
+    std::snprintf( text, sizeof( text ), "progress %s %d %08X %08X", r.track.c_str( ), place, rules_i32( h, 0x4B4 ), rules_i32( h, 0x4B8 ) );
+    race_rules_platform( r, text );
+    if ( !h[ 0x334 ] )
+    {
+        const std::int32_t ms = _mm_cvtss_si32( _mm_set_ss( rules_f( h, 0x4B4 ) * 1000.0f ) );
+        const std::int64_t value = static_cast< std::int32_t >( 0u - static_cast< std::uint32_t >( ms ) );
+        std::snprintf( text, sizeof( text ), "leaderboard %sRace %lld", r.track.c_str( ), static_cast< long long >( value ) );
+        race_rules_platform( r, text );
+    }
+    const char* line = "FinishLessThanThird";
+    if ( h[ 0x32F ] )
+    {
+        const std::int32_t boats = r.boats ? static_cast< std::int32_t >( r.boats->size( ) ) : 0;
+        line = place == 0 ? "FinishFirst" : place == 1 ? "FinishSecond" : place == 2 ? "FinishThird" : place == boats ? "FinishLast" : "FinishLessThanThird";
+    }
+    race_rules_platform( r, std::string( "vo " ) + line );
+    if ( place > 0 && _mm_comigt_ss( _mm_set_ss( rules_f( h, 0x328 ) ), _mm_set_ss( 0.0f ) ) && !h[ 0x32D ] )
+        race_rules_platform( r, "vo20 DidNotUseBoost" );
+}
+
+// 0x48ADE0's tail past the HUD release: the track compared with
+// "Hydroelectric" (0x404AC0 over min(size, 13) bytes, then the sizes), the
+// human's place +0x4CC == 0 and +0x744 == 0x1F -> the achievement "DingDong".
+// Retail reads the human list's first entry whatever its count (a race always
+// has a human); with none here, nothing.
+inline void race_rules_post_exit( race_rules_t& r )
+{
+    if ( r.track != "Hydroelectric" || r.humans.empty( ) )
+        return;
+    if ( rules_i32( r.humans[ 0 ], 0x4CC ) == 0 && r.buoys == 0x1Fu )
+        race_rules_platform( r, "achievement DingDong" );
+}
+
 inline void race_rules_construct( race_rules_t& r )
 {
     r.fsm = c_fsm{ };
@@ -440,13 +520,13 @@ inline void race_rules_construct( race_rules_t& r )
     fsm_state_t& post = r.fsm.add_state( "PostGame" );
     post.m_enter = [ &r ] {
         race_rules_hud( r, 2, race_hud_verb_t::initialize );
-        if ( r.hooks.platform )
-            r.hooks.platform( "PostGame enter 0x48AB70: OnSetAllowPause, the progress manager, the leaderboard, the voice-over" );
+        if ( r.hooks.broadcast )
+            r.hooks.broadcast( "OnSetAllowPause", false );
+        race_rules_post_results( r );
     };
     post.m_exit = [ &r ] {
         race_rules_hud( r, 2, race_hud_verb_t::release );
-        if ( r.hooks.platform )
-            r.hooks.platform( "PostGame exit 0x48ADE0: the DingDong achievement" );
+        race_rules_post_exit( r );
     };
     // 0x48AE80: the clocks and places; "Exit" = the time in the state >= 4.0.
     post.m_tick = [ &r ]( float dt ) {
@@ -474,9 +554,11 @@ inline void race_rules_start( race_rules_t& r )
 // 0x48A780 ("OnStartLightsOut"): the condition StartLightsOut's +28 = 1.
 inline void race_rules_on_start_lights_out( race_rules_t& r ) { r.fsm.set_condition( "StartLightsOut", true ); }
 
-// 0x48A7B0 ("OnCheckPointBuoyHit"): 0x4237B0 reads the params' first entry (a
-// 4-byte tag, then when the tag is 0 the 4-byte value; else 0): +0x744 |= 1 <<
-// that value (shl: the count taken mod 32).
+// 0x48A7B0 ("OnCheckPointBuoyHit"): 0x4237B0 reads the params' first entry -
+// when the size (+0x80, signed) is above 0 a 4-byte tag, then when the tag is
+// 0 the next 4 bytes as the value whatever the size left (memcpy_s(4, 4): the
+// size is only decremented); else 0: +0x744 |= 1 << that value (shl: the count
+// taken mod 32).
 inline void race_rules_on_buoy_hit( race_rules_t& r, const std::uint8_t* params, std::int32_t size )
 {
     std::int32_t value = 0;
@@ -484,7 +566,7 @@ inline void race_rules_on_buoy_hit( race_rules_t& r, const std::uint8_t* params,
     {
         std::int32_t tag = -1;
         std::memcpy( &tag, params, 4 );
-        if ( tag == 0 && size >= 8 )
+        if ( tag == 0 )
             std::memcpy( &value, params + 4, 4 );
     }
     r.buoys |= 1u << ( static_cast< std::uint32_t >( value ) & 31u );
