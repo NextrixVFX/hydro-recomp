@@ -1,5 +1,9 @@
 #pragma once
 
+#include <workspace/core/assets/tree.hxx>
+#include <workspace/core/boat/manager.hxx>
+#include <workspace/core/boat/nuisance.hxx>
+#include <workspace/core/boat/rtti.hxx>
 #include <workspace/core/ui/button.hxx>
 #include <workspace/core/ui/select.hxx>
 #include <workspace/core/world/pfx.hxx>
@@ -32,8 +36,9 @@
 // NOT here (other areas): VuIfEntity, VuDelayEntity, VuMultiDelayEntity,
 // VuTriggerForwarderEntity, VuOneShotFilterEntity, VuBooleanEntity,
 // VuGenericEventEntity, VuOnProjectInitializedEntity (world, graph.hxx); the
-// VuPersistent* entities (saves: platform, re-made); VuIsSkuEntity /
-// VuIsTegraEntity / VuHumanFilterEntity (game, 0x42C..; not read).
+// VuPersistent* entities (saves: platform, re-made). The three game-tier
+// filters VuIsTegraEntity / VuIsSkuEntity / VuHumanFilterEntity (0x42C..) are
+// here too, their game environment through logic_game_t (case logic_game).
 
 struct logic_retval_t
 {
@@ -51,6 +56,22 @@ struct logic_entity_t
     std::string text;
 };
 
+// The game environment the three game-tier filters read (all optional; a
+// missing piece a handler needs is counted in `unrecreated` and nothing fires).
+struct logic_game_t
+{
+    // g_vugameutil 0x758FF8 +0x50: the game-data root (a VuJsonContainer).
+    const value_t* game_data = nullptr;
+    // The asset manager g 0x759004 vt+0x7C: the SKU string it answers.
+    const std::string* sku = nullptr;
+    void* user = nullptr;
+    // The entity repository g 0x759080 vt+0x28: hash -> the entity (an image address; 0 = none).
+    std::uint32_t ( *find )( void* user, std::uint32_t hash ) = nullptr;
+    // A word of retail memory (the entity's vtable, its +0x220 driver, the driver's vtable).
+    std::uint32_t ( *word )( void* user, std::uint32_t address ) = nullptr;
+    int* unrecreated = nullptr;
+};
+
 struct logic_hooks_t
 {
     void* user = nullptr;
@@ -58,7 +79,14 @@ struct logic_hooks_t
     logic_retval_t ( *fire )( void* user, logic_entity_t& e, const char* plug, const ui_params_t& params ) = nullptr;
     // The global VuRand 0x736810 (the same one the particles draw from - world/pfx.hxx pfx_rand_t).
     pfx_rand_t* rand = nullptr;
+    const logic_game_t* game = nullptr;
 };
+
+inline void logic_unrecreated( const logic_hooks_t& h )
+{
+    if ( h.game && h.game->unrecreated )
+        ++*h.game->unrecreated;
+}
 
 using logic_handler_fn = void ( * )( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h );
 
@@ -408,6 +436,106 @@ inline void logic_string_get( logic_entity_t& e, logic_retval_t& out, const ui_p
     out.text = e.text.c_str( );
 }
 
+// VuIsTegraEntity "Trigger" 0x42DAA0: gameutil +0x50 ["Platform"]["Android"]
+// ["IsTegra"] (0x4FBDF0 three times); a bool (type 3) whose byte is not 0 ->
+// "True" with the params, anything else "False".
+inline void logic_is_tegra( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    out.type = 0u;
+    if ( !h.game || !h.game->game_data )
+    {
+        logic_unrecreated( h );
+        return;
+    }
+    const value_t& v = member( member( member( *h.game->game_data, "Platform" ), "Android" ), "IsTegra" );
+    const bool tegra = v.tag == 3u && static_cast< std::uint8_t >( v.integer ) != 0u;
+    logic_fire( e, h, tegra ? "True" : "False", in );
+}
+
+// VuIsSkuEntity "Trigger" 0x42CFF0: the asset manager's SKU (vt+0x7C) against
+// the entity's VuString +0x60 (0x404AC0 over the shorter length, then the
+// lengths: equal strings) -> "True", else "False", with the params.
+inline void logic_is_sku( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    out.type = 0u;
+    if ( !h.game || !h.game->sku )
+    {
+        logic_unrecreated( h );
+        return;
+    }
+    logic_fire( e, h, *h.game->sku == e.text ? "True" : "False", in );
+}
+
+// VuIsEventTypeEntity "Trigger" 0x42CB00: c = gameutil +0x50 ["GameData"];
+// not an object -> the dev config g 0x75901C's getParam( "ActionGameData" )
+// (vt+0x18 = 0x4FDB70: the static null 0x7593A0) or, without one, the null
+// itself; c["EventType"] as a string (else the function-static empty string
+// 0x819950) against Type (+0x60 VuString, ctor default "AttractEvent") ->
+// "True", else "False", with the params.
+inline void logic_is_event_type( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    out.type = 0u;
+    if ( !h.game || !h.game->game_data )
+    {
+        logic_unrecreated( h );
+        return;
+    }
+    static const value_t null{ };
+    const value_t& data = member( *h.game->game_data, "GameData" );
+    const value_t& t = member( data.tag == 6u ? data : null, "EventType" );
+    const std::string type = t.tag == 4u ? t.text : std::string( );
+    logic_fire( e, h, type == e.text ? "True" : "False", in );
+}
+
+// VuHumanFilterEntity "In" 0x42D370: with params size > 0 (signed) and a
+// first record of type 11 (an entity), its hash (0x505370 = boat/nuisance.hxx
+// vu_params_entity) -> the repository's entity; when its type chain holds
+// VuBoatEntity 0x73628C and its driver (+0x220) answers vt+0x30 (isHuman:
+// boat/manager.hxx boat_driver_kind) true -> "Out" with the params. Retail
+// tests neither the entity nor the driver for null (a null faults): counted
+// unrecreated here, as is a vtable outside the boat tables.
+inline void logic_human_filter( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    out.type = 0u;
+    if ( in.m_size <= 0 )
+        return;
+    std::uint32_t type;
+    std::memcpy( &type, in.m_bytes, 4 );
+    if ( type != 11u )
+        return;
+    if ( !h.game || !h.game->find || !h.game->word )
+    {
+        logic_unrecreated( h );
+        return;
+    }
+    std::uint8_t view[ 132 ];
+    std::memcpy( view, in.m_bytes, 128 );
+    std::memcpy( view + 128, &in.m_size, 4 );
+    const std::uint32_t entity = h.game->find( h.game->user, vu_params_entity( view ) );
+    if ( !entity )
+    {
+        logic_unrecreated( h );
+        return;
+    }
+    const std::uint32_t vtable = h.game->word( h.game->user, entity );
+    if ( !boat_rtti_of( vtable ) )
+    {
+        logic_unrecreated( h );
+        return;
+    }
+    if ( !boat_rtti_is( vtable, 0x73628Cu ) )
+        return;
+    const std::uint32_t driver = h.game->word( h.game->user, entity + 0x220u );
+    boat_driver_kind_t kind;
+    if ( !driver || !boat_driver_kind( h.game->word( h.game->user, driver ), kind ) )
+    {
+        logic_unrecreated( h );
+        return;
+    }
+    if ( kind.human )
+        logic_fire( e, h, "Out", in );
+}
+
 // ---------------------------------------------------------------------------
 // THE TABLE the world's dispatcher calls by the entity's vtable (+0) and the
 // input plug's name; g_logic_outputs gives each class's output plugs and their
@@ -449,6 +577,10 @@ static const logic_plug_t g_logic_plugs[] = {
     { 0x7552D0u, "VuStringEntity", "Set", 0x5E55B0u, logic_string_set },
     { 0x7552D0u, "VuStringEntity", "Clear", 0x5E5190u, logic_string_clear },
     { 0x7552D0u, "VuStringEntity", "Get", 0x5E51B0u, logic_string_get },
+    { 0x7399E8u, "VuIsTegraEntity", "Trigger", 0x42DAA0u, logic_is_tegra },
+    { 0x739A84u, "VuIsSkuEntity", "Trigger", 0x42CFF0u, logic_is_sku },
+    { 0x739A50u, "VuHumanFilterEntity", "In", 0x42D370u, logic_human_filter },
+    { 0x739AD0u, "VuIsEventTypeEntity", "Trigger", 0x42CB00u, logic_is_event_type },
 };
 
 struct logic_output_t
@@ -479,6 +611,10 @@ static const logic_output_t g_logic_outputs[] = {
     { 0x754A30u, "OnTurnedOn", 0u }, { 0x754A30u, "OnTurnedOff", 0u },
     { 0x755224u, "Trigger", 0u }, { 0x755224u, "OnChanged", 0u },
     { 0x7552D0u, "OnChanged", 0u },
+    { 0x7399E8u, "True", 0u }, { 0x7399E8u, "False", 0u },
+    { 0x739A84u, "True", 0u }, { 0x739A84u, "False", 0u },
+    { 0x739A50u, "Out", 0u },
+    { 0x739AD0u, "True", 0u }, { 0x739AD0u, "False", 0u },
 };
 
 inline const logic_output_t* logic_output( std::uint32_t vtable, const char* plug )
@@ -525,5 +661,47 @@ inline logic_entity_t logic_construct( std::uint32_t vtable )
 {
     logic_entity_t e{ };
     e.vtable = vtable;
+    // VuIsEventTypeEntity's ctor 0x42C850: Type = "AttractEvent" (0x67803C).
+    if ( vtable == 0x739AD0u )
+        e.text = "AttractEvent";
     return e;
 }
+
+// The classes' getType slots (6 bytes: mov eax, descriptor; ret): the static
+// VuRTTI descriptor (+0 the name, +4 the parent) and the chain it names - the
+// logic classes above, the game filters (with VuIsEventTypeEntity 0x42C7D0),
+// VuGroupEntity, VuControlEntity, VuControlKeyframeEntity (case logic_types).
+struct logic_type_t
+{
+    std::uint32_t address;
+    std::uint32_t descriptor;
+    const char* chain;
+};
+
+inline const logic_type_t g_logic_types[] = {
+    { 0x5DC890u, 0x736C58u, "VuAddIntegerConstantEntity|VuEntity" },
+    { 0x5DCC30u, 0x736C60u, "VuAddIntegersEntity|VuEntity" },
+    { 0x5DD060u, 0x736C68u, "VuSubtractIntegersEntity|VuEntity" },
+    { 0x5DD670u, 0x736C70u, "VuIntegerEntity|VuEntity" },
+    { 0x5DE010u, 0x736C80u, "VuCompareBooleansEntity|VuEntity" },
+    { 0x5DE3C0u, 0x736C88u, "VuCompareIntegersEntity|VuEntity" },
+    { 0x5DE8E0u, 0x736C90u, "VuCompareStringsEntity|VuEntity" },
+    { 0x5E2F30u, 0x736CE8u, "VuSetBooleanEntity|VuEntity" },
+    { 0x5E32B0u, 0x736CF0u, "VuSetIntegerEntity|VuEntity" },
+    { 0x5E3630u, 0x736CF8u, "VuSetStringEntity|VuEntity" },
+    { 0x5DF0B0u, 0x736CA0u, "VuSequencerEntity|VuEntity" },
+    { 0x5E0740u, 0x736CB8u, "VuTriggerArrayEntity|VuEntity" },
+    { 0x5E1050u, 0x736CC8u, "VuRandomTriggerEntity|VuEntity" },
+    { 0x5E1890u, 0x736CD0u, "VuPlatformFilterEntity|VuEntity" },
+    { 0x5E1D80u, 0x736CD8u, "VuBuildFilterEntity|VuEntity" },
+    { 0x5E2130u, 0x736CE0u, "VuSwitchEntity|VuEntity" },
+    { 0x5E4B40u, 0x736D20u, "VuCounterEntity|VuEntity" },
+    { 0x5E5180u, 0x736D28u, "VuStringEntity|VuEntity" },
+    { 0x42D810u, 0x736338u, "VuIsTegraEntity|VuEntity" },
+    { 0x42CCE0u, 0x736320u, "VuIsSkuEntity|VuEntity" },
+    { 0x42D150u, 0x736328u, "VuHumanFilterEntity|VuEntity" },
+    { 0x42C7D0u, 0x736318u, "VuIsEventTypeEntity|VuEntity" },
+    { 0x5F05A0u, 0x736DB8u, "VuGroupEntity|VuEntity" },
+    { 0x5CCA40u, 0x736B90u, "VuControlEntity|VuEntity" },
+    { 0x5CC700u, 0x736B88u, "VuControlKeyframeEntity|VuEntity" },
+};

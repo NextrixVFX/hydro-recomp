@@ -401,6 +401,31 @@ inline bool pfx_pattern_submits( std::uint32_t count )
     return count != 0u;
 }
 
+// THE SORT LAYER the two renderers submit a pattern's batch at - and with it
+// the blend the renderer applies (VuGfxSort's translucency layer): the quad
+// renderer 0x58BD60 reads the node's Blend Mode +0x6C (0 Additive, 1 Modulate)
+// and Water Interaction +0x70 (0 Above, 1 Below, 2 UI) and takes
+// 0x735BD4[ blend + 2 * water ]; the trail renderer 0x58D030 the same from
+// +0x84 / +0x88 through 0x735BEC (an identical static table, .data, no
+// writer). Above: 12 Additive / 11 Modulate; Below: 9 / 8; UI: 18 / 17. (The
+// corona's drawCorona 0x61D1A0 submits at 18 = the Additive UI layer.) An enum
+// word outside the authored choices indexes past the six words - UNKNOWN here
+// (0xFFFFFFFF). The per-layer blend state itself is the renderer's (unread).
+inline constexpr std::uint32_t g_pfx_sort_layers[ 6 ] = { 12u, 11u, 9u, 8u, 18u, 17u };
+
+inline std::uint32_t pfx_sort_layer( std::uint32_t blend, std::uint32_t water )
+{
+    if ( blend > 1u || water > 2u )
+        return 0xFFFFFFFFu;
+    return g_pfx_sort_layers[ blend + 2u * water ];
+}
+
+// The layers the Additive choice selects (0x735BD4 / 0x735BEC even indices).
+inline bool pfx_sort_layer_additive( std::uint32_t layer )
+{
+    return layer == 12u || layer == 9u || layer == 18u;
+}
+
 // The model matrix of one geom particle q: D = params Space (+0x34) == 1 ? the
 // system matrix (+0x1C) : the static identity 0x7593B0; T = 0x410AB0's
 // translation of q's position (+0x08); E = fromEuler( q's angles +0x44 );
