@@ -3217,6 +3217,7 @@ inline bool verify_race_all( )
     ok = verify_needs_collision( ) && ok;
     ok = verify_debris_follow( ) && ok;
     ok = verify_destroyed_event( ) && ok;
+    ok = verify_bt_teardown( ) && ok;
     ok = verify_simplex_ctor( ) && ok;
     ok = verify_thunk_exclude( ) && ok;
     ok = verify_boat_contact( ) && ok;

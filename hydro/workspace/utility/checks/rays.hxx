@@ -4,6 +4,7 @@
 #include <workspace/core/boat/rays.hxx>
 #include <workspace/core/boat/effects.hxx>
 #include <workspace/core/collision/leaves.hxx>
+#include <workspace/core/collision/teardown.hxx>
 
 #include <array>
 #include <cstring>
@@ -1533,5 +1534,118 @@ inline bool verify_destroyed_event( )
         return true;
     }
     LOG_ERROR( "destroyed_event FAILED %d of %u", failed, n );
+    return false;
+}
+// verify_bt_teardown (boat batch 18): engine collision/teardown.hxx against
+// cases/boat.py bt_teardown - the four scalar deleting dtors 0x56D290 /
+// 0x5B53E0 / 0x54C0C0 / 0x56DD30 run whole on fake objects in one arena: the
+// arena after, gNumAlignedFree, the frees, the deletes, the virtual calls.
+inline bool verify_bt_teardown( )
+{
+    struct arena_t
+    {
+        std::uint32_t base = 0;
+        std::vector< std::uint8_t > bytes;
+        bool outside = false;
+        std::vector< unsigned > frees, deletes;
+        const unsigned* vcalls = nullptr;
+        unsigned nv = 0, at = 0;
+        bool vbad = false;
+        std::uint8_t* p( std::uint32_t a, unsigned n )
+        {
+            if ( a < base || a + n > base + bytes.size( ) )
+            {
+                outside = true;
+                return nullptr;
+            }
+            return bytes.data( ) + ( a - base );
+        }
+    };
+    const unsigned* g = g_golden_bt_teardown_words;
+    const unsigned n = *g++;
+    int failed = 0, frees = 0, calls = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = *g++, address = *g++, flags = *g++, self = *g++, base = *g++, eax = *g++, c0 = *g++, c1 = *g++;
+        arena_t x;
+        x.base = base;
+        const unsigned nf = *g++;
+        const std::vector< unsigned > want_frees( g, g + nf );
+        g += nf;
+        const unsigned nd = *g++;
+        const std::vector< unsigned > want_deletes( g, g + nd );
+        g += nd;
+        x.nv = *g++;
+        x.vcalls = g;
+        for ( unsigned k = 0; k < x.nv; ++k )
+            g += 4 + g[ 2 ];
+        const unsigned nch = *g++;
+        const unsigned* changed = g;
+        g += 2 * nch;
+        const unsigned nw = *g++;
+        x.bytes.assign( reinterpret_cast< const std::uint8_t* >( g ), reinterpret_cast< const std::uint8_t* >( g + nw ) );
+        g += nw;
+        std::vector< std::uint8_t > want( x.bytes );
+        for ( unsigned k = 0; k < nch; ++k )
+            std::memcpy( want.data( ) + 4 * changed[ 2 * k ], &changed[ 2 * k + 1 ], 4 );
+        std::uint32_t counter = c0;
+        bt_mem_t m;
+        m.user = &x;
+        m.num_aligned_free = &counter;
+        m.rd = []( void* u, std::uint32_t a ) -> std::uint32_t {
+            std::uint32_t w = 0;
+            if ( std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 4 ) )
+                std::memcpy( &w, q, 4 );
+            return w;
+        };
+        m.rd8 = []( void* u, std::uint32_t a ) -> std::uint8_t {
+            std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 1 );
+            return q ? *q : 0;
+        };
+        m.wr = []( void* u, std::uint32_t a, std::uint32_t w ) {
+            if ( std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 4 ) )
+                std::memcpy( q, &w, 4 );
+        };
+        m.wr8 = []( void* u, std::uint32_t a, std::uint8_t b ) {
+            if ( std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 1 ) )
+                *q = b;
+        };
+        m.aligned_free = []( void* u, std::uint32_t p ) { static_cast< arena_t* >( u )->frees.push_back( p ); };
+        m.release = []( void* u, std::uint32_t p ) { static_cast< arena_t* >( u )->deletes.push_back( p ); };
+        m.vcall = []( void* u, std::uint32_t s, std::uint32_t off, const std::uint32_t* args, int count ) -> std::uint32_t {
+            arena_t& a = *static_cast< arena_t* >( u );
+            if ( a.at >= a.nv )
+            {
+                a.vbad = true;
+                return 0;
+            }
+            const unsigned* c = a.vcalls;
+            for ( unsigned k = 0; k < a.at; ++k )
+                c += 4 + c[ 2 ];
+            ++a.at;
+            if ( c[ 0 ] != s || c[ 1 ] != off || c[ 2 ] != static_cast< unsigned >( count ) )
+                a.vbad = true;
+            for ( int k = 0; k < count && !a.vbad; ++k )
+                a.vbad = c[ 3 + k ] != args[ k ];
+            return c[ 3 + c[ 2 ] ];
+        };
+        void ( *inner )( const bt_mem_t&, std::uint32_t ) = kind == 1 ? bt_dispatcher_destroy : kind == 2 ? bt_convex_polyhedron_destroy
+                                                           : kind == 3 ? bt_collision_world_destroy : bt_dbvt_broadphase_destroy;
+        const std::uint32_t r = bt_deleting( m, self, flags, inner );
+        frees += static_cast< int >( nf );
+        calls += static_cast< int >( x.nv );
+        const bool same = !x.outside && !x.vbad && x.at == x.nv && r == eax && counter == c1 && x.frees == want_frees &&
+                          x.deletes == want_deletes && x.bytes == want;
+        if ( !same && ++failed <= 4 )
+            LOG_ERROR( "bt_teardown %u (0x%06X flags %u): %d frees (retail %u), arena %s, calls %s", v, address, flags,
+                       static_cast< int >( x.frees.size( ) ), nf, x.bytes == want ? "same" : "differs", x.vbad || x.at != x.nv ? "differ" : "same" );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the Bullet teardown dtors 0x56D290 / 0x5B53E0 / 0x54C0C0 / 0x56DD30 (collision/teardown.hxx) match retail: %u calls, "
+                     "%d frees, %d virtual calls", n, frees, calls );
+        return true;
+    }
+    LOG_ERROR( "bt_teardown FAILED %d of %u", failed, n );
     return false;
 }
