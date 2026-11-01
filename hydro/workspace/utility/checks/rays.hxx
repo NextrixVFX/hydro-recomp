@@ -328,6 +328,182 @@ inline bool verify_ray_table( const unsigned* g, const char* name, bool with_bvh
     return false;
 }
 
+// verify_compound_pair (boat batch 16): boat vs boat - compound_process_collision
+// with BOTH bodies compounds (the nested swapped Compound algorithm the matrix's
+// (3, 31) gives, engine collision/compound.hxx) over the case's four frames: per
+// frame the outer child's kind and the nested one's, gNumManifold, the dispatcher's
+// manifolds (points masked as verify_compound), result+4 and the ids.
+inline bool verify_compound_pair( )
+{
+    const golden_bvh_asset_t& ha = g_golden_bvh_assets[ 0 ];
+    striding_mesh_t hull_mesh{};
+    hull_mesh.scaling[ 0 ] = hull_mesh.scaling[ 1 ] = hull_mesh.scaling[ 2 ] = 1.0f;
+    hull_mesh.vertices = reinterpret_cast< const float( * )[ 4 ] >( ha.m_verts );
+    hull_mesh.num_vertices = ha.m_nverts;
+    hull_mesh.indices = ha.m_indices;
+    hull_mesh.index_count = ha.m_nindices;
+    const unsigned* g = g_golden_compound_pair_words;
+    const unsigned nv = *g++;
+    int failed = 0, nested = 0, contacts = 0, removals = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        auto f = [ & ]( ) { float x; std::memcpy( &x, g++, 4 ); return x; };
+        const bool use_box = *g++ != 0;
+        convex_shape_t hull{};
+        hull.type = 3;
+        hull.local_scaling[ 0 ] = hull.local_scaling[ 1 ] = hull.local_scaling[ 2 ] = 1.0f;
+        hull.margin = f( );
+        float com[ 3 ], com2[ 3 ], pth[ 2 ];
+        for ( float& x : com )
+            x = f( );
+        for ( float& x : com2 )
+            x = f( );
+        for ( float& x : pth )
+            x = f( );
+        static solver_rigid_t objects[ 2 ];
+        for ( int k = 0; k < 2; ++k )
+            objects[ k ] = solver_rigid_t{};
+        objects[ 0 ].friction = f( );
+        objects[ 1 ].friction = f( );
+        objects[ 0 ].restitution = f( );
+        objects[ 1 ].restitution = f( );
+        convex_shape_t box{};
+        box.type = 0;
+        box.local_scaling[ 0 ] = box.local_scaling[ 1 ] = box.local_scaling[ 2 ] = 1.0f;
+        for ( float& x : box.implicit )
+            x = f( );
+        box.margin = f( );
+        for ( float& x : hull.local_aabb_min )
+            x = f( );
+        for ( float& x : hull.local_aabb_max )
+            x = f( );
+        hull.mesh = &hull_mesh;
+        float tt[ 16 ];
+        std::memcpy( tt, g, 64 );
+        g += 16;
+        simplex_solver_t simplex;
+        std::memcpy( &simplex, g, 400 );
+        g += 100;
+        g_num_manifolds = static_cast< int >( *g++ );
+        compound_shape_t a, b;
+        const char* what = nullptr;
+        int frame_no = -1;
+        for ( int k = 0; k < 2; ++k )
+        {
+            float child_t[ 16 ] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0 };
+            for ( int j = 0; j < 3; ++j )
+                child_t[ 12 + j ] = support_negate( k ? com2[ j ] : com[ j ] );
+            if ( compound_add_child( k ? b : a, child_t, k && use_box ? box : hull ) != 1 )
+                what = "addChildShape reached unrecreated code";
+        }
+        collision_dispatcher_t d;
+        d.simplex = &simplex;
+        compound_algorithm_t alg;
+        compound_create( alg, a, false, nullptr );
+        for ( int fr = 0; fr < 4; ++fr )
+        {
+            float t[ 16 ];
+            std::memcpy( t, g, 64 );
+            g += 16;
+            const int kind = static_cast< int >( *g++ ), inner = static_cast< int >( *g++ ), numman = static_cast< int >( *g++ );
+            const int rman_want = static_cast< int >( *g++ );
+            int ids_want[ 4 ];
+            std::memcpy( ids_want, g, 16 );
+            g += 4;
+            const int nmans = static_cast< int >( *g++ );
+            const unsigned* mans = g;
+            g += nmans * ( 6 + 4 * 72 );
+            if ( what )
+                continue;
+            frame_no = fr;
+            const concave_body_t cb{ t, nullptr, nullptr, &objects[ 0 ], &a, pth[ 0 ] };
+            const concave_body_t ob{ tt, nullptr, nullptr, &objects[ 1 ], &b, pth[ 1 ] };
+            manifold_result_t r{};
+            std::memcpy( r.basis0, t, 48 );
+            std::memcpy( r.origin0, t + 12, 16 );
+            std::memcpy( r.basis1, tt, 48 );
+            std::memcpy( r.origin1, tt + 12, 16 );
+            r.object0 = &objects[ 0 ];
+            r.object1 = &objects[ 1 ];
+            const bool had = alg.children[ 0 ] != nullptr;
+            if ( compound_process_collision( d, alg, cb, ob, r, nullptr, nullptr ) != 1 )
+            {
+                what = "a path not recreated was reached";
+                continue;
+            }
+            const child_algorithm_t* c = alg.children[ 0 ].get( );
+            const int my_kind = c ? c->kind : 0;
+            int my_inner = -1;
+            if ( c && c->kind == 3 )
+                my_inner = c->compound->children[ 0 ] ? c->compound->children[ 0 ]->kind : 0;
+            nested += my_kind == 3 ? 1 : 0;
+            removals += had && !c ? 1 : 0;
+            int rman = -1;
+            for ( std::size_t m = 0; m < d.manifolds.size( ); ++m )
+                if ( d.manifolds[ m ] == r.manifold )
+                    rman = static_cast< int >( m );
+            if ( r.manifold && rman < 0 )
+                rman = -2;
+            const int ids[ 4 ] = { r.part_id0, r.part_id1, r.index0, r.index1 };
+            if ( my_kind != kind || my_inner != inner )
+                what = "the child kinds";
+            else if ( g_num_manifolds != numman )
+                what = "gNumManifold";
+            else if ( static_cast< int >( d.manifolds.size( ) ) != nmans )
+                what = "the dispatcher's manifold count";
+            else if ( rman != rman_want )
+                what = "result+4";
+            else if ( std::memcmp( ids, ids_want, 16 ) != 0 )
+                what = "the result's ids";
+            for ( int m = 0; m < nmans && !what; ++m )
+            {
+                const unsigned* gm = mans + m * ( 6 + 4 * 72 );
+                const solver_manifold_t& ours = *d.manifolds[ m ];
+                const int b0 = ours.body0 == &objects[ 0 ] ? 0 : ours.body0 == &objects[ 1 ] ? 1 : -1;
+                const int b1 = ours.body1 == &objects[ 0 ] ? 0 : ours.body1 == &objects[ 1 ] ? 1 : -1;
+                unsigned th[ 2 ];
+                std::memcpy( th, &ours.contact_breaking_threshold, 4 );
+                std::memcpy( th + 1, &ours.contact_processing_threshold, 4 );
+                contacts += ours.num_contacts > 0 ? 1 : 0;
+                if ( static_cast< unsigned >( ours.num_contacts ) != gm[ 0 ] )
+                    what = "a manifold's count";
+                else if ( b0 != static_cast< int >( gm[ 1 ] ) || b1 != static_cast< int >( gm[ 2 ] ) )
+                    what = "a manifold's bodies";
+                else if ( th[ 0 ] != gm[ 3 ] || th[ 1 ] != gm[ 4 ] )
+                    what = "a manifold's thresholds";
+                else if ( static_cast< unsigned >( ours.dispatcher_index ) != gm[ 5 ] )
+                    what = "a manifold's +1196";
+                for ( int k = 0; k < 4 && !what; ++k )
+                {
+                    unsigned pw[ 72 ];
+                    std::memcpy( pw, &ours.points[ k ], 288 );
+                    for ( int x = 0; x < 72 && !what; ++x )
+                    {
+                        const bool unknown = ( x >= 37 && x < 48 ) || ( x >= 48 && x < 72 && ( x - 48 ) % 8 != 7 );
+                        const unsigned mask = x == 29 ? 0xFFu : 0xFFFFFFFFu;
+                        if ( !unknown && ( pw[ x ] & mask ) != ( gm[ 6 + 72 * k + x ] & mask ) )
+                            what = "a manifold point";
+                    }
+                }
+            }
+        }
+        if ( what && ++failed <= 6 )
+            LOG_ERROR( "compound_pair vector %u frame %d: %s", v, frame_no, what );
+        for ( auto& c : alg.children )
+            c.reset( );
+    }
+    g_num_manifolds = 0;
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "btCompoundCollisionAlgorithm compound vs compound (the nested SwappedCreateFunc 0x56C4F0 Compound, its "
+                     "getAllContactManifolds 0x5F7A00 / removeChildAlgorithms 0x5F7BD0) matches retail over %u vectors x 4 frames on the "
+                     "real boat hull: %d frames nested, %d contact manifolds, %d removals", nv, nested, contacts, removals );
+        return true;
+    }
+    LOG_ERROR( "compound_pair FAILED %d of %u", failed, nv );
+    return false;
+}
+
 // verify_simplex_ctor: simplex_construct on the allocator's random block =
 // the block retail's btDefaultCollisionConfiguration ctor 0x56C880 left.
 inline bool verify_simplex_ctor( )

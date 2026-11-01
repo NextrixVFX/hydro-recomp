@@ -168,14 +168,31 @@ inline void dispatcher_release_manifold( collision_dispatcher_t& d, solver_manif
 // on the first processCollision); sphere vs sphere (8, 8) -> SphereSphere
 // (sphere.hxx: getNewManifold(body0, body1), ownManifold 1). The matrix's
 // sphere-triangle (8, 1) and box-box (0, 0) are not recreated: -1.
+// A convex child against another COMPOUND (boat vs boat: both bodies are
+// compounds) -> the matrix's (convex, 31) SwappedCreateFunc 0x56C4F0 (vt
+// 0x74F610): a nested btCompoundCollisionAlgorithm (vt 0x757578), +0x1C
+// isSwapped 1, +0x20 the shared manifold = ci.m_manifold (the outer's, NULL
+// from the nearCallback), +0x24 ownsManifold 0, +0x28 body1's shape (+0xCC)
+// revision (+0x44), then preallocateChildAlgorithms 0x5F7A60 (all NULL with
+// the tree).
+struct compound_algorithm_t;
 struct child_algorithm_t
 {
-    int kind = 0;   // 1 ConvexConvex, 2 ConvexConcave, 4 SphereSphere, 5 BoxBox
+    int kind = 0;   // 1 ConvexConvex, 2 ConvexConcave, 3 Compound (swapped), 4 SphereSphere, 5 BoxBox
     convex_convex_t convex{};
     convex_concave_t concave{};
     sphere_sphere_t sphere{};
     box_box_t box{};
+    std::unique_ptr< compound_algorithm_t > compound;
+    child_algorithm_t( ) = default;
+    ~child_algorithm_t( );
 };
+
+inline void compound_create( compound_algorithm_t& alg, const compound_shape_t& shape, bool swapped, solver_manifold_t* shared );
+inline void compound_destroy_children( collision_dispatcher_t& d, compound_algorithm_t& alg );
+inline int compound_process_collision( collision_dispatcher_t& d, compound_algorithm_t& alg, const concave_body_t& body0,
+    const concave_body_t& body1, manifold_result_t& result, void* debug_draw, void* stack_alloc );
+inline void compound_contact_manifolds( const compound_algorithm_t& alg, std::vector< solver_manifold_t* >& out );
 
 // The BoxBox CreateFunc (vt 0x74F5E0, slot 1 0x56C700) and ctor 0x5FB6F0: 16
 // bytes; manifold 0 / own 0, then IF the dispatcher's needsCollision(b0, b1)
@@ -245,6 +262,12 @@ inline int dispatcher_find_algorithm( collision_dispatcher_t& d, const concave_b
         a->convex.perturbation_iterations = d.perturbation_iterations;
         a->convex.minimum_points_threshold = d.minimum_points_threshold;
     }
+    else if ( t0 < 20 && t1 == 31 && body1.compound )
+    {
+        a->kind = 3;
+        a->compound = std::make_unique< compound_algorithm_t >( );
+        compound_create( *a->compound, *body1.compound, true, shared );
+    }
     else
         return -1;   // another pair of the matrix
     out = std::move( a );
@@ -269,6 +292,8 @@ inline void dispatcher_destroy_algorithm( collision_dispatcher_t& d, std::unique
         dispatcher_clear_manifold( d, *a->concave.manifold );
         dispatcher_release_manifold( d, a->concave.manifold );
     }
+    if ( a->kind == 3 && a->compound )   // the Compound dtor 0x5F7A30 -> removeChildAlgorithms 0x5F7BD0 (ownsManifold 0)
+        compound_destroy_children( d, *a->compound );
     a.reset( );
 }
 
@@ -301,12 +326,15 @@ inline int child_process_collision( collision_dispatcher_t& d, child_algorithm_t
             return -1;
         return box_box_process( a.box, *body0.convex, body0.transform, *body1.convex, body1.transform, result, cb );
     }
+    if ( a.kind == 3 )
+        return compound_process_collision( d, *a.compound, body0, body1, result, debug_draw, stack_alloc );
     return convex_concave_process( a.concave, body0, body1, result, cb, debug_draw, stack_alloc );
 }
 
 // getAllContactManifolds (vt+12): ConvexConvex 0x5FBBF0 and SphereSphere
 // 0x5F9BB0 only when they own a manifold; ConvexConcave 0x5F6630 its
-// callback's when non-null.
+// callback's when non-null; a nested Compound 0x5F7A00 each non-null child's
+// in index order.
 inline solver_manifold_t* child_contact_manifold( const child_algorithm_t& a )
 {
     if ( a.kind == 4 )
@@ -315,7 +343,21 @@ inline solver_manifold_t* child_contact_manifold( const child_algorithm_t& a )
         return ( a.box.manifold && a.box.own_manifold ) ? a.box.manifold : nullptr;
     if ( a.kind == 1 )
         return ( a.convex.manifold && a.convex.own_manifold ) ? a.convex.manifold : nullptr;
+    if ( a.kind == 3 )
+        return nullptr;   // several: child_contact_manifolds
     return a.concave.manifold;
+}
+
+// The manifold array getAllContactManifolds appends to.
+inline void child_contact_manifolds( const child_algorithm_t& a, std::vector< solver_manifold_t* >& out )
+{
+    if ( a.kind == 3 )
+    {
+        compound_contact_manifolds( *a.compound, out );
+        return;
+    }
+    if ( solver_manifold_t* m = child_contact_manifold( a ) )
+        out.push_back( m );
 }
 
 // btCompoundShape: the ctor 0x5269C0 (type 31, local aabb 1e18 / -1e18,
@@ -429,6 +471,25 @@ inline void compound_create( compound_algorithm_t& alg, const compound_shape_t& 
     alg.revision = shape.revision;
     alg.children.clear( );
     alg.children.resize( shape.children.size( ) );
+}
+
+inline child_algorithm_t::~child_algorithm_t( ) = default;
+
+// removeChildAlgorithms 0x5F7BD0: each child in index order (its dtor +
+// freeCollisionAlgorithm).
+inline void compound_destroy_children( collision_dispatcher_t& d, compound_algorithm_t& alg )
+{
+    for ( auto& a : alg.children )
+        dispatcher_destroy_algorithm( d, a );
+}
+
+// getAllContactManifolds 0x5F7A00 (slot 3): each non-null child's, in index
+// order.
+inline void compound_contact_manifolds( const compound_algorithm_t& alg, std::vector< solver_manifold_t* >& out )
+{
+    for ( const auto& a : alg.children )
+        if ( a )
+            child_contact_manifolds( *a, out );
 }
 
 // The two-box test both ProcessChildShape 0x5F7CB0 and the removal loop make:
@@ -547,19 +608,24 @@ inline int compound_process_collision( collision_dispatcher_t& d, compound_algor
         alg.children.clear( );
         alg.children.resize( shape.children.size( ) );
     }
+    std::vector< solver_manifold_t* > array;
     for ( auto& a : alg.children )
     {
         if ( !a )
             continue;
-        solver_manifold_t* m = child_contact_manifold( *a );
-        if ( !m || m->num_contacts == 0 )
-            continue;
-        result.manifold = m;
-        if ( m->body0 == result.object0 )
-            manifold_refresh( *m, result.basis0, result.origin0, result.basis1, result.origin1, cb );
-        else
-            manifold_refresh( *m, result.basis1, result.origin1, result.basis0, result.origin0, cb );
-        result.manifold = nullptr;
+        child_contact_manifolds( *a, array );
+        for ( solver_manifold_t* m : array )
+        {
+            if ( m->num_contacts == 0 )
+                continue;
+            result.manifold = m;
+            if ( m->body0 == result.object0 )
+                manifold_refresh( *m, result.basis0, result.origin0, result.basis1, result.origin1, cb );
+            else
+                manifold_refresh( *m, result.basis1, result.origin1, result.basis0, result.origin0, cb );
+            result.manifold = nullptr;
+        }
+        array.clear( );
     }
     if ( !shape.has_root )
         return -1;   // no tree root: retail skips collideTV; with no child - not reached by content

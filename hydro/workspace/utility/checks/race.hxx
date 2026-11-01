@@ -3207,6 +3207,7 @@ inline bool verify_race_all( )
     ok = verify_waypoint_plugs( ) && ok;
     ok = verify_ray_test( ) && ok;
     ok = verify_ray_bvh( ) && ok;
+    ok = verify_compound_pair( ) && ok;
     ok = verify_simplex_ctor( ) && ok;
     ok = verify_thunk_exclude( ) && ok;
     ok = verify_boat_contact( ) && ok;
