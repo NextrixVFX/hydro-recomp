@@ -571,6 +571,7 @@ private:
     void load_huds( const char* const* names = k_race_hud_projects );
     void hud( int project, race_hud_verb_t verb, float dt );
     void race_broadcast( const char* name, const ui_params_t* params = nullptr, int origin = -1 );
+    void race_broadcast_hash( std::uint32_t hash, const char* name, const ui_params_t& p, int origin );
     void hud_post( std::uint32_t hash, const ui_params_t& p, int origin );
     bool m_hud_posting = false;
     static void multi_delay_ticked( void* user, float dt );
@@ -1099,6 +1100,11 @@ public:
         load_huds( mode == "TimeTrial" ? game_mode_defs( )[ 1 ].huds : mode == "Slalom" ? game_mode_defs( )[ 0 ].huds : k_race_hud_projects );
         m_race.world.hud = [ this ]( int project, race_hud_verb_t verb, float step ) { hud( project, verb, step ); };
         m_race.world.broadcast = [ this ]( const char* name, const ui_params_t* params ) { race_broadcast( name, params ); };
+        // The VuPfx runtime / manager before the boats' postLoad (its Pfx fill creates systems - session.hxx
+        // race_session_bind_pfx_fill); scene_frame refreshes them each frame.
+        m_race.world.pfx = m_pfx.runtime( );
+        m_race.world.pfx_manager = m_pfx.manager( );
+        m_race.world.pfx_ops = m_pfx.manager_ops( );
         vo_ready( );
         m_race.world.vo = &m_vo;
         m_race.world.vo_hooks = &m_vo_hooks;

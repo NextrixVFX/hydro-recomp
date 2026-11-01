@@ -1465,9 +1465,65 @@ inline bool verify_substitute_asset_properties( )
     return failed == 0;
 }
 
+// world/slalom.hxx slalom_draw_gates against retail's 0x48E680 + 0x440050 (case slalom_gate_draw): per vector the gates
+// drawn in order, which model instance (Model / Reflection Model Asset), the 16 matrix words; a ref whose type chain
+// misses VuSlalomGateEntity (kind 2) or an unconnected one ends the walk (`next` null here, as the session builds it).
+inline bool verify_slalom_gate_draw( )
+{
+    const unsigned* p = g_golden_sgd_words;
+    const unsigned nv = *p++;
+    int failed = 0, draws = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned ng = *p++;
+        const std::int32_t current = static_cast< std::int32_t >( *p++ );
+        const bool reflection = *p++ != 0;
+        std::vector< slalom_gate_t > gates( ng );
+        std::vector< std::array< float, 16 > > worlds( ng );
+        for ( unsigned k = 0; k < ng; ++k )
+        {
+            std::memcpy( &gates[ k ].diameter, p, 4 );
+            const bool linked = p[ 1 ] != 0 && p[ 2 ] != 2;
+            std::memcpy( worlds[ k ].data( ), p + 3, 64 );
+            gates[ k ].world = worlds[ k ].data( );
+            gates[ k ].model = "Model" + std::to_string( k );
+            gates[ k ].reflection = "Reflection" + std::to_string( k );
+            gates[ k ].next = linked && k + 1 < ng ? &gates[ k + 1 ] : nullptr;
+            p += 19;
+        }
+        slalom_course_t c;
+        c.current = current >= 0 ? &gates[ static_cast< std::size_t >( current ) ] : nullptr;
+        slalom_gate_draw_t got[ 8 ];
+        const int n = slalom_draw_gates( c, reflection, got );
+        const unsigned want = *p++;
+        bool bad = static_cast< unsigned >( n ) != want;
+        for ( unsigned d = 0; d < want; ++d, p += 18 )
+        {
+            if ( static_cast< int >( d ) >= n )
+                continue;
+            const slalom_gate_t* g = got[ d ].gate;
+            const unsigned k = static_cast< unsigned >( g - gates.data( ) );
+            const std::string name = ( p[ 1 ] ? "Reflection" : "Model" ) + std::to_string( p[ 0 ] );
+            if ( k != p[ 0 ] || *got[ d ].model != name || std::memcmp( got[ d ].matrix, p + 2, 64 ) != 0 )
+                bad = true;
+        }
+        p += 2 * ng;   // +0xC0 / +0xE0 after: the instances' own words (the renderer's), not modelled
+        draws += static_cast< int >( want );
+        if ( bad && ++failed <= 6 )
+            LOG_ERROR( "slalom gate draw vector %u: %d draws (retail %u) or a gate / instance / matrix differs", v, n, want );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "slalom_draw_gates matches retail's VuSlalomGame draw 0x48E680 + the gate draw 0x440050 on %u vectors, %d draws "
+                     "(gate, instance, the 16 matrix words)", nv, draws );
+    else
+        LOG_ERROR( "the slalom gate draw FAILED on %d of %u vectors", failed, nv );
+    return failed == 0;
+}
+
 inline bool verify_session_all( )
 {
     bool ok = true;
+    ok = verify_slalom_gate_draw( ) && ok;
     ok = verify_substitute_asset_properties( ) && ok;
     ok = verify_rigid_body_dtor( ) && ok;
     ok = verify_vugame_release( ) && ok;

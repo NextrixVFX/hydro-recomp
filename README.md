@@ -27,10 +27,10 @@ Measured, not estimated: see **[docs/INVENTORY.md](docs/INVENTORY.md)** (summary
 
 | retail functions | 8,638 |
 |---|---:|
-| **verified** - retail executed in an oracle case and recreated here | **2,785** |
-| callee - executed inside a checked case, not recreated on its own (CRT / STL / engine helpers) | 723 |
-| cited - recreated or referenced here, but no oracle case runs it yet | 559 |
-| absent | 4,571 |
+| **verified** - retail executed in an oracle case and recreated here | **2,814** |
+| callee - executed inside a checked case, not recreated on its own (CRT / STL / engine helpers) | 719 |
+| cited - recreated or referenced here, but no oracle case runs it yet | 576 |
+| absent | 4,529 |
 
 Verified so far, by area: Bullet physics (collision, broadphase, the constraint solver, integration - 154
 functions), the boat's tick path and fluid / buoyancy forces, the water wave kernels, the VUJB asset document
