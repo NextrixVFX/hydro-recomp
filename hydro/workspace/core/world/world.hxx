@@ -874,6 +874,72 @@ public:
     // runs these off VuTickManager phases that have not been transliterated.
     // Every function it calls is 1:1, but the sequence is ours and proves
     // nothing about ordering.
+    // The water surfaces on screen: 0x5979C0's body for our one viewport (grid.hxx water_grid_frame), then our
+    // draw. The frustum block is 0x50C550's, fed from OUR camera (the dev vantage: eye / target, the
+    // viewport's fov_y 1.05, near 0.5, the 1280x720 aspect; retail's +384 is tanf of the horizontal half
+    // angle). SUBSTITUTED / NOT RECREATED in the draw (the platform draw of the 15-word records is unread):
+    // the retail Water shader's colour is lerp( gAmbientColor, gDiffuseColor, record +0x18 ) per vertex -
+    // computed here on the CPU from the gfx settings colours (whether the surface entity's own AmbientColor /
+    // DiffuseColor override them is unread); the foam term (gFoam* colours, gFoamTexture, record +0x14), the
+    // normal map, the planar reflection and the Fresnel LUT are absent; the pass is the engine's class 7
+    // (unlit, fogged, blended, alpha x 0.55 - divided out here).
+    void water_draw( )
+    {
+        if ( m_grid_geometry < 0 )
+            return;
+        float fw[ 3 ] = { m_target[ 0 ] - m_eye[ 0 ], m_target[ 1 ] - m_eye[ 1 ], m_target[ 2 ] - m_eye[ 2 ] };
+        const float fl = std::sqrt( fw[ 0 ] * fw[ 0 ] + fw[ 1 ] * fw[ 1 ] + fw[ 2 ] * fw[ 2 ] );
+        if ( !( fl > 0.0f ) )
+            return;
+        for ( float& c : fw )
+            c /= fl;
+        float rt[ 3 ] = { fw[ 1 ], -fw[ 0 ], 0.0f };
+        const float rl = std::sqrt( rt[ 0 ] * rt[ 0 ] + rt[ 1 ] * rt[ 1 ] );
+        if ( rl > 0.0f )
+        {
+            rt[ 0 ] /= rl;
+            rt[ 1 ] /= rl;
+        }
+        else
+            rt[ 0 ] = 1.0f;
+        const float up[ 3 ] = { rt[ 1 ] * fw[ 2 ] - rt[ 2 ] * fw[ 1 ], rt[ 2 ] * fw[ 0 ] - rt[ 0 ] * fw[ 2 ], rt[ 0 ] * fw[ 1 ] - rt[ 1 ] * fw[ 0 ] };
+        const float aspect = 1280.0f / 720.0f;
+        const water_frustum_t cam = water_frustum_build( m_eye, rt, fw, up, aspect, 0.5f, m_far, std::tan( 1.05f * 0.5f ) * aspect );
+        water_grid_frame( m_grid, cam, m_water, &m_water_view, m_grid_frame );
+        int count = 0;
+        mesh_vertex_t* out = c_engine::edit( m_grid_geometry, count );
+        if ( !out )
+            return;
+        auto channel = []( std::uint32_t c, int k ) { return static_cast< float >( ( c >> ( 8 * k ) ) & 0xFF ) / 255.0f; };
+        int n = 0;
+        for ( const water_grid_draw_t& d : m_grid_frame.draws )
+            for ( int i = 0; i < d.index_count; ++i )
+            {
+                if ( n >= count )
+                {
+                    ++m_grid_overflow;
+                    break;
+                }
+                const water_grid_record_t& r = m_grid_frame.vertices[ static_cast< std::size_t >( d.vertex_start + m_grid_frame.indices[ static_cast< std::size_t >( d.index_start + i ) ] ) ];
+                mesh_vertex_t& v = out[ n++ ];
+                v = mesh_vertex_t{};
+                v.position[ 0 ] = r.x;
+                v.position[ 1 ] = r.y;
+                v.position[ 2 ] = r.height;
+                v.normal[ 2 ] = 1.0f;
+                for ( int k = 0; k < 4; ++k )
+                {
+                    const float a = channel( m_water_ambient, k );
+                    v.color[ k ] = a + ( channel( m_water_diffuse, k ) - a ) * r.shade;
+                }
+                v.color[ 3 ] = v.color[ 3 ] / 0.55f > 1.0f ? 1.0f : v.color[ 3 ] / 0.55f;
+            }
+        for ( int i = n; i < count; ++i )
+            out[ i ] = mesh_vertex_t{};
+        c_engine::stream( m_grid_geometry );
+        if ( m_grid_overflow == 1 )
+            LOG_WARNING( "water draw: more than %d expanded vertices in a frame - the tail is not drawn (our capacity)", count );
+    }
     void scene_frame( float dt )
     {
         if ( !m_loaded )
@@ -906,6 +972,7 @@ public:
         trace::frame( ).ocean += trace::now( ) - ocean_start;
 
         dev_vantage( dt );
+        water_draw( );
         // The crossing test wants the position of whatever the plane's Trigger
         // Type accepts. With no boat in the scene the dev vantage stands in,
         // so flying the orbit through a plane still exercises the real test.
@@ -1019,6 +1086,18 @@ private:
     // is the water kernel the boat's tick takes (boat tick.hxx / fluid.hxx). Not consumed yet: the boat tick is
     // not wired into c_world.
     water_view_t m_water_view;
+    // The water renderer (world/grid.hxx): its templates, this frame's records, and OUR draw of them - one
+    // geometry holding the records expanded per index (a triangle list, capacity k_water_draw_vertices,
+    // unused tail degenerate) drawn through the engine's class-7 blended pass. m_water_ambient / _diffuse:
+    // VuGlobalGfxSettingsEntity's Water Ambient / Diffuse Color (memory water.md: gAmbientColor / gDiffuseColor).
+    water_grid_t m_grid{};
+    water_grid_frame_t m_grid_frame{};
+    int m_grid_geometry = -1;
+    int m_grid_placement = -1;
+    int m_grid_overflow = 0;
+    std::uint32_t m_water_ambient = 0xC0423C2Du;
+    std::uint32_t m_water_diffuse = 0xC05A503Cu;
+    static constexpr int k_water_draw_vertices = 60000;
     // Loaded VuTimedEventAssets, keyed by asset name. A control points into
     // this, so entries are only ever added.
     std::map< std::string, std::vector< timed_event_t > > m_timed;

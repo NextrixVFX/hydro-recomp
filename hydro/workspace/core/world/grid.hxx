@@ -525,7 +525,6 @@ struct water_grid_frame_t
     std::vector< water_grid_record_t > vertices;   // renderer +520 (+24 * buffer)
     std::vector< std::uint16_t > indices;          // +532
     std::vector< water_grid_draw_t > draws;
-    int skipped_ocean = 0;   // records an ocean wave overlapped: its +96 kernel skipped (UNKNOWN)
     int failed = 0;          // patches whose query returned UNKNOWN
 };
 
@@ -541,26 +540,6 @@ inline bool water_query_forced( const water_t& w, water_query_t& ctx, int surfac
         return true;
     const float rect[ 4 ] = { ctx.aabb[ 0 ], ctx.aabb[ 1 ], ctx.aabb[ 4 ], ctx.aabb[ 5 ] };
     return water_waves( w, s.wave_root, ctx, rect, kernel, user );
-}
-
-// The renderer's kernel: water_view_kernel, except an ocean wave (its field is
-// not generated yet - the water agent's) contributes nothing and is counted.
-struct water_grid_kernel_user_t
-{
-    water_view_t* view = nullptr;
-    int* skipped = nullptr;
-};
-
-inline bool water_grid_kernel( void* user, int wave, water_query_t& ctx )
-{
-    water_grid_kernel_user_t& u = *static_cast< water_grid_kernel_user_t* >( user );
-    const water_kind_t k = u.view->kernels[ static_cast< std::size_t >( wave ) ].kind;
-    if ( k == water_kind_rectangular || k == water_kind_circular )
-    {
-        *u.skipped += ctx.count;
-        return true;
-    }
-    return water_view_kernel( u.view, wave, ctx );
 }
 
 // 0x597D70 (thiscall renderer; vertices*, indices*): every patch in order.
@@ -617,8 +596,9 @@ inline void water_grid_vertices( const water_grid_t& g, const water_words_t& s, 
         ctx.flag100 = 0;
         ctx.records = reinterpret_cast< unsigned char* >( rec );
         ctx.stride = 0x20;
-        water_grid_kernel_user_t user{ view, &out.skipped_ocean };
-        if ( !water_query_forced( view->water, ctx, surface, water_grid_kernel, &user ) )
+        // Every wave's slot 3 through kernel.hxx's dispatch (the ocean waves'
+        // from the water agent's field, world/field.hxx).
+        if ( !water_query_forced( view->water, ctx, surface, water_view_kernel, view ) )
             ++out.failed;
         // surface +0x100 (the water map): not loaded (see the top) - skipped
         // as retail skips a null one.
@@ -679,7 +659,6 @@ inline void water_grid_frame( water_grid_t& g, const water_frustum_t& cam, const
     out.vertices.clear( );
     out.indices.clear( );
     out.draws.clear( );
-    out.skipped_ocean = 0;
     out.failed = 0;
     static const float identity[ 16 ] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
     for ( std::size_t i = 0; i < b.surfaces.size( ); ++i )
