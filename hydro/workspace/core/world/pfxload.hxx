@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <map>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -718,6 +719,120 @@ inline void pfx_remove_project( pfx_runtime_t& rt, pfx_library_t& lib, const std
         return;
     pfx_node_release( rt, lib, it->second, r );
     lib.projects.erase( it );
+}
+
+// ---------------------------------------------------------------------------
+// VuPfxImpl's TEARDOWN: slot 0 0x51C640 (flags; bit 0 = operator delete of the
+// object afterwards) -> the dtor 0x51C700 (verified: case pfx_impl_teardown):
+//   vtable 0x74CCE0; the registry +4 (16 bytes: pattern map +0, generic-process
+//   map +8): the generic map erased (0x4CCCE0, its whole-tree branch -> 0x4CD070)
+//   and its head freed, the pattern map erased (0x51DF10 -> 0x51E2B0: per entry
+//   its process map +0x44 erased by 0x4CCCE0 and the head freed, the two
+//   strings, the node) and its head freed, the registry freed. Every erase walks
+//   right subtree, node, left: DESCENDING key order;
+//   the resources +8: blocks +0, +4, +8, +0xC freed, then the object (inline -
+//   no VuPfxResources dtor runs);
+//   the quad renderer +0xC (0x58BA30: an array new[] of 8 x 0x14, 0x58CC90 each
+//   {0, 0, 0, -1, -1}): the eh vector dtor 0x630EF0 LAST to first, 0x538820
+//   each - g 0x759074's 0x53A710( +4 ), the asset manager's vt+0x24( +0 ) -,
+//   delete[], the object freed;
+//   +0x10 (12 bytes {0, 0, -1} from the ctor): 0x53A710( +4 ), vt+0x24( +0 ),
+//   freed;
+//   the projects map +0x14 erased (0x4CDB30 -> 0x4C4FD0: the key, the node) and
+//   its head freed - THE GROUPS ARE NOT RELEASED (their refcount stays, no node
+//   dtor runs: the asset unload 0x5CAB80's removeProject is what releases them);
+//   vtable 0x736EE8.
+// 0x51DFD0 (one node's erase) is 0x51DF10's range branch: unreachable from the
+// dtor (it passes begin / end). Its range form is std::map::erase - not used.
+// HOOKS: the render words are the renderer's (0x58BAC0 / 0x58CE40 fill them;
+// 0x53A710 and the asset manager are render / platform). `freed` is told every
+// object operator delete / delete[] gets, by what it is (string buffers - the
+// std::string's own, by length - are not told). The registry is
+// g_pfx_node_types (the static table pfxload builds from); the runtime's
+// resources and its four blocks leave rt.heap; the library keeps its nodes.
+struct pfx_impl_render_t
+{
+    std::uint32_t quad[ 8 ][ 2 ] = { };   // +0xC -> [ k ] +0 / +4
+    std::uint32_t extra[ 2 ] = { };       // +0x10 +0 / +4
+};
+
+struct pfx_impl_teardown_hooks_t
+{
+    void* user = nullptr;
+    void ( *freed )( void* user, bool array, const char* what, const std::string& name ) = nullptr;
+    void ( *shader )( void* user, std::uint32_t handle ) = nullptr;   // g 0x759074 0x53A710
+    void ( *asset )( void* user, std::uint32_t asset ) = nullptr;     // the asset manager's vt+0x24
+};
+
+inline void pfx_impl_destroy( pfx_runtime_t& rt, pfx_library_t& lib, const pfx_impl_render_t& render, int flags,
+    const pfx_impl_teardown_hooks_t& k )
+{
+    auto freed = [ & ]( bool array, const char* what, const std::string& name ) {
+        if ( k.freed != nullptr )
+            k.freed( k.user, array, what, name );
+    };
+    // the registry: generic processes, then patterns with their processes
+    std::set< std::string > generic, patterns;
+    std::map< std::string, std::set< std::string > > procs;
+    for ( const pfx_node_type_t& t : g_pfx_node_types )
+    {
+        if ( t.pattern == nullptr )
+        {
+            if ( t.vtable != 0x74FFD4u && t.vtable != 0x74CD14u )
+                patterns.insert( t.type );
+        }
+        else if ( t.pattern[ 0 ] == '\0' )
+            generic.insert( t.type );
+        else
+            procs[ t.pattern ].insert( t.type );
+    }
+    for ( auto g = generic.rbegin( ); g != generic.rend( ); ++g )
+        freed( false, "generic", *g );
+    freed( false, "head", "generic" );
+    for ( auto p = patterns.rbegin( ); p != patterns.rend( ); ++p )
+    {
+        const std::set< std::string >& s = procs[ *p ];
+        for ( auto q = s.rbegin( ); q != s.rend( ); ++q )
+            freed( false, "process", *p + "/" + *q );
+        freed( false, "head", *p );
+        freed( false, "pattern", *p );
+    }
+    freed( false, "head", "patterns" );
+    freed( false, "registry", "" );
+    // the resources
+    std::uint32_t blocks[ 4 ];
+    for ( int b = 0; b < 4; ++b )
+    {
+        blocks[ b ] = rt.heap[ rt.resources + 4u * b ];
+        freed( false, blocks[ b ] != 0u ? "block" : "null", blocks[ b ] != 0u ? std::to_string( b ) : std::string( ) );
+    }
+    freed( false, "resources", "" );
+    auto& regions = rt.heap.regions;
+    regions.erase( std::remove_if( regions.begin( ), regions.end( ), [ & ]( const pfx_heap_t::region_t& r ) {
+        return r.base == rt.resources || ( r.base != 0u && std::find( blocks, blocks + 4, r.base ) != blocks + 4 );
+    } ), regions.end( ) );
+    // the quad renderer's entries, last to first, then +0x10
+    for ( int e = 7; e >= 0; --e )
+    {
+        if ( k.shader != nullptr )
+            k.shader( k.user, render.quad[ e ][ 1 ] );
+        if ( k.asset != nullptr )
+            k.asset( k.user, render.quad[ e ][ 0 ] );
+    }
+    freed( true, "quad_array", "8" );
+    freed( false, "quad", "" );
+    if ( k.shader != nullptr )
+        k.shader( k.user, render.extra[ 1 ] );
+    if ( k.asset != nullptr )
+        k.asset( k.user, render.extra[ 0 ] );
+    freed( false, "extra", "" );
+    // the projects: keys and nodes only
+    for ( auto p = lib.projects.rbegin( ); p != lib.projects.rend( ); ++p )
+        freed( false, "project", p->first );
+    freed( false, "head", "projects" );
+    lib.projects.clear( );
+    if ( flags & 1 )
+        freed( false, "this", "" );
 }
 
 // The path lookup 0x51DBD0: strcpy_s into 0x100 bytes, strtok_s on "/" (empty

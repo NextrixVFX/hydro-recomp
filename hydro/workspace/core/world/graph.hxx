@@ -426,6 +426,26 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
     // The race's own receivers (world/drive.hxx race_event_dispatch): the
     // gfx-settings entities' Trigger and the nuisance start's DriverTarget /
     // DriverDisable - built by the race session's gameInitialize walk.
+    // The race HUD projects' (world/huds.hxx): VuMultiDelayEntity's "In" 0x5E0660 and VuStartLightsOutAction's "Trigger"
+    // (VuGameActionEntity's input 0x406F40 -> 0x4077E3, vt+0x30 = 0x405470: the "OnStartLightsOut" broadcast, an empty
+    // VuParams; VuRetVal 0).
+    const auto clock = m_multi_delays.find( entity );
+    if ( clock != m_multi_delays.end( ) )
+    {
+        if ( plug == "In" )
+            multi_delay_in( clock->second.state );
+        else
+            count_unhandled( entity, plug );
+        return retval_t{};
+    }
+    if ( m_start_lights.count( entity ) != 0 )
+    {
+        if ( plug == "Trigger" )
+            race_broadcast( "OnStartLightsOut" );
+        else
+            count_unhandled( entity, plug );
+        return retval_t{};
+    }
     if ( race_event_dispatch( m_race, entity, plug, params ) )
     {
         ++m_fired;
@@ -518,8 +538,8 @@ inline void c_world::update_delays( float dt )
 // order, trigger_plane_crossing; a crossing is VuTriggerEntity_fireCrossing
 // 0x61CB70(the instigator component's +8 entity, enter): VuParams built by
 // 0x505150 - one entity parameter {11, the entity's hash} (size 8) - and fired
-// on "OnEnter" / "OnExit". A BOX's vt+0x30 (0x5D1AB0) is not recreated: not
-// run, logged UNKNOWN. The +0x1C in-tick byte and the pending add / remove
+// on "OnEnter" / "OnExit". A BOX's vt+0x30 is VuTriggerBoxEntity_testCrossings
+// 0x5D1AB0 (trigger_box_crossing), fired the same way. The +0x1C in-tick byte and the pending add / remove
 // lists (Activate / Deactivate during the tick) are not modelled: our
 // set_active applies at once (FLAGGED - 0x61CCB0 / 0x61CD20 unread for it).
 inline void c_world::race_triggers( )
@@ -528,16 +548,12 @@ inline void c_world::race_triggers( )
     {
         if ( !gate.active )
             continue;
-        if ( gate.box )
-        {
-            race_unwired( m_race, "VuTriggerBoxEntity's crossing test 0x5D1AB0 (vt+0x30) is not recreated - the boxes are not tested in the race (UNKNOWN)" );
-            continue;
-        }
         const std::string path = gate.path;
         for ( std::size_t k = 0; k < m_race.triggers.instigators.size( ); ++k )
         {
             const trigger_record_t r = m_race.triggers.instigators[ k ];
-            const int crossed = trigger_plane_crossing( gate.frame, gate.half, gate.mask, r.at );
+            const int crossed = gate.box ? trigger_box_crossing( gate.frame, gate.half, gate.mask, r.at )
+                                         : trigger_plane_crossing( gate.frame, gate.half, gate.mask, r.at );
             if ( crossed < 0 )
                 continue;
             std::uint8_t params[ 0x84 ] = { };

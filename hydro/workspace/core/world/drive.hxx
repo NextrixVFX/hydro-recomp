@@ -22,6 +22,8 @@
 #include <workspace/utility/logger.hxx>
 
 #include <cstdint>
+#include <fstream>
+#include <sstream>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -48,8 +50,9 @@
 //   - so its inputs are UNKNOWN and it does not run); 0x410FF0, 0x41E240, the
 //   debris pieces' follow / removal; the driver tick of a UI / nuisance /
 //   ghost driver (none in a Race roster - their ticks are the boat agent's);
-//   the hull's splash pfx 0x52BCD0, the lens-water manager g 0x759048; the driver's vt+0x50 and the
-//   "OnBoatRecovered" broadcast inside the respawn. WIRED (world batch 18): the trigger manager's 0x536350
+//   the hull's splash pfx 0x52BCD0, the lens-water manager g 0x759048 (VuLensWaterManagerImpl, the water /
+//   render side's). RESOLVED (world batch 19): the driver's vt+0x50 (the human's 'OnHumanRecovered' and
+//   0x41D790's 'OnBoatRecovered' have no subscriber in a Race - nothing runs) and 0x41E240 (FMOD - platform). WIRED (world batch 18): the trigger manager's 0x536350
 //   (trigger/volume.hxx) and the respawn's 0x534C00(0) (no children: nothing).
 //   PLATFORM HOOKS (not copied - BRIEF): FMOD (every get_event answers false:
 //   no event is made, so no audio calls follow), the stats / voice-over
@@ -106,6 +109,70 @@ inline void race_unwired( race_session_t& s, const std::string& what )
 {
     if ( s.unwired[ what ]++ == 0 )
         LOG_WARNING( "race: %s", what.c_str( ) );
+}
+
+// ---- THE TEST INPUT (ours, FLAGGED: not retail) -----------------------------
+//
+// Retail's input is a platform hook (the input device behind the control
+// method manager); a --bench run has no player. --input-script FILE answers
+// that hook from a file of pad states instead of the device, so the human
+// boat can be driven through the verified input -> controls mapping
+// (VuHumanDriver's 0x40F690, boat human.hxx) in a repeatable run. One key per
+// line, "FRAME THROTTLE BRAKE STEERING BOOST" (the four channels the device
+// answer has: the right / left trigger 0..1, the stick -1..1, the shoulder 0 /
+// 1); a key holds from its session frame until the next one; '#' starts a
+// comment. A TEST INPUT, logged as such - never a stand-in for the AI.
+struct race_input_script_t
+{
+    struct key_t
+    {
+        int frame = 0;
+        input_t pad{};
+    };
+    std::vector< key_t > keys;
+    std::string path;
+};
+
+inline bool race_input_script_load( const std::string& path, race_input_script_t& out )
+{
+    std::ifstream f( path );
+    if ( !f )
+        return false;
+    out = race_input_script_t{ };
+    out.path = path;
+    std::string line;
+    while ( std::getline( f, line ) )
+    {
+        const std::size_t hash = line.find( '#' );
+        if ( hash != std::string::npos )
+            line.resize( hash );
+        std::istringstream in( line );
+        race_input_script_t::key_t k;
+        int boost = 0;
+        if ( in >> k.frame >> k.pad.throttle >> k.pad.brake >> k.pad.steer )
+        {
+            if ( in >> boost )
+                k.pad.boost = boost != 0;
+            out.keys.push_back( k );
+        }
+    }
+    return !out.keys.empty( );
+}
+
+// The pad state at a session frame: the last key at or before it (none: a released pad).
+inline input_t race_input_script_at( const race_input_script_t& s, int frame )
+{
+    input_t pad{};
+    for ( const race_input_script_t::key_t& k : s.keys )
+        if ( k.frame <= frame )
+            pad = k.pad;
+    return pad;
+}
+
+// The platform input hook's answer: the script when one is loaded, else the device.
+inline input_t race_drive_pad( const race_session_t& s )
+{
+    return s.input_script ? race_input_script_at( *s.input_script, s.frames ) : read_input( );
 }
 
 // g 0x759058's first surface's +0xD8 (boat_decision_t::floor). VuWater +0x20
@@ -476,8 +543,8 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         hd.tick.animation = d.animation;
         hd.env.control_method = s.world.control_method;
         hd.hooks.user = &s;
-        hd.hooks.axis = []( void*, std::int32_t, const char* name ) -> float {
-            const input_t in = read_input( );
+        hd.hooks.axis = []( void* u, std::int32_t, const char* name ) -> float {
+            const input_t in = race_drive_pad( *static_cast< const race_session_t* >( u ) );
             if ( std::strcmp( name, "Throttle" ) == 0 )
                 return in.throttle;
             if ( std::strcmp( name, "Brake" ) == 0 )
@@ -486,8 +553,8 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
                 return in.steer;
             return 0.0f;
         };
-        hd.hooks.held = []( void*, std::int32_t, const char* name ) -> std::uint8_t {
-            return std::strcmp( name, "Boost" ) == 0 && read_input( ).boost ? 1 : 0;
+        hd.hooks.held = []( void* u, std::int32_t, const char* name ) -> std::uint8_t {
+            return std::strcmp( name, "Boost" ) == 0 && race_drive_pad( *static_cast< const race_session_t* >( u ) ).boost ? 1 : 0;
         };
         hd.hooks.pressed = []( void*, std::int32_t, const char* ) -> std::uint8_t { return 0; };
         hd.hooks.misfire = []( void* u ) { race_unwired( *static_cast< race_session_t* >( u ), "audio: the BoostMisfire sound 0x41E060 (FMOD - platform)" ); };
@@ -515,8 +582,13 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         r->respawn_hooks.transform_children = []( void* ) {};
         r->respawn_hooks.instigator = []( void* u ) { race_drive_t& d = race_drive_of( u ); trigger_instigator_update( d.session->triggers, race_drive_boat( d ).io.instigator ); };
         r->respawn_hooks.enable = []( void* u ) { race_session_enable( *race_drive_of( u ).session, race_drive_boat( race_drive_of( u ) ), true ); };
-        r->respawn_hooks.driver_50 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the driver's vt+0x50 after a respawn (not recreated)" ); };
-        r->respawn_hooks.recovered = []( void* u, std::uint32_t ) { race_unwired( *race_drive_of( u ).session, "the OnBoatRecovered broadcast (VuEventManager, not wired)" ); };
+        // The driver's slot 20 vt+0x50 after a respawn: VuHumanDriver 0x40F4A0 broadcasts "OnHumanRecovered" (an empty
+        // VuParams, 0x505690) - NO SUBSCRIBER exists: the string's one reference is that broadcaster and no asset names it -
+        // so it changes nothing; VuAiDriver / VuAiUiDriver / VuAiNuisanceDriver's slot 20 is the nullsub 0x401560.
+        r->respawn_hooks.driver_50 = []( void* ) { };
+        // "OnBoatRecovered" (0x41D790's broadcast): its only subscriber is VuSlalomGame (ctor 0x48BEC0 - the string's other
+        // reference); no asset names it. In a Race nothing answers: nothing to run.
+        r->respawn_hooks.recovered = []( void*, std::uint32_t ) { };
         // The Decision tick's hooks.
         boat_decision_hooks_t& h = r->hooks;
         h.user = r.get( );
@@ -531,8 +603,10 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         h.respawn = race_drive_respawn;
         h.enable = []( void* u ) { race_session_enable( *race_drive_of( u ).session, race_drive_boat( race_drive_of( u ) ), true ); };
         h.disable = []( void* u ) { race_session_enable( *race_drive_of( u ).session, race_drive_boat( race_drive_of( u ) ), false ); };
-        h.debris_410FF0 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the debris 0x410FF0 (not recreated)" ); };
-        h.boat_41E240 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the boat's 0x41E240 (not recreated)" ); };
+        h.debris_410FF0 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the debris 0x410FF0 (2391 b: the damage pieces' Bullet bodies - the boat agent's) - not recreated" ); };
+        // 0x41E240: an FMOD one-shot at the boat (g 0x759010 EventSystem getEvent on the name at +0x1EC, set3DAttributes at the
+        // transform's +0x80, start, release - imports 0x64C348 / 0x64C358 / 0x64C354): the audio platform layer, a hook.
+        h.boat_41E240 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "audio: the boat's one-shot 0x41E240 (FMOD - platform)" ); };
         h.piece_follow = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the debris pieces' follow 0x5344A0 / 0x50E660 (not recreated)" ); };
         h.piece_remove = []( void* u, int ) { race_unwired( *race_drive_of( u ).session, "the debris pieces' removal (0x411950's dynamics calls, not recreated)" ); };
         h.boost.user = r.get( );
@@ -545,7 +619,9 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
             return false;
         };
         h.hull.splash = []( void* u, const std::string& ) { race_unwired( *race_drive_of( u ).session, "the hull's splash pfx 0x52BCD0 (not wired)" ); };
-        h.hull.lens = []( void* u, float ) { race_unwired( *race_drive_of( u ).session, "the lens-water manager g 0x759048 (not wired)" ); };
+        // VuLensWaterManagerImpl g 0x759048 (the camera's water droplets): vt+0x28 0x513600 adds to its +0x2490, vt+0x2C
+        // 0x513620 stores [0x7358A0] x v at +0x68 - state only its own tick 0x513B90 / draw read (the water / render side's).
+        h.hull.lens = []( void* u, float ) { race_unwired( *race_drive_of( u ).session, "the lens-water manager g 0x759048 vt+0x28 / vt+0x2C (VuLensWaterManagerImpl - the water / render side's) - not wired" ); };
         h.hull.wake = race_drive_hull_wake;
         s.drives[ k ] = r;
     }
@@ -829,4 +905,121 @@ inline bool race_event_dispatch( race_session_t& s, const std::string& entity, c
         return true;
     }
     return false;
+}
+// ---- VuGame's tick 0x482F10 in a race (world/rules.hxx) ----------------------
+//
+// The Decision phase's game mode manager tick 0x4CBFD0 -> the action mode's
+// slot 4 0x4B99E0 (its own state machine: LoadingScreen / LoadLevel / Begin -
+// the front end's loading flow, NOT recreated: the session starts in its Run
+// state) -> Run's tick 0x4BAB50 -> 0x482F10(dt) on the game: 0x483230,
+// 0x483540, 0x483AD0, slot 7 0x489A40, VuGame's +0x0C / +0x67C machines (not
+// recreated - logged), each game boat's +0x4DC = its world. A game boat's
+// driver vt+0x5C: the human's sector (its pilot), an AI's plan's first sector
+// (+0x90 > 0 ? [+0x8C][0] : null).
+inline void race_session_game_mode( void* user, float dt )
+{
+    race_session_t& s = *static_cast< race_session_t* >( user );
+    if ( !s.rules_running || !s.track )
+        return;
+    ++s.rules_frames;
+    const track_manager_t& tm = *s.track;
+    for ( std::size_t k = 0; k < s.rules_boats.size( ); ++k )
+    {
+        race_rules_boat_t& rb = s.rules_boats[ k ];
+        rb.sector = nullptr;
+        const race_drive_t* d = k < s.drives.size( ) ? s.drives[ k ].get( ) : nullptr;
+        int sector = -1;
+        if ( d && d->human )
+            sector = d->human_pilot.sector;
+        else if ( d && d->ai && d->pilot >= 0 )
+        {
+            const fleet_plan_t& plan = s.pilots[ static_cast< std::size_t >( d->pilot ) ].plan;
+            sector = plan.sectors.empty( ) ? -1 : plan.sectors[ 0 ];
+        }
+        else
+            race_unwired( s, "a game boat's driver vt+0x5C with no human / AI drive composed - no sector (UNKNOWN)" );
+        if ( sector >= 0 && static_cast< std::size_t >( sector ) < tm.sectors.size( ) )
+            rb.sector = tm.sectors[ static_cast< std::size_t >( sector ) ].image;
+    }
+    race_rules_distances( s.rules_game, s.rules_boats );
+    race_checkpoint_hooks_t h;
+    h.view = [ & ]( int w, race_checkpoint_view_t& v )
+    {
+        if ( w < 0 || static_cast< std::size_t >( w ) >= tm.waypoints.size( ) )
+            return false;
+        const track_waypoint_t& wp = tm.waypoints[ static_cast< std::size_t >( w ) ];
+        const transform_component_t* t = wp.entity ? entity_transform( *wp.entity ) : nullptr;
+        if ( !t || wp.entity->m_world_unknown )
+            return false;
+        std::memcpy( v.normal, t->world + 4, 12 );
+        std::memcpy( v.origin, t->world + 12, 12 );
+        v.finish = wp.p.finish;
+        v.width = wp.p.width;
+        v.height = wp.p.height;
+        return true;
+    };
+    h.index = [ & ]( int w ) { return track_checkpoint_index( tm, w ); };
+    h.next = [ & ]( int w ) { return race_rules_next_checkpoint( tm, w ); };
+    h.crossed = [ & ]( int boat, int w )
+    {
+        LOG_INFO( "race: %s crossed checkpoint %d (waypoint %d) - lap %d, sync %d", s.boats[ static_cast< std::size_t >( boat ) ]->name.c_str( ),
+                  track_checkpoint_index( tm, w ), w, rules_i32( s.rules_boats[ static_cast< std::size_t >( boat ) ].boat, 0x4AC ),
+                  s.dynamics ? s.dynamics->syncs : -1 );
+        race_unwired( s, "VuRaceGame slot 15 0x48B180 on a checkpoint (the split / result display: VuGame +0x67C's ShowSplit / ShowResult, "
+                         "+0x6D8 / +0x6DC - the HUD's) - not recreated" );
+    };
+    h.finished = [ & ]( int boat )
+    {
+        fleet_remove_driver( s.fleet, boat );   // 0x483B60's g_vuaimanagerimpl slot 12 0x4036C0
+        LOG_INFO( "race: %s FINISHED - race time %.3f, place %d", s.boats[ static_cast< std::size_t >( boat ) ]->name.c_str( ),
+                  rules_f( s.rules_boats[ static_cast< std::size_t >( boat ) ].boat, 0x4B4 ),
+                  rules_i32( s.rules_boats[ static_cast< std::size_t >( boat ) ].boat, 0x4CC ) );
+    };
+    race_rules_checkpoints( s.rules_game, s.rules_boats, h );
+    if ( h.unknown )
+        race_unwired( s, "0x483540 on a checkpoint waypoint whose world is unknown - that boat skipped (UNKNOWN)" );
+    std::vector< std::uint8_t* > ais;
+    for ( const void* b : s.manager.lists.ais.boats )
+        ais.push_back( const_cast< std::uint8_t* >( static_cast< const std::uint8_t* >( b ) ) );
+    race_rules_hide_finished( ais, [ & ]( int ai )
+    {
+        for ( std::size_t k = 0; k < s.boats.size( ); ++k )
+            if ( s.boats[ k ]->graph.objects[ 0 ].image.data( ) == ais[ static_cast< std::size_t >( ai ) ] )
+            {
+                race_session_enable( s, *s.boats[ k ], false );   // slot 18 0x421940
+                LOG_INFO( "race: %s hidden (0x483AD0: the sixth finished AI boat)", s.boats[ k ]->name.c_str( ) );
+            }
+        race_unwired( s, "0x483AD0's draw removal (g_vu3ddrawmanager 0x7590B8 vt+0x2C - the renderer's)" );
+    } );
+    s.rules.humans.clear( );
+    for ( const void* b : s.manager.lists.humans.boats )
+        s.rules.humans.push_back( const_cast< std::uint8_t* >( static_cast< const std::uint8_t* >( b ) ) );
+    const std::string before = s.rules.fsm.current( ) ? s.rules.fsm.current( )->m_name : std::string( );
+    const bool running = race_rules_tick( s.rules, dt );
+    const std::string after = s.rules.fsm.current( ) ? s.rules.fsm.current( )->m_name : std::string( );
+    if ( before != after )
+        LOG_INFO( "race: VuRaceGame state %s -> %s (sync %d)", before.c_str( ), after.c_str( ), s.dynamics ? s.dynamics->syncs : -1 );
+    if ( !s.rules.sorted )
+        race_unwired( s, "0x48AB20 over more than 32 boats (MSVC's partition / heap sort paths, not recreated) - the places not sorted (UNKNOWN)" );
+    if ( !running )
+        race_unwired( s, "slot 7 answered the Exit state: VuGame's +0x0C machine's EventFinished (not recreated)" );
+    race_unwired( s, "VuGame's own state machines +0x0C / +0x67C (0x480BA0's states: the pause / split-display flow) - not recreated, their evaluate / "
+                     "tick not run (UNKNOWN)" );
+    for ( race_rules_boat_t& rb : s.rules_boats )
+        std::memcpy( rb.boat + 0x4DC, rb.transform + 0x50, 64 );
+    // Ours (dev trace): every boat's progress every 240 game ticks.
+    if ( s.rules_frames % 240 == 0 )
+        for ( std::size_t k = 0; k < s.rules_boats.size( ); ++k )
+        {
+            const race_rules_boat_t& rb = s.rules_boats[ k ];
+            int sector = -1;
+            for ( std::size_t q = 0; q < tm.sectors.size( ); ++q )
+                if ( tm.sectors[ q ].image == rb.sector )
+                    sector = static_cast< int >( q );
+            LOG_INFO( "race progress tick %d: %s sector %d lap %d place %d next checkpoint %d race done %.1f / left %.1f, time %.2f, input-off %d, "
+                      "at (%.1f %.1f %.1f)", s.rules_frames, s.boats[ k ]->name.c_str( ), sector, rules_i32( rb.boat, 0x4AC ),
+                      rules_i32( rb.boat, 0x4CC ), rb.checkpoint >= 0 ? track_checkpoint_index( tm, rb.checkpoint ) : -1, rules_f( rb.boat, 0x4C8 ),
+                      rules_f( rb.boat, 0x4C4 ), rules_f( rb.boat, 0x4B4 ), rules_i32( rb.boat, 0x308 ), rules_f( rb.transform, 0x80 ),
+                      rules_f( rb.transform, 0x84 ), rules_f( rb.transform, 0x88 ) );
+        }
 }
