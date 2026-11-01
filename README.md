@@ -74,8 +74,18 @@ for `engine/x87.asm`).
 MSBuild hydro.slnx /p:Configuration=Release /p:Platform=x64
 ```
 
-The output is `build/hydro/Release/hydro.exe`. Without the oracle's golden data (below) everything still
-builds; `--selftest` then reports that it has nothing to check against.
+The output is `build/hydro/Release/hydro.exe`: the game, with no test data in it.
+
+The self-test is a separate build, because the oracle's golden vectors compile to tens of megabytes of
+constants that the game has no use for:
+
+```
+MSBuild hydro.slnx /p:Configuration=Release /p:Platform=x64 /p:HydroSelftest=true
+```
+
+builds `build/hydro-selftest/Release/hydro.exe`, which carries the golden vectors and runs `--selftest`.
+Without the golden data (below) it still builds; `--selftest` then reports that it has nothing to check
+against.
 
 ## Game data
 
@@ -96,7 +106,7 @@ hydro.exe                                   # the Hydroelectric track, free came
 hydro.exe --race Hydroelectric --mode ... --course ...
 hydro.exe --bench --still 200,400,800 --frames 820 --fixed-step 0.016666667 --race Hydroelectric --out <dir>
                                             # deterministic stills (the regression gate)
-hydro.exe --selftest                        # every oracle check; exit 0 = all pass
+hydro.exe --selftest                        # every oracle check; exit 0 = all pass (the -selftest build)
 hydro.exe --verbose                         # extra diagnostics
 ```
 
