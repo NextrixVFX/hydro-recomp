@@ -111,8 +111,73 @@ struct race_load_hooks_t
     std::function< void( int offset, const std::string& name ) > font_reload;
 };
 
-// The game fields 0x481CE0 writes. The VuRaceGame ctor 0x489030 is not
-// recreated: the caller presets laps / fonts (its values are an input).
+// ---- VuActionGameMode's load 0x4BA060: the project and the game object -----
+//
+// The GameData every reader below takes: gameutil +0x50 ["GameData"] when it is
+// an object (type 6), else g_vudevconfig 0x75901C's getParam("ActionGameData")
+// (slot 6 - in this build 0x4FDB70, which answers the static null container
+// 0x7593A0: `dev` null = that), else (no dev config) the null container.
+// 0x4D3260 / 0x4D31D0 / 0x4D32F0 read its Level / GameType / Course: a string
+// (type 4), else the static empty 0x819950.
+inline const value_t& race_action_game_data( const value_t& util_root, const value_t* dev )
+{
+    static const value_t null{};
+    const value_t& gd = member( util_root, "GameData" );
+    if ( gd.tag == 6 )
+        return gd;
+    return dev ? *dev : null;
+}
+
+inline std::string race_game_data_text( const value_t& util_root, const value_t* dev, const char* key )
+{
+    const value_t& v = member( race_action_game_data( util_root, dev ), key );
+    return v.tag == 4 ? v.text : std::string( );
+}
+
+// 0x4D3480 (thiscall gameutil, VuString* out): out = Level (0x4D3260); when
+// the asset factory's doesAssetExist("VuProjectAsset", out) (vt+0x28) is false:
+// out = "Games/" + 0x564AE0(Level) (the part after the LAST '/' - 0x4ECA50 is
+// an rfind; no '/' -> all of it; operator+ 0x4D3FF0) + GameType (0x4D31D0,
+// operator+ 0x436700); then for GameType "Slalom" the Course (0x4D32F0) is
+// appended (0x430420). An existing Level names the project as is, unappended.
+// `exists` answers doesAssetExist (the asset factory's: the caller's).
+inline std::string race_project_name( const value_t& util_root, const value_t* dev,
+                                      const std::function< bool( const std::string& type, const std::string& name ) >& exists )
+{
+    std::string out = race_game_data_text( util_root, dev, "Level" );
+    if ( exists( "VuProjectAsset", out ) )
+        return out;
+    const std::size_t slash = out.rfind( '/' );
+    const std::string tail = slash == std::string::npos ? out : out.substr( slash + 1 );
+    out = "Games/" + tail + race_game_data_text( util_root, dev, "GameType" );
+    if ( race_game_data_text( util_root, dev, "GameType" ) == "Slalom" )
+        out += race_game_data_text( util_root, dev, "Course" );
+    return out;
+}
+
+// 0x4BA060's game object by GameType (0x4D31D0): exactly "Race" (0x404AC0
+// over min(size, 4) bytes and size 4) -> VuRaceGame (new 0x748, 0x4BA430, the
+// ctor 0x489030); else VuString_equals "Slalom" -> 0x770 / 0x48BEC0,
+// "TimeTrial" -> 0x740 / 0x48ED30, "Ghost" -> 0x778 / 0x484A20; anything else
+// -> none (+0x44 left as it was: 0x481CE0 and 0x4829A0 are skipped, the
+// project's OnProjectInitialized / OnGameStart still run).
+enum class race_game_kind_t { none, race, slalom, time_trial, ghost };
+
+inline race_game_kind_t race_game_kind( const std::string& type )
+{
+    if ( type == "Race" )
+        return race_game_kind_t::race;
+    if ( type == "Slalom" )
+        return race_game_kind_t::slalom;
+    if ( type == "TimeTrial" )
+        return race_game_kind_t::time_trial;
+    if ( type == "Ghost" )
+        return race_game_kind_t::ghost;
+    return race_game_kind_t::none;
+}
+
+// The game fields 0x481CE0 writes, with the values the VuRaceGame ctor 0x489030
+// leaves in them (race_game_construct).
 struct race_game_t
 {
     std::vector< std::unique_ptr< entity_t > > boats;   // +0x38 data, +0x3C count
@@ -123,6 +188,19 @@ struct race_game_t
     std::uint8_t championship = 0;                       // +0x80
     std::string fonts[ 14 ];                             // each font object's +8
 };
+
+// The VuRaceGame ctor 0x489030's values in race_game_t: all from its base, VuGame's ctor 0x480BA0 - the boat
+// vector's storage aligned_malloc(0x20, 0x10) with +0x3C count 0 and +0x40 capacity 8, +0x4C laps -1, the
+// +0x50 difficulty / +0x68 track strings empty, +0x80 championship 0, and each HUD font's ctor 0x626900 leaves
+// its name (+8) empty. (0x489030's own part - +0x6F8 .. +0x744 zeroed, the PreGame / Game / PostGame FSM states
+// and the three HUD projects HUDs/RacePreGameHUD / RaceGameHUD / RacePostGameHUD - holds nothing race_game_t
+// models: the HUD is the UI's, the FSM is not recreated here.)
+inline void race_game_construct( race_game_t& game )
+{
+    game = race_game_t{ };
+    game.capacity = 8;
+    game.laps = -1;
+}
 
 // The 14 HUD font objects (game offset, name) in 0x481CE0's call order.
 inline const std::pair< int, const char* >* race_game_fonts( )

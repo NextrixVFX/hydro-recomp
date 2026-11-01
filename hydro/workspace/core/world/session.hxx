@@ -302,6 +302,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
 {
     s = race_session_t{ };
     s.random = &random;
+    race_game_construct( s.game );   // the VuRaceGame ctor 0x489030 (its base 0x480BA0's values)
     if ( mode.empty( ) || boat.empty( ) || skin.empty( ) || track_name.empty( ) )
     {
         LOG_WARNING( "race: boats UNKNOWN - --mode, --race, --boat and --skin are all required (no defaults); no race" );
