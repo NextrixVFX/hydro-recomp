@@ -4642,7 +4642,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x501160,60,sub_501160,,,water (by address),absent,,False,False,race
 0x5011A0,186,sub_5011A0,,,water (by address),verified,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/screen.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x501260,117,sub_501260,,,unattributed,verified,hydro/workspace/core/ui/bind.hxx; hydro/workspace/core/ui/overlay.hxx; hydro/workspace/core/world/animate.hxx; hydro/workspace/core/world/huds.hxx; hydro/workspace/core/world/rules.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/utility/checks/update.hxx,False,False,race
-0x5012E0,26,sub_5012E0,,,unattributed,cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5012E0,26,sub_5012E0,,,unattributed,verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
 0x501300,713,loader_00501300_load_name,,,unattributed,verified,engine/workspace/core/entity/node.hxx; engine/workspace/core/entity/registry.hxx; hydro/workspace/utility/check.hxx,False,False,race
 0x5015D0,208,loader_005015D0_load_ChildEntities,,,unattributed,verified,engine/workspace/core/entity/node.hxx; hydro/workspace/core/game/types.hxx; hydro/workspace/utility/check.hxx,False,False,race
 0x5016A0,92,sub_5016A0,,,unattributed,verified,engine/workspace/core/entity/node.hxx; hydro/workspace/utility/check.hxx,False,False,race
@@ -7244,31 +7244,31 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5CC5A0,164,sub_5CC5A0,,,assets (by address),callee,,False,False,race
 0x5CC650,161,sub_5CC650,,,assets (by address),callee,,False,False,race
 0x5CC700,6,sub_5CC700,VuControlKeyframeEntity,VuControlKeyframeEntity+1,entity / component / script framework,callee,,False,False,game
-0x5CC710,112,sub_5CC710,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
-0x5CC780,97,sub_5CC780,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CC710,112,sub_5CC710,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CC780,97,sub_5CC780,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
 0x5CC7F0,48,sub_5CC7F0,VuControlKeyframeEntity,VuControlKeyframeEntity+0,entity / component / script framework,absent,,False,False,game
-0x5CC820,488,sub_5CC820,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
-0x5CCA10,47,sub_5CCA10,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CC820,488,sub_5CC820,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CCA10,47,sub_5CCA10,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
 0x5CCA40,6,sub_5CCA40,VuControlEntity,VuControlEntity+1,entity / component / script framework,callee,,False,False,game
-0x5CCA50,117,sub_5CCA50,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
-0x5CCAD0,135,sub_5CCAD0,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CCA50,117,sub_5CCA50,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CCAD0,135,sub_5CCAD0,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
 0x5CCB60,37,sub_5CCB60,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/keyframe.hxx,False,False,race
-0x5CCBA0,1776,sub_5CCBA0,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CCBA0,1776,sub_5CCBA0,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
 0x5CD290,48,sub_5CD290,VuControlEntity,VuControlEntity+0,entity / component / script framework,absent,,False,False,game
-0x5CD2C0,30,?$VuMethod1@VVuControlEntity@@XM_load_ChildEntities,VuControlEntity,VuControlEntity+2,entity / component / script framework,cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
-0x5CD2E0,30,?$VuMethod1@VVuControlEntity@@XM_load_ChildEntities_0,VuControlEntity,VuControlEntity+3,entity / component / script framework,cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
-0x5CD300,400,?$VuMethod1@VVuControlEntity@@XM_load_Properties,VuControlEntity,VuControlEntity+4,entity / component / script framework,cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
-0x5CD490,456,sub_5CD490,VuControlEntity,VuControlEntity+6,entity / component / script framework,cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
-0x5CD660,54,sub_5CD660,VuControlEntity,VuControlEntity+7,entity / component / script framework,cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
-0x5CD6A0,5,sub_5CD6A0,VuControlEntity,VuControlEntity+8,entity / component / script framework,cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
-0x5CD6B0,84,sub_5CD6B0,VuControlEntity,VuControlEntity+9,entity / component / script framework,cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
-0x5CD710,138,sub_5CD710,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
-0x5CD7A0,225,sub_5CD7A0,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
-0x5CD890,254,sub_5CD890,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
-0x5CD9F0,500,sub_5CD9F0,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
-0x5CDBF0,130,sub_5CDBF0,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
-0x5CDC80,241,sub_5CDC80,,,entity / component / script framework (by address),cited,hydro/workspace/core/world/keyframe.hxx,False,False,game
-0x5CDD80,150,sub_5CDD80,,,entity / component / script framework (by address),absent,,False,False,game
+0x5CD2C0,30,?$VuMethod1@VVuControlEntity@@XM_load_ChildEntities,VuControlEntity,VuControlEntity+2,entity / component / script framework,verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CD2E0,30,?$VuMethod1@VVuControlEntity@@XM_load_ChildEntities_0,VuControlEntity,VuControlEntity+3,entity / component / script framework,verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CD300,400,?$VuMethod1@VVuControlEntity@@XM_load_Properties,VuControlEntity,VuControlEntity+4,entity / component / script framework,verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CD490,456,sub_5CD490,VuControlEntity,VuControlEntity+6,entity / component / script framework,verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CD660,54,sub_5CD660,VuControlEntity,VuControlEntity+7,entity / component / script framework,verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CD6A0,5,sub_5CD6A0,VuControlEntity,VuControlEntity+8,entity / component / script framework,verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CD6B0,84,sub_5CD6B0,VuControlEntity,VuControlEntity+9,entity / component / script framework,verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CD710,138,sub_5CD710,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CD7A0,225,sub_5CD7A0,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CD890,254,sub_5CD890,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CD9F0,500,sub_5CD9F0,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CDBF0,130,sub_5CDBF0,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CDC80,241,sub_5CDC80,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/keyframe.hxx,False,False,game
+0x5CDD80,150,sub_5CDD80,,,entity / component / script framework (by address),callee,,False,False,game
 0x5CDE20,6,sub_5CDE20,VuTransformEntity,VuTransformEntity+1,entity / component / script framework,absent,,False,False,game
 0x5CDE30,112,sub_5CDE30,,,entity / component / script framework (by address),absent,,False,False,game
 0x5CDEA0,434,sub_5CDEA0,,,entity / component / script framework (by address),absent,,False,False,game
@@ -7302,7 +7302,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5D0FE0,175,VuRotateMotionEntity_onEnable,VuRotateMotionEntity,VuRotateMotionEntity+12,entity / component / script framework,absent,,False,False,race
 0x5D1090,836,VuRotateMotionEntity_tick,VuRotateMotionEntity,VuRotateMotionEntity+14,entity / component / script framework,cited,hydro/workspace/core/world/motion.hxx; hydro/workspace/core/world/world.hxx,False,False,race
 0x5D13E0,29,sub_5D13E0,VuTriggerBoxEntity; VuTriggerEntity; VuTriggerPlaneEntity,VuTriggerPlaneEntity+2; VuTriggerBoxEntity+2; VuTriggerEntity+2,entity / component / script framework,verified,engine/workspace/core/entity/trigger.hxx; hydro/workspace/core/trigger/volume.hxx,False,False,race
-0x5D1400,6,sub_5D1400,VuTriggerPlaneEntity,VuTriggerPlaneEntity+1,entity / component / script framework,absent,,False,False,race
+0x5D1400,6,sub_5D1400,VuTriggerPlaneEntity,VuTriggerPlaneEntity+1,entity / component / script framework,callee,,False,False,race
 0x5D1410,115,sub_5D1410,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/trigger.hxx,False,False,race
 0x5D1490,138,VuTriggerPlaneEntity_ctor,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/trigger.hxx,False,False,race
 0x5D1520,72,VuTriggerPlaneEntity_dtor,VuOneShotPfxEntity; VuTriggerBoxEntity; VuTriggerEntity; VuTriggerPlaneEntity,VuTriggerPlaneEntity+0; VuTriggerBoxEntity+0; VuOneShotPfxEntity+0; VuTriggerEntity+0,entity / component / script framework,absent,,False,False,race
@@ -7665,9 +7665,9 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5E64B0,6,sub_5E64B0,VuLensWaterEmitterEntity,VuLensWaterEmitterEntity+1,entity / component / script framework,absent,,False,False,race
 0x5E64C0,114,sub_5E64C0,,,entity / component / script framework (by address),verified,hydro/workspace/core/world/lens.hxx,False,False,race
 0x5E6540,466,sub_5E6540,,,entity / component / script framework (by address),callee,,False,False,race
-0x5E6720,35,sub_5E6720,VuLensWaterEmitterEntity,VuLensWaterEmitterEntity+6,entity / component / script framework,cited,hydro/workspace/core/world/lens.hxx,False,False,race
-0x5E6750,35,sub_5E6750,VuLensWaterEmitterEntity,VuLensWaterEmitterEntity+7,entity / component / script framework,cited,hydro/workspace/core/world/lens.hxx,False,False,race
-0x5E6780,94,sub_5E6780,VuLensWaterEmitterEntity,VuLensWaterEmitterEntity+0,entity / component / script framework,cited,hydro/workspace/core/world/lens.hxx; hydro/workspace/utility/checks/logic.hxx,False,False,race
+0x5E6720,35,sub_5E6720,VuLensWaterEmitterEntity,VuLensWaterEmitterEntity+6,entity / component / script framework,verified,hydro/workspace/core/world/lens.hxx,False,False,race
+0x5E6750,35,sub_5E6750,VuLensWaterEmitterEntity,VuLensWaterEmitterEntity+7,entity / component / script framework,verified,hydro/workspace/core/world/lens.hxx,False,False,race
+0x5E6780,94,sub_5E6780,VuLensWaterEmitterEntity,VuLensWaterEmitterEntity+0,entity / component / script framework,verified,hydro/workspace/core/world/lens.hxx; hydro/workspace/utility/checks/logic.hxx,False,False,race
 0x5E67E0,90,sub_5E67E0,,,entity / component / script framework (by address),absent,,False,False,race
 0x5E6840,73,sub_5E6840,,,entity / component / script framework (by address),callee,,False,False,race
 0x5E6890,6,sub_5E6890,VuFoliageEntity,VuFoliageEntity+1,entity / component / script framework,absent,,False,False,race
