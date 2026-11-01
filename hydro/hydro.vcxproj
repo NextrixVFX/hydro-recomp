@@ -179,6 +179,7 @@
     <ClInclude Include="workspace\core\ui\leaves.hxx" />
     <ClInclude Include="workspace\core\ui\map.hxx" />
     <ClInclude Include="workspace\core\ui\navigate.hxx" />
+    <ClInclude Include="workspace\core\ui\overlay.hxx" />
     <ClInclude Include="workspace\core\ui\schema.hxx" />
     <ClInclude Include="workspace\core\ui\screen.hxx" />
     <ClInclude Include="workspace\core\ui\select.hxx" />
