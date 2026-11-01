@@ -37,6 +37,56 @@
 // - the string DB / sign-in hooks of the exit's builders are unset (the AI
 //   names: VuStringDB not recreated; the player's name: platform sign-in).
 
+// --front-end: what VuFrontEndGameMode's enter 0x4BF630 reaches through the
+// game mode manager's slot 9 0x4CBF10 - VuBackground's ctor 0x4BDEB0
+// (world/background.hxx), the Screens/Background project as the scene and the
+// rig's camera as the view (world.hxx scene_frame). The rest of the enter
+// (the screens, SnapMode, the FSM: ui/flow.hxx c_front_end, the UI agent's)
+// is not run here - so nothing fires the screens' VuSetFrontEndCameraEntity
+// triggers and the rig keeps its ctor's view until something does. Ours:
+// the option itself (a dev entry; retail enters the front end from the
+// title sequence). The hooks, each as retail reaches it:
+// - 0x4B4360's load = load_project (the race's own loader: the tree, the walk-
+//   time stand-ins for the entities' gameInitialize the world already models
+//   - water, pfx, triggers, logic - and their bookkeeping);
+// - 0x500B10 = the root's +0x14 |= 4 (0x500B75; the per-entity slot 6 walk is
+//   what load_project ran); 0x501260 = project_initialized( );
+// - g 0x758FF4 vt+0x1C = the track build load_entity_tree already ran
+//   (track_build_from_tree; Background authors no waypoints if the log says so);
+// - g 0x759080 vt+0x18 (the repository), 0x530BB0, import 0x64C314, the tick
+//   registration (scene_frame calls the tick): platform / unread - hooks.
+inline void c_world::load_background( )
+{
+    m_race = race_session_t{ };
+    const race_session_dbs_t dbs = race_dbs( );
+    wipe_scene( );
+    m_background = background_t{ };
+    m_vantage_ready = false;
+    m_authored_camera = false;
+    m_authored_far = 500.0f;
+    m_defer_project_initialized = true;   // 0x501260 is the ctor's own step, after 0x500B10
+    m_project_initialized = false;
+    m_background_env = camera_env_t{ };
+    if ( dbs.constant_db )
+        m_background_env.vertical_fov = race_drive_fov_value( member( member( member( *dbs.constant_db, "VuDBAsset" ), "Camera" ), "VerticalFOV" ) );
+    background_hooks_t h;
+    h.user = this;
+    h.load_project = []( void* u ) {
+        c_world& w = *static_cast< c_world* >( u );
+        w.m_tree.reset( );
+        w.load_project( "VuProjectAsset/Screens/Background" );
+        return w.m_tree != nullptr;
+    };
+    h.root_flags = []( void* u ) { return static_cast< c_world* >( u )->m_tree->m_flags; };
+    h.game_initialize = []( void* u ) { static_cast< c_world* >( u )->m_tree->m_flags |= 4u; };
+    h.game_release = []( void* u ) { static_cast< c_world* >( u )->m_tree->m_flags &= ~4u; };
+    h.project_initialized = []( void* u ) { static_cast< c_world* >( u )->project_initialized( ); };
+    background_construct( m_background, m_background_env, h );
+    m_loaded = true;
+    LOG_SUCCESS( "front end: VuBackground 0x4BDEB0 - Screens/Background %s, the rig at its ctor's view (eye -1 -3 2, target 0 0 0.5)%s",
+                 m_background.project ? "loaded" : "NOT loaded", m_track_built ? "; a track was built from it" : "" );
+}
+
 // The loaded front-end screen of an asset through the UI's world (the UI
 // property loads ui_front_end_screen reads), or null (logged).
 inline std::unique_ptr< entity_t > c_world::front_end_screen( const std::string& name )

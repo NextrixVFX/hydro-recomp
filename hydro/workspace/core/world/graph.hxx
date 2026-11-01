@@ -162,33 +162,33 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
     // buffer is reused but never accumulates. The interpolation broadcast
     // is UNCONDITIONAL: there is no Modify boolean for it.
     //
-    // COVERAGE GAP, NAMED: the four subscribers live on the front-end
-    // camera, which needs the menus. Nothing in the build hooks
-    // "OnSetFrontEndCamera*" yet, so the eye, target and far plane are
-    // applied straight to the scene viewer - OUR vantage, not retail's -
-    // and Interpolation Time is carried but not acted on, because no
-    // interpolation code has been read.
+    // The handler 0x408F90: world/background.hxx front_end_trigger (verified,
+    // case front_end_trigger). The subscriber is VuBackground's rig while one
+    // exists; a broadcast nobody subscribes to does nothing. UNKNOWN: the
+    // vectors' w lanes (+0x74 / +0x84: the VuVector3 property's, not loaded
+    // here) - written 0; the rig never reads them back into a camera
+    // (front_rig_place / camera_view read x y z).
     const auto shot = m_front_end.find( entity );
     if ( shot != m_front_end.end( ) )
     {
         if ( plug == "Trigger" )
         {
             const front_end_camera_t& set = shot->second;
-            if ( set.modify_eye )
-                std::memcpy( m_eye, set.eye, sizeof( m_eye ) );
-            if ( set.modify_target )
-                std::memcpy( m_target, set.target, sizeof( m_target ) );
-            if ( set.modify_far )
-                m_far = set.far_plane;
-            if ( set.modify_eye || set.modify_target || set.modify_far )
-                m_authored_camera = true;
-            ++m_fired;
-            LOG_SUCCESS( "event: %s set the front end camera  eye %s target %s far %s  interpolation %.3f (carried, not applied)",
-                entity.c_str( ),
-                set.modify_eye ? "yes" : "no",
-                set.modify_target ? "yes" : "no",
-                set.modify_far ? "yes" : "no",
-                set.interpolation_time );
+            front_end_trigger_t t;
+            t.interpolation = set.interpolation_time;
+            t.modify[ 0 ] = set.modify_eye ? 1 : 0;
+            t.modify[ 1 ] = set.modify_target ? 1 : 0;
+            t.modify[ 2 ] = set.modify_far ? 1 : 0;
+            std::memcpy( t.eye, set.eye, sizeof( set.eye ) );
+            std::memcpy( t.target, set.target, sizeof( set.target ) );
+            t.far_plane = set.far_plane;
+            front_end_trigger( t, [ this ]( std::uint32_t hash, const std::uint8_t* p ) {
+                if ( background_event( m_background, hash, p ) )
+                    ++m_fired;
+            } );
+            LOG_INFO( "event: %s . Trigger 0x408F90: eye %s target %s far %s interpolation %.3f -> %s", entity.c_str( ),
+                      set.modify_eye ? "yes" : "no", set.modify_target ? "yes" : "no", set.modify_far ? "yes" : "no", set.interpolation_time,
+                      m_background.rig ? "VuBackground's rig" : "no subscriber" );
             return retval_t{};
         }
         count_unhandled( entity, plug );

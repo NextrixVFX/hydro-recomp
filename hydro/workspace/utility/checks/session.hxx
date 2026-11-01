@@ -2,6 +2,7 @@
 
 #include <workspace/core/world/race.hxx>
 #include <workspace/core/world/strings.hxx>
+#include <workspace/core/world/background.hxx>
 
 // The world area's second checks file (checks/world.hxx is at its size limit): the race session's
 // pieces from world batch 24 on. Included at the end of checks/world.hxx; verify_session_all runs
@@ -180,9 +181,56 @@ inline bool verify_string_db( )
     return failed == 0;
 }
 
+// front_end_trigger (world/background.hxx: VuSetFrontEndCameraEntity's Trigger 0x408F90) against retail's handler on
+// 24 entity images (every Modify combination x 3 value sets; oracle case front_end_trigger): the broadcasts in order -
+// the name hash, the VuParams size word and its defined bytes - and the answer (VuRetVal 0: graph.hxx returns retval_t{}).
+inline bool verify_front_end_trigger( )
+{
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_front_end_trigger_count; ++k )
+    {
+        const golden_front_end_trigger_t& want = g_golden_front_end_trigger[ k ];
+        front_end_trigger_t e;
+        std::memcpy( &e.interpolation, &want.interpolation, 4 );
+        for ( int m = 0; m < 3; ++m )
+            e.modify[ m ] = static_cast< std::uint8_t >( want.modify[ m ] );
+        std::memcpy( e.eye, want.eye, 16 );
+        std::memcpy( e.target, want.target, 16 );
+        std::memcpy( &e.far_plane, &want.far_plane, 4 );
+        int n = 0;
+        bool bad = false;
+        front_end_trigger( e, [ & ]( std::uint32_t hash, const std::uint8_t* p ) {
+            std::int32_t size;
+            std::memcpy( &size, p + 0x80, 4 );
+            if ( n >= want.count )
+            {
+                bad = true;
+                ++n;
+                return;
+            }
+            const golden_front_end_broadcast_t& b = g_golden_front_end_broadcasts[ want.first + n++ ];
+            std::uint8_t expect[ 20 ];
+            std::memcpy( expect, b.words, 20 );
+            if ( hash != b.hash || size != b.size || size < 0 || size > 20 || std::memcmp( p, expect, static_cast< std::size_t >( size ) ) != 0 )
+                bad = true;
+        } );
+        bad = bad || n != want.count || want.retval != 0u || want.eax_is_out != 1;
+        if ( bad && ++failed <= 8 )
+            LOG_ERROR( "front end trigger %d (modify %d %d %d): %d broadcasts, retail %d (or a hash / size / byte differs)", static_cast< int >( k ),
+                       want.modify[ 0 ], want.modify[ 1 ], want.modify[ 2 ], n, want.count );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "front_end_trigger matches VuSetFrontEndCameraEntity's Trigger 0x408F90 on %d entity images (broadcast order, hashes, "
+                     "VuParams bytes and sizes, VuRetVal 0), bit for bit", static_cast< int >( g_golden_front_end_trigger_count ) );
+    else
+        LOG_ERROR( "the front end trigger FAILED on %d of %d images", failed, static_cast< int >( g_golden_front_end_trigger_count ) );
+    return failed == 0;
+}
+
 inline bool verify_session_all( )
 {
     bool ok = true;
+    ok = verify_front_end_trigger( ) && ok;
     ok = verify_logic_properties( ) && ok;
     ok = verify_string_db( ) && ok;
     ok = verify_prop_contact( ) && ok;

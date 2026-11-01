@@ -28,6 +28,7 @@
 #include <workspace/core/world/drive.hxx>
 #include <workspace/core/world/water.hxx>
 #include <workspace/core/world/watchers.hxx>
+#include <workspace/core/world/background.hxx>
 #include <workspace/core/assets/texture.hxx>
 #include <workspace/utility/logger.hxx>
 #include <workspace/utility/trace.hxx>
@@ -939,10 +940,17 @@ public:
     // end run and retail has no counterpart (its dev config's ActionGameData is the null container,
     // 0x4FDB70): SCAFFOLD, ours - GameData {Level: --race, GameType: --mode (else "Race"), Course: --course}, the
     // inputs the old Games/<track><mode> path took; with Level a bare track name 0x4D3480 names the same projects.
+    void load_background( );
+
     void load_scene( const char* track, const char* mode, const char* course = nullptr )
     {
         if ( !m_opened )
             load( );
+        if ( c_engine::option( "front-end" ) != nullptr )
+        {
+            load_background( );
+            return;
+        }
         m_race = race_session_t{ };
         race_session_dbs_t dbs = race_dbs( );
         const auto text = []( const char* v ) { return std::string( v ? v : "" ); };
@@ -1252,6 +1260,17 @@ public:
             std::memcpy( m_eye, m_race.viewport_camera + 0x00, sizeof( m_eye ) );
             std::memcpy( m_target, m_race.viewport_camera + 0x10, sizeof( m_target ) );
             m_far = m_authored_far;
+        }
+        else if ( m_background.rig )
+        {
+            // --front-end: VuBackground's Decision tick 0x4BE1A0 (world/background.hxx), then the view from the
+            // camera it publishes at g 0x758FB8 +0x2C0 (the rig's +0xC): eye +0, target +0x10, far +0x17C. The
+            // renderer takes eye / target / far only (as for the race's viewport camera - SUBSTITUTION, the renderer's).
+            background_tick( m_background, dt, m_background_env );
+            const std::uint8_t* cam = m_background.rig->camera( );
+            std::memcpy( m_eye, cam + 0x00, sizeof( m_eye ) );
+            std::memcpy( m_target, cam + 0x10, sizeof( m_target ) );
+            std::memcpy( &m_far, cam + 0x17C, sizeof( m_far ) );
         }
         else
             dev_vantage( dt );
@@ -1623,6 +1642,8 @@ private:
     // by graph.hxx; m_logic_fired counts their handlers run.
     std::map< std::string, entity_t* > m_logic;
     std::map< std::string, std::uint32_t > m_static_pfx;   // VuStaticPfxEntity path -> its +0x94 instance (0: none)
+    background_t m_background;           // g 0x758FF0 +0x44 (world/background.hxx; --front-end)
+    camera_env_t m_background_env;       // the rig's display / VerticalFOV
     int m_logic_fired = 0;
     // Their game environment: the gameutil +0x50 root (load_scene's), no SKU (the asset manager's vt+0x7C: a platform
     // answer, not supplied) and no entity repository (find / word: not wired) - those filters count unrecreated.
