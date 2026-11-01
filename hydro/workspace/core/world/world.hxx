@@ -17,6 +17,7 @@
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/game/types.hxx>
 #include <workspace/core/world/kernel.hxx>
+#include <workspace/core/world/grid.hxx>
 #include <workspace/core/world/water.hxx>
 #include <workspace/core/assets/texture.hxx>
 #include <workspace/utility/logger.hxx>

@@ -797,9 +797,117 @@ inline bool verify_static_scene_load( )
     return failed == 0;
 }
 
+// The water renderer's CPU side (world/grid.hxx) against retail (oracle case
+// water_grid): the sixteen templates 0x595D40, the frustum OBB test 0x57D280
+// on seeded cameras / boxes / matrices, and whole surfaces through 0x597B50 -
+// patches, records and indices word for word (qsort faked under emulation, so
+// ours runs with the sort off: the order the quadtree emits).
+inline bool verify_water_templates( )
+{
+    water_template_t t[ 16 ];
+    water_templates( t );
+    int failed = 0;
+    std::size_t xy = 0, ix = 0;
+    for ( int k = 0; k < 16; ++k )
+    {
+        const int nv = g_golden_water_template_counts[ k ][ 0 ];
+        const int ni = g_golden_water_template_counts[ k ][ 1 ];
+        bool same = static_cast< int >( t[ k ].xy.size( ) ) == 2 * nv && static_cast< int >( t[ k ].index.size( ) ) == ni;
+        same = same && std::memcmp( t[ k ].xy.data( ), g_golden_water_template_xy + xy, 8 * static_cast< std::size_t >( nv ) ) == 0;
+        same = same && std::memcmp( t[ k ].index.data( ), g_golden_water_template_index + ix, 2 * static_cast< std::size_t >( ni ) ) == 0;
+        xy += 2 * static_cast< std::size_t >( nv );
+        ix += static_cast< std::size_t >( ni );
+        if ( !same && ++failed <= 4 )
+            LOG_ERROR( "water template %d differs", k );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_templates matches the water renderer's sixteen patch templates 0x595D40 (0x5970B0) vertex and index for index" );
+    else
+        LOG_ERROR( "water_templates FAILED %d of 16", failed );
+    return failed == 0;
+}
+
+inline bool verify_water_frustum( )
+{
+    int failed = 0, visible = 0;
+    for ( std::size_t k = 0; k < g_golden_water_frustums_count; ++k )
+    {
+        const golden_water_frustum_t& g = g_golden_water_frustums[ k ];
+        water_frustum_t fr{};
+        std::memcpy( fr.f, g.m_frustum, sizeof( fr.f ) );
+        float box[ 8 ]{}, m[ 16 ];
+        std::memcpy( box, g.m_box, 12 );
+        std::memcpy( box + 4, g.m_box + 3, 12 );
+        std::memcpy( m, g.m_matrix, sizeof( m ) );
+        const bool v = water_frustum_test( fr, box, m );
+        visible += g.m_visible != 0;
+        if ( v != ( g.m_visible != 0 ) && ++failed <= 8 )
+            LOG_ERROR( "water frustum: vector %d ours %d retail %d", static_cast< int >( k ), v ? 1 : 0, g.m_visible );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_frustum_test matches the camera frustum OBB test 0x57D280 on %d vectors (%d visible)",
+                     static_cast< int >( g_golden_water_frustums_count ), visible );
+    else
+        LOG_ERROR( "water_frustum_test FAILED %d of %d vectors", failed, static_cast< int >( g_golden_water_frustums_count ) );
+    return failed == 0;
+}
+
+inline bool verify_water_grid( )
+{
+    int failed = 0, patches = 0, vertices = 0;
+    water_grid_t g{};
+    water_templates( g.templates );
+    for ( std::size_t k = 0; k < g_golden_water_grids_count; ++k )
+    {
+        const golden_water_grid_t& r = g_golden_water_grids[ k ];
+        water_frustum_t fr{};
+        std::memcpy( fr.f, r.m_frustum, sizeof( fr.f ) );
+        std::memcpy( fr.position, r.m_eye, sizeof( fr.position ) );
+        water_words_t s{};
+        for ( int w = 0; w < 68; ++w )
+            s.set( 4 * w, r.m_surface[ w ] );
+        water_view_t view{};
+        water_surface_t q{};
+        q.height = s.f( 20 );
+        q.wave_root = -1;
+        view.water.surfaces.push_back( q );
+        water_grid_frame_t out{};
+        water_grid_build( g, fr, s, 0, &view, out, false );
+        bool same = ( out.draws.size( ) == 1 ) == ( r.m_built != 0 ) && out.failed == 0;
+        if ( same && r.m_built )
+        {
+            const water_grid_draw_t& d = out.draws[ 0 ];
+            const unsigned n = r.m_record[ 10 ], nv = r.m_record[ 12 ], ni = r.m_record[ 14 ];
+            same = static_cast< unsigned >( d.patches ) == n && static_cast< unsigned >( d.vertex_count ) == nv &&
+                   static_cast< unsigned >( d.index_count ) == ni && std::memcmp( d.position, &r.m_record[ 1 ], 16 ) == 0 &&
+                   std::memcmp( &d.rotation, &r.m_record[ 5 ], 4 ) == 0 && std::memcmp( d.size, &r.m_record[ 6 ], 8 ) == 0 &&
+                   std::memcmp( &d.below, &r.m_record[ 8 ], 4 ) == 0 && std::memcmp( &d.above, &r.m_record[ 9 ], 4 ) == 0;
+            for ( unsigned p = 0; same && p < n; ++p )
+                same = std::memcmp( &g.patches[ p ], g_golden_water_grid_patches + r.m_patch_at + 5 * p, 20 ) == 0;
+            same = same && std::memcmp( out.vertices.data( ), g_golden_water_grid_vertices + r.m_vertex_at, 32 * static_cast< std::size_t >( nv ) ) == 0;
+            same = same && std::memcmp( out.indices.data( ), g_golden_water_grid_indices + r.m_index_at, 2 * static_cast< std::size_t >( ni ) ) == 0;
+            patches += static_cast< int >( n );
+            vertices += static_cast< int >( nv );
+        }
+        if ( !same && ++failed <= 6 )
+            LOG_ERROR( "water grid: surface %d differs (ours %d patches %d vertices)", static_cast< int >( k ),
+                       static_cast< int >( g.patches.size( ) ), static_cast< int >( out.vertices.size( ) ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_grid_build matches the water renderer's surface build 0x597B50 (0x597110 / 0x597260 / 0x597700 / 0x597D70, the "
+                     "forced +96 query) on %d surfaces: %d patches, %d vertex records and their indices bit for bit",
+                     static_cast< int >( g_golden_water_grids_count ), patches, vertices );
+    else
+        LOG_ERROR( "water_grid_build FAILED %d of %d surfaces", failed, static_cast< int >( g_golden_water_grids_count ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_water_templates( ) && ok;
+    ok = verify_water_frustum( ) && ok;
+    ok = verify_water_grid( ) && ok;
     ok = verify_static_scene_load( ) && ok;
     ok = verify_animated_model_draw( ) && ok;
     ok = verify_script_graph( ) && ok;
