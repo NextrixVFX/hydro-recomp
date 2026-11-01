@@ -183,6 +183,10 @@ struct front_end_engine_t
     bool m_title_played = false;
 };
 
+// core/world action.hxx (included at the end of this file: it includes this one for the fade type).
+inline void action_end_enter( front_end_engine_t::ui_fade_t& f );
+inline void action_end_tick( const front_end_engine_t::ui_fade_t& f, bool channel, float volume, const std::function< void( float ) >& set_volume );
+
 class c_front_end
 {
 public:
@@ -528,28 +532,11 @@ private:
             m_engine.m_save_check( );
     }
 
-    // End enter 0x4BAAD0: a fade out (duration not > 0: value 1, rate 0; else
-    // value 0, rate 1 / duration).
-    void end_enter( )
-    {
-        if ( !( m_engine.m_fade.m_duration > 0.0f ) )  // comiss + jbe: a NaN duration takes this branch
-        {
-            m_engine.m_fade.m_value = 1.0f;
-            m_engine.m_fade.m_rate = 0.0f;
-        }
-        else
-        {
-            m_engine.m_fade.m_value = 0.0f;
-            m_engine.m_fade.m_rate = 1.0f / m_engine.m_fade.m_duration;
-        }
-    }
-
-    // End tick 0x4BAB10: the music follows the fade, (1 - value) * volume.
-    void end_tick( float )
-    {
-        if ( m_engine.m_music_channel && m_engine.m_set_music_volume )
-            m_engine.m_set_music_volume( ( 1.0f - m_engine.m_fade.m_value ) * m_engine.m_music_volume );
-    }
+    // End enter 0x4BAAD0 / tick 0x4BAB10: VuActionGameMode's member functions
+    // (the front end binds the same two) - ONE recreation, core/world action.hxx
+    // action_end_enter / action_end_tick (declared above, included at the end).
+    void end_enter( ) { action_end_enter( m_engine.m_fade ); }
+    void end_tick( float ) { action_end_tick( m_engine.m_fade, m_engine.m_music_channel, m_engine.m_music_volume, m_engine.m_set_music_volume ); }
 
     bool screen_loaded( ) const { return m_project && m_engine.m_is_screen && m_engine.m_is_screen( m_project ); }
 
@@ -625,3 +612,5 @@ private:
             m_engine.m_screen_draw( m_project, 1.0f );
     }
 };
+
+#include <workspace/core/world/action.hxx>
