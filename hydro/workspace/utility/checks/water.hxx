@@ -3,6 +3,7 @@
 #include <workspace/core/world/tree.hxx>
 #include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/spray.hxx>
+#include <workspace/core/world/pfxclass.hxx>
 
 #include <map>
 #include <string>
@@ -2276,9 +2277,107 @@ inline bool verify_boat_hull( )
     return failed == 0;
 }
 
+// world/pfxclass.hxx's g_pfx_classes and its creates / inits / resets against each VuPfx node class's slots run by
+// retail (cases pfx_class_*, one per class): the vtable's slot addresses, getType's descriptor and chain, the sizes,
+// every word slot 7 / slot 9 leave on two fills (the pattern instances' +0x38 / +0x48 skipped: stack words 0x58B240
+// never sets), the instance's slot 0 with its child calls. One line per class.
+inline bool verify_pfx_classes( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_pcl_count; ++index )
+    {
+        const unsigned* s = g_golden_pcl_words + g_golden_pcl_offsets[ index ];
+        const char* name = g_golden_pcl_names[ index ];
+        const pfx_class_t* c = pfx_class_find( name );
+        int bad = 0;
+        if ( !c )
+        {
+            ++failed;
+            LOG_ERROR( "pfx_class %s: not in g_pfx_classes", name );
+            continue;
+        }
+        const unsigned* slots = s + 1;
+        bad += s[ 0 ] != c->vtable;
+        bad += slots[ 1 ] != c->get_type;
+        bad += s[ 11 ] != c->descriptor;
+        bad += std::strcmp( g_golden_pcl_chains[ index ], c->chain ) != 0;
+        bad += c->size_slot ? ( slots[ 6 ] != c->size_slot || s[ 12 ] != c->instance_size ) : s[ 12 ] != 0u;
+        const bool created = s[ 13 ] != 0u;
+        bad += created != ( c->create != 0u );
+        s += 14;
+        const bool pattern = c->create == 0x58E9A0u || c->create == 0x58FAA0u || c->create == 0x591470u;
+        if ( created )
+        {
+            bad += slots[ 7 ] != c->create;
+            for ( int f = 0; f < 2; ++f, s += 33 )
+            {
+                std::uint32_t w[ 32 ];
+                for ( auto& x : w )
+                    x = f ? 0x33333333u : 0xCCCCCCCCu;
+                pfx_create_class( c->create, w );
+                bad += s[ 0 ] != 0u;
+                for ( int k = 0; k < 32; ++k )
+                    if ( !( pattern && ( k == 0x38 / 4 || k == 0x48 / 4 ) ) && w[ k ] != s[ 1 + k ] )
+                        ++bad;
+            }
+            const unsigned reset_slot = *s++;
+            bad += c->reset ? reset_slot != c->reset : reset_slot != 0x401560u;
+            for ( int f = 0; f < 2; ++f )
+            {
+                const int calls = static_cast< int >( s[ 0 ] );
+                const unsigned* order = s + 1;
+                s += 1 + calls;
+                std::uint32_t w[ 32 ];
+                std::memcpy( w, s, sizeof( w ) );
+                struct kids_t { int n; int at[ 4 ]; } kids{ 0, { } };
+                auto child = []( void* u, int k ) { auto& q = *static_cast< kids_t* >( u ); if ( q.n < 4 ) q.at[ q.n ] = k; ++q.n; };
+                switch ( c->reset )
+                {
+                case 0x55D020u: pfx_fountain_reset( w ); break;
+                case 0x4CE750u: pfx_hull_reset( w ); break;
+                case 0x58FE80u: pfx_pattern_reset( w, false, 2, child, &kids ); break;
+                case 0x58F080u: pfx_pattern_reset( w, true, 2, child, &kids ); break;
+                default: break;   // 0x401560: a nullsub
+                }
+                bad += kids.n != calls;
+                for ( int k = 0; k < calls && k < 4; ++k )
+                    bad += kids.at[ k ] != static_cast< int >( order[ k ] );
+                bad += std::memcmp( w, s + 32, sizeof( w ) ) != 0;
+                s += 64;
+            }
+        }
+        bad += c->particle_slot ? ( slots[ 8 ] != c->particle_slot || s[ 0 ] != c->particle_size ) : s[ 0 ] != 0u;
+        const bool particle = s[ 1 ] != 0u;
+        bad += particle != ( c->particle != 0u );
+        s += 2;
+        if ( particle )
+        {
+            bad += slots[ 9 ] != c->particle;
+            for ( int f = 0; f < 2; ++f, s += 32 )
+            {
+                std::uint32_t w[ 32 ];
+                for ( auto& x : w )
+                    x = f ? 0x33333333u : 0xCCCCCCCCu;
+                pfx_particle_class( c->particle, w );
+                bad += std::memcmp( w, s, sizeof( w ) ) != 0;
+            }
+        }
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "pfx_class %s: %d differences", name, bad );
+        }
+        else
+            LOG_SUCCESS( "pfx_class %s matches retail (vtable 0x%X): getType 0x%X -> %s%s%s%s", name, c->vtable, c->get_type, c->chain,
+                c->size_slot ? ", instance size / create" : "", c->reset ? ", reset" : "", c->particle ? ", particle size / init" : "" );
+    }
+    return failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
+    ok = verify_pfx_classes( ) && ok;
     ok = verify_boat_hull( ) && ok;
     ok = verify_pfx_springs( ) && ok;
     ok = verify_boat_thrust( ) && ok;
