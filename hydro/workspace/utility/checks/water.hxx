@@ -2658,6 +2658,7 @@ inline bool verify_water_all( )
     ok = verify_settings_triggers( ) && ok;
     ok = verify_key_motion( ) && ok;
     ok = verify_key_curve( ) && ok;
+    ok = verify_rotate_axis_angle( ) && ok;
     ok = verify_water_surface_distance( ) && ok;
     ok = verify_water_reflection( ) && ok;
     ok = verify_ocean_kernels96( ) && ok;

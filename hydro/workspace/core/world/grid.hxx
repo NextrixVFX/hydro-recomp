@@ -15,6 +15,9 @@
 // THE WATER RENDERER'S CPU SIDE (VuWaterRenderer, ctor 0x594DD0), recreated
 // from retail's disassembly / decompilation:
 //
+//   0x594BC0  the thread's entry trampoline (the ctor's g 0x759098 vt+0x20(
+//             0x594BC0, renderer) -> 0x5979C0 on its argument): platform
+//             threading - a hook, not copied.
 //   0x5979C0  the worker thread's loop: per viewport (camera = viewport +40),
 //             every surface in VuWater's list (+0x20) whose box (+208) passes
 //             the camera frustum 0x57D280 (identity matrix 0x7593B0) is built
