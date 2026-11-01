@@ -3,6 +3,7 @@
 #include <workspace/core/ui/combo.hxx>
 #include <workspace/core/ui/draw.hxx>
 #include <workspace/core/ui/frame.hxx>
+#include <workspace/core/ui/fsm.hxx>
 #include <workspace/core/ui/image.hxx>
 #include <workspace/core/ui/results.hxx>
 
@@ -34,8 +35,10 @@
 // The VuFSM (built by the ctor): "Read" (enter 0x47BC90, exit 0x47BE70, tick
 // 0x47BEA0, draw 0x47BEF0), "Show" (draw 0x47BF90), "NotConnected" (draw 0x47C720);
 // Read -> Show "Success", Read -> NotConnected "Failure", Show / NotConnected ->
-// Read "Refresh". The state draws are recreated here; the state machine's enter /
-// exit / tick, slot 6 0x479C50, slot 7 0x479CF0 and "Decision" 0x47B640 are NOT yet.
+// Read "Refresh" (ctor 0x4799B4..0x479A87). The state draws (batch 22) and the
+// per-frame half (batch 23: c_ui_leaderboard below - slot 6 0x479C50, slot 7
+// 0x479CF0, "Decision" 0x47B640, Read's enter / exit / tick, the combo change
+// 0x47A1B0, the page 0x47A280, the touch callbacks) are recreated here.
 
 inline constexpr std::uint32_t k_ui_leaderboard_vtable = 0x73F2C8u;
 
@@ -44,6 +47,8 @@ struct ui_leaderboard_t
     float m_scale[ 2 ] = { 100.0f, 100.0f };   // +0x68
     float m_pos[ 2 ] = { 0.0f, 0.0f };         // +0x70
     float m_combo_spacing = 0.0f;              // +0x78 ComboBoxSpacing
+    float m_left[ 4 ] = { };                   // +0x25C TouchLeft X / Y / Width / Height
+    float m_right[ 4 ] = { };                  // +0x26C TouchRight
     std::int32_t m_rows = 10;                  // +0x27C RowCount
     float m_row[ 4 ] = { };                    // +0x280 RowRect
     float m_spacing = 0.0f;                    // +0x290 RowSpacing
@@ -80,6 +85,8 @@ inline ui_leaderboard_t ui_leaderboard_of( const entity_t& e )
     bits( "Position X", &b.m_pos[ 0 ], 4 );
     bits( "Position Y", &b.m_pos[ 1 ], 4 );
     bits( "ComboBoxSpacing", &b.m_combo_spacing, 4 );
+    rect( "TouchLeft", b.m_left );
+    rect( "TouchRight", b.m_right );
     bits( "RowCount", &b.m_rows, 4 );
     rect( "RowRect", b.m_row );
     bits( "RowSpacing", &b.m_spacing, 4 );
@@ -321,3 +328,372 @@ inline bool ui_leaderboard_draw( const ui_leaderboard_t& f, const ui_combo_block
     }
     return known;
 }
+
+// The platform's leaderboard manager g 0x758FA8 (HOOKS: an online service) and the
+// engine services the per-frame half reaches.
+struct ui_leaderboard_hooks_t
+{
+    std::function< void( const std::string&, int, int ) > m_read;   // vt+0x18 (key, first row, RowCount)
+    std::function< int( ) > m_status;                               // vt+0x1C: 1 done, 2 failed
+    std::function< int( ) > m_total;                                // vt+0x20: the board's entry count
+    std::function< void( bool ) > m_tick_register;                  // the tick manager g 0x759008 vt+0x20 / +0x24 "Decision"
+    std::function< float( ) > m_delta;                              // its vt+0x3C (the frame's dt)
+    std::function< void( bool ) > m_touch;                          // the touch device g 0x759070: 0x53FB90 add {+0x5C, 0} / 0x53FA60 remove
+    std::function< void( const char* ) > m_sound;                   // FMOD getEvent + start (g 0x759010 +8, a HOOK)
+    const value_t* m_option_db = nullptr;                           // gameutil g 0x758FF8 +0x34 -> +0x58 (OptionDB)
+};
+
+// VuUILeaderboardEntity's per-frame half (batch 23), transliterated from the
+// disassembly. The ctor's records come from ui_leaderboard_combos over the hooks'
+// OptionDB; the FSM is the ctor's (current = Read from addState - its enter runs
+// at slot 6). Every member returns false where retail would fault or read outside
+// what it owns (a combo index < 0, RowCount 0 in an idiv, a mode index outside
+// the six names) - the path is then UNKNOWN.
+class c_ui_leaderboard
+{
+public:
+    c_ui_leaderboard( const ui_leaderboard_t& fields, ui_leaderboard_hooks_t& hooks ) : m_f( fields ), m_hooks( hooks )
+    {
+        ui_leaderboard_combos( hooks.m_option_db, m_s.m_combos );
+        fsm_state_t& read = m_fsm.add_state( "Read" );
+        read.m_enter = [ this ] { m_known = read_enter( ) && m_known; };
+        read.m_exit = [ this ] { read_exit( ); };
+        read.m_tick = [ this ]( float ) { read_tick( ); };
+        read.m_address[ 0 ] = 0x47BC90u;
+        read.m_address[ 1 ] = 0x47BE70u;
+        read.m_address[ 2 ] = 0x47BEA0u;
+        read.m_address[ 3 ] = 0x47BEF0u;
+        m_fsm.add_state( "Show" ).m_address[ 3 ] = 0x47BF90u;
+        m_fsm.add_state( "NotConnected" ).m_address[ 3 ] = 0x47C720u;
+        m_fsm.add_transition( "Read", "Show", "Success" );
+        m_fsm.add_transition( "Read", "NotConnected", "Failure" );
+        m_fsm.add_transition( "Show", "Read", "Refresh" );
+        m_fsm.add_transition( "NotConnected", "Read", "Refresh" );
+    }
+
+    // Slot 6 0x479C50 (gameInitialize): "Decision" (0x47B640, a 16-byte VuMethod
+    // delegate vtable 0x73F274) registered with the tick manager (vt+0x20); the touch
+    // callback (+0x5C) registered through 0x53FB90 with priority 0; current = the
+    // first state (+0x5B4 [0]), then its enter.
+    bool initialize( )
+    {
+        m_known = true;
+        if ( m_hooks.m_tick_register )
+            m_hooks.m_tick_register( true );
+        if ( m_hooks.m_touch )
+            m_hooks.m_touch( true );
+        m_fsm.start( );
+        return m_known;
+    }
+
+    // Slot 7 0x479CF0 (gameRelease): "Decision" unregistered (vt+0x24), the touch
+    // callback removed (0x53FA60), then the current state's exit (+0x24).
+    void release( )
+    {
+        if ( m_hooks.m_tick_register )
+            m_hooks.m_tick_register( false );
+        if ( m_hooks.m_touch )
+            m_hooks.m_touch( false );
+        if ( fsm_state_t* s = m_fsm.current( ) )
+            if ( s->m_exit )
+                s->m_exit( );
+    }
+
+    // "Decision" 0x47B640 (its float argument is overwritten by the tick manager's
+    // dt, vt+0x3C). With the touch down byte (+0x5D0): per combo k (y from Position Y,
+    // += ComboBoxSpacing) the left / right arrow (TouchLeft / TouchRight over Position,
+    // x (1 / Screen Scale); inclusive, comiss - unordered fails) -> press 1 / 2, the
+    // touched entry +0x5E0 = k, the record's +0x29 / +0x2A = 1 (a later k wins); per
+    // button k (ButtonTouch, += ButtonSpacing) -> press 3, entry k, focus k + 2. Then
+    // the press over the entry's rect rebuilt from k (float k x the spacing - not the
+    // running sum): released (+0x5D2) -> 0x47A1B0(k, -1 / +1) or 0x47A280(focus) and
+    // the press dropped; the point outside drops it too. Released: held / up cleared;
+    // down cleared; each record's shown choice +0x30 toward its current +0x2C by dt /
+    // the block's +0x120 (0.25, ctor 0x4569F0; minss / maxss); FSM evaluate 0x555AD0;
+    // the current state's tick (dt); the FSM time += dt.
+    bool decision( )
+    {
+        m_known = true;
+        const float dt = m_hooks.m_delta ? m_hooks.m_delta( ) : 0.0f;
+        const auto inside = [ this ]( float x, float y, float w, float h )
+        {
+            return m_point[ 0 ] >= x && w + x >= m_point[ 0 ] && m_point[ 1 ] >= y && h + y >= m_point[ 1 ];
+        };
+        if ( m_down )
+        {
+            const float x = m_f.m_pos[ 0 ];
+            float y = m_f.m_pos[ 1 ];
+            for ( int k = 0; k < 2; ++k )
+            {
+                const float ix = 1.0f / m_f.m_scale[ 0 ];   // 0x6F76B8
+                const float iy = 1.0f / m_f.m_scale[ 1 ];
+                const float lx = ix * ( x + m_f.m_left[ 0 ] ), lw = ix * m_f.m_left[ 2 ];
+                const float ly = iy * ( y + m_f.m_left[ 1 ] ), lh = iy * m_f.m_left[ 3 ];
+                const float rx = ix * ( m_f.m_right[ 0 ] + x ), rw = ix * m_f.m_right[ 2 ];
+                const float ry = iy * ( m_f.m_right[ 1 ] + y ), rh = iy * m_f.m_right[ 3 ];
+                if ( inside( lx, ly, lw, lh ) )
+                {
+                    m_s.m_press = 1;
+                    m_entry = k;
+                    m_s.m_combos[ k ].m_b41 = 1;
+                }
+                else if ( inside( rx, ry, rw, rh ) )
+                {
+                    m_s.m_press = 2;
+                    m_entry = k;
+                    m_s.m_combos[ k ].m_b42 = 1;
+                }
+                y = m_f.m_combo_spacing + y;
+            }
+            y = m_f.m_pos[ 1 ];
+            for ( int k = 0; k < 2; ++k )
+            {
+                const float ix = 1.0f / m_f.m_scale[ 0 ];
+                const float iy = 1.0f / m_f.m_scale[ 1 ];
+                const float bx = ix * ( x + m_f.m_button_touch[ 0 ] ), bw = ix * m_f.m_button_touch[ 2 ];
+                const float by = iy * ( m_f.m_button_touch[ 1 ] + y ), bh = iy * m_f.m_button_touch[ 3 ];
+                if ( inside( bx, by, bw, bh ) )
+                {
+                    m_s.m_press = 3;
+                    m_entry = k;
+                    m_s.m_focus = k + 2;
+                }
+                y = m_f.m_button_spacing + y;
+            }
+        }
+        for ( int side = 1; side <= 2; ++side )
+        {
+            if ( m_s.m_press != side )
+                continue;
+            const int e = m_entry;
+            const float* r = side == 1 ? m_f.m_left : m_f.m_right;
+            const float ix = 1.0f / m_f.m_scale[ 0 ];
+            const float iy = 1.0f / m_f.m_scale[ 1 ];
+            const float sx = side == 1 ? m_f.m_pos[ 0 ] + r[ 0 ] : r[ 0 ] + m_f.m_pos[ 0 ];
+            const float sy = ( r[ 1 ] + m_f.m_pos[ 1 ] ) + static_cast< float >( e ) * m_f.m_combo_spacing;
+            const float x = ix * sx, w = ix * r[ 2 ];
+            const float y = iy * sy, h = iy * r[ 3 ];
+            const auto clear = [ this, side ]
+            {
+                m_s.m_press = 0;
+                if ( m_entry < 0 || m_entry > 1 )
+                    return false;   // retail writes the byte outside the two records
+                ( side == 1 ? m_s.m_combos[ m_entry ].m_b41 : m_s.m_combos[ m_entry ].m_b42 ) = 0;
+                return true;
+            };
+            if ( m_up )
+            {
+                m_known = change( e, side == 1 ? -1 : 1 ) && m_known;
+                m_known = clear( ) && m_known;
+            }
+            if ( !inside( x, y, w, h ) )
+                m_known = clear( ) && m_known;
+        }
+        if ( m_s.m_press == 3 )
+        {
+            const float sy = ( m_f.m_button_touch[ 1 ] + m_f.m_pos[ 1 ] ) + static_cast< float >( m_entry ) * m_f.m_button_spacing;
+            const float sx = m_f.m_pos[ 0 ] + m_f.m_button_touch[ 0 ];
+            const float iy = 1.0f / m_f.m_scale[ 1 ];
+            const float ix = 1.0f / m_f.m_scale[ 0 ];
+            const float x = ix * sx, w = ix * m_f.m_button_touch[ 2 ];
+            const float y = iy * sy, h = iy * m_f.m_button_touch[ 3 ];
+            if ( m_up )
+            {
+                m_known = page( m_s.m_focus ) && m_known;
+                m_s.m_press = 0;
+            }
+            if ( !inside( x, y, w, h ) )
+                m_s.m_press = 0;
+        }
+        if ( m_up )
+        {
+            m_held = 0;
+            m_up = 0;
+        }
+        m_down = 0;
+        for ( ui_config_combo_t& c : m_s.m_combos )
+        {
+            const float target = static_cast< float >( c.m_index );   // cvtdq2ps
+            const float step = dt / 0.25f;                           // the block's +0x120
+            if ( target > c.m_shown )
+            {
+                const float sum = step + c.m_shown;
+                c.m_shown = sum < target ? sum : target;   // minss
+            }
+            else
+            {
+                const float diff = c.m_shown - step;
+                c.m_shown = diff > target ? diff : target;   // maxss
+            }
+        }
+        m_fsm.evaluate( );
+        if ( fsm_state_t* s = m_fsm.current( ) )
+            if ( s->m_tick )
+                s->m_tick( dt );
+        m_fsm.m_time = m_fsm.m_time + dt;
+        return m_known;
+    }
+
+    // 0x47A1B0 (thiscall k, step; ret 8): nothing unless k < 2 (signed). focus = k; the
+    // record's new choice = min(current + step, entries - 1), then 0 if negative; when
+    // it moved: current = it, menu_change, the first row +0x5A4 = 0, "Refresh" = 1.
+    bool change( int k, int step )
+    {
+        if ( k >= 2 )
+            return true;
+        if ( k < 0 )
+            return false;   // retail indexes before the records
+        m_s.m_focus = k;
+        ui_config_combo_t& c = m_s.m_combos[ k ];
+        const int last = static_cast< int >( c.m_choice_ids.size( ) ) - 1;
+        int n = static_cast< int >( static_cast< std::uint32_t >( step ) + static_cast< std::uint32_t >( c.m_index ) );
+        if ( last < n )
+            n = last;
+        if ( n < 0 )
+            n = 0;
+        if ( n == c.m_index )
+            return true;
+        c.m_index = n;
+        if ( m_hooks.m_sound )
+            m_hooks.m_sound( "Global/UI_and_Menu/menu_change" );
+        m_first = 0;
+        m_fsm.set_condition( "Refresh", true );
+        return true;
+    }
+
+    // 0x47A280 (thiscall focus; ret 4): nothing for focus < 2 or while the current
+    // state's name is exactly "Read". page = first / RowCount; focus 2 -> first -=
+    // RowCount, 3 -> += RowCount; then clamped to [0, the board's count (vt+0x20) - 1]
+    // (min first, then 0 if negative); when the page moved, "Refresh" = 1.
+    bool page( int focus )
+    {
+        if ( focus < 2 )
+            return true;
+        const fsm_state_t* s = m_fsm.current( );
+        if ( !s )
+            return false;
+        if ( s->m_name == "Read" )
+            return true;
+        const int rows = m_f.m_rows;
+        if ( rows == 0 || ( rows == -1 && m_first == INT32_MIN ) )
+            return false;   // idiv fault
+        const int page0 = m_first / rows;
+        if ( focus == 2 )
+            m_first = static_cast< int >( static_cast< std::uint32_t >( m_first ) - static_cast< std::uint32_t >( rows ) );
+        else if ( focus == 3 )
+            m_first = static_cast< int >( static_cast< std::uint32_t >( rows ) + static_cast< std::uint32_t >( m_first ) );
+        m_first = clamp_first( m_first );
+        if ( rows == -1 && m_first == INT32_MIN )
+            return false;
+        if ( m_first / rows != page0 )
+            m_fsm.set_condition( "Refresh", true );
+        return true;
+    }
+
+    // The touch callbacks (vtable 0x73F2B4, this = entity + 0x5C). Slot 0 0x479D30
+    // (down, const VuVector2&): unless held (+0x5D1), down = held = 1 and the point
+    // through VuUIImpl's inverse crop matrix 0x81A144 (m0 m1 m4 m5 m12 m13 - an input)
+    // -> +0x5D4.
+    void touch_down( const float inverse[ 16 ], const float point[ 2 ] )
+    {
+        if ( m_held )
+            return;
+        m_down = 1;
+        m_held = 1;
+        m_point[ 0 ] = point[ 0 ] * inverse[ 0 ] + point[ 1 ] * inverse[ 4 ] + inverse[ 12 ];
+        m_point[ 1 ] = point[ 0 ] * inverse[ 1 ] + point[ 1 ] * inverse[ 5 ] + inverse[ 13 ];
+    }
+
+    // Slot 1 0x479E30 (up): +0x5D2 = 1.
+    void touch_up( ) { m_up = 1; }
+
+    // Slot 2 0x479E40 (move): the device's touch 0 (g 0x759070 vt+0x1C (0, out) - a
+    // HOOK: `point`) mapped -> +0x5D4, always (retail's operand order).
+    void touch_move( const float inverse[ 16 ], const float point[ 2 ] )
+    {
+        const float x = inverse[ 4 ] * point[ 1 ] + inverse[ 0 ] * point[ 0 ] + inverse[ 12 ];
+        const float y = inverse[ 5 ] * point[ 1 ] + inverse[ 1 ] * point[ 0 ] + inverse[ 13 ];
+        m_point[ 0 ] = x;
+        m_point[ 1 ] = y;
+    }
+
+    // The draw component's member 0x47A360 over this runtime state.
+    bool draw( const ui_combo_block_t& block, const ui_leaderboard_draw_t& d )
+    {
+        m_s.m_state = m_fsm.m_current;
+        return ui_leaderboard_draw( m_f, block, m_s, d );
+    }
+
+    ui_leaderboard_state_t m_s;            // +0x538 the records, +0x5A0 focus, +0x5DC press
+    c_fsm m_fsm;                           // +0x5A8
+    std::int32_t m_first = 0;              // +0x5A4 the first row asked for
+    std::int32_t m_entry = 0;              // +0x5E0 the touched record / button
+    std::uint8_t m_down = 0, m_held = 0, m_up = 0;   // +0x5D0 / +0x5D1 / +0x5D2
+    float m_point[ 2 ] = { 0.0f, 0.0f };   // +0x5D4
+
+private:
+    // Read's exit 0x47BE70 / the clamp in 0x47A280: min(first, count - 1), then 0 if negative.
+    int clamp_first( int first ) const
+    {
+        const int count = m_hooks.m_total ? m_hooks.m_total( ) : 0;
+        const int last = static_cast< int >( static_cast< std::uint32_t >( count ) - 1u );
+        if ( last < first )
+            first = last;
+        if ( first < 0 )
+            first = 0;
+        return first;
+    }
+
+    // Read's enter 0x47BC90: "Refresh" = 0; the key = OptionDB ["VuDBAsset"]["Track"]
+    // (its first element when an array with one or more, else null) ["Choices"] (the
+    // element at record 0's current +0x564 when an array and in range, else null)
+    // ["Value"]'s text (tag 4, else ""), + the mode name .data 0x73F290 [record 1's
+    // current +0x598] (Race / SlalomCourseC / SlalomCourseB / SlalomCourseA / TimeTrial
+    // / Ghost; 0x430290 append); the manager's read (vt+0x18: &key, (first / RowCount)
+    // x RowCount, RowCount).
+    bool read_enter( )
+    {
+        static const value_t k_none;
+        static const char* const k_modes[ 6 ] = { "Race", "SlalomCourseC", "SlalomCourseB", "SlalomCourseA", "TimeTrial", "Ghost" };
+        m_fsm.set_condition( "Refresh", false );
+        const int track_index = m_s.m_combos[ 0 ].m_index;
+        const int mode_index = m_s.m_combos[ 1 ].m_index;
+        const value_t& db = m_hooks.m_option_db ? member( *m_hooks.m_option_db, "VuDBAsset" ) : k_none;
+        const value_t& track = member( db, "Track" );
+        const value_t& first = track.tag == 5 && !track.list.empty( ) ? track.list[ 0 ] : k_none;
+        const value_t& choices = member( first, "Choices" );
+        const value_t& choice = choices.tag == 5 && track_index >= 0 && track_index < static_cast< int >( choices.list.size( ) )
+                                    ? choices.list[ static_cast< std::size_t >( track_index ) ]
+                                    : k_none;
+        const value_t& v = member( choice, "Value" );
+        std::string key = v.tag == 4 ? v.text : std::string( );
+        if ( mode_index < 0 || mode_index > 5 )
+            return false;   // retail reads past the name table
+        key += k_modes[ mode_index ];
+        const int rows = m_f.m_rows;
+        if ( rows == 0 || ( rows == -1 && m_first == INT32_MIN ) )
+            return false;   // idiv fault
+        const int start = static_cast< int >( static_cast< std::uint32_t >( m_first / rows ) * static_cast< std::uint32_t >( rows ) );
+        if ( m_hooks.m_read )
+            m_hooks.m_read( key, start, rows );
+        return true;
+    }
+
+    // Read's exit 0x47BE70: first = clamped to the board's count (vt+0x20).
+    void read_exit( ) { m_first = clamp_first( m_first ); }
+
+    // Read's tick 0x47BEA0 (the dt is not read): the manager's status (vt+0x1C) 1
+    // pulses "Success", 2 "Failure" (conditions +0x1D = 1).
+    void read_tick( )
+    {
+        const int status = m_hooks.m_status ? m_hooks.m_status( ) : 0;
+        if ( status == 1 )
+            m_fsm.pulse_condition( "Success" );
+        else if ( status == 2 )
+            m_fsm.pulse_condition( "Failure" );
+    }
+
+    ui_leaderboard_t m_f;
+    ui_leaderboard_hooks_t& m_hooks;
+    bool m_known = true;
+};
