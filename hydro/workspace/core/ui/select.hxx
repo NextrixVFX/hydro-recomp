@@ -211,11 +211,36 @@ inline bool ui_json_equal( const value_t& a, const value_t& b )
 // manager 0x758FAC slot +0x18; `next_choice` = VuGameConfigEntity's slot 26
 // (+104) 0x45E300 (READ - a walk over the progress manager 0x758FD8 +48 and
 // the unlock manager - NOT recreated): true with the choice text to select.
+// The boat selector's further reads, HOOKS too: `progress` = the progress
+// manager 0x758FD8 slot +132 (one string; `has_progress` false = the global is
+// null), `store_beta` = 0x4D3170 (the asset factory's slot +124 build name
+// compared with "StoreBeta": build configuration), `has_unlock` = whether
+// g_vuunlockmanagerimpl is set (0x44B780 / 0x449050 / 0x4491C0 test it; the
+// cases always set it - the null branches are NOT exercised).
 struct ui_profile_t
 {
     std::function< bool( int slot, const std::string& a, const std::string& b, const std::string& c ) > unlock;
     std::function< bool( ) > license;
     std::function< bool( const value_t& option, std::string& out ) > next_choice;
+    std::function< bool( const std::string& value ) > progress;
+    std::function< bool( ) > store_beta;
+    bool has_progress = true;
+    bool has_unlock = true;
+};
+
+// A combo box record (VuBaseConfigEntity +0x2B0 .. +0x2B4, 52 bytes each,
+// built by slot 4's 0x44A4C0 - an input here): +40 the focused byte, +41 /
+// +42 two bytes the walk never writes, +44 the current choice, +48 the shown
+// choice (float), +28 the choice entries (28 bytes: a VuString, +24 the
+// locked byte).
+struct ui_config_combo_t
+{
+    std::uint8_t m_focused = 0;
+    std::uint8_t m_b41 = 0;
+    std::uint8_t m_b42 = 0;
+    int m_index = 0;
+    float m_shown = 0.0f;
+    std::vector< std::uint8_t > m_locked;
 };
 
 // The selector entity's fields the walk reads.
@@ -224,7 +249,57 @@ struct ui_config_entity_t
     bool m_single_player = false;  // +0x274 "Single Player"
     bool m_force_online = false;   // +0x275 "Force Online"
     bool m_refresh = false;        // +0x2CC, set around 0x448140's refresh
+    int m_focus = 0;               // +0x2C8, the focused option's index
+    std::vector< const value_t* > m_options;     // +0x2BC, the walk's option vector
+    std::vector< ui_config_combo_t > m_combos;   // +0x2B0
+    bool m_fault = false;          // a path where retail reads / writes outside a container
 };
+
+// The selector's class virtuals the base reaches (VuBaseConfigEntity's vtable
+// slots; VuGameConfigEntity 0x73D1DC and VuBoatConfigEntity 0x73C69C fill
+// them). (name, value) are the option's Name and a choice's Value texts.
+struct ui_config_class_t
+{
+    std::function< bool( const std::string& name, const std::string& value ) > blocked;       // slot 17 +68
+    std::function< bool( const std::string& name, const std::string& value ) > locked;        // slot 18 +72
+    std::function< bool( const std::string& name, const std::string& value ) > locked_trial;  // slot 19 +76
+    std::function< bool( const std::string& name, const std::string& value ) > unavailable;   // slot 20 +80
+    std::function< int( const value_t& option, const std::string& current ) > fallback;       // slot 22 +88
+    std::function< void( std::string& out ) > info;                                           // slot 23 +92
+    std::function< std::string( const std::string& name ) > last;                             // slot 24 +96
+    std::function< void( const std::string& name, const std::string& value ) > remember;      // slot 25 +100
+    std::function< bool( const value_t& option, std::string& out ) > next_choice;             // slot 26 +104
+    std::function< bool( ) > changed;                                                         // slot 12 +48
+};
+
+// What the selectors post. All but `fire` are HOOKS of the platform /
+// engine: VuEventManager_broadcast 0x505690 (immediate), the touch register
+// 0x53FB90 (g_vumetrotouch +4 push of { this + 92, 0 }: platform input), the
+// FMOD event start (audio device). `fire` is an output plug's
+// VuScriptOutputPlug_fire 0x5023A0 on the plug VuScriptComponent_findPlug
+// 0x504770 finds by name - false when the entity declares no such plug
+// (retail calls through the null it gets).
+struct ui_config_hooks_t
+{
+    std::function< void( std::uint32_t hash, const ui_params_t& p ) > broadcast;
+    std::function< void( ) > touch;
+    std::function< bool( const std::string& plug, const ui_params_t& p ) > fire;
+    std::function< void( const char* event ) > sound;
+};
+
+// VuParams' bool add 0x4051A0: with size + 5 <= 128, type 3 then one byte.
+inline void ui_params_add_bool( ui_params_t& p, bool value )
+{
+    if ( p.m_size + 5 > 128 )
+        return;
+    const std::uint32_t type = 3;
+    std::memcpy( p.m_bytes + p.m_size, &type, 4 );
+    p.m_bytes[ p.m_size + 4 ] = value ? 1 : 0;
+    p.m_size += 5;
+}
+
+// VuEventManager's named broadcast: FNV-1a of the name (inlined at each site).
+inline void ui_broadcast( const ui_config_hooks_t& h, const char* name, const ui_params_t& p ) { h.broadcast( fsm_hash( name ), p ); }
 
 // gameutil (g 0x758FF8): +0x50 the game-data root, +0x60 a byte that stops
 // both of the walk's profile branches, +0x64 the last screen operation.
@@ -314,6 +389,28 @@ inline int ui_config_choice_index( const value_t& option, const value_t& root )
     return 0;
 }
 
+// 0x44BD50 with the class's slot 22: the fallback gets the current value's
+// TEXT (the boat's 0x44D970 reads only that, before it writes into the root -
+// the reference itself would not survive the write here).
+inline int ui_config_choice_index( const value_t& option, const value_t& root, const ui_config_class_t& cls )
+{
+    const std::string& name = ui_json_text( member( option, "Name" ) );
+    const value_t& current = ui_json_find( member( root, "GameConfig" ), name );
+    const value_t& choices = member( option, "Choices" );
+    for ( int i = 0; i < ui_json_size( choices ); ++i )
+        if ( ui_json_equal( member( ui_json_element( choices, i ), "Value" ), current ) )
+            return i;
+    const std::string text = ui_json_text( current );
+    return cls.fallback( option, text );
+}
+
+// 0x44BE90: the option's current choice (0x44BD50), element-or-null.
+inline const value_t& ui_config_current_choice( const value_t& option, const value_t& root, const ui_config_class_t& cls )
+{
+    const int index = ui_config_choice_index( option, root, cls );
+    return ui_json_element( member( option, "Choices" ), index );
+}
+
 // 0x44B0D0 (thiscall this, const VuJsonContainer& options), for
 // VuGameConfigEntity's virtuals. For each element of `options` (an array):
 //   the option is pushed onto the entity's option vector (+0x2BC);
@@ -328,8 +425,8 @@ inline int ui_config_choice_index( const value_t& option, const value_t& root )
 //   root made a map, GameConfig (0x4FC970) made a map, [Name] = the Value's
 //     text up to its first NUL;
 //   the walk again over that choice's "Options" (same entity, same vector).
-inline void ui_config_apply_options( const ui_config_entity_t& e, ui_config_env_t& env, const value_t& options,
-                                     std::vector< const value_t* >& pushed, const ui_profile_t& p )
+inline void ui_config_walk( const ui_config_entity_t& e, ui_config_env_t& env, const value_t& options, std::vector< const value_t* >& pushed,
+                            const ui_config_class_t& cls, const ui_profile_t& p )
 {
     value_t& root = *env.m_root;
     for ( int i = 0; i < ui_json_size( options ); ++i )
@@ -342,25 +439,195 @@ inline void ui_config_apply_options( const ui_config_entity_t& e, ui_config_env_
             if ( e.m_single_player && env.m_op == "push" )
             {
                 std::string out;
-                if ( p.next_choice( option, out ) )
-                    ui_game_config_remember( root, name, out );
+                if ( cls.next_choice( option, out ) )
+                    cls.remember( name, out );
             }
-            value_t& slot = ui_json_child_s( ui_json_child( root, "GameConfig" ), name );
-            ui_json_set_string( slot, ui_game_config_last( root, name ).c_str( ) );
+            const std::string last = cls.last( name );
+            ui_json_set_string( ui_json_child_s( ui_json_child( root, "GameConfig" ), name ), last.c_str( ) );
         }
-        const int index = ui_config_choice_index( option, root );
+        const int index = ui_config_choice_index( option, root, cls );
         const value_t& choice = ui_json_element( member( option, "Choices" ), index );
         const std::string value = ui_json_text( member( choice, "Value" ) );
         if ( !e.m_refresh && !env.m_busy )
         {
-            const bool open = !ui_game_config_locked( e, root, name, value, p );
-            const bool trial = p.license( ) ? !ui_game_config_locked_trial( root, name, value, p ) : true;
+            const bool open = !cls.locked( name, value );
+            const bool trial = p.license( ) ? !cls.locked_trial( name, value ) : true;
             if ( open && trial )
-                ui_game_config_remember( root, name, value );
+                cls.remember( name, value );
         }
         ui_json_set_string( ui_json_child_s( ui_json_child( root, "GameConfig" ), name ), value.c_str( ) );
-        ui_config_apply_options( e, env, member( choice, "Options" ), pushed, p );
+        ui_config_walk( e, env, member( choice, "Options" ), pushed, cls, p );
     }
+}
+
+// VuGameConfigEntity's virtuals for the walk (slot 22 0x4471B0 = 0; slots 17
+// / 20 0x4471A0 / 23 / 12 are not reached by it).
+inline ui_config_class_t ui_game_config_class( const ui_config_entity_t& e, value_t& root, const ui_profile_t& p )
+{
+    ui_config_class_t c;
+    c.locked = [ &e, &root, &p ]( const std::string& name, const std::string& value ) { return ui_game_config_locked( e, root, name, value, p ); };
+    c.locked_trial = [ &root, &p ]( const std::string& name, const std::string& value ) { return ui_game_config_locked_trial( root, name, value, p ); };
+    c.fallback = []( const value_t&, const std::string& ) { return 0; };
+    c.last = [ &root ]( const std::string& name ) { return ui_game_config_last( root, name ); };
+    c.remember = [ &root ]( const std::string& name, const std::string& value ) { ui_game_config_remember( root, name, value ); };
+    c.next_choice = p.next_choice;
+    return c;
+}
+
+// The walk for VuGameConfigEntity (verify_ui_config_options' entry).
+inline void ui_config_apply_options( const ui_config_entity_t& e, ui_config_env_t& env, const value_t& options,
+                                     std::vector< const value_t* >& pushed, const ui_profile_t& p )
+{
+    const ui_config_class_t cls = ui_game_config_class( e, *env.m_root, p );
+    ui_config_walk( e, env, options, pushed, cls, p );
+}
+
+// 0x44B780 (thiscall this): for each option k of the vector, its combo box
+// record (+0x2B0 + 52 x asInt(ComboBoxID) - unchecked in retail: false here
+// when outside) gets +40 = (focus +0x2C8 == k), +44 = the current choice
+// (0x44BD50), +48 = (float) that when not focused or refreshing; then for each
+// choice j its entry's +24 = locked (slot 18) - 0 without the unlock manager
+// (also unchecked in retail: false when the record holds fewer entries).
+inline bool ui_config_combo_state( ui_config_entity_t& e, const value_t& root, const ui_config_class_t& cls, const ui_profile_t& p )
+{
+    for ( std::size_t k = 0; k < e.m_options.size( ); ++k )
+    {
+        const value_t& option = *e.m_options[ k ];
+        const value_t& choices = member( option, "Choices" );
+        const int index = ui_config_choice_index( option, root, cls );
+        const bool focused = e.m_focus == static_cast< int >( k );
+        const int id = ui_json_as_int( member( option, "ComboBoxID" ) );
+        if ( id < 0 || static_cast< std::size_t >( id ) >= e.m_combos.size( ) )
+            return false;
+        ui_config_combo_t& combo = e.m_combos[ static_cast< std::size_t >( id ) ];
+        combo.m_focused = focused ? 1 : 0;
+        combo.m_index = index;
+        if ( !focused || e.m_refresh )
+            combo.m_shown = static_cast< float >( index );
+        for ( int j = 0; j < ui_json_size( choices ); ++j )
+        {
+            bool locked = false;
+            if ( p.has_unlock )
+            {
+                const std::string value = ui_json_text( member( ui_json_element( choices, j ), "Value" ) );
+                locked = cls.locked( ui_json_text( member( option, "Name" ) ), value );
+            }
+            if ( static_cast< std::size_t >( j ) >= combo.m_locked.size( ) )
+                return false;
+            combo.m_locked[ static_cast< std::size_t >( j ) ] = locked ? 1 : 0;
+        }
+    }
+    return true;
+}
+
+// The three option scans: for each option of the vector, the class test on
+// (Name, the current choice's Value) - the first true answer returns false.
+// 0x449050 slot 18 (true without the unlock manager), 0x4491C0 slot 19 (true
+// unless the license hook answers true and the unlock manager is set),
+// 0x449350 slot 20.
+inline bool ui_config_scan( const ui_config_entity_t& e, const value_t& root, const ui_config_class_t& cls,
+                            const std::function< bool( const std::string&, const std::string& ) >& test )
+{
+    for ( const value_t* option : e.m_options )
+    {
+        const value_t& choice = ui_config_current_choice( *option, root, cls );
+        const std::string value = ui_json_text( member( choice, "Value" ) );
+        if ( test( ui_json_text( member( *option, "Name" ) ), value ) )
+            return false;
+    }
+    return true;
+}
+
+inline bool ui_config_all_unlocked( const ui_config_entity_t& e, const value_t& root, const ui_config_class_t& cls, const ui_profile_t& p )
+{
+    return !p.has_unlock || ui_config_scan( e, root, cls, cls.locked );
+}
+
+inline bool ui_config_all_licensed( const ui_config_entity_t& e, const value_t& root, const ui_config_class_t& cls, const ui_profile_t& p )
+{
+    if ( !p.license( ) || !p.has_unlock )
+        return true;
+    return ui_config_scan( e, root, cls, cls.locked_trial );
+}
+
+inline bool ui_config_all_available( const ui_config_entity_t& e, const value_t& root, const ui_config_class_t& cls )
+{
+    return ui_config_scan( e, root, cls, cls.unavailable );
+}
+
+// 0x44B9C0 (thiscall this): the info string. Not all unlocked: "Common_
+// StoreBetaLocked" when the build is the store beta, else the class's slot
+// 23 text; an empty text posts nothing, else "OnSetShortUnlockStringID" (text
+// + "_Short") and then "OnSetInfoStringID" (text). Not all licensed: "Common_
+// PurchaseInfo"; not all available: "Common_HostDoesNotHaveDLC". Otherwise
+// the focused option's (focus < count, signed: a negative focus reads before
+// the vector in retail - false here) current choice's InfoStringID, else the
+// option's own; still empty, the LAST non-empty current-choice InfoStringID
+// over every option. A non-empty text posts "OnSetInfoStringID" with it.
+inline bool ui_config_info( const ui_config_entity_t& e, const value_t& root, const ui_config_class_t& cls, const ui_profile_t& p,
+                            const ui_config_hooks_t& h )
+{
+    std::string text;
+    if ( !ui_config_all_unlocked( e, root, cls, p ) )
+    {
+        if ( p.store_beta( ) )
+            text = "Common_StoreBetaLocked";
+        else
+            cls.info( text );
+        if ( text.empty( ) )
+            return true;
+        ui_params_t shorter;
+        shorter.add_string( ( text + "_Short" ).c_str( ) );
+        ui_broadcast( h, "OnSetShortUnlockStringID", shorter );
+    }
+    else if ( !ui_config_all_licensed( e, root, cls, p ) )
+        text = "Common_PurchaseInfo";
+    else if ( !ui_config_all_available( e, root, cls ) )
+        text = "Common_HostDoesNotHaveDLC";
+    else
+    {
+        const int count = static_cast< int >( e.m_options.size( ) );
+        if ( e.m_focus < count )
+        {
+            if ( e.m_focus < 0 )
+                return false;
+            const value_t& option = *e.m_options[ static_cast< std::size_t >( e.m_focus ) ];
+            text = ui_json_text( member( ui_config_current_choice( option, root, cls ), "InfoStringID" ) );
+            if ( text.empty( ) )
+                text = ui_json_text( member( option, "InfoStringID" ) );
+        }
+        if ( text.empty( ) )
+            for ( const value_t* option : e.m_options )
+            {
+                const std::string& t = ui_json_text( member( ui_config_current_choice( *option, root, cls ), "InfoStringID" ) );
+                if ( !t.empty( ) )
+                    text = t;
+            }
+    }
+    if ( text.empty( ) )
+        return true;
+    ui_params_t p2;
+    p2.add_string( text.c_str( ) );
+    ui_broadcast( h, "OnSetInfoStringID", p2 );
+    return true;
+}
+
+// The refresh 0x448140 (VuBaseConfigEntity slot 6; VuBoatConfigEntity's
+// onGameInitialize calls it directly): the touch register (HOOK), +0x2CC = 1,
+// the option vector emptied, the walk over the options document (+0x2A0), the
+// combo state 0x44B780, slot 12 (+48), the info string 0x44B9C0, +0x2CC = 0.
+inline bool ui_config_refresh( ui_config_entity_t& e, ui_config_env_t& env, const value_t& options, const ui_config_class_t& cls,
+                               const ui_profile_t& p, const ui_config_hooks_t& h )
+{
+    h.touch( );
+    e.m_refresh = true;
+    e.m_options.clear( );
+    ui_config_walk( e, env, options, e.m_options, cls, p );
+    bool ok = ui_config_combo_state( e, *env.m_root, cls, p );
+    ok = ok && cls.changed( );
+    ok = ok && ui_config_info( e, *env.m_root, cls, p, h );
+    e.m_refresh = false;
+    return ok && !e.m_fault;
 }
 
 // ---------------------------------------------------------------------------

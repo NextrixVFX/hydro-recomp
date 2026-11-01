@@ -12,6 +12,7 @@
 #include <workspace/core/ui/gauge.hxx>
 #include <workspace/core/ui/map.hxx>
 #include <workspace/core/ui/select.hxx>
+#include <workspace/core/ui/dock.hxx>
 
 #include <algorithm>
 #include <array>
@@ -2311,9 +2312,225 @@ inline bool verify_ui_boat_config( )
     return failed == 0;
 }
 
+// One of the boat_config_init documents (g_golden_bci_at: word offset, bytes) parsed.
+inline value_t ui_bci_document( int index )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_bci_words + g_golden_bci_at[ 2 * index ] );
+    return c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_bci_at[ 2 * index + 1 ] ) ).parse( );
+}
+
+// The combo records as the case prints them: "b40b41b42|i44|f48|bytes;" (hex).
+inline std::vector< ui_config_combo_t > ui_bci_combos( const char* s )
+{
+    std::vector< ui_config_combo_t > out;
+    std::string text( s );
+    std::size_t at = 0;
+    while ( at < text.size( ) )
+    {
+        const std::size_t end = text.find( ';', at );
+        const std::string rec = text.substr( at, end - at );
+        at = end + 1;
+        ui_config_combo_t c;
+        const std::size_t a = rec.find( '|' ), b = rec.find( '|', a + 1 ), d = rec.find( '|', b + 1 );
+        const std::vector< std::uint8_t > head = ui_unhex( rec.substr( 0, a ).c_str( ) );
+        c.m_focused = head[ 0 ];
+        c.m_b41 = head[ 1 ];
+        c.m_b42 = head[ 2 ];
+        const std::uint32_t i44 = static_cast< std::uint32_t >( std::stoul( rec.substr( a + 1, b - a - 1 ), nullptr, 16 ) );
+        const std::uint32_t f48 = static_cast< std::uint32_t >( std::stoul( rec.substr( b + 1, d - b - 1 ), nullptr, 16 ) );
+        c.m_index = static_cast< int >( i44 );
+        std::memcpy( &c.m_shown, &f48, 4 );
+        c.m_locked = ui_unhex( rec.substr( d + 1 ).c_str( ) );
+        out.push_back( c );
+    }
+    return out;
+}
+
+inline std::string ui_bci_combo_text( const std::vector< ui_config_combo_t >& combos )
+{
+    std::string out;
+    char buf[ 64 ];
+    for ( const ui_config_combo_t& c : combos )
+    {
+        std::uint32_t f48 = 0;
+        std::memcpy( &f48, &c.m_shown, 4 );
+        std::snprintf( buf, sizeof( buf ), "%02x%02x%02x|%08x|%08x|", c.m_focused, c.m_b41, c.m_b42, static_cast< std::uint32_t >( c.m_index ), f48 );
+        out += buf;
+        for ( std::uint8_t b : c.m_locked )
+        {
+            std::snprintf( buf, sizeof( buf ), "%02x", b );
+            out += buf;
+        }
+        out += ';';
+    }
+    return out;
+}
+
+inline std::string ui_bci_hex( const ui_params_t& p )
+{
+    std::string out;
+    char buf[ 4 ];
+    for ( int k = 0; k < p.m_size && k < 128; ++k )
+    {
+        std::snprintf( buf, sizeof( buf ), "%02x", p.m_bytes[ k ] );
+        out += buf;
+    }
+    return out;
+}
+
+// ui_dock_initialize (hydro core/ui/dock.hxx: VuBoatConfigEntity onGameInitialize
+// 0x44CD10 with the refresh 0x448140 - the walk 0x44B0D0, the combo state
+// 0x44B780, slot 12 0x44E2B0, the info string 0x44B9C0 - over the boat
+// virtuals; select.hxx's walk machinery) against retail's on every
+// VuBoatConfigEntity of the five BoatConfig* screens (oracle case
+// boat_config_init; the options document and the combo records are retail's
+// own slot 4 output - inputs): per run the whole root after, the player, the
+// pushed options' names, every combo record after, and every hook call in
+// order (unlock / license / progress / store-beta answers replayed; touch,
+// plug fires, broadcasts with their VuParams bytes, the voice compared).
+inline bool verify_ui_boat_config_init( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0, runs = 0, calls = 0;
+    auto bad = [ &failed ]( const char* what, int k )
+    {
+        if ( ++failed <= 8 )
+            LOG_ERROR( "ui boat config init: %s differs from retail (run %d)", what, k );
+    };
+    const value_t boat_db = ui_bci_document( 0 ), skin_db = ui_bci_document( 1 );
+    for ( std::size_t k = 0; k < g_golden_bci_entities_count; ++k )
+    {
+        const golden_bci_entity_t& want = g_golden_bci_entities[ k ];
+        const entity_t* have = nullptr;
+        for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+            if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, want.m_project ) == 0 && want.m_index >= 0 &&
+                 static_cast< std::size_t >( want.m_index ) < loaded.trees[ p ].size( ) )
+                have = loaded.trees[ p ][ static_cast< std::size_t >( want.m_index ) ].second;
+        if ( !have || have->m_type != "VuBoatConfigEntity" || have->m_name != want.m_name )
+            bad( "the authored entity", static_cast< int >( k ) );
+        const value_t options = ui_bci_document( want.m_options );
+        const std::vector< ui_config_combo_t > combos = ui_bci_combos( want.m_combos );
+        for ( int r = 0; r < want.m_runs; ++r )
+        {
+            const golden_bci_run_t& run = g_golden_bci_runs[ want.m_first + r ];
+            const int row = want.m_first + r;
+            const std::vector< std::uint8_t > doc = ui_unhex( run.m_root );
+            value_t root = c_reader( doc ).parse( );
+            ui_dock_t d;
+            d.m_base.m_single_player = run.m_single != 0;
+            d.m_base.m_force_online = run.m_online != 0;
+            d.m_base.m_focus = run.m_focus;
+            d.m_base.m_combos = combos;
+            d.m_boat_db = &boat_db;
+            d.m_skin_db = &skin_db;
+            ui_config_env_t env;
+            env.m_root = &root;
+            env.m_busy = run.m_busy != 0;
+            env.m_op = run.m_op;
+            int at = 0;
+            bool hooks_same = true;
+            auto next = [ & ]( int kind ) -> const golden_bci_log_t*
+            {
+                if ( at >= run.m_logs || g_golden_bci_logs[ run.m_first_log + at ].m_kind != kind )
+                {
+                    hooks_same = false;
+                    return nullptr;
+                }
+                ++calls;
+                return &g_golden_bci_logs[ run.m_first_log + at++ ];
+            };
+            ui_profile_t p;
+            p.unlock = [ & ]( int slot, const std::string& a, const std::string& b, const std::string& c )
+            {
+                const golden_bci_log_t* g = next( 0 );
+                if ( !g )
+                    return false;
+                hooks_same = hooks_same && g->m_slot == slot && a == g->m_a && b == g->m_b && c == g->m_c;
+                return g->m_answer != 0;
+            };
+            p.license = [ & ]( )
+            {
+                const golden_bci_log_t* g = next( 1 );
+                return g && g->m_answer != 0;
+            };
+            p.progress = [ & ]( const std::string& value )
+            {
+                const golden_bci_log_t* g = next( 2 );
+                hooks_same = hooks_same && g && value == g->m_a;
+                return g && g->m_answer != 0;
+            };
+            p.store_beta = [ & ]( )
+            {
+                const golden_bci_log_t* g = next( 3 );
+                return g && g->m_answer != 0;
+            };
+            p.has_progress = run.m_progress != 0;
+            ui_config_hooks_t h;
+            h.touch = [ & ]( )
+            {
+                const golden_bci_log_t* g = next( 4 );
+                hooks_same = hooks_same && g && std::strcmp( g->m_a, "0x5C" ) == 0;
+            };
+            h.fire = [ & ]( const std::string& plug, const ui_params_t& params )
+            {
+                static const char* const stats[ ] = { "Handling", "Acceleration", "TopSpeed", "AirControl" };
+                bool declared = false;
+                for ( const char* s : stats )
+                    declared = declared || plug == s;
+                if ( !declared )
+                    return false;
+                const golden_bci_log_t* g = next( 5 );
+                hooks_same = hooks_same && g && plug == g->m_a && ui_bci_hex( params ) == g->m_b;
+                return true;
+            };
+            h.broadcast = [ & ]( std::uint32_t hash, const ui_params_t& params )
+            {
+                const golden_bci_log_t* g = next( 6 );
+                char text[ 16 ];
+                std::snprintf( text, sizeof( text ), "0x%08X", hash );
+                hooks_same = hooks_same && g && std::strcmp( g->m_a, text ) == 0 && ui_bci_hex( params ) == g->m_b;
+            };
+            h.sound = [ & ]( const char* event )
+            {
+                const golden_bci_log_t* g = next( 7 );
+                hooks_same = hooks_same && g && std::strcmp( g->m_a, event ) == 0;
+            };
+            const bool done = ui_dock_initialize( d, env, options, p, h );
+            ++runs;
+            std::string after;
+            vujb_dump( root, after );
+            bool names_same = static_cast< int >( d.m_base.m_options.size( ) ) == run.m_names;
+            for ( int n = 0; names_same && n < run.m_names; ++n )
+                names_same = ui_json_text( member( *d.m_base.m_options[ static_cast< std::size_t >( n ) ], "Name" ) ) ==
+                             g_golden_bci_names[ run.m_first_name + n ];
+            if ( !done )
+                bad( "the run (a path not recreated)", row );
+            if ( after != run.m_after )
+                bad( "the root after", row );
+            if ( d.m_player != run.m_player )
+                bad( "the player", row );
+            if ( !names_same )
+                bad( "the pushed options", row );
+            if ( ui_bci_combo_text( d.m_base.m_combos ) != run.m_combos )
+                bad( "the combo records", row );
+            if ( !hooks_same || at != run.m_logs )
+                bad( "the hook calls", row );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_dock_initialize matches retail's VuBoatConfigEntity onGameInitialize 0x44CD10 (refresh 0x448140, walk 0x44B0D0 with the "
+                     "boat virtuals, combo state 0x44B780, OnChangeDockedBoat / stat plugs / OnPlayerBoatConfig, info strings 0x44B9C0) on %d "
+                     "entities: %d runs, the whole root, the player, the option order, every combo record, %d hook calls",
+            static_cast< int >( g_golden_bci_entities_count ), runs, calls );
+    else
+        LOG_ERROR( "the boat selector's initialize FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_boat_config_init( ) && ok;
     ok = verify_ui_boat_config( ) && ok;
     ok = verify_ui_config_options( ) && ok;
     ok = verify_ui_boat_player( ) && ok;
