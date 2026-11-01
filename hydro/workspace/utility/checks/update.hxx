@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/ui/bind.hxx>
+#include <workspace/core/ui/overlay.hxx>
 
 #include <algorithm>
 #include <cstdio>
@@ -314,9 +315,233 @@ inline bool verify_ui_frames( )
     return failed == 0;
 }
 
+// The race HUD driver (core/ui overlay.hxx c_ui_race_hud over c_ui_binding's HUD
+// kinds) on OUR loaded Race Pre / Game / PostGameHUD against retail's own run
+// (oracle case hud_frames: gameInitialize 0x500B10 + OnProjectInitialized
+// 0x501260, VuHUDEntity tick 0x423A20, the world's multi delay outputs fired,
+// race events broadcast, gameRelease 0x500B80; the graph live): the tree and
+// the event maps, then per step the whole trace in order and every text base /
+// image / speedometer state.
+inline std::string ui_hud_state_text( const ui_bound_t& b )
+{
+    char text[ 96 ];
+    std::uint32_t bits[ 4 ];
+    if ( b.m_speedometer )
+    {
+        std::memcpy( &bits[ 1 ], &b.m_speedometer->m_v_offset, 4 );
+        std::memcpy( &bits[ 2 ], &b.m_speedometer->m_countdown, 4 );
+        std::snprintf( text, sizeof( text ), "0x%08X.0x%08X.0x%08X", b.m_speedometer->m_metric, bits[ 1 ], bits[ 2 ] );
+        return text;
+    }
+    std::memcpy( &bits[ 0 ], &b.m_shown->m_alpha, 4 );
+    std::snprintf( text, sizeof( text ), "%02x.0x%08X", b.m_shown->m_visible ? 1 : 0, bits[ 0 ] );
+    std::string out = text;
+    if ( b.m_vtable == k_ui_text_vtable )
+        out += "." + b.m_shown->m_string_id;
+    else if ( b.m_toast )
+    {
+        std::memcpy( &bits[ 1 ], &b.m_toast->m_total, 4 );
+        std::memcpy( &bits[ 2 ], &b.m_toast->m_fade, 4 );
+        std::memcpy( &bits[ 3 ], &b.m_toast->m_left, 4 );
+        std::snprintf( text, sizeof( text ), ".0x%08X.0x%08X.0x%08X.", bits[ 1 ], bits[ 2 ], bits[ 3 ] );
+        out += text + b.m_toast->m_text;
+    }
+    return out;
+}
+
+inline bool verify_ui_hud_frames( )
+{
+    const ui_loaded_t& base = ui_loaded( );
+    std::vector< std::string > names( g_golden_entity_templates, g_golden_entity_templates + g_golden_entity_templates_count );
+    static const entity_registry_t registry = build_entity_registry( names );
+    const std::map< std::string, value_t >* templates = &base.templates;
+    int failed = 0, steps = 0, traces = 0, states = 0, rows = 0, entities = 0, unknown_inputs = 0, unknown_events = 0, hooks_seen = 0;
+    auto bad = [ &failed ]( const char* what, const char* project, int step )
+    {
+        if ( ++failed <= 8 )
+            LOG_ERROR( "ui hud frames: %s differs from retail (%s, step %d)", what, project, step );
+    };
+    const auto bits_of = []( const char* hex, std::uint8_t* out, int max ) -> int
+    {
+        int n = 0;
+        for ( const char* at = hex; at[ 0 ] && at[ 1 ] && n < max; at += 2 )
+        {
+            const char pair[ 3 ] = { at[ 0 ], at[ 1 ], 0 };
+            out[ n++ ] = static_cast< std::uint8_t >( std::strtoul( pair, nullptr, 16 ) );
+        }
+        return n;
+    };
+    for ( std::size_t w = 0; w < g_golden_hf_projects_count; ++w )
+    {
+        const golden_hf_project_t& gp = g_golden_hf_projects[ w ];
+        const golden_ui_project_t* project = nullptr;
+        for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+            if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, gp.m_asset ) == 0 )
+                project = &g_golden_ui_projects[ p ];
+        if ( !project )
+        {
+            bad( "the project's presence in the loaded set", gp.m_asset, -1 );
+            continue;
+        }
+        const unsigned char* raw = reinterpret_cast< const unsigned char* >( project->m_words );
+        const value_t document = c_reader( std::vector< std::uint8_t >( raw, raw + project->m_bytes ) ).parse( );
+        const std::unique_ptr< entity_t > root = ui_hud_load( member( document, "VuProject" ), project->m_path, registry,
+                                                              [ templates ]( const std::string& name ) -> const value_t*
+                                                              {
+                                                                  const auto found = templates->find( "VuTemplateAsset/" + name );
+                                                                  return found == templates->end( ) ? nullptr : &found->second;
+                                                              } );
+        if ( !root )
+        {
+            bad( "the load", gp.m_asset, -1 );
+            continue;
+        }
+        ui_bind_hooks_t hooks;
+        hooks.m_string_db = []( const char* ) { return std::string( g_golden_hf_template ); };   // the case's VuStringDB slot 6
+        hooks.m_external = []( entity_t&, const char*, const ui_params_t& ) { return ui_ret_t( ); };   // the case answers { 0, 0 }
+        c_ui_race_hud hud( *root, hooks );
+        c_ui_binding& bind = hud.binding( );
+        bool same = bind.m_bound.size( ) == static_cast< std::size_t >( gp.m_entities );
+        for ( int k = 0; same && k < gp.m_entities; ++k )
+        {
+            const golden_hf_entity_t& ge = g_golden_hf_entities[ gp.m_first_entity + k ];
+            const ui_bound_t& b = *bind.m_bound[ static_cast< std::size_t >( k ) ];
+            const int parent = b.m_entity->m_parent ? bind.bound_index( *b.m_entity->m_parent ) : -1;
+            if ( parent != ge.m_parent || b.m_entity->m_name != ge.m_name || b.m_vtable != ge.m_vtable )
+            {
+                same = false;
+                break;
+            }
+            auto methods = b.m_methods;
+            std::sort( methods.begin( ), methods.end( ) );
+            if ( methods.size( ) != static_cast< std::size_t >( ge.m_rows ) )
+                same = false;
+            for ( int r = 0; same && r < ge.m_rows; ++r )
+                same = methods[ static_cast< std::size_t >( r ) ].first == g_golden_hf_rows[ ge.m_first_row + r ].m_hash &&
+                       methods[ static_cast< std::size_t >( r ) ].second == g_golden_hf_rows[ ge.m_first_row + r ].m_method;
+            rows += ge.m_rows;
+            ++entities;
+        }
+        if ( !same )
+        {
+            bad( "the bound tree / event maps", gp.m_asset, -1 );
+            continue;
+        }
+        const auto same_states = [ &bind, &states ]( int first, int count )
+        {
+            std::vector< std::pair< int, std::string > > have;
+            for ( const auto& b : bind.m_bound )
+                if ( b->m_shown || b->m_speedometer )
+                    have.push_back( { b->m_index, ui_hud_state_text( *b ) } );
+            bool ok = have.size( ) == static_cast< std::size_t >( count );
+            for ( int k = 0; ok && k < count; ++k )
+                ok = have[ static_cast< std::size_t >( k ) ].first == g_golden_hf_states[ first + k ].m_index &&
+                     have[ static_cast< std::size_t >( k ) ].second == g_golden_hf_states[ first + k ].m_state;
+            states += count;
+            return ok;
+        };
+        if ( !same_states( gp.m_first_state, gp.m_states ) )
+            bad( "the loaded states", gp.m_asset, -1 );
+        entity_t* delay = nullptr;
+        for ( const auto& b : bind.m_bound )
+            if ( b->m_vtable == k_ui_multi_delay_vtable )
+                delay = b->m_entity;
+        std::vector< ui_hud_boat_t > boats;
+        for ( int s = 0; s < gp.m_steps; ++s )
+        {
+            const golden_hf_step_t& st = g_golden_hf_steps[ gp.m_first_step + s ];
+            const golden_hf_world_t& gw = g_golden_hf_worlds[ st.m_world ];
+            ui_hud_env_t& env = hud.env( );
+            env = ui_hud_env_t( );
+            boats.assign( static_cast< std::size_t >( gw.m_boats ), ui_hud_boat_t( ) );
+            for ( int k = 0; k < gw.m_boats; ++k )
+            {
+                const golden_hf_boat_t& gb = g_golden_hf_boats[ gw.m_first_boat + k ];
+                ui_hud_boat_t& b = boats[ static_cast< std::size_t >( k ) ];
+                b.m_lap = gb.m_lap;
+                std::memcpy( &b.m_time_1200, &gb.m_lap_time, 4 );
+                std::memcpy( &b.m_time_1204, &gb.m_race_time, 4 );
+                std::memcpy( &b.m_time_1208, &gb.m_best, 4 );
+                b.m_place = gb.m_place;
+                b.m_laps = gb.m_laps;
+                std::memcpy( &b.m_wrong_way, &gb.m_wrong_way, 4 );
+                b.m_byte_812 = static_cast< std::uint8_t >( gb.m_byte_812 );
+                env.m_world.m_boats.push_back( &b );
+            }
+            env.m_world.m_manager = gw.m_manager != 0;
+            env.m_world.m_settings = gw.m_units != nullptr;
+            env.m_world.m_units = gw.m_units ? gw.m_units : "";
+            env.m_world.m_local = gw.m_local;
+            env.m_world.m_boat_count = gw.m_count;
+            env.m_control_method = gw.m_method;
+            env.m_track_built = gw.m_built != 0;
+            env.m_track_circuit = gw.m_circuit != 0;
+            bind.m_trace.clear( );
+            if ( std::strcmp( st.m_op, "init" ) == 0 )
+                hud.initialize( );
+            else if ( std::strcmp( st.m_op, "release" ) == 0 )
+                hud.release( );
+            else if ( std::strcmp( st.m_op, "tick" ) == 0 )
+            {
+                const std::uint32_t dt_bits = static_cast< std::uint32_t >( std::strtoul( st.m_arg, nullptr, 16 ) );
+                float dt;
+                std::memcpy( &dt, &dt_bits, 4 );
+                hud.tick( dt );
+            }
+            else if ( std::strcmp( st.m_op, "fire" ) == 0 )
+            {
+                if ( delay )
+                    bind.fire_plug( *delay, st.m_arg, ui_params_t( ) );
+            }
+            else
+            {
+                ui_params_t p;
+                p.m_size = bits_of( st.m_params, p.m_bytes, 128 );
+                hud.post( st.m_arg, p );
+            }
+            bool ok = bind.m_trace.size( ) == static_cast< std::size_t >( st.m_logs );
+            for ( int k = 0; ok && k < st.m_logs; ++k )
+            {
+                const ui_trace_t& t = bind.m_trace[ static_cast< std::size_t >( k ) ];
+                const golden_hf_log_t& g = g_golden_hf_logs[ st.m_first_log + k ];
+                const bool params = t.m_kind == ui_trace_kind_t::event || t.m_kind == ui_trace_kind_t::string || t.m_kind == ui_trace_kind_t::hook
+                                        ? true
+                                        : ui_hex( t.m_params ) == g.m_params;
+                ok = static_cast< int >( t.m_kind ) == g.m_kind && t.m_index == g.m_index && t.m_name == g.m_name && t.m_word == g.m_word && params &&
+                     ( t.m_known ? 1 : 0 ) == g.m_known;
+                if ( !t.m_known && t.m_kind == ui_trace_kind_t::input )
+                    ++unknown_inputs;
+                if ( t.m_kind == ui_trace_kind_t::event )
+                    ++unknown_events;
+                if ( t.m_kind == ui_trace_kind_t::hook )
+                    ++hooks_seen;
+            }
+            if ( !ok )
+                bad( "the trace", gp.m_asset, s );
+            traces += st.m_logs;
+            if ( !same_states( st.m_first_state, st.m_states ) )
+                bad( "the states", gp.m_asset, s );
+            if ( root->m_flags != st.m_flags )
+                bad( "the root's +0x14", gp.m_asset, s );
+            ++steps;
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_race_hud matches retail's race HUD frames over %d projects (gameInitialize 0x500B10 + OnProjectInitialized 0x501260, "
+                     "VuHUDEntity tick 0x423A20, gameRelease 0x500B80; Show / Hide / SetAlpha / SetStringID, VuTriggerForwarderEntity 0x5E0FC0, "
+                     "VuIfEntity, VuIsCircuitTrack 0x42E1F0, VuControlMethodEntity 0x42EAE0 / 0x42EC80, VuStartLightsOutAction 0x405470, the toast, "
+                     "the speedometer): %d entities and %d event-map rows, %d steps, %d trace entries in order (%d hooks, %d world-owned / audio "
+                     "inputs, %d unrecreated handlers), %d states",
+            static_cast< int >( g_golden_hf_projects_count ), entities, rows, steps, traces, hooks_seen, unknown_inputs, unknown_events, states );
+    else
+        LOG_ERROR( "the race HUD driver FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_update_all( )
 {
     bool ok = true;
     ok = verify_ui_frames( ) && ok;
+    ok = verify_ui_hud_frames( ) && ok;
     return ok;
 }
