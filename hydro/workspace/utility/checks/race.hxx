@@ -2646,6 +2646,79 @@ inline bool verify_driver_dtors( )
     LOG_ERROR( "driver_dtors FAILED %d of %u vectors", failed, nv );
     return false;
 }
+// VuAiManagerImpl's slots 15 0x404210 / 3 0x404570 / 9 0x403510 against retail (oracle case fleet_small).
+inline bool verify_fleet_small( )
+{
+    const unsigned* g = g_golden_fleet_small_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    const std::uint32_t self = 0x100, arr = 0x200;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned slot = *g++, count = *g++, owned = *g++;
+        unsigned before[ 7 ];
+        for ( unsigned& b : before )
+            b = *g++;
+        std::vector< unsigned > ents( *g++ );
+        for ( unsigned& e : ents )
+            e = *g++;
+        std::vector< std::vector< unsigned > > glog( *g++ ), log;
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        const unsigned* after = g;
+        g += 7;
+        const unsigned st0 = *g++, rest = *g++;
+        std::map< std::uint32_t, std::uint32_t > mem;
+        vu_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0u : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        mem[ self + 0x1C ] = before[ 0 ];
+        mem[ self + 0x24 ] = count;
+        mem[ self + 0x28 ] = before[ 2 ];
+        mem[ self + 0x2C ] = arr;
+        mem[ self + 0x30 ] = owned;
+        mem[ self + 0x34 ] = before[ 5 ];
+        mem[ self + 0x38 ] = before[ 6 ];
+        for ( std::size_t k = 0; k < ents.size( ); ++k )
+            mem[ arr + 4 * static_cast< std::uint32_t >( k ) ] = ents[ k ] ? 0x1000u + ents[ k ] : 0u;
+        auto sym = [ & ]( std::uint32_t x ) -> unsigned { return x == 0 ? 0u : x == self ? 1u : x == arr ? 2u : x >= 0x1000u ? x - 0x1000u : 0x100u + ( x & 0xFF ); };
+        unsigned mine_st0 = 0;
+        if ( slot == 15 )
+        {
+            const float f = fleet_slot15( );
+            std::memcpy( &mine_st0, &f, 4 );
+        }
+        else if ( slot == 3 )
+        {
+            fleet_manager_t m;
+            m.state = static_cast< std::int32_t >( before[ 0 ] );
+            fleet_release( m, [ & ]( ) { log.push_back( { 3u, 1u } ); } );
+            mem[ self + 0x1C ] = static_cast< std::uint32_t >( m.state );
+        }
+        else
+        {
+            fleet_reset_hooks_t h;
+            h.free_block = [ & ]( std::uint32_t a ) { log.push_back( { 1u, sym( a ) } ); };
+            h.aligned_free = [ & ]( std::uint32_t a ) { log.push_back( { 2u, sym( a ) } ); };
+            fleet_reset_words( w, self, h );
+        }
+        const unsigned mine[ 7 ] = { w.get( self + 0x1C ), w.get( self + 0x24 ), w.get( self + 0x28 ), sym( w.get( self + 0x2C ) ), w.get( self + 0x30 ) & 0xFFu,
+                                     w.get( self + 0x34 ), w.get( self + 0x38 ) };
+        if ( !( std::equal( mine, mine + 7, after ) && log == glog && mine_st0 == st0 && rest == 1 ) && ++failed <= 8 )
+            LOG_ERROR( "fleet_small vector %u (slot %u): %zu calls (%zu), +0x1C %u (%u), +0x30 %u (%u), ST0 0x%08X (0x%08X)", v, slot, log.size( ),
+                       glog.size( ), mine[ 0 ], after[ 0 ], mine[ 4 ], after[ 4 ], mine_st0, st0 );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuAiManagerImpl slots 15 0x404210 / 3 0x404570 / 9 0x403510 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "fleet_small FAILED %d of %u vectors", failed, nv );
+    return false;
+}
 // The contact-added callback 0x574E90 -> 0x5751F0 -> 0x519720 against retail (oracle case contact_added): the manifold
 // point after (every word, bit for bit), the return, and each listener / callback call's record (but its stale-stack
 // words) with the case's scripted write-backs replayed.
@@ -3015,6 +3088,7 @@ inline bool verify_race_all( )
     ok = verify_piece_motion( ) && ok;
     ok = verify_boat_set_world( ) && ok;
     ok = verify_driver_dtors( ) && ok;
+    ok = verify_fleet_small( ) && ok;
     ok = verify_contact_added( ) && ok;
     ok = verify_boat_rtti( ) && ok;
     ok = verify_human_explosion( ) && ok;
