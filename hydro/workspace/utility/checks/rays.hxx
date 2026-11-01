@@ -1010,3 +1010,82 @@ inline bool verify_boat_debris( )
     LOG_ERROR( "boat_debris FAILED %d of %d", failed, static_cast< int >( g_golden_boat_debris_count ) );
     return false;
 }
+// verify_piece_remove (boat batch 17): the debris reset 0x411950 - boat/state.hxx
+// boat_debris_reset with its piece_remove hook = boat/effects.hxx
+// boat_piece_remove - against cases/boat.py piece_remove: the calls in order,
+// +0x94 / +0xC8, each piece's +0x20C and +0x228.
+inline std::uint32_t piece_check_word( const std::uint8_t* image, int at )
+{
+    std::uint32_t w;
+    std::memcpy( &w, image + at, 4 );
+    return w;
+}
+
+inline bool verify_piece_remove( )
+{
+    int failed = 0, calls = 0, removed = 0;
+    for ( std::size_t v = 0; v < g_golden_piece_remove_count; ++v )
+    {
+        const unsigned* g = g_golden_piece_remove_words + g_golden_piece_remove_offsets[ v ];
+        std::uint8_t debris[ 0xD0 ]{};
+        debris[ 0x94 ] = static_cast< std::uint8_t >( *g++ );
+        image_put32( debris, 0xC8, *g++ );
+        const unsigned n = *g++;
+        image_put32( debris, 0xA0, n );
+        std::vector< std::array< std::uint8_t, 0x230 > > ps( n );
+        for ( unsigned k = 0; k < n; ++k )
+        {
+            ps[ k ].fill( 0 );
+            ps[ k ][ 0x20C ] = static_cast< std::uint8_t >( *g++ );
+            image_put32( ps[ k ].data( ), 0x208, *g++ );
+            image_put32( ps[ k ].data( ), 0x228, *g++ );
+        }
+        const unsigned nlog = *g++;
+        const std::vector< unsigned > want( g, g + 2 * nlog );
+        g += 2 * nlog;
+        struct ctx_t
+        {
+            std::vector< std::array< std::uint8_t, 0x230 > >* ps;
+            std::vector< unsigned > log;
+            boat_piece_hooks_t h;
+        } c{ &ps, { }, { } };
+        c.h.user = &c;
+        c.h.remove_body = []( void* u, std::uint32_t b ) { static_cast< ctx_t* >( u )->log.insert( static_cast< ctx_t* >( u )->log.end( ), { 1u, b } ); };
+        c.h.remove_step = []( void* u, std::uint8_t* s ) {
+            ctx_t& x = *static_cast< ctx_t* >( u );
+            unsigned k = 0xEEEEu;
+            for ( std::size_t i = 0; i < x.ps->size( ); ++i )
+                if ( s == ( *x.ps )[ i ].data( ) + 4 )
+                    k = static_cast< unsigned >( i );
+            x.log.insert( x.log.end( ), { 2u, k } );
+        };
+        c.h.pfx_release = []( void* u, std::uint32_t s ) { static_cast< ctx_t* >( u )->log.insert( static_cast< ctx_t* >( u )->log.end( ), { 3u, s } ); };
+        boat_decision_hooks_t hooks;
+        hooks.user = &c;
+        hooks.piece_remove = []( void* u, int k ) {
+            ctx_t& x = *static_cast< ctx_t* >( u );
+            boat_piece_remove( ( *x.ps )[ static_cast< std::size_t >( k ) ].data( ), x.h );
+        };
+        boat_debris_reset( debris, hooks );
+        bool same = c.log == want && debris[ 0x94 ] == g[ 0 ] && piece_check_word( debris, 0xC8 ) == g[ 1 ];
+        g += 2;
+        for ( unsigned k = 0; k < n; ++k )
+        {
+            same = same && ps[ k ][ 0x20C ] == g[ 0 ] && piece_check_word( ps[ k ].data( ), 0x228 ) == g[ 1 ];
+            g += 2;
+        }
+        calls += static_cast< int >( nlog );
+        removed += ( n > 0 && piece_check_word( debris, 0xA0 ) == n && c.log.size( ) > 0 ) ? 1 : 0;
+        if ( !same && ++failed <= 4 )
+            LOG_ERROR( "piece_remove %u: %d log words (retail %d)", static_cast< unsigned >( v ), static_cast< int >( c.log.size( ) ),
+                       static_cast< int >( want.size( ) ) );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the debris reset 0x411950 (boat_debris_reset + boat_piece_remove) matches retail: %d resets, %d hook calls",
+                     static_cast< int >( g_golden_piece_remove_count ), calls );
+        return true;
+    }
+    LOG_ERROR( "piece_remove FAILED %d of %d", failed, static_cast< int >( g_golden_piece_remove_count ) );
+    return false;
+}

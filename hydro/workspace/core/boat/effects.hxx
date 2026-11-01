@@ -182,8 +182,9 @@ inline bool boat_pfx_tick( boat_pfx_t& c, const boat_pfx_boat_t& b, float dt, co
         for ( const boat_pfx_record_t& r : l )
             if ( r.bone >= 0 && ( b.bones == nullptr || r.bone >= b.bone_count ) )
                 return false;
-    auto gt = []( float a, float x ) { return _mm_comigt_ss( _mm_set_ss( a ), _mm_set_ss( x ) ) != 0; };   // ordered a > x
-    auto ge = []( float a, float x ) { return _mm_comige_ss( _mm_set_ss( a ), _mm_set_ss( x ) ) != 0; };   // ordered a >= x
+    // comiss branches: ordered compares (NaN false) - written as plain operators (see boat_debris_tick)
+    auto gt = []( float a, float x ) { return a > x; };
+    auto ge = []( float a, float x ) { return a >= x; };
     const float hi = water_bits( 0x3F400000u ), lo = water_bits( 0x3E800000u ), tenth = water_bits( 0x3DCCCCCDu );
     const float t = b.throttle;
     if ( c.on[ 0 ] == 0 )
@@ -469,4 +470,56 @@ inline void boat_debris_tick( boat_debris_t& d, float dt, const boat_pfx_ops_t& 
             d.aabb[ 4 + k ] = fluid_max( d.aabb[ 4 + k ], its[ 4 + k ] );
         }
     }
+}
+// 0x411950's per-piece body (thiscall the debris; the loop over +0x9C /
+// +0xA0 after +0x94 = 0 and +0xC8 = 0 - boat/state.hxx boat_debris_reset,
+// whose piece_remove hook this is): a piece in the world (+0x20C) leaves it -
+// g_vudynamicsimpl (0x75900C) vt+0x40( its body +0x208 ) then vt+0x30( piece +
+// 4, its step interface ), +0x20C = 0; a live pfx (+0x228) goes back to
+// g_vupfximpl (0x75904C) vt+0x2C (release: world/pfxsim.hxx
+// pfx_system_release); +0x228 = 0 either way. The dynamics calls are Vu
+// virtuals: hooks.
+struct boat_piece_hooks_t
+{
+    void* user = nullptr;
+    void ( *remove_body )( void* user, std::uint32_t body ) = nullptr;           // vt+0x40
+    void ( *remove_step )( void* user, std::uint8_t* step ) = nullptr;           // vt+0x30 (piece + 4)
+    void ( *pfx_release )( void* user, std::uint32_t system ) = nullptr;         // g_vupfximpl vt+0x2C
+};
+
+inline void boat_piece_remove( std::uint8_t* piece, const boat_piece_hooks_t& h )
+{
+    if ( piece[ 0x20C ] )
+    {
+        std::uint32_t body;
+        std::memcpy( &body, piece + 0x208, 4 );
+        if ( h.remove_body )
+            h.remove_body( h.user, body );
+        if ( h.remove_step )
+            h.remove_step( h.user, piece + 4 );
+        piece[ 0x20C ] = 0;
+    }
+    std::uint32_t pfx;
+    std::memcpy( &pfx, piece + 0x228, 4 );
+    if ( pfx != 0 && h.pfx_release )
+        h.pfx_release( h.user, pfx );
+    image_put32( piece, 0x228, 0 );
+}
+
+// The Decision tick's destroyed branch (0x41EFF0, 0x41F103 .. 0x41F1A3: boat
+// +0x46B set and the debris +0xA0 > 0) - boat_decision_hooks_t::piece_follow:
+// the boat FOLLOWS the first piece. The transform's setWorldTransform 0x5344A0(
+// piece +8, notify 0 ) (world/transform.hxx: the caller's), the boat body's
+// +0x140 .. +0x15F (both velocities, four movq) = the piece body's (piece
+// +0x208), then setCenterOfMassTransform 0x50E660( the boat body, the piece
+// body's +0x10 transform ) (engine dynamics/world.hxx). Read from the
+// disassembly; NOT oracle-run (the boat_decision case holds no pieces).
+inline void boat_debris_follow( solver_rigid_t& body, const solver_rigid_t& piece_body, const float* piece_matrix,
+                                void ( *set_world )( void* user, const float* m16 ), void* user )
+{
+    if ( set_world )
+        set_world( user, piece_matrix );
+    std::memcpy( body.linear_velocity, piece_body.linear_velocity, 16 );
+    std::memcpy( body.angular_velocity, piece_body.angular_velocity, 16 );
+    body_set_center_of_mass_transform( body, piece_body.basis, piece_body.origin );
 }
