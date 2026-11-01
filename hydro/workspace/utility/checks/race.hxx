@@ -14,6 +14,7 @@
 #include <workspace/core/boat/events.hxx>
 #include <workspace/core/boat/damage.hxx>
 #include <workspace/core/collision/leaves.hxx>
+#include <workspace/utility/checks/rays.hxx>
 
 #include <algorithm>
 #include <array>
@@ -3204,5 +3205,6 @@ inline bool verify_race_all( )
     ok = verify_boat_rtti( ) && ok;
     ok = verify_human_explosion( ) && ok;
     ok = verify_waypoint_plugs( ) && ok;
+    ok = verify_ray_test( ) && ok;
     return ok;
 }
