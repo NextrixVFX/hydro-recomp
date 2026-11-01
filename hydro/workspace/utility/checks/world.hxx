@@ -1,5 +1,6 @@
 #pragma once
 
+#include <workspace/core/world/drive.hxx>
 #include <workspace/core/world/livery.hxx>
 #include <workspace/core/world/race.hxx>
 #include <workspace/core/world/start.hxx>
@@ -2004,9 +2005,48 @@ inline bool verify_race_game_ctor( )
     return failed == 0;
 }
 
+// race_drive_floor (core/world drive.hxx) against VuWater's surface list as
+// retail keeps it (oracle case water_surface_list: each add's push_back then
+// std::list::sort 0x52A670 with the predicate 0x527F50, run whole) and the
+// Decision tick's floor read [[[water +0x20]] +8] +0xD8: per vector the floor
+// word, bit for bit. Ties of the least height (6 of 48 vectors) and a lone
+// surface are among them.
+inline bool verify_water_surface_list( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_water_surface_list_count; ++index )
+    {
+        const unsigned* s = g_golden_water_surface_list_words + g_golden_water_surface_list_offsets[ index ];
+        const unsigned n = *s++;
+        water_built_t water;
+        for ( unsigned k = 0; k < n; ++k )
+        {
+            water_words_t w{};
+            w.set( 20, *s++ );
+            w.set( 216, *s++ );
+            water.surfaces.push_back( w );
+        }
+        bool unknown = false;
+        const float* floor = race_drive_floor( &water, unknown );
+        std::uint32_t got = 0;
+        if ( floor )
+            std::memcpy( &got, floor, 4 );
+        if ( !floor || unknown || got != *s )
+            if ( ++failed <= 4 )
+                LOG_ERROR( "water surface list vector %d: our floor 0x%08X, retail's 0x%08X", static_cast< int >( index ), got, *s );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "race_drive_floor matches VuWater's surface list order (0x5284C0's push_back + std::list::sort 0x52A670 / 0x527F50) "
+                     "and the Decision tick's floor read: %d vectors", static_cast< int >( g_golden_water_surface_list_count ) );
+    else
+        LOG_ERROR( "water surface list FAILED %d of %d vectors", failed, static_cast< int >( g_golden_water_surface_list_count ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_water_surface_list( ) && ok;
     ok = verify_race_game_ctor( ) && ok;
     ok = verify_game_project_name( ) && ok;
     ok = verify_boat_skin( ) && ok;
