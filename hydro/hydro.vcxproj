@@ -157,6 +157,7 @@
     <ClInclude Include="workspace\core\ui\combo.hxx" />
     <ClInclude Include="workspace\core\ui\compose.hxx" />
     <ClInclude Include="workspace\core\ui\config.hxx" />
+    <ClInclude Include="workspace\core\ui\difficulty.hxx" />
     <ClInclude Include="workspace\core\ui\dock.hxx" />
     <ClInclude Include="workspace\core\ui\draw.hxx" />
     <ClInclude Include="workspace\core\ui\entity.hxx" />
