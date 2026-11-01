@@ -275,6 +275,9 @@
     <ClInclude Include="workspace\core\entity\gfx.hxx">
       <Filter>workspace\core\entity</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\entity\json.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\entity\light.hxx">
       <Filter>workspace\core\entity</Filter>
     </ClInclude>
