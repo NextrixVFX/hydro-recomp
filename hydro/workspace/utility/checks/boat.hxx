@@ -1476,6 +1476,42 @@ inline bool verify_ai_steer( )
     return failed == 0;
 }
 
+// ai_path_follow (boat/ai.hxx) against retail's 0x40BEC0 (oracle case
+// ai_path_follow): the target and direction words after, but the stale
+// stack words retail never writes (the mask).
+inline bool verify_ai_path_follow( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_ai_path_follow_count; ++index )
+    {
+        const unsigned* s = g_golden_ai_path_follow_words + g_golden_ai_path_follow_offsets[ index ];
+        const std::int32_t count = static_cast< std::int32_t >( *s++ );
+        std::vector< const std::uint8_t* > points;
+        for ( std::int32_t k = 0; k < count; ++k, s += 0xD0 / 4 )
+            points.push_back( reinterpret_cast< const std::uint8_t* >( s ) );
+        float pos[ 4 ];
+        std::memcpy( pos, s, 16 );
+        s += 4;
+        unsigned out[ 8 ];
+        for ( unsigned& w : out )
+            w = 0xCDCDCDCDu;
+        ai_path_follow( points.data( ), count, pos, reinterpret_cast< float* >( out ), reinterpret_cast< float* >( out + 4 ) );
+        const unsigned stale = s[ 8 ];
+        int bad = -1;
+        for ( int w = 0; w < 8 && bad < 0; ++w )
+            if ( !( stale & ( 1u << w ) ) && out[ w ] != s[ w ] )
+                bad = w;
+        if ( bad >= 0 && ++failed <= 4 )
+            LOG_ERROR( "ai path follow vector %d (%d points) differs from retail at word %d (0..3 target): 0x%08X, retail 0x%08X",
+                       static_cast< int >( index ), static_cast< int >( count ), bad, out[ bad ], s[ bad ] );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuAiDriver's path follow 0x40BEC0 matches retail: %d vectors", static_cast< int >( g_golden_ai_path_follow_count ) );
+    else
+        LOG_ERROR( "ai path follow FAILED %d of %d vectors", failed, static_cast< int >( g_golden_ai_path_follow_count ) );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
@@ -1498,5 +1534,6 @@ inline bool verify_boat_all( )
     ok = verify_boat_decision( ) && ok;
     ok = verify_ai_controls( ) && ok;
     ok = verify_ai_steer( ) && ok;
+    ok = verify_ai_path_follow( ) && ok;
     return ok;
 }

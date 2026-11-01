@@ -176,3 +176,130 @@ inline void ai_steer( const std::uint8_t* body, const std::uint8_t* solver, cons
     else
         *throttle = 0.0f;
 }
+// 0x40BEC0 (thiscall, the driver; pos*, target*, direction*; retn 0Ch),
+// VuAiDriver's path follow over the path points (driver +0x8C / +0x90; the
+// tick calls it only with at least one). Point fields: +0 / +4 and +0x10 /
+// +0x14 two xy marks, +0x40 / +0x70 two planes (x, y, z, d), +0x80 its start,
+// +0x90 its end, +0xA0 its direction (16 b), +0xB0 its length, +0xC0 / +0xC4
+// the widths at start / end.
+//
+// On point 0: t = d0 / (d1 + d0) (the planes at pos), u = 1 - t, the
+// segment point c = u start + t end, its width u w0 + t w1; s =
+// maxss(0, minss(1, (|pos - c|xy / width - 0.5) x 2)), the look-ahead L =
+// ((1 - s) + s) x 75 (0x6F77D4). When point 0's remaining length +0xB0 x u
+// exceeds L: target = c + direction x L (xyz; its w is never written - a
+// stale stack word, UNKNOWN: left as it was) and direction = point 0's.
+// Otherwise rem = L - +0xB0 u and, for each point i >= 1 (fewer: nothing
+// written at all): best = 1, and for every j in 1..i the rays from pos to
+// 1000 along pos -> mark A (+0 / +4) and pos -> mark B (+0x10 / +0x14) are
+// crossed with point i's segment (start -> end, xy): a determinant below
+// FLT_MIN (0x6F7574) in magnitude, or either parameter outside [0, 1]
+// (ordered), misses; the first ray that hits (A's, else B's) gives best =
+// minss(best, |hit - start| / |segment|). v = minss(maxss(best, (20 -
+// (L - rem)) / len_i), rem / len_i) (0x6F77A0; 1 / len multiplied). When
+// 1 > v: target = (1 - v) start + v end with w 0, direction = point i's,
+// done. Else target = point i's end (16 b), direction = its, rem -= len_i,
+// and the next point.
+inline void ai_path_follow( const std::uint8_t* const* points, std::int32_t count, const float* pos, float* target, float* direction )
+{
+    auto at = [ & ]( std::int32_t k ) -> const std::uint8_t* { return k < count ? points[ k ] : nullptr; };
+    auto ge = []( float a, float b ) { return _mm_comige_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) != 0; };   // ordered a >= b
+    const std::uint8_t* p = count > 0 ? points[ 0 ] : nullptr;
+    const float px = pos[ 0 ], py = pos[ 1 ], pz = pos[ 2 ];
+    const float d0 = ( ( state_f( p, 0x44 ) * py + state_f( p, 0x40 ) * px ) + state_f( p, 0x48 ) * pz ) + state_f( p, 0x4C );
+    const float d1 = ( ( state_f( p, 0x74 ) * py + px * state_f( p, 0x70 ) ) + state_f( p, 0x78 ) * pz ) + state_f( p, 0x7C );
+    const float t = d0 / ( d1 + d0 );
+    const float u = 1.0f - t;
+    const float cx = u * state_f( p, 0x80 ) + state_f( p, 0x90 ) * t;
+    const float cy = state_f( p, 0x84 ) * u + state_f( p, 0x94 ) * t;
+    const float ex = px - cx, ey = py - cy;
+    const float dist = hull_sqrt( ex * ex + ey * ey );
+    const float width = state_f( p, 0xC0 ) * u + state_f( p, 0xC4 ) * t;
+    const float s = ai_maxss( 0.0f, ai_minss( 1.0f, ( dist / width - 0.5f ) * 2.0f ) );
+    const float look = ( ( 1.0f - s ) + s ) * 75.0f;
+    const float left0 = state_f( p, 0xB0 ) * u;
+    if ( left0 > look )
+    {
+        target[ 0 ] = state_f( p, 0xA0 ) * look + cx;
+        target[ 1 ] = state_f( p, 0xA4 ) * look + cy;
+        target[ 2 ] = state_f( p, 0xA8 ) * look + ( state_f( p, 0x88 ) * u + state_f( p, 0x98 ) * t );
+        std::memcpy( direction, p + 0xA0, 16 );
+        return;
+    }
+    float rem = look - left0;
+    for ( std::int32_t i = 1; i < count; ++i )
+    {
+        const std::uint8_t* q = at( i );
+        const float q80 = state_f( q, 0x80 ), q84 = state_f( q, 0x84 );
+        const float sx_ = state_f( q, 0x90 ) - q80, sy_ = state_f( q, 0x94 ) - q84;   // the segment (ex, ey in retail's frame)
+        float best = 1.0f;
+        for ( std::int32_t j = 1; j <= i; ++j )
+        {
+            const std::uint8_t* r = at( j );
+            const float ax = state_f( r, 0 ) - px, ay = state_f( r, 4 ) - py;
+            const float ia = 1.0f / hull_sqrt( ay * ay + ax * ax );
+            const float Ay = ia * ay * 1000.0f + py, Ax = ia * ax * 1000.0f + px;
+            const float bx = state_f( r, 0x10 ) - px, by = state_f( r, 0x14 ) - py;
+            const float ib = 1.0f / hull_sqrt( by * by + bx * bx );
+            const float Bx = px + ib * bx * 1000.0f, By = py + ib * by * 1000.0f;
+            bool hit = false;
+            float hx = 0.0f, hy = 0.0f;
+            {
+                const float rx = Ax - px, ry = Ay - py;
+                const float det = sx_ * ry - sy_ * rx;
+                if ( !( ai_bits( 0x00800000u ) > std::fabs( det ) ) )
+                {
+                    const float id = 1.0f / det;
+                    const float wy = q84 - py, wx = q80 - px;
+                    const float s1 = ( wy * rx - wx * ry ) * id;
+                    const float s2 = ( wy * sx_ - wx * sy_ ) * id;
+                    if ( ge( s1, 0.0f ) && ge( 1.0f, s1 ) && ge( s2, 0.0f ) && ge( 1.0f, s2 ) )
+                    {
+                        hit = true;
+                        hx = q80 + sx_ * s1;
+                        hy = q84 + sy_ * s1;
+                    }
+                }
+            }
+            if ( !hit )
+            {
+                const float ty = By - py, tx = Bx - px;
+                const float det = sx_ * ty - sy_ * tx;
+                if ( !( ai_bits( 0x00800000u ) > std::fabs( det ) ) )
+                {
+                    const float id = 1.0f / det;
+                    const float wy = q84 - py, wx = q80 - px;
+                    const float s1 = ( wy * tx - wx * ty ) * id;
+                    const float s2 = ( wy * sx_ - wx * sy_ ) * id;
+                    if ( ge( s1, 0.0f ) && ge( 1.0f, s1 ) && ge( s2, 0.0f ) && ge( 1.0f, s2 ) )
+                    {
+                        hit = true;
+                        hx = q80 + s1 * sx_;
+                        hy = q84 + s1 * sy_;
+                    }
+                }
+            }
+            if ( hit )
+            {
+                const float d = hull_sqrt( ( hy - q84 ) * ( hy - q84 ) + ( hx - q80 ) * ( hx - q80 ) );
+                const float len = hull_sqrt( sy_ * sy_ + sx_ * sx_ );
+                best = ai_minss( best, d / len );
+            }
+        }
+        const float inv = 1.0f / state_f( q, 0xB0 );
+        const float v = ai_minss( ai_maxss( best, ( 20.0f - ( look - rem ) ) * inv ), inv * rem );
+        if ( 1.0f > v )
+        {
+            const float w = 1.0f - v;
+            target[ 0 ] = q80 * w + v * state_f( q, 0x90 );
+            target[ 1 ] = q84 * w + state_f( q, 0x94 ) * v;
+            target[ 2 ] = state_f( q, 0x88 ) * w + state_f( q, 0x98 ) * v;
+            target[ 3 ] = 0.0f;
+            std::memcpy( direction, q + 0xA0, 16 );
+            return;
+        }
+        std::memcpy( target, q + 0x90, 16 );
+        std::memcpy( direction, q + 0xA0, 16 );
+        rem = rem - state_f( q, 0xB0 );
+    }
+}
