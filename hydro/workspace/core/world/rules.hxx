@@ -668,6 +668,55 @@ inline void race_rules_cheat_finish( const std::vector< std::uint8_t* >& humans,
     }
 }
 
+// ---- VuGame's release 0x482D50 (world batch 26; case vugame_release) -------
+//
+// thiscall(game), from VuActionGameMode's exit 0x4B97E0: the game's vt+0x18 (VuRaceGame slot 6 0x489A10: the +0x6F8
+// machine's current state's exit (vt+8, when there is one), the AI manager g 0x758F8C vt+0x20 then vt+0x24); a local
+// container - with a human (the boat manager g 0x758FB8 +0x28 non-zero) ["Finished"] = tag 3 the first human's +0x32F
+// byte, ["TotalTime"] = tag 2 its +0x4B4 - handed to the analytics g 0x758F9C vt+0x18("LevelExit", container) (a
+// PLATFORM service) and cleared; the +0x0C machine's current state's exit, then the +0x67C machine's; 0x500B80
+// (gameRelease) on each game boat (+0x38 / +0x3C) whose +0x14 has bit 2; the track manager g 0x758FF4 vt+0x28;
+// 0x4AD2B0 on the collision manager g 0x758FBC; the viewport manager g 0x759060's four cameras +0x278 / +0x4EC / +0x760
+// / +0x9D4 = 0; lens water g 0x759048 vt+0x24; 0x539020(game) on g 0x75906C; 0x4D2010. Each callee not this file's
+// is a hook, called in retail's order.
+struct vugame_release_hooks_t
+{
+    std::function< void( int machine ) > exit;             // 0 = +0x0C, 1 = +0x67C, 2 = +0x6F8: the current state's vt+8
+    std::function< void( int slot ) > ai;                  // the AI manager's vt+0x20 / vt+0x24 (slot 8 / 9)
+    std::function< void( const char* name, const value_t& data ) > analytics;
+    std::function< void( std::size_t boat ) > release;     // 0x500B80
+    std::function< void( const char* what ) > call;        // "track28", "collision", "cameras", "lens24", "listener", "db"
+};
+
+inline void vugame_release( race_rules_t& r, const std::vector< std::uint32_t >& boat_flags, const vugame_release_hooks_t& h )
+{
+    const auto exit = [ & ]( int machine, c_fsm& f ) {
+        if ( f.current( ) && h.exit )
+            h.exit( machine );
+    };
+    exit( 2, r.fsm );                     // 0x489A10
+    if ( h.ai )
+        h.ai( 8 ), h.ai( 9 );
+    value_t data;
+    if ( !r.humans.empty( ) )
+    {
+        const std::uint8_t* b = r.humans[ 0 ];
+        race_results_set( ui_json_child( data, "Finished" ), 3, b[ 0x32F ] );
+        race_results_set_float( ui_json_child( data, "TotalTime" ), rules_f( b, 0x4B4 ) );
+    }
+    if ( h.analytics )
+        h.analytics( "LevelExit", data );
+    exit( 0, r.event );
+    exit( 1, r.split );
+    for ( std::size_t k = 0; k < boat_flags.size( ); ++k )
+        if ( ( boat_flags[ k ] >> 2 ) & 1u )
+            if ( h.release )
+                h.release( k );
+    for ( const char* c : { "track28", "collision", "cameras", "lens24", "listener", "db" } )
+        if ( h.call )
+            h.call( c );
+}
+
 // ---- VuGame's machines (ctor 0x480BA0): the tables -------------------------
 //
 // +0x0C: Event (no handlers) -> Results "EventFinished"; Results {enter

@@ -155,6 +155,7 @@ struct race_session_t
     // results writer (VuRaceGame slot 12 0x489C60) fills - the UI's results table (core/ui/results.hxx) reads it.
     value_t util;
     bool results_logged = false;   // ours: the first GameResults write logged
+    std::uint32_t aligned_frees = 0;   // gNumAlignedFree 0x759050's increments by the session end's body dtors
     race_game_t game;
     race_start_game_t start;
     race_boat_manager_t manager;
@@ -1780,10 +1781,75 @@ inline bool race_session_game_data( const std::string& mode, const std::string& 
 // race_session_game_data built. `tree` the race project's entity tree, `track`
 // the world's track manager built from it. False (logged) when a boat cannot
 // be made.
+// THE SESSION END (world batch 26): what leaving the race runs - VuActionGameMode's exit 0x4B97E0 calls VuGame's
+// release 0x482D50 (rules.hxx vugame_release: the machines' current exits run here; its other callees are the AI
+// manager's / analytics' (platform) / the entity gameRelease 0x500B80 / track / collision / lens water / listener / DB
+// managers' - not recreated, each logged), then the level's entities go and with them their bodies: VuRigidBody's dtor
+// 0x50FAF0 (bodies.hxx rigid_body_destroy) on every level body and boat body (the boats' via VuBoatEntity's dtor
+// 0x41CB10 - the boat lane's - stated, not run; the body dtor itself is run on them). VuRigidBodyComponent's dtor
+// 0x543FC0 frees two VuStrings and deletes its property list: ours are std::string / C++ objects (RAII - the library's
+// frees, no retail-visible word). The rest of 0x4B97E0 (0x4D3100, the game's deleting dtor vt+0xC, 0x500B80 on the
+// project, vt+0x1C) is not read. Ours: the caller decides WHEN (a replaced session, or the --end-race test driver).
+inline void race_session_end( race_session_t& s )
+{
+    if ( !s.active )
+        return;
+    std::vector< std::uint32_t > flags( s.rules_boats.size( ), 4u );   // every game boat was gameInitialize'd (+0x14 bit 2)
+    vugame_release_hooks_t h;
+    h.exit = [ &s ]( int machine ) {
+        c_fsm& f = machine == 0 ? s.rules.event : machine == 1 ? s.rules.split : s.rules.fsm;
+        if ( fsm_state_t* st = f.current( ) )
+            if ( st->m_exit )
+                st->m_exit( );
+    };
+    h.ai = [ &s ]( int slot ) {
+        race_unwired( s, slot == 8 ? "VuGame release: the AI manager's vt+0x20 (not read)" : "VuGame release: the AI manager's vt+0x24 (not read)" );
+    };
+    h.analytics = [ &s ]( const char* name, const value_t& data ) {
+        LOG_INFO( "race: analytics %s (platform hook): Finished %d TotalTime %.3f", name, ui_json_find( data, "Finished" ).integer,
+                  ui_json_find( data, "TotalTime" ).real );
+        (void)s;
+    };
+    h.release = [ &s ]( std::size_t ) { race_unwired( s, "VuGame release: 0x500B80 (gameRelease) on a game boat - not recreated" ); };
+    h.call = [ &s ]( const char* what ) {
+        const std::string w( what );
+        if ( w == "cameras" )
+            s.viewport_set = false;   // the viewport manager's cameras = 0: the view stops following the boat's camera
+        else
+            race_unwired( s, "VuGame release: " + w + " (" +
+                             ( w == "track28" ? "the track manager vt+0x28" : w == "collision" ? "0x4AD2B0 on the collision manager" :
+                               w == "lens24" ? "lens water vt+0x24" : w == "listener" ? "0x539020 on g 0x75906C" : "0x4D2010" ) + ") - not recreated" );
+    };
+    vugame_release( s.rules, flags, h );
+    int bodies = 0;
+    for ( const auto& lb : s.level_bodies )
+    {
+        if ( lb->in_world && s.dynamics )
+        {
+            vu_dynamics_remove_rigid_body( s.dynamics->impl, lb->body );
+            lb->in_world = false;
+        }
+        if ( lb->built )
+        {
+            rigid_body_destroy( reinterpret_cast< std::uint8_t* >( &lb->body ), s.aligned_frees, { } );
+            ++bodies;
+        }
+    }
+    for ( const auto& b : s.boats )
+    {
+        rigid_body_destroy( reinterpret_cast< std::uint8_t* >( &b->body ), s.aligned_frees, { } );
+        ++bodies;
+    }
+    LOG_INFO( "race: session end - VuGame release 0x482D50 run, %d bodies through VuRigidBody's dtor 0x50FAF0 (gNumAlignedFree +%u)", bodies,
+              s.aligned_frees );
+    s.active = false;
+}
+
 inline bool race_session_start( race_session_t& s, const std::string& mode, const value_t& game_data, const race_session_dbs_t& db,
                                 const c_archive& archive, entity_t& tree, const track_manager_t* track, fleet_random_t& random,
                                 const std::function< void( ) >& project_initialized = { } )
 {
+    race_session_end( s );   // a session still running ends first (its VuGame release, its bodies' dtors)
     race_world_t lent = std::move( s.world );   // the world's services, set by c_world before the start (the HUD projects)
     s = race_session_t{ };
     s.world = std::move( lent );

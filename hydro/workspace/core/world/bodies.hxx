@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <xmmintrin.h>
@@ -410,4 +411,31 @@ inline bool bodies_prop_game_initialize( level_body_t& b, rigid_component_t& c, 
         }
     }
     return true;
+}
+
+// VuRigidBody's dtor 0x50FAC0 -> 0x50FAF0 (case rigid_body_dtor), on the body's retail image (0x2D4 bytes): +0 =
+// 0x74C644; when the constraint-ref array (+0x204) is non-null - with +0x208 (the byte: owns) set, gNumAlignedFree
+// 0x759050 += 1 and btAlignedFree (the function pointer at 0x7358AC) on it - +0x204 = 0; then +0x208 = 1, +0x204 =
+// +0x1FC (the count) = +0x200 (the capacity) = 0, +0 = 0x74DEBC (btCollisionObject's, whose own dtor is empty here).
+// The delete (flags & 1) is the allocator's. `aligned_free` = the CRT's / the platform's (a hook).
+inline void rigid_body_destroy( std::uint8_t* body, std::uint32_t& aligned_frees, const std::function< void( std::uint32_t ) >& aligned_free )
+{
+    std::uint32_t w = 0x74C644u;
+    std::memcpy( body, &w, 4 );
+    std::uint32_t refs;
+    std::memcpy( &refs, body + 0x204, 4 );
+    if ( refs )
+    {
+        if ( body[ 0x208 ] )
+        {
+            ++aligned_frees;
+            if ( aligned_free )
+                aligned_free( refs );
+        }
+        std::memset( body + 0x204, 0, 4 );
+    }
+    body[ 0x208 ] = 1;
+    std::memset( body + 0x1FC, 0, 12 );
+    w = 0x74DEBCu;
+    std::memcpy( body, &w, 4 );
 }

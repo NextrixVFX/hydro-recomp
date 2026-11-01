@@ -805,9 +805,87 @@ inline bool verify_breakable_dynamic_properties( )
     return failed == 0;
 }
 
+// vugame_release (world/rules.hxx) against retail's VuGame release 0x482D50 with VuRaceGame's slot 6 0x489A10 run (oracle
+// case vugame_release): 60 games - which machines have a current state, the humans, the boats' +0x14 - compared as the
+// whole call log (the analytics container canonical, as race_results_canonical prints it); the cameras retail zeroes.
+inline bool verify_vugame_release( )
+{
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_vugame_release_count; ++k )
+    {
+        const golden_vugame_release_t& want = g_golden_vugame_release[ k ];
+        race_rules_t r;
+        race_rules_construct( r );
+        c_fsm* m[ 3 ] = { &r.event, &r.split, &r.fsm };
+        for ( int i = 0; i < 3; ++i )
+            m[ i ]->m_current = want.states[ i ] ? 0 : -1;
+        std::vector< std::uint8_t > human( 0x520, 0 );
+        human[ 0x32F ] = static_cast< std::uint8_t >( want.finished );
+        std::memcpy( human.data( ) + 0x4B4, &want.time, 4 );
+        for ( int i = 0; i < want.humans; ++i )
+            r.humans.push_back( human.data( ) );
+        const std::vector< std::uint32_t > flags( want.flags, want.flags + want.nb );
+        std::string log;
+        const auto add = [ &log ]( const std::string& e ) { log += ( log.empty( ) ? "" : "|" ) + e; };
+        vugame_release_hooks_t h;
+        h.exit = [ & ]( int machine ) { add( "exit " + std::to_string( machine ) ); };
+        h.ai = [ & ]( int slot ) { add( slot == 8 ? "ai20" : "ai24" ); };
+        h.analytics = [ & ]( const char* name, const value_t& data ) { add( std::string( "analytics " ) + name + " " + race_results_canonical( data ) ); };
+        h.release = [ & ]( std::size_t b ) { add( "release " + std::to_string( b ) ); };
+        h.call = [ & ]( const char* what ) {
+            const std::string w( what );
+            if ( w == "collision" )
+                add( "collision 1" );
+            else if ( w == "listener" )
+                add( "listener 1 1" );
+            else if ( w != "cameras" )
+                add( w );
+        };
+        vugame_release( r, flags, h );
+        if ( log != want.log && ++failed <= 4 )
+            LOG_ERROR( "vugame release %d:\n ours   %s\n retail %s", static_cast< int >( k ), log.c_str( ), want.log );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "vugame_release matches VuGame's release 0x482D50 (VuRaceGame slot 6 0x489A10) on %d games: the whole call log",
+                     static_cast< int >( g_golden_vugame_release_count ) );
+    else
+        LOG_ERROR( "the VuGame release FAILED on %d of %d games", failed, static_cast< int >( g_golden_vugame_release_count ) );
+    return failed == 0;
+}
+
+// rigid_body_destroy (world/bodies.hxx) against retail's VuRigidBody dtor 0x50FAC0(0) -> 0x50FAF0 (oracle case
+// rigid_body_dtor): 64 seeded images - the five words after, btAlignedFree's call, gNumAlignedFree.
+inline bool verify_rigid_body_dtor( )
+{
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_rigid_body_dtor_count; ++k )
+    {
+        const golden_rigid_body_dtor_t& want = g_golden_rigid_body_dtor[ k ];
+        std::uint8_t img[ 0x2D4 ] = { };
+        std::memcpy( img + 0x1FC, want.in, 12 );
+        img[ 0x208 ] = static_cast< std::uint8_t >( want.in[ 3 ] );
+        std::uint32_t counter = 0, freed = 0;
+        int frees = 0;
+        rigid_body_destroy( img, counter, [ & ]( std::uint32_t p ) { ++frees, freed = p; } );
+        std::uint32_t out[ 5 ];
+        std::memcpy( out, img, 4 );
+        std::memcpy( out + 1, img + 0x1FC, 12 );
+        out[ 4 ] = img[ 0x208 ];
+        if ( ( std::memcmp( out, want.out, sizeof( out ) ) != 0 || frees != want.frees || freed != want.freed || counter != want.counter ) && ++failed <= 6 )
+            LOG_ERROR( "rigid body dtor %d: a word, the free or the counter differs", static_cast< int >( k ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "rigid_body_destroy matches VuRigidBody's dtor 0x50FAF0 on %d bodies", static_cast< int >( g_golden_rigid_body_dtor_count ) );
+    else
+        LOG_ERROR( "the rigid body dtor FAILED on %d of %d bodies", failed, static_cast< int >( g_golden_rigid_body_dtor_count ) );
+    return failed == 0;
+}
+
 inline bool verify_session_all( )
 {
     bool ok = true;
+    ok = verify_rigid_body_dtor( ) && ok;
+    ok = verify_vugame_release( ) && ok;
     ok = verify_breakable_dynamic_properties( ) && ok;
     ok = verify_kinematic_step( ) && ok;
     ok = verify_cheat_finish( ) && ok;

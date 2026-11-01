@@ -1314,6 +1314,13 @@ public:
         else
             m_race.world.game_mode = nullptr;
         race_session_frame( m_race, dt );
+        // Ours (a test driver): `--end-race N` ends the session after its frame N (session.hxx race_session_end: VuGame's
+        // release and the bodies' dtors) - retail's action-mode exit is not reached by our flow.
+        {
+            static const char* end = c_engine::option( "end-race" );
+            if ( end && end[ 0 ] && m_race.active && m_race.frames == std::atoi( end ) )
+                race_session_end( m_race );
+        }
         // g_vufademanager's "Final" tick 0x4AEE50 (ui/flow.hxx ui_fade_t; delta = the tick manager's = dt): after the
         // frame's other phases. Its two broadcasts (OnFadeOutComplete / OnFadeInComplete) reach no subscriber here.
         if ( m_action )
