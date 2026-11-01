@@ -143,11 +143,16 @@ enum water_kind_t
 {
     water_kind_surface, water_kind_ramp, water_kind_rectangular, water_kind_circular, water_kind_banked, water_kind_whirlpool,
     water_kind_directional, water_kind_bump, water_kind_none,
-    water_kind_point   // made at run time (VuWater_createPointWave 0x528E10), not by an entity's slot 6
+    water_kind_point,   // made at run time (VuWater_createPointWave 0x528E10), not by an entity's slot 6
+    // VuInfiniteOceanWaveEntity (vtable 0x753B34; the front end's Screens/Background authors one): the ocean ctor
+    // 0x5D8380's eight properties (+0x68 .. +0x84, k_water_ocean_props' names and defaults), slot 6 0x5D8970.
+    water_kind_infinite
 };
 
 inline water_kind_t water_kind_of( const std::string& cls )
 {
+    if ( cls == "VuInfiniteOceanWaveEntity" )
+        return water_kind_infinite;
     static const char* const names[] = { "VuWaterSurfaceEntity", "VuWaterRampEntity", "VuRectangularOceanWaveEntity",
         "VuCircularOceanWaveEntity", "VuBankedTurnWaveEntity", "VuWhirlpoolWaveEntity", "VuDirectionalWaveEntity", "VuBumpWaveEntity" };
     for ( int k = 0; k < water_kind_none; ++k )
@@ -200,6 +205,7 @@ inline void water_props_rows( water_kind_t kind, const water_prop_row_t* rows[ 3
     case water_kind_whirlpool: rows[ 0 ] = k_water_whirlpool_props; break;
     case water_kind_directional: rows[ 0 ] = k_water_directional_props; break;
     case water_kind_bump: rows[ 0 ] = k_water_bump_props; break;
+    case water_kind_infinite: rows[ 0 ] = k_water_ocean_props; break;
     default: break;
     }
 }
@@ -652,7 +658,7 @@ inline int water_hold_surface( water_hold_t& w, const water_words_t& s )
     const int surface = static_cast< int >( w.surfaces.size( ) );
     w.surfaces.push_back( std::move( h ) );
     const float r[ 4 ] = { s.f( 208 ), s.f( 212 ), s.f( 224 ), s.f( 228 ) };
-    water_tree_add( w.surface_tree, surface, r );
+    w.surfaces[ surface ].leaf = water_tree_add( w.surface_tree, surface, r );
     for ( int e = w.list; e >= 0; e = w.pool[ e ].next )
     {
         const water_held_wave_t& v = w.waves[ w.pool[ e ].leaf ];
@@ -703,6 +709,13 @@ struct water_built_t
     // VuWaterMapAsset at its +0x100 (null until water_build_maps finds it).
     std::vector< std::string > map_names;
     std::vector< std::shared_ptr< water_map_t > > maps;
+    // VuWater's surface list (+0x20, a std::list; size +0x24) as surface
+    // indices in list order: createSurface 0x5284C0 appends and then sorts it
+    // (0x52A670 = std::list::sort with 0x527F50: a before b when a's +0x14 -
+    // its world z - is below b's, comiss / seta).
+    std::vector< int > surface_list;
+    // Per surface: destroyed (its slot 0 0x535B80 ran); the words stay.
+    std::vector< std::uint8_t > surface_gone;
 };
 
 // The field of ocean wave `wave`, or null (not an ocean wave / not built).
@@ -736,6 +749,7 @@ inline std::uint32_t water_wave_vtable( water_kind_t k )
     case water_kind_directional: return 0x750768u;
     case water_kind_bump: return 0x7509B4u;
     case water_kind_point: return 0x750978u;
+    case water_kind_infinite: return 0x7508C0u;
     default: return 0u;
     }
 }
@@ -775,6 +789,14 @@ inline void water_build_entity( water_built_t& b, water_kind_t kind, const water
         b.surfaces.push_back( water_surface_create( in ) );
         b.map_names.push_back( in.water_map ? in.water_map : "" );
         b.maps.push_back( nullptr );
+        b.surface_gone.push_back( 0 );
+        // 0x5284C0: push_back on +0x20, then the list sort. SUBSTITUTION:
+        // std::stable_sort for MSVC's std::list::sort (a stable merge sort -
+        // for this strict weak order both give the one stable order).
+        b.surface_list.push_back( static_cast< int >( b.surfaces.size( ) ) - 1 );
+        std::stable_sort( b.surface_list.begin( ), b.surface_list.end( ), [ & ]( int x, int y ) {
+            return _mm_comigt_ss( _mm_set_ss( b.surfaces[ y ].f( 20 ) ), _mm_set_ss( b.surfaces[ x ].f( 20 ) ) ) != 0;
+        } );
         water_hold_surface( b.hold, b.surfaces.back( ) );
         if ( kind == water_kind_ramp )
             add_wave( ramp_wave_create( in ), kind );
@@ -782,9 +804,24 @@ inline void water_build_entity( water_built_t& b, water_kind_t kind, const water
     }
     case water_kind_rectangular:
     case water_kind_circular:
+    case water_kind_infinite:
     {
-        add_wave( from_image( kind == water_kind_rectangular ? rectangular_ocean_create( in.source( ) ) : circular_ocean_create( in.source( ) ) ),
-            kind );
+        if ( kind == water_kind_infinite )
+        {
+            // VuInfiniteOceanWaveEntity's slot 6 0x5D8970: the descriptor is the entity's +0x68 .. +0x87 (a zeroed
+            // 32-byte block, then the eight words); 0x528A50: new 0xD0, +8 / +0x38 / +0x3C / +0x40 / +0x90 .. +0xA0
+            // zeroed, the ocean ctor 0x59CB10 (ocean_construct), vtable 0x7508C0, +4 incremented, the allocators'
+            // common tail; the entity's +0x88 = the wave. No bounds of its own.
+            std::uint32_t d[ 8 ];
+            for ( int k = 0; k < 8; ++k )
+                d[ k ] = in.source( ).e( 0x68 + 4 * k );
+            wave_image_t image{};
+            ocean_construct( image, d );
+            add_wave( from_image( image ), kind );
+        }
+        else
+            add_wave( from_image( kind == water_kind_rectangular ? rectangular_ocean_create( in.source( ) ) : circular_ocean_create( in.source( ) ) ),
+                kind );
         // the ctor's 0x59CCB0 field half, at the ctor's time (+0x88, 0.0)
         water_built_t::ocean_t o{};
         o.wave = static_cast< int >( b.waves.size( ) ) - 1;
@@ -964,7 +1001,7 @@ inline void water_built_destroy( water_built_t& b, int wave )
         ++b.unread_dtors;   // a class this file does not build
         return;
     }
-    if ( kind == water_kind_rectangular || kind == water_kind_circular )
+    if ( kind == water_kind_rectangular || kind == water_kind_circular || kind == water_kind_infinite )
         if ( water_built_t::ocean_t* o = water_ocean_of( b, wave ) )
             o->field = decltype( o->field )( );
     water_built_remove( b, wave );
@@ -981,11 +1018,8 @@ inline void water_built_destroy( water_built_t& b, int wave )
 // 0 with 1 at zero -, then VuWater's removal 0x529800 of the same pointer (a
 // no-op when the dtor already unlinked it), then the entity's word = 0 (the
 // caller's). VuWaterRampEntity's 0x5D7030 releases its surface (+0x128) first
-// (the surface's dtor 0x535BB0 - VuWater's removeSurface 0x529770 - is NOT
-// recreated) and then its wave (+0x140) the same way: only the wave half is
-// this function. VuPointWaveEntity's slot 7 0x5D4AF0 (read, not measured):
-// its tick unregistered (g 0x759008 vt+0x28: the caller's), then, when +0xA0
-// is set, this same body on it.
+// and then its wave (+0x140) the same way: water_ramp_entity_release below.
+// VuPointWaveEntity's slot 7 0x5D4AF0: water_point_entity_release below.
 inline void water_entity_release( water_built_t& b, int wave )
 {
     if ( --b.waves[ static_cast< std::size_t >( wave ) ].word[ 1 ] == 0u )
@@ -1000,6 +1034,304 @@ inline void water_point_wave_expired( water_built_t& b, int wave )
 {
     if ( --b.waves[ wave ].word[ 1 ] == 0 )
         water_built_destroy( b, wave );
+}
+
+// ---------------------------------------------------------------------------
+// THE SURFACE'S RELEASE. The hooks (all optional; one reached while missing is
+// COUNTED in the return value):
+struct water_surface_hooks_t
+{
+    void* user = nullptr;
+    // The renderer's (water +0x1C) +0x2B5 byte: its thread is drawing. When
+    // set, 0x759098 vt+0x3C( renderer +0x2C0, -1 ) waits for it (platform:
+    // the hook) and the byte is cleared. Null = clear.
+    bool* render_busy = nullptr;
+    void ( *render_wait )( void* user ) = nullptr;
+    // VuWater's listener list (+0x34, a std::list of interfaces): each one's
+    // slot 1 is told of a removed surface (slot 0 of an added one, in
+    // createSurface). `listeners` = the list's length.
+    int listeners = 0;
+    void ( *listener )( void* user, int listener, int surface ) = nullptr;
+    // The entity's Vu3dDrawComponent (+0x60) removed from g_vu3ddrawmanager
+    // 0x7590B8 (vt+0x2C) when its +0x1E byte (registered) is set.
+    void ( *draw_remove )( void* user, int surface ) = nullptr;
+    // Told (not retail: a notification) as a surface's dtor reaches 0x598D10,
+    // with the wave tree as that dtor receives it.
+    void ( *destroying )( void* user, int surface, const water_tree_t& waves ) = nullptr;
+};
+
+// 0x529990 (thiscall water; surface*; retn 4): the surface's leaf (+0xF8) out
+// of the surface tree (0x599220) and freed (the leaf count +0x14 one fewer),
+// +0xF8 = 0; its wave tree's (+0xFC) nodes all freed from the root
+// (0x598FC0, inlined on the root); then per wave-list node (+0x30, from the
+// head) per entry of the wave's +0x40 list (its next taken first) whose leaf's
+// tag (+0x1C) is this surface: the FIRST entry holding that leaf unlinked and
+// pushed on the pool (+0x10, count +8).
+inline void water_hold_drop_surface( water_hold_t& w, int surface )
+{
+    water_held_surface_t& s = w.surfaces[ static_cast< std::size_t >( surface ) ];
+    water_tree_remove( w.surface_tree, s.leaf );
+    water_tree_release_leaf( w.surface_tree, s.leaf );
+    s.leaf = -1;
+    if ( s.waves.root >= 0 )
+        water_tree_free( s.waves, s.waves.root );
+    for ( int e = w.list; e >= 0; e = w.pool[ e ].next )
+    {
+        water_held_wave_t& v = w.waves[ static_cast< std::size_t >( w.pool[ e ].leaf ) ];
+        for ( int c = v.entries; c >= 0; )
+        {
+            const int next = w.pool[ c ].next;
+            const int leaf = w.pool[ c ].leaf;
+            const int tree = w.pool[ c ].surface;
+            if ( w.surfaces[ static_cast< std::size_t >( tree ) ].waves.nodes[ leaf ].tag == static_cast< std::uint32_t >( surface ) )
+            {
+                int prev = -1;
+                int x = v.entries;
+                while ( x >= 0 && !( w.pool[ x ].leaf == leaf && w.pool[ x ].surface == tree ) )
+                {
+                    prev = x;
+                    x = w.pool[ x ].next;
+                }
+                if ( x >= 0 )
+                {
+                    if ( prev >= 0 )
+                        w.pool[ prev ].next = w.pool[ x ].next;
+                    else
+                        v.entries = w.pool[ x ].next;
+                    w.pool[ x ].next = w.pool_free;
+                    ++w.pool_count;
+                    w.pool_free = x;
+                }
+            }
+            c = next;
+        }
+    }
+}
+
+// VuWater's removeSurface 0x529770 (thiscall water; surface*; retn 4): the
+// renderer's wait (hooks.render_busy), every list node (+0x20) holding the
+// surface erased (0x4A44A0 - std::list::remove: all matches, size +0x24 one
+// fewer each), 0x529990, then every listener's slot 1 with the surface.
+inline int water_built_remove_surface( water_built_t& b, int surface, const water_surface_hooks_t& hooks )
+{
+    int unrecreated = 0;
+    if ( hooks.render_busy && *hooks.render_busy )
+    {
+        if ( hooks.render_wait )
+            hooks.render_wait( hooks.user );
+        else
+            ++unrecreated;
+        *hooks.render_busy = false;
+    }
+    b.surface_list.erase( std::remove( b.surface_list.begin( ), b.surface_list.end( ), surface ), b.surface_list.end( ) );
+    water_hold_drop_surface( b.hold, surface );
+    for ( int k = 0; k < hooks.listeners; ++k )
+        if ( hooks.listener )
+            hooks.listener( hooks.user, k, surface );
+        else
+            ++unrecreated;
+    return unrecreated;
+}
+
+// The surface's slot 0 with 1, 0x535B80: the dtor 0x535BB0 then operator
+// delete. 0x535BB0: vtable 0x74D378, removeSurface 0x529770 on g_vuwater, the
+// wave tree (+0xFC, when set) destroyed (0x598D10) and deleted; then the base
+// (vtable 0x7458B8): while +8 is set, slot 0 of the object there (UNREAD:
+// counted in b.unread_dtors, as the waves' are; every surface built here has
+// +8 = 0); vtable 0x7458C0.
+inline int water_built_destroy_surface( water_built_t& b, int surface, const water_surface_hooks_t& hooks )
+{
+    const int unrecreated = water_built_remove_surface( b, surface, hooks );
+    water_tree_t& waves = b.hold.surfaces[ static_cast< std::size_t >( surface ) ].waves;
+    if ( hooks.destroying )
+        hooks.destroying( hooks.user, surface, waves );
+    water_tree_destroy( waves );
+    if ( b.surfaces[ static_cast< std::size_t >( surface ) ].word[ 2 ] != 0 )
+        ++b.unread_dtors;
+    if ( b.surface_gone.size( ) < b.surfaces.size( ) )
+        b.surface_gone.resize( b.surfaces.size( ), 0 );
+    b.surface_gone[ static_cast< std::size_t >( surface ) ] = 1;
+    return unrecreated;
+}
+
+// VuWaterSurfaceEntity's slot 7 (gameRelease) 0x5DB5C0, THE EXPORT for an
+// entity's release: when the draw component's byte (`drawn`, its +0x1E) is
+// set, the draw manager's removal (hooks.draw_remove) and the byte cleared;
+// then the entity's reference to its surface (+0x128; the surface's +4)
+// dropped - slot 0 with 1 at zero -, the entity's +0x128 = 0 (the caller's).
+// Returns the hooks reached while missing.
+inline int water_surface_entity_release( water_built_t& b, int surface, bool& drawn, const water_surface_hooks_t& hooks )
+{
+    int unrecreated = 0;
+    if ( drawn )
+    {
+        if ( hooks.draw_remove )
+            hooks.draw_remove( hooks.user, surface );
+        else
+            ++unrecreated;
+        drawn = false;
+    }
+    if ( --b.surfaces[ static_cast< std::size_t >( surface ) ].word[ 1 ] == 0u )
+        unrecreated += water_built_destroy_surface( b, surface, hooks );
+    return unrecreated;
+}
+
+// VuWaterRampEntity's slot 7 0x5D7030: 0x5DB5C0's body on its surface, then
+// its wave (+0x140) as water_entity_release (the reference dropped, slot 0
+// at zero, 0x529800), the entity's +0x140 = 0 (the caller's).
+inline int water_ramp_entity_release( water_built_t& b, int surface, int wave, bool& drawn, const water_surface_hooks_t& hooks )
+{
+    const int unrecreated = water_surface_entity_release( b, surface, drawn, hooks );
+    water_entity_release( b, wave );
+    return unrecreated;
+}
+
+// ---------------------------------------------------------------------------
+// VUWATER'S OWN LIFECYCLE (vtable 0x74D05C: slot 0 0x528120, slot 3 release
+// 0x528410, slot 4 0x527E80, slot 5 init 0x528200 - the renderer, the dev
+// menu and the "Water" tick: render / platform, not recreated).
+//
+// The release's hooks (all optional; one reached while missing is COUNTED):
+struct water_release_hooks_t
+{
+    void* user = nullptr;
+    // g_vutickmanager 0x759008 vt+0x28( water ): its ticks unregistered.
+    void ( *tick_unregister )( void* user ) = nullptr;
+    // +0x14, a refcounted object (its +4) - the water shader: dropped, its
+    // slot 0 with 1 at zero (VuWaterShader's 0x59A1B0 -> 0x59A3A0: render
+    // side). `shader_refs` = its +4 (null = no object: retail would fault).
+    std::uint32_t* shader_refs = nullptr;
+    void ( *shader_destroy )( void* user ) = nullptr;
+    // +0x1C, the renderer (when set): 0x5953F0 then operator delete - its
+    // thread, render side.
+    bool renderer = false;
+    void ( *renderer_destroy )( void* user ) = nullptr;
+    // Told (not retail: a notification) as the surface tree reaches 0x598D10.
+    void ( *tree_destroying )( void* user, const water_tree_t& tree ) = nullptr;
+};
+
+// Slot 3 0x528410 (thiscall water): the tick unregistered; while the wave list
+// (+0x30) is not empty, its head's wave unlinked (the first node holding it,
+// pooled), 0x529B90 on it, its reference dropped - slot 0 with 1 at zero (the
+// body of 0x529800, water_built_remove); the +0x14 object dropped, +0x14 = 0;
+// the renderer destroyed; the surface tree (+0x3C, when set) destroyed by
+// 0x598D10 and deleted. Surfaces are not touched (their entities own them).
+inline int water_built_release( water_built_t& b, const water_release_hooks_t& hooks )
+{
+    int unrecreated = 0;
+    if ( hooks.tick_unregister )
+        hooks.tick_unregister( hooks.user );
+    else
+        ++unrecreated;
+    while ( b.hold.list >= 0 )
+        water_built_remove( b, b.hold.pool[ b.hold.list ].leaf );
+    if ( !hooks.shader_refs )
+        ++unrecreated;
+    else if ( --*hooks.shader_refs == 0u )
+    {
+        if ( hooks.shader_destroy )
+            hooks.shader_destroy( hooks.user );
+        else
+            ++unrecreated;
+    }
+    if ( hooks.renderer )
+    {
+        if ( hooks.renderer_destroy )
+            hooks.renderer_destroy( hooks.user );
+        else
+            ++unrecreated;
+    }
+    if ( hooks.tree_destroying )
+        hooks.tree_destroying( hooks.user, b.hold.surface_tree );
+    water_tree_destroy( b.hold.surface_tree );
+    return unrecreated;
+}
+
+// Slot 4 0x527E80: g_vuwater 0x759058 = 0 - `water` is the caller's pointer.
+inline void water_global_clear( water_built_t*& water )
+{
+    water = nullptr;
+}
+
+// Slot 0 0x528120 (the scalar deleting dtor): 0x528150 then operator delete.
+// 0x528150: the listener list (+0x34, size +0x38), the +0x28 list (size
+// +0x2C: nothing of it is modelled here) and the surface list (+0x20, size
+// +0x24) each emptied - nodes and sentinel freed -, the pool's block (+0xC)
+// freed, the base vtable 0x736EE8. Here: the surface list and the pool
+// dropped.
+inline void water_built_destroy_water( water_built_t& b )
+{
+    b.surface_list.clear( );
+    b.hold.pool.clear( );
+    b.hold.pool.shrink_to_fit( );
+}
+
+// ---------------------------------------------------------------------------
+// VuPointWaveEntity (vtable 0x75344C; slot 0 0x405000 = VuEntity's dtor
+// 0x500870 + operator delete): the words its slot 6 / tick / slot 7 use.
+struct water_point_entity_t
+{
+    // +0x70: the descriptor - the position (the tick's copy of the transform's
+    // +0x80 .. +0x8F), then +0x80 .. +0x9B the properties the ctor 0x5D43B0
+    // binds (Falloff Time, Magnitude, Range Start, Range End, Speed,
+    // Frequency, Foaminess).
+    std::uint32_t desc[ 11 ]{};
+    bool pending = false;   // +0x9C, set by the Emit input (its handler: not read here)
+    int wave = -1;          // +0xA0, -1 = null
+};
+
+// g_vutickmanager 0x759008 - the engine's tick manager, a hook here.
+struct water_point_entity_hooks_t
+{
+    void* user = nullptr;
+    // slot 6: vt+0x20( functor, "Decision" 0x6DFA50 ), the functor a new
+    // 16 bytes {0x753414, entity, 0x5D4C50 (the tick), 0} (a failed new
+    // registers null - not modelled).
+    void ( *tick_register )( void* user, const char* phase ) = nullptr;
+    // slot 7: vt+0x28( entity ) - the entity's ticks unregistered.
+    void ( *tick_unregister )( void* user ) = nullptr;
+};
+
+// Slot 6 (gameInitialize) 0x5D4A90: the tick registered. Returns 1 when the
+// hook is missing (counted), else 0.
+inline int water_point_entity_init( const water_point_entity_hooks_t& hooks )
+{
+    if ( !hooks.tick_register )
+        return 1;
+    hooks.tick_register( hooks.user, "Decision" );
+    return 0;
+}
+
+// The tick 0x5D4C50 (thiscall entity; float dt - unread): when +0x9C is set
+// it is cleared, the transform's position copied to +0x70, 0x528E10 on the
+// descriptor, +0xA0 = the wave, wave +0x8C = entity + 0x5C
+// (water_point_wave_emit's body). `position` = the transform's +0x80 words.
+inline void water_point_entity_tick( water_built_t& b, water_point_entity_t& e, const std::uint32_t* position )
+{
+    if ( !e.pending )
+        return;
+    e.pending = false;
+    for ( int k = 0; k < 4; ++k )
+        e.desc[ k ] = position[ k ];
+    e.wave = water_point_wave_emit( b, e.desc, e.desc + 4 );
+}
+
+// Slot 7 (gameRelease) 0x5D4AF0: the tick unregistered, then when +0xA0 is
+// set water_entity_release's body on it and +0xA0 = 0. Returns 1 when the
+// hook is missing (counted), else 0.
+inline int water_point_entity_release( water_built_t& b, water_point_entity_t& e, const water_point_entity_hooks_t& hooks )
+{
+    int unrecreated = 0;
+    if ( hooks.tick_unregister )
+        hooks.tick_unregister( hooks.user );
+    else
+        ++unrecreated;
+    if ( e.wave >= 0 )
+    {
+        water_entity_release( b, e.wave );
+        e.wave = -1;
+    }
+    return unrecreated;
 }
 
 // 0x529E30 (thiscall water; float dt): per list node from +0x30, the next
@@ -1055,6 +1387,7 @@ inline int water_built_tick( water_built_t& b, float dt, const water_built_hooks
         case water_kind_bump: alive = static_wave_tick( static_cast< int >( v.word[ 1 ] ) ); break;
         case water_kind_rectangular:
         case water_kind_circular:
+        case water_kind_infinite:   // its vtable 0x7508C0's slot 2 is 0x59CC00 too
         {
             ocean_clock_t c{};
             std::memcpy( &c.time, &v.word[ 0x88 / 4 ], 8 );
@@ -1138,8 +1471,7 @@ inline int water_built_tick( water_built_t& b, float dt, const water_built_hooks
 // make? Counted so the gap is visible.
 inline bool water_class_unbuilt( const std::string& cls )
 {
-    static const char* const others[] = { "VuInfiniteOceanWaveEntity", "VuDirectionalFlowWaveEntity", "VuStaticWakeWaveEntity",
-        "VuWakeWaveEntity" };
+    static const char* const others[] = { "VuDirectionalFlowWaveEntity", "VuStaticWakeWaveEntity", "VuWakeWaveEntity" };
     for ( const char* o : others )
         if ( cls == o )
             return true;

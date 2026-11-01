@@ -1,5 +1,7 @@
 #pragma once
 
+#include <workspace/core/world/build.hxx>
+#include <workspace/core/world/drive.hxx>
 #include <workspace/core/world/livery.hxx>
 #include <workspace/core/world/race.hxx>
 #include <workspace/core/world/start.hxx>
@@ -2004,9 +2006,384 @@ inline bool verify_race_game_ctor( )
     return failed == 0;
 }
 
+// race_drive_floor (core/world drive.hxx) against VuWater's surface list as
+// retail keeps it (oracle case water_surface_list: each add's push_back then
+// std::list::sort 0x52A670 with the predicate 0x527F50, run whole) and the
+// Decision tick's floor read [[[water +0x20]] +8] +0xD8: per vector the floor
+// word, bit for bit. Ties of the least height (6 of 48 vectors) and a lone
+// surface are among them.
+inline bool verify_water_surface_list( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_water_surface_list_count; ++index )
+    {
+        const unsigned* s = g_golden_water_surface_list_words + g_golden_water_surface_list_offsets[ index ];
+        const unsigned n = *s++;
+        water_built_t water;
+        for ( unsigned k = 0; k < n; ++k )
+        {
+            water_words_t w{};
+            w.set( 20, *s++ );
+            w.set( 216, *s++ );
+            water.surfaces.push_back( w );
+        }
+        bool unknown = false;
+        const float* floor = race_drive_floor( &water, unknown );
+        std::uint32_t got = 0;
+        if ( floor )
+            std::memcpy( &got, floor, 4 );
+        if ( !floor || unknown || got != *s )
+            if ( ++failed <= 4 )
+                LOG_ERROR( "water surface list vector %d: our floor 0x%08X, retail's 0x%08X", static_cast< int >( index ), got, *s );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "race_drive_floor matches VuWater's surface list order (0x5284C0's push_back + std::list::sort 0x52A670 / 0x527F50) "
+                     "and the Decision tick's floor read: %d vectors", static_cast< int >( g_golden_water_surface_list_count ) );
+    else
+        LOG_ERROR( "water surface list FAILED %d of %d vectors", failed, static_cast< int >( g_golden_water_surface_list_count ) );
+    return failed == 0;
+}
+
+// boat_build_audio (core/world build.hxx) against retail's 0x4200E0 run whole
+// (oracle case boat_build_audio; 0x50FBF0 and the FMOD imports intercepted):
+// +0x3F8..+0x407 bit for bit, +0x484, +0x48C and the calls in order, over 200
+// vectors (10 NaN probes).
+struct build_audio_log_t
+{
+    std::vector< unsigned > got;
+    unsigned ok = 0;
+};
+
+inline bool verify_boat_build_audio( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_build_audio_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_build_audio_words + g_golden_boat_build_audio_offsets[ index ];
+        std::vector< std::uint8_t > boat( 0x520, 0 ), body( 0x2D4, 0 ), engine( 0x104, 0 ), solver( 0x104, 0 ), camera( 0x308, 0 );
+        float dt;
+        std::memcpy( &dt, s++, 4 );
+        std::memcpy( body.data( ) + 0x140, s, 16 );
+        s += 4;
+        std::memcpy( camera.data( ) + 0x20, s, 12 );
+        s += 3;
+        const struct { std::uint8_t* b; int at; } in[ 11 ] = { { boat.data( ), 0x3F8 }, { boat.data( ), 0x3FC }, { boat.data( ), 0x400 },
+            { boat.data( ), 0x404 }, { boat.data( ), 0x30C }, { boat.data( ), 0x470 }, { engine.data( ), 4 }, { engine.data( ), 0xC },
+            { engine.data( ), 0x28 }, { solver.data( ), 0x54 }, { solver.data( ), 0x5C } };
+        for ( const auto& i : in )
+            std::memcpy( i.b + i.at, s++, 4 );
+        const unsigned n = *s++;
+        const std::string name( reinterpret_cast< const char* >( s ), n );
+        s += ( n + 3 ) / 4;
+        build_audio_log_t log;
+        log.ok = *s++;
+        boat[ 0x484 ] = static_cast< std::uint8_t >( *s++ );
+        image_put32( boat.data( ), 0x48C, *s++ );
+        const unsigned* after = s;
+        s += 4;
+        const unsigned flag_after = *s++, handle_after = *s++;
+        const unsigned calls = *s++;
+        std::vector< unsigned > want( s, s + 2 * calls );
+        boat_build_audio_hooks_t h;
+        h.user = &log;
+        h.slot = []( void* u, std::uint8_t* b, const std::string& ) {
+            build_audio_log_t& l = *static_cast< build_audio_log_t* >( u );
+            l.got.push_back( 1 );
+            l.got.push_back( 0 );
+            if ( l.ok )
+                image_put32( b, 0x48C, 0xE700u + static_cast< unsigned >( l.got.size( ) / 2 ) );
+            return l.ok != 0;
+        };
+        h.start = []( void* u, std::uint32_t x ) { auto& g = static_cast< build_audio_log_t* >( u )->got; g.push_back( 2 ); g.push_back( x ); };
+        h.callback = []( void* u, std::uint32_t x ) { auto& g = static_cast< build_audio_log_t* >( u )->got; g.push_back( 3 ); g.push_back( x ); };
+        h.release = []( void* u, std::uint32_t x ) { auto& g = static_cast< build_audio_log_t* >( u )->got; g.push_back( 4 ); g.push_back( x ); };
+        boat_build_audio( boat.data( ), body.data( ), engine.data( ), solver.data( ), camera.data( ), name, dt, h );
+        const bool same = std::memcmp( boat.data( ) + 0x3F8, after, 16 ) == 0 && boat[ 0x484 ] == flag_after && load_word( boat.data( ), 0x48C ) == handle_after &&
+                          log.got == want;
+        if ( !same && ++failed <= 4 )
+            LOG_ERROR( "boat build audio vector %d differs from retail's 0x4200E0 (+0x3F8 0x%08X / 0x%08X, +0x404 0x%08X / 0x%08X, %d / %d calls)",
+                       static_cast< int >( index ), load_word( boat.data( ), 0x3F8 ), after[ 0 ], load_word( boat.data( ), 0x404 ), after[ 3 ],
+                       static_cast< int >( log.got.size( ) / 2 ), static_cast< int >( calls ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "boat_build_audio matches the Build tick's 0x4200E0 (0x50FBF0 / FMOD hooked): %d vectors",
+                     static_cast< int >( g_golden_boat_build_audio_count ) );
+    else
+        LOG_ERROR( "boat build audio FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_build_audio_count ) );
+    return failed == 0;
+}
+
+// entity_set_world (world/race.hxx) = transform_set_world (world/transform.hxx)
+// + the child walk + the watcher, against retail's 0x5344A0 with 0x534830 run
+// whole (oracle case transform_set_world; 0x534C00 and the watcher's vt+8
+// intercepted): per vector, half under a parent (its transform's world the
+// hand-built parent's), the component's local +0x10, world +0x50, rotation
+// +0x90 and world euler +0xA0 (lanes 0 - 2; each fourth lane is a stack word
+// retail never writes) bit for bit, and the watcher fired iff notify (its low
+// byte - `cmp byte`) and a watcher.
+inline bool verify_transform_set_world( )
+{
+    int failed = 0, parents = 0, fired = 0;
+    for ( std::size_t index = 0; index < g_golden_transform_set_world_count; ++index )
+    {
+        const unsigned* s = g_golden_transform_set_world_words + g_golden_transform_set_world_offsets[ index ];
+        const bool has_parent = *s++ != 0;
+        float matrix[ 16 ], parent_world[ 16 ];
+        std::memcpy( matrix, s, 64 );
+        s += 16;
+        if ( has_parent )
+        {
+            std::memcpy( parent_world, s, 64 );
+            s += 16;
+        }
+        const unsigned notify = *s++, watcher = *s++;
+        const unsigned* after = s;
+        s += 40;
+        const unsigned ncalls = *s++;
+        int want_fired = 0;
+        for ( unsigned k = 0; k < ncalls; ++k )
+            want_fired += s[ 3 * k ] == 2 ? 1 : 0;
+        entity_t parent, owner;
+        auto component = []( entity_t& e ) {
+            auto st = std::make_shared< transform_state_t >( );
+            std::memset( &st->c, 0x77, sizeof( st->c ) );
+            e.m_components.push_back( entity_component_t{ "VuTransformComponent", k_transform_component_vtable, st } );
+            return st;
+        };
+        auto ps = component( parent );
+        auto os = component( owner );
+        if ( has_parent )
+        {
+            std::memcpy( ps->c.world, parent_world, 64 );
+            owner.m_parent = &parent;
+            ++parents;
+        }
+        int got_fired = 0;
+        const std::function< void( ) > hook = [ &got_fired ] { ++got_fired; };
+        const bool ran = entity_set_world( owner, matrix, ( notify & 0xFFu ) != 0, watcher ? hook : std::function< void( ) >( ) );
+        fired += got_fired;
+        const transform_component_t& c = os->c;
+        int bad = -1;
+        for ( int w = 0; w < 40 && ran; ++w )
+        {
+            if ( w == 35 || w == 39 )
+                continue;
+            const float* f = w < 16 ? &c.local[ w ] : w < 32 ? &c.world[ w - 16 ] : w < 36 ? &c.rotation[ w - 32 ] : &c.world_rotation[ w - 36 ];
+            if ( std::memcmp( f, &after[ w ], 4 ) != 0 )
+            {
+                bad = w;
+                break;
+            }
+        }
+        if ( !ran || bad >= 0 || got_fired != want_fired )
+            if ( ++failed <= 4 )
+                LOG_ERROR( "transform set world vector %d (%s): %s word +0x%X (watcher %d / %d)", static_cast< int >( index ),
+                           has_parent ? "parent" : "no parent", ran ? "differs at" : "did not run", 0x10 + 4 * bad, got_fired, want_fired );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "entity_set_world matches VuTransformComponent's setWorldTransform 0x5344A0 + 0x534830 over %d vectors (%d under a parent, "
+                     "%d watcher calls): local, world, both eulers bit for bit", static_cast< int >( g_golden_transform_set_world_count ), parents, fired );
+    else
+        LOG_ERROR( "transform set world FAILED %d of %d vectors", failed, static_cast< int >( g_golden_transform_set_world_count ) );
+    return failed == 0;
+}
+
+// world_synchronize_motion_states (world/dynamics.hxx) against retail's
+// synchronizeMotionStates 0x600B00 + 0x600600 run whole (case
+// sync_motion_states; the motion states' setWorldTransform intercepted): per
+// vector the bodies whose motion state is called, in order, and the 16
+// transform words each gets, bit for bit - both the synchronize-all and the
+// non-static paths, every flag / state / type gate, the Taylor and sinf
+// branches and the angular clamp.
+struct sync_motion_log_t
+{
+    const solver_rigid_t* first = nullptr;
+    const std::vector< unsigned >* motion = nullptr;
+    std::vector< unsigned > got;
+};
+
+inline bool verify_sync_motion_states( )
+{
+    int failed = 0, calls = 0;
+    static solver_rigid_t bodies[ 8 ];
+    for ( std::size_t index = 0; index < g_golden_sync_motion_states_count; ++index )
+    {
+        const unsigned* s = g_golden_sync_motion_states_words + g_golden_sync_motion_states_offsets[ index ];
+        auto w = std::make_unique< world_t >( );
+        std::memcpy( &w->local_time, s++, 4 );
+        const bool all = *s++ != 0;
+        const unsigned n = *s++, ns = *s++;
+        std::vector< unsigned > nonstatic( s, s + ns );
+        s += ns;
+        std::vector< unsigned > motion( n );
+        for ( unsigned i = 0; i < n; ++i )
+        {
+            solver_rigid_t& b = bodies[ i ];
+            std::memset( &b, 0, sizeof( b ) );
+            b.collision_flags = static_cast< int >( *s++ );
+            b.activation_state = static_cast< int >( *s++ );
+            b.internal_type = static_cast< int >( *s++ );
+            std::memcpy( &b.hit_fraction, s++, 4 );
+            motion[ i ] = *s++;
+            std::memcpy( b.interpolation_basis, s, 48 );
+            std::memcpy( b.interpolation_origin, s + 12, 16 );
+            std::memcpy( b.interpolation_linear, s + 16, 16 );
+            std::memcpy( b.interpolation_angular, s + 20, 16 );
+            s += 24;
+            w->objects.push_back( &b );
+        }
+        for ( unsigned i : nonstatic )
+            w->bodies.push_back( &bodies[ i ] );
+        const unsigned ncalls = *s++;
+        std::vector< unsigned > want( s, s + 17 * ncalls );
+        sync_motion_log_t log;
+        log.first = bodies;
+        log.motion = &motion;
+        world_synchronize_motion_states( *w, all,
+            []( void* u, const solver_rigid_t& b ) {
+                const sync_motion_log_t& l = *static_cast< const sync_motion_log_t* >( u );
+                return ( *l.motion )[ static_cast< std::size_t >( &b - l.first ) ] != 0;
+            },
+            []( void* u, solver_rigid_t& b, const float* basis, const float* origin ) {
+                sync_motion_log_t& l = *static_cast< sync_motion_log_t* >( u );
+                l.got.push_back( static_cast< unsigned >( &b - l.first ) );
+                unsigned words[ 16 ];
+                std::memcpy( words, basis, 48 );
+                std::memcpy( words + 12, origin, 16 );
+                l.got.insert( l.got.end( ), words, words + 16 );
+            },
+            &log );
+        calls += static_cast< int >( ncalls );
+        if ( log.got != want )
+        {
+            int bad = -1;
+            for ( std::size_t k = 0; k < want.size( ) && k < log.got.size( ); ++k )
+                if ( want[ k ] != log.got[ k ] )
+                {
+                    bad = static_cast< int >( k );
+                    break;
+                }
+            if ( ++failed <= 4 )
+                LOG_ERROR( "sync motion states vector %d: %d / %d calls, first difference at word %d", static_cast< int >( index ),
+                           static_cast< int >( log.got.size( ) / 17 ), static_cast< int >( ncalls ), bad );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "world_synchronize_motion_states matches btDiscreteDynamicsWorld::synchronizeMotionStates 0x600B00 + 0x600600: %d "
+                     "vectors, %d setWorldTransform calls, the transforms bit for bit", static_cast< int >( g_golden_sync_motion_states_count ), calls );
+    else
+        LOG_ERROR( "sync motion states FAILED %d of %d vectors", failed, static_cast< int >( g_golden_sync_motion_states_count ) );
+    return failed == 0;
+}
+
+// boat_motion_set (world/dynamics.hxx) against retail's VuBoatEntity
+// setWorldTransform 0x41E460 run whole with 0x534830 (case boat_motion_set;
+// 0x534C00 intercepted - called once with 0 on the component): the component's
+// local, world and both eulers' lanes 0 - 2 bit for bit over 64 vectors (8 of
+// them a non-orthonormal basis with odd w lanes), and the walk's call.
+inline bool verify_boat_motion_set( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_boat_motion_set_count; ++index )
+    {
+        const unsigned* s = g_golden_boat_motion_set_words + g_golden_boat_motion_set_offsets[ index ];
+        float basis[ 12 ], origin[ 4 ];
+        std::memcpy( basis, s, 48 );
+        std::memcpy( origin, s + 12, 16 );
+        s += 16;
+        std::vector< std::uint8_t > boat( 0x520, 0 ), transform( 0xC0, 0x77 );
+        std::memcpy( boat.data( ) + 0x290, s, 12 );
+        s += 3;
+        const unsigned* after = s;
+        s += 40;
+        const unsigned ncalls = *s++;
+        const bool walk_ok = ncalls == 1 && s[ 0 ] == 1 && s[ 1 ] == 0;
+        const bool ran = boat_motion_set( boat.data( ), transform.data( ), false, basis, origin );
+        int bad = -1;
+        for ( int w = 0; w < 40 && ran; ++w )
+            if ( w != 35 && w != 39 && std::memcmp( transform.data( ) + 0x10 + 4 * w, &after[ w ], 4 ) != 0 )
+            {
+                bad = w;
+                break;
+            }
+        if ( !ran || bad >= 0 || !walk_ok )
+            if ( ++failed <= 4 )
+                LOG_ERROR( "boat motion set vector %d: %s +0x%X (walk %s)", static_cast< int >( index ), ran ? "differs at" : "did not run",
+                           0x10 + 4 * bad, walk_ok ? "0x534C00(0)" : "NOT as recreated" );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "boat_motion_set matches VuBoatEntity's setWorldTransform 0x41E460 + 0x534830 over %d vectors: local, world, both "
+                     "eulers bit for bit, 0x534C00(0)", static_cast< int >( g_golden_boat_motion_set_count ) );
+    else
+        LOG_ERROR( "boat motion set FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_motion_set_count ) );
+    return failed == 0;
+}
+
+// water_surface_under (world/query.hxx) against retail's 0x52ACB0 run whole
+// (case water_surface_under): 160 hand-built surface trees (1 - 7 surfaces,
+// rotated / arbitrary inverses, shrunk node rects, points inside / on the
+// edge / outside, below the floor, a -1e30 height), the surface found (or
+// none) per vector. Each surface's 'above' is set to -FLT_MAX here: 0x52ACB0
+// has no above test, so it must not matter.
+inline bool verify_water_surface_under( )
+{
+    int failed = 0, hits = 0;
+    for ( std::size_t index = 0; index < g_golden_water_surface_under_count; ++index )
+    {
+        const unsigned* s = g_golden_water_surface_under_words + g_golden_water_surface_under_offsets[ index ];
+        float p[ 4 ];
+        std::memcpy( p, s, 16 );
+        s += 4;
+        water_t w;
+        w.skip_waves = true;
+        const unsigned ns = *s++;
+        for ( unsigned k = 0; k < ns; ++k )
+        {
+            water_surface_t sf{};
+            std::memcpy( &sf.height, s, 4 );
+            std::memcpy( &sf.below, s + 1, 4 );
+            std::memcpy( sf.inverse, s + 2, 64 );
+            std::memcpy( &sf.half_x, s + 18, 4 );
+            std::memcpy( &sf.half_y, s + 19, 4 );
+            sf.above = -3.4028235e38f;
+            sf.wave_root = -1;
+            s += 20;
+            w.surfaces.push_back( sf );
+        }
+        const unsigned nn = *s++;
+        for ( unsigned k = 0; k < nn; ++k )
+        {
+            water_node_t n{};
+            std::memcpy( n.rect, s, 16 );
+            n.first = static_cast< int >( s[ 4 ] );
+            n.second = static_cast< int >( s[ 5 ] );
+            s += 6;
+            w.nodes.push_back( n );
+        }
+        w.surface_root = 0;
+        const int want = static_cast< int >( *s );
+        const int got = water_surface_under( w, p, water_bits( 0xFEFFFFFFu ) );
+        hits += want >= 0 ? 1 : 0;
+        if ( got != want && ++failed <= 4 )
+            LOG_ERROR( "water surface under vector %d: ours %d, retail %d", static_cast< int >( index ), got, want );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_surface_under matches VuWater's 0x52ACB0 over %d trees (%d with a surface found)",
+                     static_cast< int >( g_golden_water_surface_under_count ), hits );
+    else
+        LOG_ERROR( "water surface under FAILED %d of %d", failed, static_cast< int >( g_golden_water_surface_under_count ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_water_surface_under( ) && ok;
+    ok = verify_boat_motion_set( ) && ok;
+    ok = verify_sync_motion_states( ) && ok;
+    ok = verify_transform_set_world( ) && ok;
+    ok = verify_boat_build_audio( ) && ok;
+    ok = verify_water_surface_list( ) && ok;
     ok = verify_race_game_ctor( ) && ok;
     ok = verify_game_project_name( ) && ok;
     ok = verify_boat_skin( ) && ok;

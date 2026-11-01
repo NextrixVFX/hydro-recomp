@@ -4,8 +4,10 @@
 #include <workspace/core/boat/math.hxx>
 #include <workspace/core/boat/hull.hxx>
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <xmmintrin.h>
 
 // VuTransformComponent (vtable 0x74D324), the part every placed entity's
 // position comes from. The members mirror retail's from +0x10 on:
@@ -122,6 +124,55 @@ inline void transform_recalc( transform_component_t& c, const float* parent_worl
     c.local[ 13 ] = y;
     c.local[ 14 ] = z;
     transform_world( c, parent_world );
+}
+
+// The euler 0x5344A0 / 0x534830 take of a matrix (+0xA0 of the world, +0x90
+// of the local): (atan2(m6, m10), asinf(maxss(-1, minss(1, -m2))), atan2(m1,
+// m0)); the fourth lane is a stack word neither writes (UNKNOWN - not
+// modelled). SUBSTITUTION: the CRT's __libm_sse2_atan2 / asinf served by the
+// host's double functions rounded once (as respawn_euler).
+inline void transform_euler( const float* m, float* e )
+{
+    const float v = -m[ 2 ];
+    const float c = _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( -1.0f ), _mm_min_ss( _mm_set_ss( 1.0f ), _mm_set_ss( v ) ) ) );
+    e[ 0 ] = static_cast< float >( std::atan2( static_cast< double >( m[ 6 ] ), static_cast< double >( m[ 10 ] ) ) );
+    e[ 1 ] = static_cast< float >( std::asin( static_cast< double >( c ) ) );
+    e[ 2 ] = static_cast< float >( std::atan2( static_cast< double >( m[ 1 ] ), static_cast< double >( m[ 0 ] ) ) );
+}
+
+// VuTransformComponent::setWorldTransform 0x5344A0 (thiscall component;
+// matrix*, notify; retn 8) up to its child walk, with 0x534830 (the local from
+// the world):
+//   world +0x50 = the matrix; the world euler +0xA0 = transform_euler(world);
+//   0x534830: no parent (owner +8 -> +0x34 null) -> local +0x10 = world and
+//   the rotation +0x90 = +0xA0 (16 bytes); a parent -> P = its transform's
+//   (+0x50) world, inverted rigidly - the rotation transposed, the w lanes
+//   kept (P3, P7, P11, P15), the translation t_j = (P[4j] (-P12) + P[4j+1]
+//   (-P13)) + P[4j+2] (-P14) - and local = VuMatrix_multiply(this = world,
+//   inverse) (0x4078C0), the rotation +0x90 = transform_euler(local).
+// What follows in retail - 0x534C00(notify) on the owner's children and, with
+// notify, the watcher +0xC0's vt+8 - is the caller's: entity_set_world
+// (world/race.hxx) runs both. `parent_world` null = no parent.
+inline void transform_set_world( transform_component_t& c, const float* matrix, const float* parent_world )
+{
+    std::memcpy( c.world, matrix, sizeof( c.world ) );
+    transform_euler( c.world, c.world_rotation );
+    c.world_rotation_known = true;
+    if ( parent_world == nullptr )
+    {
+        std::memcpy( c.local, c.world, sizeof( c.local ) );
+        std::memcpy( c.rotation, c.world_rotation, 12 );
+        return;
+    }
+    const float* p = parent_world;
+    const float nx = -p[ 12 ], ny = -p[ 13 ], nz = -p[ 14 ];
+    const float inverse[ 16 ] = { p[ 0 ], p[ 4 ], p[ 8 ], p[ 3 ], p[ 1 ], p[ 5 ], p[ 9 ], p[ 7 ], p[ 2 ], p[ 6 ], p[ 10 ], p[ 11 ],
+                                  ( p[ 0 ] * nx + p[ 1 ] * ny ) + p[ 2 ] * nz, ( p[ 4 ] * nx + p[ 5 ] * ny ) + p[ 6 ] * nz,
+                                  ( p[ 8 ] * nx + p[ 9 ] * ny ) + p[ 10 ] * nz, p[ 15 ] };
+    float product[ 16 ];
+    hull_multiply( c.world, product, inverse );
+    std::memcpy( c.local, product, sizeof( c.local ) );
+    transform_euler( c.local, c.rotation );
 }
 
 // The model-draw components' draw matrix (Vu3dDrawStaticModelComponent +0x13C,

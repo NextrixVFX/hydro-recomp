@@ -113,6 +113,29 @@ inline bool water_map_load( const std::uint8_t* data, std::size_t size, water_ma
     return true;
 }
 
+// The unload 0x5C8780 (thiscall asset): +0x58 / +0x5C = 0; the three byte
+// arrays freed and their (pointer, size, capacity) words zeroed; each entry
+// of +0x84 (count +0x88) its byte array freed (+8) and the entry deleted;
+// the entry array freed, +0x84 / +0x88 / +0x8C = 0. Returns the CRT frees it
+// makes (the entries' deletes not counted), for the check.
+inline int water_map_unload( water_map_t& m )
+{
+    const int calls = 4 + static_cast< int >( m.entries.size( ) );
+    m = water_map_t{};
+    return calls;
+}
+
+// Slot 0 0x5C7D00 (the scalar deleting dtor): vtable 0x752498, the unload,
+// the four (now null) arrays freed again, VuAsset's dtor 0x515D00 (engine:
+// `base`, optional), operator delete with 1.
+inline int water_map_destroy( water_map_t& m, void ( *base )( void* user ), void* user )
+{
+    const int calls = water_map_unload( m ) + 4;
+    if ( base )
+        base( user );
+    return calls;
+}
+
 // The VuWaterSurface fields the query reads: +20 the height, +40 / +44 the
 // depth below / above, +144 .. +200 the world-to-surface transform (rows of
 // a row-vector 4x4: +144 row 0, +160 row 1, +176 row 2, +192 the
@@ -524,6 +547,47 @@ inline int water_point_surface( const water_t& w, const float* p )
         water_local( s, p, lx, ly, lz );
         if ( water_ge( s.half_x, water_abs( lx ) ) && water_ge( s.half_y, water_abs( ly ) ) && water_ge( s.above, lz ) &&
              water_ge( lz, -s.below ) )
+            found = node.first;
+    }
+    return found;
+}
+
+// 0x52ACB0 (fastcall root, const float* xy; record* on the stack - {+0 the
+// point xyzw, +0x10 a height limit, +0x14 the surface found}; the caller
+// pops): the Build tick 0x41F330's surface under the boat. The same walk as
+// 0x52AEC0 (point-in-node, the second child popped first, the 256-entry
+// stack) but a leaf qualifies when half_x >= |lx|, half_y >= |ly| and lz >=
+// -below (NO 'above' test) AND its height (+0x14) > the record's +0x10
+// (comiss / jbe: strictly, a NaN fails); +0x10 is never updated, so the LAST
+// qualifying leaf wins. -1 none, -2 retail's stack would overflow (not
+// recreated).
+inline int water_surface_under( const water_t& w, const float* p, float limit )
+{
+    if ( w.surface_root < 0 )
+        return -1;
+    int found = -1;
+    int stack[ 257 ];
+    int top = 1;
+    stack[ 1 ] = w.surface_root;
+    while ( top )
+    {
+        const water_node_t& node = w.nodes[ stack[ top-- ] ];
+        if ( !water_ge( p[ 0 ], node.rect[ 0 ] ) || !water_ge( p[ 1 ], node.rect[ 1 ] ) || !water_ge( node.rect[ 2 ], p[ 0 ] ) ||
+             !water_ge( node.rect[ 3 ], p[ 1 ] ) )
+            continue;
+        if ( node.second >= 0 )
+        {
+            if ( top + 2 > 256 )
+                return -2;
+            stack[ ++top ] = node.first;
+            stack[ ++top ] = node.second;
+            continue;
+        }
+        const water_surface_t& s = w.surfaces[ node.first ];
+        float lx, ly, lz;
+        water_local( s, p, lx, ly, lz );
+        if ( water_ge( s.half_x, water_abs( lx ) ) && water_ge( s.half_y, water_abs( ly ) ) && water_ge( lz, -s.below ) &&
+             _mm_comigt_ss( _mm_set_ss( s.height ), _mm_set_ss( limit ) ) )
             found = node.first;
     }
     return found;
