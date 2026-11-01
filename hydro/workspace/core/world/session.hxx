@@ -85,6 +85,10 @@ struct race_session_t
     // 0x566230; the pfx emitters draw from the same one): the roster picks and
     // the AI manager's plans.
     fleet_random_t* random = nullptr;
+    // The surface-type table (g_vudynamicsimpl +0x38, VuDynamicsContactManagerImpl ctor 0x574EC0: the boat
+    // agent's surface.hxx) from VuDBAsset/SurfaceDB; built when the session starts.
+    surface_table_t surfaces;
+    bool surfaces_built = false;
     // Counts of the stopped paths reached (UNKNOWN), logged once each.
     int stopped_decision = 0, stopped_build = 0, stopped_transform = 0, stopped_viewports = 0, stopped_fleet = 0;
 };
@@ -112,7 +116,7 @@ inline std::uint8_t* race_session_image( race_session_boat_t& b, int object, int
 // factory's doesAssetExist answers from the pack's directory (as the oracle's
 // factory does); create hands a handle; the collision mesh / fluids count
 // readers are absent - UNKNOWN, the load stops (b.stop says where).
-inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb, const c_archive& archive )
+inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb, const c_archive& archive, const surface_table_t* surfaces )
 {
     std::uint8_t* boat = b.graph.objects[ 0 ].image.data( );
     std::uint8_t* body = race_session_image( b, 0, 0x21C );
@@ -178,10 +182,11 @@ inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb
     // the load creates come from the boat agent's mesh library (core/boat/meshes.hxx: the 1:1 loads 0x51AF20 /
     // 0x523770; its name list and refcounted cache are its flagged substitution); every other create hands a
     // handle from 0x10000 (the rendering assets' loads are hooks); every other release is the null one 0x421870
-    // makes on a fresh boat. The surface-type table (g_vudynamicsimpl +0x38, slot 2 through 0x4F88A0) is NOT
-    // recreated: io.hooks.surface stays null and the load stops there (UNKNOWN); the collision mesh's material
-    // bytes (+40) take the library's null-surface 0 - nothing reads them before that stop.
+    // makes on a fresh boat. The surface-type table (g_vudynamicsimpl +0x38, slot 2 0x5754D0 through 0x4F88A0:
+    // the boat agent's surface.hxx, built from SurfaceDB) answers both the collision mesh materials' byte +40 and
+    // the body's +0x2C8; without one (SurfaceDB unreadable) io.hooks.surface stays null and the load stops there.
     b.meshes = boat_mesh_library_t{ };
+    b.meshes.surfaces = surfaces;
     b.meshes.read_user = const_cast< c_archive* >( &archive );
     b.meshes.read = []( void* u, const std::string& asset, std::vector< std::uint8_t >& blob ) {
         return static_cast< const c_archive* >( u )->read( asset.c_str( ), blob );
@@ -198,6 +203,10 @@ inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb
         return asset < 0x10000u && boat_mesh_release( &static_cast< ctx_t* >( u )->b->meshes, asset );
     };
     io.hooks.surface = nullptr;
+    if ( surfaces != nullptr )
+        io.hooks.surface = []( void* u, const std::string& name ) -> std::uint8_t {
+            return surface_id( *static_cast< ctx_t* >( u )->b->meshes.surfaces, name.c_str( ) );
+        };
     io.hooks.mesh = []( void* u, std::uint32_t a, striding_mesh_t& out ) {
         const collision_mesh_asset_t* m = static_cast< ctx_t* >( u )->b->meshes.collision_of( a );
         if ( !m )
@@ -303,6 +312,18 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     s = race_session_t{ };
     s.random = &random;
     race_game_construct( s.game );   // the VuRaceGame ctor 0x489030 (its base 0x480BA0's values)
+    {
+        std::vector< std::uint8_t > bytes;
+        if ( archive.read( "VuDBAsset/SurfaceDB", bytes ) )
+        {
+            const value_t surface_db = c_reader( bytes ).parse( );
+            s.surfaces_built = surface_table_build( s.surfaces, &surface_db );
+        }
+        if ( !s.surfaces_built )
+            LOG_WARNING( "race: VuDBAsset/SurfaceDB did not build the surface-type table - the sections load will stop at it" );
+        else
+            LOG_INFO( "race: surface-type table built from SurfaceDB: %d types", static_cast< int >( surface_count( s.surfaces ) ) );
+    }
     if ( mode.empty( ) || boat.empty( ) || skin.empty( ) || track_name.empty( ) )
     {
         LOG_WARNING( "race: boats UNKNOWN - --mode, --race, --boat and --skin are all required (no defaults); no race" );
@@ -356,7 +377,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         }
         race_session_boat_t& r = *b;
         race_post_load_hooks_t ph;
-        ph.load_sections = [ &r, &db, &archive ] { r.sections = race_session_sections( r, *db.boat_db, archive ); };
+        ph.load_sections = [ &r, &db, &archive, &s ] { r.sections = race_session_sections( r, *db.boat_db, archive, s.surfaces_built ? &s.surfaces : nullptr ); };
         ph.transform_changed = [ &r, &s ]
         {
             std::uint8_t* t = race_session_image( r, 0, 0x50 );
