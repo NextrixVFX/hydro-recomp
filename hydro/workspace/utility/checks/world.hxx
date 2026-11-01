@@ -3045,9 +3045,336 @@ inline bool verify_trigger_instigators( )
     return failed == 0;
 }
 
+// The level's dynamic game props (world/dynprop.hxx, world/bodies.hxx) against retail's create + VuEntity::load +
+// gameInitialize 0x437580 (oracle case dynamic_prop_bodies) on every VuCheckpointBuoyEntity / VuDynamicGamePropEntity
+// of VuTemplateAsset/Levels/Hydroelectric - plain or a template instance - loaded here through hydro's tree with the
+// pack's templates. Compared: the component's load words + Initially Active and its +0xD0 / +0xDC .. +0xE4 / +0xEC after
+// postLoad (0x5459F0), its +0xD0 / +0xD4 / +0xD8 / +0xEC after gameInitialize, the shape's (compound: type, count,
+// local aabb, revision, margin; cylinder: type, scaling, implicit, margin, up axis; convex hull: type, scaling, margin,
+// cached aabb min) and the child's modelled words, the body's 0x2D4 bytes (pointer words masked), the ticks registered
+// (Decision / Build in order), the body / step-callback / draw adds. VuBreakableDynamicGamePropEntity and
+// VuFloatingMineEntity are not recreated: counted, not compared (their tree state is UNKNOWN).
+inline bool verify_dynamic_prop_bodies( )
+{
+    static c_archive archive;
+    const std::string pack = world_check_pack( );
+    std::vector< std::uint8_t > bytes;
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) || !archive.read( "VuTemplateAsset/Levels/Hydroelectric", bytes ) )
+    {
+        LOG_ERROR( "verify_dynamic_prop_bodies: Base.apf / the Hydroelectric template not readable" );
+        return false;
+    }
+    static std::map< std::string, value_t > templates;
+    const value_t document = c_reader( bytes ).parse( );
+    const entity_registry_t registry = build_entity_registry( archive.names( "VuTemplateAsset/" ) );
+    entity_world_t world = race_entity_world( registry, []( const std::string& name ) -> const value_t* {
+        auto at = templates.find( name );
+        if ( at == templates.end( ) )
+        {
+            std::vector< std::uint8_t > raw;
+            value_t parsed{ };
+            if ( archive.read( ( "VuTemplateAsset/" + name ).c_str( ), raw ) )
+                parsed = c_reader( raw ).parse( );
+            at = templates.emplace( name, std::move( parsed ) ).first;
+        }
+        return at->second.tag == 6 ? &at->second : nullptr;
+    } );
+    std::unique_ptr< entity_t > tree = entity_load_project( member( document, "VuProject" ), "Data/Projects/Check.vuprj", world );
+    boat_mesh_library_t lib;
+    lib.read_user = &archive;
+    lib.read = []( void* u, const std::string& key, std::vector< std::uint8_t >& blob ) { return static_cast< c_archive* >( u )->read( key.c_str( ), blob ); };
+    bodies_hooks_t hooks;
+    hooks.surface = []( void*, const std::string& n ) -> std::uint8_t {
+        for ( std::size_t k = 0; k < g_golden_dynamic_props_surface_count; ++k )
+            if ( n == g_golden_dynamic_props_surfaces[ k ] )
+                return static_cast< std::uint8_t >( 1 + k );
+        return 0xEE;
+    };
+    hooks.gravity = []( void*, float* g ) {
+        const std::uint32_t z = 0xC19CE560u;
+        g[ 0 ] = g[ 1 ] = 0.0f;
+        std::memcpy( &g[ 2 ], &z, 4 );
+    };
+    auto bits = []( float f ) { std::uint32_t u; std::memcpy( &u, &f, 4 ); return u; };
+    int failed = 0, compared = 0, skipped = 0, words = 0, buoys = 0;
+    for ( std::size_t k = 0; k < g_golden_dynamic_props_count && tree; ++k )
+    {
+        const golden_dynamic_prop_t& g = g_golden_dynamic_props[ k ];
+        const std::string cls = g.m_class;
+        if ( cls != "VuCheckpointBuoyEntity" && cls != "VuDynamicGamePropEntity" )
+        {
+            ++skipped;
+            continue;
+        }
+        const unsigned* w = g_golden_dynamic_props_words + g.m_at;
+        const unsigned* loaded = w;
+        const unsigned* after = w + 66;
+        const unsigned* shape_w = w + 132;
+        const unsigned* child_w = w + 156;
+        const unsigned* body_w = w + 176;
+        const unsigned* shape_m = w + 357;
+        const unsigned* child_m = w + 381;
+        const unsigned* body_m = w + 401;
+        const unsigned* tail = w + 582;
+        entity_t* e = tree.get( );
+        const std::string path = g.m_path;
+        std::size_t at = 0;
+        while ( e )
+        {
+            const std::size_t slash = path.find( '/', at );
+            const std::string part = path.substr( at, slash == std::string::npos ? std::string::npos : slash - at );
+            entity_t* next = nullptr;
+            for ( auto& c : e->m_children )
+                if ( c->m_name == part )
+                    next = c.get( );
+            e = next;
+            if ( slash == std::string::npos )
+                break;
+            at = slash + 1;
+        }
+        rigid_component_state_t* rs = nullptr;
+        if ( e )
+            for ( entity_component_t& c : e->m_components )
+                if ( c.m_vtable == k_rigid_body_component_vtable )
+                    rs = static_cast< rigid_component_state_t* >( c.m_state.get( ) );
+        transform_component_t* t = e ? entity_transform( *e ) : nullptr;
+        if ( !e || !rs || !t || !e->m_state || !dynamic_prop_class( e->m_type ) )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "dynamic props: '%s' not found as a %s with its components in hydro's tree", g.m_path, g.m_class );
+            continue;
+        }
+        ++compared;
+        buoys += cls == "VuCheckpointBuoyEntity" ? 1 : 0;
+        const dynamic_prop_t& p = static_cast< dynamic_prop_state_t* >( e->m_state.get( ) )->value;
+        rigid_component_t& c = rs->value;
+        dynamic_prop_post_load( p, c );
+        int bad = -1;
+        const std::uint32_t mine_loaded[ 19 ] = { static_cast< std::uint32_t >( c.collision_type ), bits( c.radius ), bits( c.size[ 0 ] ), bits( c.size[ 1 ] ),
+            bits( c.size[ 2 ] ), bits( c.height ), bits( c.offset[ 0 ] ), bits( c.offset[ 1 ] ), bits( c.offset[ 2 ] ), bits( c.linear_damping ),
+            bits( c.angular_damping ), bits( c.linear_sleep ), bits( c.angular_sleep ), c.flags_d0, bits( c.centre[ 0 ] ), bits( c.centre[ 1 ] ),
+            bits( c.centre[ 2 ] ), bits( c.mass ), c.initially_active };
+        const int at_loaded[ 18 ] = { 0x10, 0x2C, 0x30, 0x34, 0x38, 0x40, 0x5C, 0x60, 0x64, 0x6C, 0x70, 0x74, 0x78, 0xD0, 0xDC, 0xE0, 0xE4, 0xEC };
+        for ( int i = 0; i < 18 && bad < 0; ++i )
+            if ( mine_loaded[ i ] != loaded[ at_loaded[ i ] / 4 ] )
+                bad = at_loaded[ i ];
+        if ( bad < 0 && mine_loaded[ 18 ] != ( loaded[ 0x7C / 4 ] & 0xFFu ) )
+            bad = 0x7C;
+        if ( bad < 0 && c.surface != g.m_surface )
+            bad = 100;
+        const collision_mesh_asset_t* asset = nullptr;
+        if ( ( c.collision_type == 6 || c.collision_type == 7 ) && !c.mesh_asset.empty( ) && boat_mesh_exists( &lib, "VuCollisionMeshAsset", c.mesh_asset ) )
+            asset = lib.collision_of( boat_mesh_create( &lib, "VuCollisionMeshAsset", c.mesh_asset ) );
+        if ( bad < 0 && ( asset ? c.mesh_asset : std::string( ) ) != g.m_mesh )
+            bad = 101;
+        auto b = std::make_unique< level_body_t >( );
+        std::string why;
+        std::uint32_t id = tail[ 2 ] ? body_w[ 0x210 / 4 ] : 0;
+        dynamic_prop_motion_t motion;
+        dynamic_prop_init_t init;
+        const bool ok = dynamic_prop_game_initialize( *b, c, p, *t, asset, id, hooks, motion, init, why );
+        if ( bad < 0 && !ok )
+            bad = 102;
+        if ( bad < 0 && ok )
+        {
+            const std::uint32_t mine_after[ 4 ] = { c.flags_d0, static_cast< std::uint32_t >( c.group ) | static_cast< std::uint32_t >( c.mask ) << 16, c.flags_d8,
+                                                    bits( c.mass ) };
+            const int at_after[ 4 ] = { 0xD0, 0xD4, 0xD8, 0xEC };
+            for ( int i = 0; i < 4 && bad < 0; ++i )
+                if ( mine_after[ i ] != after[ at_after[ i ] / 4 ] )
+                    bad = 0x1000 + at_after[ i ];
+            if ( bad < 0 && ( tail[ 0 ] != 1 || tail[ 2 ] != 1 || ( tail[ 1 ] != 0 ) != b->has_compound ) )
+                bad = 103;
+        }
+        // The modelled words of one convex / cylinder shape image against `want` (its mask skips nothing modelled).
+        auto convex_words = [ & ]( const convex_shape_t& s, const unsigned* want, int size ) -> int {
+            std::uint32_t m[ 24 ] = { };
+            std::vector< int > offs = { 4, 0x10, 0x14, 0x18, 0x30 };
+            m[ 1 ] = static_cast< std::uint32_t >( s.type );
+            for ( int i = 0; i < 3; ++i )
+                m[ 4 + i ] = bits( s.local_scaling[ i ] );
+            m[ 12 ] = bits( s.margin );
+            if ( s.type == 13 )
+            {
+                for ( int i = 0; i < 4; ++i )
+                    m[ 8 + i ] = bits( s.implicit[ i ] );
+                m[ 16 ] = static_cast< std::uint32_t >( s.up_axis );
+                offs.insert( offs.end( ), { 0x20, 0x24, 0x28, 0x2C, 0x40 } );
+            }
+            else if ( size >= 0x60 )
+            {
+                for ( int i = 0; i < 3; ++i )
+                    m[ 20 + i ] = bits( s.local_aabb_min[ i ] );
+                offs.insert( offs.end( ), { 0x50, 0x54, 0x58 } );
+            }
+            for ( int o : offs )
+            {
+                ++words;
+                if ( m[ o / 4 ] != want[ o / 4 ] )
+                    return o;
+            }
+            return -1;
+        };
+        if ( bad < 0 && ok )
+        {
+            if ( b->has_compound )
+            {
+                const compound_shape_t& cs = b->compound;
+                const std::uint32_t m[ 11 ] = { 31u, static_cast< std::uint32_t >( cs.children.size( ) ), bits( cs.local_aabb_min[ 0 ] ), bits( cs.local_aabb_min[ 1 ] ),
+                    bits( cs.local_aabb_min[ 2 ] ), bits( cs.local_aabb_max[ 0 ] ), bits( cs.local_aabb_max[ 1 ] ), bits( cs.local_aabb_max[ 2 ] ),
+                    static_cast< std::uint32_t >( cs.revision ), bits( cs.margin ), 0 };
+                const int o[ 10 ] = { 4, 0x10, 0x20, 0x24, 0x28, 0x30, 0x34, 0x38, 0x44, 0x48 };
+                for ( int i = 0; i < 10 && bad < 0; ++i )
+                {
+                    ++words;
+                    if ( m[ i ] != shape_w[ o[ i ] / 4 ] )
+                        bad = 0x2000 + o[ i ];
+                }
+                const convex_shape_t& child = c.collision_type == 6 ? b->convex : b->cylinder;
+                const int r = bad < 0 ? convex_words( child, child_w, 0x50 ) : -1;
+                if ( r >= 0 )
+                    bad = 0x3000 + r;
+            }
+            else
+            {
+                const convex_shape_t& single = c.collision_type == 6 ? b->convex : b->cylinder;
+                const int r = convex_words( single, shape_w, 0x60 );
+                if ( r >= 0 )
+                    bad = 0x2000 + r;
+            }
+        }
+        for ( int i = 0; i < 181 && bad < 0 && ok; ++i )
+        {
+            if ( body_m[ i ] )
+                continue;
+            ++words;
+            if ( body_word( b->body, 4 * i ) != body_w[ i ] )
+            {
+                bad = 0x4000 + 4 * i;
+                if ( failed < 8 )
+                    LOG_ERROR( "dynamic props: '%s' body +0x%X = 0x%08X, retail 0x%08X", g.m_path, 4 * i, body_word( b->body, 4 * i ), body_w[ i ] );
+            }
+        }
+        if ( bad < 0 && ok )
+        {
+            std::vector< unsigned > ticks;
+            if ( init.decision_tick )
+                ticks.push_back( 1 );
+            if ( init.build_tick )
+                ticks.push_back( 2 );
+            const unsigned n = tail[ 3 ];
+            bool same = n == ticks.size( );
+            for ( unsigned i = 0; same && i < n; ++i )
+                same = tail[ 4 + i ] == ticks[ i ];
+            const unsigned* adds = tail + 4 + n;
+            if ( !same )
+                bad = 300;
+            else if ( adds[ 0 ] != ( init.added ? 1u : 0u ) || adds[ 1 ] != ( init.step_callback ? 1u : 0u ) || adds[ 2 ] != ( init.drawn ? 1u : 0u ) )
+                bad = 301;
+        }
+        if ( bad >= 0 && ++failed <= 8 )
+            LOG_ERROR( "dynamic props: '%s' differs at item 0x%X (%s)", g.m_path, bad, why.c_str( ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuDynamicGamePropEntity gameInitialize 0x437580 / createRigidBody 0x544100 (cylinder, compound, inertia, motion state) match "
+                     "retail on %d dynamic game props (%d checkpoint buoys; %d words bit for bit); %d breakable / mine props not recreated",
+                     compared, buoys, words, skipped );
+    else
+        LOG_ERROR( "dynamic prop bodies FAILED on %d of %d props", failed, compared );
+    return failed == 0;
+}
+
+// The dynamic game prop's step callback (world/dynprop.hxx dynamic_prop_step: 0x437730 with the sphere buoyancy
+// 0x5474A0 and applyForce 0x4133B0) against retail's own run (oracle case dynamic_prop_step): 240 seeded entity /
+// component / body images, the water query answered as the case's hook did (the point back, the vector's disp and
+// height). Compared: the water points asked (count and words), the body's force / torque +0x1B0 .. +0x1CC (the
+// w lanes too - untouched) and the entity's +0x180 / +0x181.
+inline bool verify_dynamic_prop_step( )
+{
+    int failed = 0, words = 0, wet = 0;
+    for ( std::size_t index = 0; index < g_golden_dynamic_prop_step_count; ++index )
+    {
+        const unsigned* s = g_golden_dynamic_prop_step_words + g_golden_dynamic_prop_step_offsets[ index ];
+        std::uint8_t ent[ 0x190 ], comp[ 0x108 ], body[ 0x2D4 ];
+        std::memcpy( ent, s, 0x190 );
+        std::memcpy( comp, s + 100, 0x108 );
+        std::memcpy( body, s + 166, 0x2D4 );
+        const unsigned* w = s + 347;
+        float disp[ 3 ], height;
+        std::memcpy( disp, w, 12 );
+        std::memcpy( &height, w + 3, 4 );
+        const unsigned n = w[ 4 ];
+        const unsigned* points = w + 5;
+        const unsigned* want = points + 3 * n;
+        dynamic_prop_t p;
+        dynamic_prop_construct( p );
+        std::memcpy( &p.mass, ent + 0x78, 4 );
+        std::memcpy( &p.fluids_radius, ent + 0xB8, 4 );
+        std::memcpy( &p.fluids_density, ent + 0xBC, 4 );
+        std::memcpy( &p.fluids_drag, ent + 0xC0, 4 );
+        std::memcpy( &p.fluids_lift, ent + 0xC4, 4 );
+        std::memcpy( p.hydro_centre, ent + 0xC8, 12 );
+        std::memcpy( &p.splash_speed, ent + 0xF0, 4 );
+        p.linear_anchor = ent[ 0xFC ];
+        p.angular_anchor = ent[ 0xFD ];
+        std::memcpy( &p.anchor_spring, ent + 0x100, 4 );
+        std::memcpy( &p.anchor_damping, ent + 0x104, 4 );
+        dynamic_prop_live_t live;
+        std::memcpy( live.anchor, ent + 0x144, 12 );
+        std::memcpy( live.anchor_q, ent + 0x154, 16 );
+        live.in_water = ent[ 0x180 ];
+        live.splash = ent[ 0x181 ];
+        float centre[ 3 ];
+        std::memcpy( centre, comp + 0xDC, 12 );
+        std::vector< std::uint32_t > asked;
+        const dynamic_prop_water_fn water = [ & ]( const float* point, water_vertex_t& out ) {
+            out = water_vertex_t{ };
+            std::memcpy( out.pos, point, 12 );
+            std::memcpy( out.disp, disp, 12 );
+            out.height = height;
+            for ( int k = 0; k < 3; ++k )
+            {
+                std::uint32_t u;
+                std::memcpy( &u, point + k, 4 );
+                asked.push_back( u );
+            }
+            return true;
+        };
+        bool bad = !dynamic_prop_step( p, live, centre, body, water );
+        bad = bad || asked.size( ) != 3 * n;
+        for ( std::size_t k = 0; !bad && k < asked.size( ); ++k )
+            bad = asked[ k ] != points[ k ];
+        for ( int k = 0; !bad && k < 8; ++k )
+        {
+            ++words;
+            std::uint32_t u;
+            std::memcpy( &u, body + 0x1B0 + 4 * k, 4 );
+            if ( u != want[ k ] )
+            {
+                bad = true;
+                if ( failed < 6 )
+                    LOG_ERROR( "dynamic prop step vector %d: body +0x%X = 0x%08X, retail 0x%08X", static_cast< int >( index ), 0x1B0 + 4 * k, u, want[ k ] );
+            }
+        }
+        bad = bad || live.in_water != want[ 8 ] || live.splash != want[ 9 ];
+        wet += live.in_water ? 1 : 0;
+        if ( bad && ++failed <= 6 )
+            LOG_ERROR( "dynamic prop step vector %d differs", static_cast< int >( index ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuDynamicGamePropEntity's step callback 0x437730 (buoyancy 0x5474A0, applyForce 0x4133B0, the anchors) matches retail "
+                     "over %d vectors (%d in water; %d force / torque words bit for bit, the water points, +0x180 / +0x181)",
+                     static_cast< int >( g_golden_dynamic_prop_step_count ), wet, words );
+    else
+        LOG_ERROR( "dynamic prop step FAILED %d of %d", failed, static_cast< int >( g_golden_dynamic_prop_step_count ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_dynamic_prop_step( ) && ok;
+    ok = verify_dynamic_prop_bodies( ) && ok;
     ok = verify_trigger_instigators( ) && ok;
     ok = verify_gfx_blend( ) && ok;
     ok = verify_gfx_zones( ) && ok;

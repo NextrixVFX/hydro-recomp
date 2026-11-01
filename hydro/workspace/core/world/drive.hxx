@@ -768,6 +768,60 @@ inline void race_contact_added( void* user, solver_contact_point_t& cp, solver_r
             }
             collision_contact_added( s.collision, a, b, oa, ob, r.pos, r.normal, r.surface0, r.surface1 );
         } );
+    // The bodies' +0x2C4 contact callbacks (dynamic game props with one - 0x437580): the buoy's 0x4350B0 (world/rules.hxx
+    // checkpoint_buoy_contact) with the record's other body; a plain VuDynamicGamePropEntity's is the base 0x437F40 -
+    // not recreated (logged, UNKNOWN), as the buoy's own first call is.
+    const auto prop_callback = [ &s ]( solver_rigid_t* self, solver_rigid_t* other ) -> std::function< void( contact_record_t& ) > {
+        for ( const auto& dp : s.dyn_props )
+            if ( &dp->body->body.body == self )
+            {
+                race_session_t::dyn_prop_t* d = dp.get( );
+                return [ &s, d, other ]( contact_record_t& ) {
+                    const auto base = [ &s ] { race_unwired( s, "VuDynamicGamePropEntity's contact callback 0x437F40 (hit sfx / events, Hard Hit) - not recreated, not run (UNKNOWN)" ); };
+                    if ( !d->buoy )
+                    {
+                        base( );
+                        return;
+                    }
+                    buoy_contact_t bc;
+                    const std::uint8_t* o = reinterpret_cast< const std::uint8_t* >( other );
+                    std::memcpy( &bc.group, o + 0x2CA, 2 );
+                    for ( const auto& b : s.boats )
+                        if ( &b->body.body == other )
+                        {
+                            bc.owner = true;
+                            bc.owner_is_boat = true;
+                            if ( b->driver && b->driver->known && !b->driver->graph.empty( ) )
+                                std::memcpy( &bc.driver_vtable, b->driver->graph[ 0 ].image.data( ), 4 );
+                        }
+                    if ( !bc.owner && ( bc.group == 0x10 ) )
+                    {
+                        race_unwired( s, "a buoy contact with a boat-group body that is no session boat - 0x4350B0's owner UNKNOWN, not run" );
+                        return;
+                    }
+                    bc.index = d->p->checkpoint_index;
+                    std::uint8_t params[ 0x84 ] = { };
+                    std::int32_t size = 0;
+                    const int r = checkpoint_buoy_contact( bc, base, params, size );
+                    if ( r < 0 )
+                        race_unwired( s, "a buoy contact with a boat whose driver vtable is none of the five - UNKNOWN" );
+                    else if ( r == 1 )
+                    {
+                        ui_params_t p;
+                        std::memcpy( p.m_bytes, params, 128 );
+                        p.m_size = size;
+                        ++s.buoy_hits;
+                        LOG_INFO( "race: OnCheckPointBuoyHit (buoy '%s', index %d, sync %d)", d->entity->m_name.c_str( ), bc.index,
+                                  s.dynamics ? s.dynamics->syncs : -1 );
+                        if ( s.world.broadcast )
+                            s.world.broadcast( k_buoy_hit_event, &p );
+                    }
+                };
+            }
+        return nullptr;
+    };
+    h.callback0 = prop_callback( object0, object1 );
+    h.callback1 = prop_callback( object1, object0 );
     ++c.ran;
     c.meshes += o1.mesh ? 1 : 0;
     if ( !contact_added( s.surfaces, reinterpret_cast< std::uint8_t* >( &cp ), o0, o1, index1, h ) )

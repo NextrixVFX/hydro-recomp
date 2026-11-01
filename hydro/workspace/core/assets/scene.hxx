@@ -343,15 +343,48 @@ inline float scene_max( float a, float b )
     return _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) );
 }
 
-// VuMatrix_multiply 0x4078C0 (thiscall a; out*, b*): out[4i+j] = ((a[4i]*b[j] + a[4i+1]*b[4+j]) + a[4i+2]*b[8+j])
-// + a[4i+3]*b[12+j] - a in b's frame (row vectors).
+// The x86 SSE scalar NaN rule, written out so the compiler cannot commute it away
+// (boat/events.hxx sse_nan_pick's rule, which assets cannot include): a NaN first
+// operand (mulss / addss's destination) wins, quieted; else a NaN second.
+inline float scene_sse( float a, float b, bool add )
+{
+    std::uint32_t w;
+    if ( a != a )
+        std::memcpy( &w, &a, 4 );
+    else if ( b != b )
+        std::memcpy( &w, &b, 4 );
+    else
+        return add ? a + b : a * b;
+    w |= 0x00400000u;
+    float r;
+    std::memcpy( &r, &w, 4 );
+    return r;
+}
+
+// VuMatrix_multiply 0x4078C0 (thiscall a; out*, b*): out[4i+j] = p0 + p1 + p2 + p3 with
+// pk = a[4i+k] x b[4k+j] - a in b's frame (row vectors) - in retail's operand order
+// (world batch 23, read from the disassembly; it decides which NaN survives):
+//   products: column 0 of every row and rows 0 - 2 everywhere b first (b x a), except
+//   p3 of column 0 (a x b); row 3, columns 1 - 3, a first (a x b).
+//   sums: row 0 and row 1 column 0 ((p0 + p1) + p2) + p3; every other element
+//   (p2 + (p0 + p1)) + p3.
 inline void scene_multiply( const float* a, float* out, const float* b )
 {
     float m[ 16 ];
     for ( int i = 0; i < 4; ++i )
         for ( int j = 0; j < 4; ++j )
-            m[ 4 * i + j ] = ( ( a[ 4 * i ] * b[ j ] + a[ 4 * i + 1 ] * b[ 4 + j ] ) + a[ 4 * i + 2 ] * b[ 8 + j ] )
-                + a[ 4 * i + 3 ] * b[ 12 + j ];
+        {
+            float p[ 4 ];
+            for ( int k = 0; k < 4; ++k )
+            {
+                const bool a_first = k == 3 && j == 0 ? true : ( i == 3 && j != 0 );
+                p[ k ] = a_first ? scene_sse( a[ 4 * i + k ], b[ 4 * k + j ], false ) : scene_sse( b[ 4 * k + j ], a[ 4 * i + k ], false );
+            }
+            const float p01 = scene_sse( p[ 0 ], p[ 1 ], true );
+            const bool left = i == 0 || ( i == 1 && j == 0 );
+            const float p012 = left ? scene_sse( p01, p[ 2 ], true ) : scene_sse( p[ 2 ], p01, true );
+            m[ 4 * i + j ] = scene_sse( p012, p[ 3 ], true );
+        }
     std::memcpy( out, m, 64 );
 }
 
