@@ -124,9 +124,11 @@
     <ClInclude Include="workspace\core\boat\hull.hxx" />
     <ClInclude Include="workspace\core\boat\human.hxx" />
     <ClInclude Include="workspace\core\boat\load.hxx" />
+    <ClInclude Include="workspace\core\boat\manager.hxx" />
     <ClInclude Include="workspace\core\boat\math.hxx" />
     <ClInclude Include="workspace\core\boat\parts.hxx" />
     <ClInclude Include="workspace\core\boat\pilots.hxx" />
+    <ClInclude Include="workspace\core\boat\powerup.hxx" />
     <ClInclude Include="workspace\core\boat\respawn.hxx" />
     <ClInclude Include="workspace\core\boat\sections.hxx" />
     <ClInclude Include="workspace\core\boat\state.hxx" />

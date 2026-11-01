@@ -5,6 +5,8 @@
 #include <workspace/core/boat/anim.hxx>
 #include <workspace/core/boat/human.hxx>
 #include <workspace/core/boat/pilots.hxx>
+#include <workspace/core/boat/manager.hxx>
+#include <workspace/core/boat/powerup.hxx>
 
 #include <algorithm>
 #include <array>
@@ -1065,6 +1067,190 @@ inline bool verify_driver_slots( )
     return false;
 }
 
+// VuBoatManager's add 0x4AAF60 / remove 0x4AB040 against retail (oracle case boat_manager): the driver's kind
+// from its vtable (boat_driver_kind), every operation replayed, then +0x58 and the five lists - sizes, the
+// capacities retail's growth keeps, the entries in order.
+inline bool verify_boat_manager( )
+{
+    const unsigned* g = g_golden_boat_manager_words;
+    const unsigned ns = *g++;
+    int failed = 0, compared = 0, ops = 0;
+    for ( unsigned s = 0; s < ns; ++s )
+    {
+        const unsigned nb = *g++;
+        std::vector< boat_driver_kind_t > kinds( nb );
+        std::vector< int > ids( nb );
+        for ( unsigned i = 0; i < nb; ++i, ++g )
+        {
+            ids[ i ] = static_cast< int >( i );
+            if ( !boat_driver_kind( *g, kinds[ i ] ) && ++failed <= 8 )
+                LOG_ERROR( "boat_manager sequence %u: no kind for the vtable 0x%X", s, *g );
+        }
+        boat_manager_t m;
+        const unsigned no = *g++;
+        for ( unsigned o = 0; o < no; ++o, ++ops )
+        {
+            const unsigned op = *g++, b = *g++, has_pre = *g++;
+            const std::int32_t pre = static_cast< std::int32_t >( *g++ );
+            if ( has_pre )
+                m.viewport = pre;
+            if ( op == 0 )
+                boat_manager_add( m, &ids[ b ], kinds[ b ] );
+            else
+                boat_manager_remove( m, &ids[ b ] );
+            ++compared;
+            if ( static_cast< unsigned >( m.viewport ) != *g && ++failed <= 8 )
+                LOG_ERROR( "boat_manager sequence %u op %u: viewport %d, retail %d", s, o, m.viewport, static_cast< int >( *g ) );
+            ++g;
+            const boat_manager_list_t* lists[ 5 ] = { &m.all, &m.racers, &m.humans, &m.ais, &m.ghosts };
+            for ( int k = 0; k < 5; ++k )
+            {
+                const unsigned size = *g++, cap = *g++;
+                compared += 2;
+                if ( lists[ k ]->boats.size( ) != size && ++failed <= 8 )
+                    LOG_ERROR( "boat_manager sequence %u op %u list %d: size %zu, retail %u", s, o, k, lists[ k ]->boats.size( ), size );
+                if ( static_cast< unsigned >( lists[ k ]->capacity ) != cap && ++failed <= 8 )
+                    LOG_ERROR( "boat_manager sequence %u op %u list %d: capacity %d, retail %u", s, o, k, lists[ k ]->capacity, cap );
+                for ( unsigned j = 0; j < size; ++j, ++g )
+                {
+                    ++compared;
+                    const void* want = *g < nb ? &ids[ *g ] : nullptr;
+                    if ( ( j >= lists[ k ]->boats.size( ) || lists[ k ]->boats[ j ] != want ) && ++failed <= 8 )
+                        LOG_ERROR( "boat_manager sequence %u op %u list %d entry %u differs (retail boat %u)", s, o, k, j, *g );
+                }
+            }
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuBoatManager add 0x4AAF60 / remove 0x4AB040 (+0x415690, 0x4AB7D0) match retail: %d operations, %d values", ops, compared );
+        return true;
+    }
+    LOG_ERROR( "boat_manager FAILED %d of %d values", failed, compared );
+    return false;
+}
+
+// The "Viewports" tick 0x4AB0A0 against retail (oracle case viewport_tick): which camera reaches the viewport,
+// viewport +0x278, every boat's +0x467, the hook calls in order. The hooks stand for retail's callees as the case
+// recorded them (the listener = FMOD + 0x534830 + 0x534C00(0); the release branch = 0x5362A0 when the instigator's
+// +0x28 is set, then 0).
+inline bool verify_viewport_tick( )
+{
+    const unsigned* g = g_golden_viewport_tick_words;
+    const unsigned nv = *g++;
+    int failed = 0, compared = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned n = *g++, has_override = *g++, view = *g++, b2b9 = *g++, i28 = *g++;
+        std::vector< std::vector< std::uint8_t > > boats( n, std::vector< std::uint8_t >( 0x520, 0xCD ) );
+        for ( unsigned i = 0; i < n; ++i, g += 2 )
+            std::memcpy( boats[ i ].data( ) + 0x3F8, g, 8 );
+        static const std::uint8_t override_image[ 0x240 ] = { };
+        boat_manager_t m;
+        for ( unsigned i = 0; i < n; ++i )
+            m.all.boats.push_back( boats[ i ].data( ) );
+        m.viewport = static_cast< std::int32_t >( view );
+        m.b2b9 = static_cast< std::uint8_t >( b2b9 );
+        m.override_camera = has_override ? override_image : nullptr;
+        int source = -1;
+        std::uint32_t scale = 0xCDCDCDCDu;
+        std::uint8_t inst28 = static_cast< std::uint8_t >( i28 );
+        std::vector< std::pair< unsigned, unsigned > > log;
+        std::vector< unsigned > local( n, 0xCD );
+        auto bits = []( float x ) { std::uint32_t u; std::memcpy( &u, &x, 4 ); return u; };
+        auto index = [ & ]( const void* b ) { for ( unsigned i = 0; i < n; ++i ) if ( boats[ i ].data( ) == b ) return static_cast< int >( i ); return -2; };
+        boat_viewport_hooks_t hooks;
+        hooks.viewport_camera = [ & ]( const std::uint8_t* c ) { source = c == override_image ? 100 : -2; };
+        hooks.boat_camera = [ & ]( const void* b ) { source = index( b ); };
+        hooks.lens_scale = [ & ]( float s ) { scale = bits( s ); };
+        hooks.lens_water = [ & ]( float a ) { log.push_back( { 3u, bits( a ) } ); };
+        hooks.local = [ & ]( const void* b, std::uint8_t x ) { const int i = index( b ); if ( i >= 0 ) local[ i ] = x; };
+        hooks.listener = [ & ]( ) { log.push_back( { 5u, 1u } ); log.push_back( { 6u, 1u } ); log.push_back( { 7u, 1u } ); };
+        hooks.trigger = [ & ]( bool registered ) {
+            if ( registered )
+                log.push_back( { 8u, 1u } );
+            else
+            {
+                if ( inst28 )
+                    log.push_back( { 9u, 1u } );
+                inst28 = 0;
+            }
+        };
+        boat_viewport_t out;
+        const bool ok = boat_manager_viewport_tick( m, out, hooks );
+        const unsigned mine_head[ 2 ] = { static_cast< unsigned >( source ), scale };
+        for ( int k = 0; k < 2; ++k, ++g )
+        {
+            ++compared;
+            if ( ( !ok || mine_head[ k ] != *g ) && ++failed <= 8 )
+                LOG_ERROR( "viewport_tick vector %u %s: 0x%X, retail 0x%X", v, k ? "+0x278" : "source", mine_head[ k ], *g );
+        }
+        for ( unsigned i = 0; i < n; ++i, ++g )
+            if ( ++compared, local[ i ] != *g && ++failed <= 8 )
+                LOG_ERROR( "viewport_tick vector %u boat %u +0x467: %u, retail %u", v, i, local[ i ], *g );
+        const unsigned position = *g++, inst_after = *g++, nl = *g++;
+        compared += 2;
+        if ( position != 1 && ++failed <= 8 )
+            LOG_ERROR( "viewport_tick vector %u: retail did not copy the listener position", v );
+        if ( inst28 != inst_after && ++failed <= 8 )
+            LOG_ERROR( "viewport_tick vector %u: instigator +0x28 %u, retail %u", v, inst28, inst_after );
+        ++compared;
+        if ( log.size( ) != nl && ++failed <= 8 )
+            LOG_ERROR( "viewport_tick vector %u: %zu calls, retail %u", v, log.size( ), nl );
+        for ( unsigned j = 0; j < nl; ++j, g += 2 )
+        {
+            ++compared;
+            if ( ( j >= log.size( ) || log[ j ].first != g[ 0 ] || log[ j ].second != g[ 1 ] ) && ++failed <= 8 )
+                LOG_ERROR( "viewport_tick vector %u call %u: retail (%u, 0x%X)", v, j, g[ 0 ], g[ 1 ] );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuBoatManager's Viewports tick 0x4AB0A0 matches retail: %u vectors, %d values", nv, compared );
+        return true;
+    }
+    LOG_ERROR( "viewport_tick FAILED %d of %d values", failed, compared );
+    return false;
+}
+
+// VuPowerUpBoostEntity slot 15 0x43DB40 against retail (oracle case boost_apply): the boat's +0x314 / +0x318, the
+// return value and VuRandom's state after, bit for bit.
+inline bool verify_boost_apply( )
+{
+    const unsigned* g = g_golden_boost_apply_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        std::uint8_t pu[ 0x144 ] = { }, boat[ 0x520 ] = { };
+        std::memcpy( pu + 0x13C, g, 8 );
+        g += 2;
+        std::memcpy( boat + 0x474, g++, 4 );
+        fleet_random_t rng;
+        rng.seed = static_cast< std::int32_t >( *g++ );
+        rng.last = static_cast< std::int32_t >( *g++ );
+        for ( int k = 0; k < 32; ++k )
+            rng.table[ k ] = static_cast< std::int32_t >( *g++ );
+        const unsigned ret = powerup_boost_apply( pu, boat, rng ) ? 1u : 0u;
+        unsigned mine[ 37 ] = { ret };
+        std::memcpy( mine + 1, boat + 0x314, 8 );
+        mine[ 3 ] = static_cast< unsigned >( rng.seed );
+        mine[ 4 ] = static_cast< unsigned >( rng.last );
+        for ( int k = 0; k < 32; ++k )
+            mine[ 5 + k ] = static_cast< unsigned >( rng.table[ k ] );
+        for ( int k = 0; k < 37; ++k, ++g )
+            if ( mine[ k ] != *g && ++failed <= 8 )
+                LOG_ERROR( "boost_apply vector %u word %d: 0x%08X, retail 0x%08X", v, k, mine[ k ], *g );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuPowerUpBoostEntity slot 15 0x43DB40 (the boost a pickup gives) matches retail: %u vectors x 37 words", nv );
+        return true;
+    }
+    LOG_ERROR( "boost_apply FAILED %d of %u values", failed, nv * 37 );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -1077,5 +1263,8 @@ inline bool verify_race_all( )
     ok = verify_boat_drivers( ) && ok;
     ok = verify_nuisance_tick( ) && ok;
     ok = verify_driver_slots( ) && ok;
+    ok = verify_boat_manager( ) && ok;
+    ok = verify_viewport_tick( ) && ok;
+    ok = verify_boost_apply( ) && ok;
     return ok;
 }
