@@ -12,6 +12,7 @@
 // a VuMotionComponent +0x68, the transform's watcher 0x43FE60; +0xE8 the previous gate (0 - VuSlalomGame's slot 5
 // links it). Draw / motion (0x43FE60, 0x43FF90) are the renderer's - not here.
 
+#include <workspace/core/boat/hull.hxx>
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/entity/property.hxx>
 
@@ -83,6 +84,8 @@ struct slalom_gate_t
     std::uint8_t allow_recovery = 1;   // +0xA0
     slalom_gate_t* next = nullptr;  // the "Next" ref's target (+0xA4)
     slalom_gate_t* prev = nullptr;  // +0xE8
+    std::string model;              // +0x70 "Model Asset" (the model instance +0xA8's, set by 0x43FE60's 0x520080)
+    std::string reflection;         // +0x88 "Reflection Model Asset" (+0xC8's)
 };
 
 struct slalom_course_t
@@ -273,4 +276,43 @@ inline void slalom_recovered( slalom_course_t& c, std::uint8_t* boat, const floa
     if ( c.recover )
         c.current = c.recover->next;
     slalom_put_f( boat, 0x310, c.boost_add );
+}
+
+// ---- The gates' placement for the renderer (world batch 30) ----------------------------------------------------------
+//
+// VuSlalomGame's +0x744 Vu3dDrawComponent draws through its VuMethod (vtable 0x73FA4C, the game, 0x48E680; the ctor
+// 0x48BEC0 at 0x48C08D) while the draw manager holds it (+0x1E: slot 5's add, slot 6's remove). 0x48E680 (thiscall game,
+// draw params; retn 4), read whole: from the gate to pass (+0x73C), at most 8 gates, each one's draw 0x440050(params),
+// then the next = its "Next" ref's target when the ref's type chain reaches 0x736430 (else none: the walk ends).
+// 0x440050 (thiscall gate, params; retn 4): m = VuMatrix_multiply( this = VuMatrix_fromScale( Diameter +0x6C x3 ), out,
+// the transform's world +0x50 ) - hull_multiply, the props' order; with the params' +0x18 byte set (the reflection pass)
+// +0xE0 = -1 and the reflection model instance +0xC8's draw 0x520130( m, params ), else +0xC0 = -1 and the model
+// instance +0xA8's. The draw itself (0x520130, the model instance) is the renderer's: this hands it the list.
+// 0x43FE60 (the property / transform watcher) also writes the layout component +0x60's aabb ( -0.5 d, 0, -0.5 d, ? ) ..
+// ( 0.5 d, 0, 0.5 d, ? ) - its +0x24 / +0x34 words come from uninitialised stack (the movq of a 4-byte store): editor
+// layout only, not modelled.
+struct slalom_gate_draw_t
+{
+    const slalom_gate_t* gate = nullptr;
+    const std::string* model = nullptr;   // the instance drawn (+0xA8 Model Asset / +0xC8 Reflection Model Asset)
+    float matrix[ 16 ] = { };
+};
+
+inline int slalom_draw_gates( const slalom_course_t& c, bool reflection, slalom_gate_draw_t* out )
+{
+    int n = 0;
+    const slalom_gate_t* g = c.current;
+    for ( int k = 0; k < 8 && g; ++k, g = g->next )
+    {
+        if ( !g->world )
+            break;   // a gate with no transform world is not one the session builds (slalom_gate_t's)
+        float scale[ 16 ] = { };
+        scale[ 0 ] = scale[ 5 ] = scale[ 10 ] = g->diameter;
+        scale[ 15 ] = 1.0f;
+        slalom_gate_draw_t& d = out[ n++ ];
+        d.gate = g;
+        d.model = reflection ? &g->reflection : &g->model;
+        hull_multiply( scale, d.matrix, g->world );
+    }
+    return n;
 }

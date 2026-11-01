@@ -2115,6 +2115,15 @@ inline void race_session_end( race_session_t& s )
         (void)s;
     };
     h.release = [ &s ]( std::size_t ) { race_unwired( s, "VuGame release: 0x500B80 (gameRelease) on a game boat - not recreated" ); };
+    // The game's slot 6 by mode (rules.hxx vugame_release_hooks_t::slot6).
+    h.slot6 = s.start.slalom ? 0x48C880u : s.start.timetrial ? 0x48F330u : s.mode == "Ghost" ? 0x485360u : 0x489A10u;
+    h.draw_remove = [ &s ] {
+        if ( !s.slalom_draw )
+            return;
+        s.slalom_draw = false;   // +0x744's +0x1E = 0 after the draw manager's remove (g 0x7590B8 vt+0x2C - the renderer's)
+        race_unwired( s, "VuSlalomGame slot 6 0x48C880: the draw manager's remove (g 0x7590B8 vt+0x2C) of +0x744 - the renderer's (a hook)" );
+    };
+    h.ghost_release = [ &s ] { race_unwired( s, "VuGhostGame slot 6 0x485360: 0x4AF490 on the ghost manager g 0x758FC8 - not recreated (UNKNOWN)" ); };
     h.call = [ &s ]( const char* what ) {
         const std::string w( what );
         if ( w == "cameras" )
@@ -2214,6 +2223,8 @@ inline void race_session_slalom( race_session_t& s, entity_t& tree, const race_s
         g.world = entity_transform( *chain[ k ] )->world;
         g.diameter = p.value.diameter;
         g.allow_recovery = p.value.allow_recovery;
+        g.model = p.value.model;            // the draw's instances (slalom.hxx slalom_draw_gates - the renderer's list)
+        g.reflection = p.value.reflection;
         g.next = k + 1 < s.slalom_gates.size( ) ? &s.slalom_gates[ k + 1 ] : nullptr;
     }
     s.slalom = slalom_course_t{ };
