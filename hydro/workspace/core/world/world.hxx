@@ -552,8 +552,16 @@ private:
     // The race HUD projects and their countdown (world/huds.hxx).
     void load_huds( );
     void hud( int project, race_hud_verb_t verb, float dt );
-    void race_broadcast( const char* name );
+    void race_broadcast( const char* name, const ui_params_t* params = nullptr, int origin = -1 );
+    void hud_post( std::uint32_t hash, const ui_params_t& p, int origin );
+    bool m_hud_posting = false;
     static void multi_delay_ticked( void* user, float dt );
+
+    // --front-end-defaults: the test profile through the recreated selector chain (world/front.hxx).
+    std::unique_ptr< entity_t > front_end_screen( const std::string& name );
+    static const entity_t* front_end_find( const entity_t& e, const char* type );
+    bool front_end_defaults( const std::string& mode, const std::string& track, const std::string& course, const race_session_dbs_t& dbs,
+                             value_t& game_data );
 
     // count_unhandled: graph.hxx
     void count_unhandled( const std::string& entity, const std::string& plug );
@@ -892,7 +900,9 @@ public:
     // loaded; then the game object by GameType (race_game_kind) - "Race" -> the VuRaceGame ctor 0x489030 and the
     // race session (world/session.hxx: 0x481CE0, postLoad, begin 0x4829A0); Slalom / TimeTrial / Ghost -> their
     // ctors 0x48BEC0 / 0x48ED30 / 0x484A20, NOT recreated (logged, no game); anything else -> no game.
-    // THE GAMEDATA: with --boat / --skin, the front end's (race_session_game_data from --mode / --race / --course /
+    // THE GAMEDATA: with --front-end-defaults, the test profile's front end (world/front.hxx: the GameConfig<Mode> /
+    // BoatConfig* screens through ui_front_end_root, --boat / --skin overriding the boat screen's picks, then 0x4BF9B0's
+    // data step). Else with --boat / --skin, the front end's (race_session_game_data from --mode / --race / --course /
     // --boat / --skin - the roster drawn from the shared VuRandom). Without them (the gates' bench) there is no front
     // end run and retail has no counterpart (its dev config's ActionGameData is the null container,
     // 0x4FDB70): SCAFFOLD, ours - GameData {Level: --race, GameType: --mode (else "Race"), Course: --course}, the
@@ -904,11 +914,14 @@ public:
         m_race = race_session_t{ };
         race_session_dbs_t dbs = race_dbs( );
         const auto text = []( const char* v ) { return std::string( v ? v : "" ); };
-        const bool race = c_engine::option( "boat" ) != nullptr || c_engine::option( "skin" ) != nullptr;
+        const bool defaults = c_engine::option( "front-end-defaults" ) != nullptr;
+        const bool race = defaults || c_engine::option( "boat" ) != nullptr || c_engine::option( "skin" ) != nullptr;
         value_t util;
         value_t& game_data = ui_json_child( util, "GameData" );
         bool front_end = false;
-        if ( race )
+        if ( defaults )   // the test profile's front end (world/front.hxx); --boat / --skin override its picks
+            front_end = front_end_defaults( text( mode ), text( track ), text( course ), dbs, game_data );
+        else if ( race )
             front_end = race_session_game_data( text( mode ), text( track ), text( course ), text( c_engine::option( "boat" ) ),
                                                 text( c_engine::option( "skin" ) ), dbs, m_vurandom, game_data );
         if ( !front_end )
@@ -986,7 +999,7 @@ public:
         // VuRaceGame's ctor 0x489030 loads its three HUD projects (0x4B4360) - before the boat load.
         load_huds( );
         m_race.world.hud = [ this ]( int project, race_hud_verb_t verb, float step ) { hud( project, verb, step ); };
-        m_race.world.broadcast = [ this ]( const char* name ) { race_broadcast( name ); };
+        m_race.world.broadcast = [ this ]( const char* name, const ui_params_t* params ) { race_broadcast( name, params ); };
         const bool started = race_session_start( m_race, mode, game_data, dbs, m_archive, *m_tree, track( ), m_vurandom,
                                                  [ this ] { project_initialized( ); } );
         if ( !m_project_initialized )
@@ -1582,4 +1595,5 @@ private:
 #include <workspace/core/world/animate.hxx>
 #include <workspace/core/world/entities.hxx>
 #include <workspace/core/world/huds.hxx>
+#include <workspace/core/world/front.hxx>
 #include <workspace/core/world/models.hxx>

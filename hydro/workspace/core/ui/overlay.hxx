@@ -146,7 +146,15 @@ public:
             d.m_kind = target ? target->m_kind : ui_frame_kind_t::other;
             d.m_target = target ? target->m_target : 0u;
             const std::size_t before = sort.m_commands[ sort.m_index ].size( );
-            if ( ui_frame_ready( d.m_kind, &in ) )
+            const ui_bound_t* control = bound( e );
+            if ( control && !( control->m_hud_button || control->m_onscreen ) )
+                control = nullptr;
+            if ( control && in.m_control_texture )
+            {
+                draw_control( sort, impl, d, *control, in );
+                d.m_emitted = true;
+            }
+            else if ( ui_frame_ready( d.m_kind, &in ) )
             {
                 if ( !ui_frame_emit( sort, impl, d, in ) )
                     ++frame.m_unknown;
@@ -178,7 +186,58 @@ public:
         return out;
     }
 
+    // A pause / recover button's touch callback (c_ui_binding::hud_touch: 0
+    // down, 1 up, 2 move) by the entity's long name - the touch device's
+    // dispatch is the caller's (not read). False when no such button.
+    bool touch( const std::string& long_name, int kind, const float point[ 2 ] )
+    {
+        for ( const auto& b : m_binding.m_bound )
+            if ( ui_long_name( *b->m_entity ) == long_name )
+                return m_binding.hud_touch( *b->m_entity, kind, point );
+        return false;
+    }
+
 private:
+    // A control leaf (controls.hxx): pause 0x4257A0 / recover 0x425F70 / on-screen
+    // 0x42A0C0 over OUR loaded fields, the binding's runtime state (+0xE0 /
+    // +0xF4 / +0xD4) and the env's globals; the textures are `in`'s.
+    void draw_control( ui_gfx_sort_t& sort, const ui_impl_t& impl, const ui_frame_draw_t& d, const ui_bound_t& b, const ui_frame_inputs_t& in )
+    {
+        const entity_t& e = *d.m_entity;
+        ui_hud_control_t c;
+        ui_frame_take( e, "Screen Scale", c.m_scale, 8 );
+        const char* const image[ 4 ] = { "Image X", "Image Y", "Image Width", "Image Height" };
+        for ( int k = 0; k < 4; ++k )
+            ui_frame_take( e, image[ k ], &c.m_image[ k ], 4 );
+        ui_frame_take( e, "Horizontal Anchor", &c.m_anchor.m_horizontal, 4 );
+        ui_frame_take( e, "Vertical Anchor", &c.m_anchor.m_vertical, 4 );
+        ui_frame_take( e, "Horizontal Ratio", &c.m_anchor.m_h_ratio, 4 );
+        ui_frame_take( e, "Vertical Ratio", &c.m_anchor.m_v_ratio, 4 );
+        c.m_depth = ui_frame_depth( e );
+        ui_hud_control_inputs_t ci;
+        ci.m_texture = in.m_control_texture( e, 0 );
+        ci.m_pressed_texture = in.m_control_texture( e, 1 );
+        ci.m_race_present = m_env.m_world.m_manager;
+        ci.m_race_28 = m_env.m_manager_28;
+        ci.m_method_present = m_env.m_method_present;
+        ci.m_method = m_env.m_control_method;
+        ui_font_draw_env_t env = in.m_env;
+        std::memcpy( env.m_matrix, d.m_matrix.data( ), 64 );
+        env.m_top = d.m_top;
+        if ( b.m_onscreen )
+        {
+            std::memcpy( c.m_enable, b.m_onscreen->m_enable, 4 );
+            ci.m_state = b.m_onscreen->m_pressed;
+            ui_hud_onscreen_draw( sort, env, impl.m_crop, c, ci, d.m_alpha );
+        }
+        else
+        {
+            ci.m_state = b.m_hud_button->m_state;
+            ci.m_boing = b.m_hud_button->m_boing;
+            ui_hud_button_draw( sort, env, impl.m_crop, c, ci, b.m_hud_button->m_recover, d.m_alpha );
+        }
+    }
+
     ui_bound_t* bound( const entity_t& e )
     {
         const int k = m_binding.bound_index( e );

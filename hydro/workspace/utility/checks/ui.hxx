@@ -1890,6 +1890,7 @@ inline bool verify_ui_speedometer_draw( )
         else
             ui_speedometer_layout_draw( sort, env, crop, s, boat, v.m_display, v.m_fn == 1 );
         bool same = list.size( ) - before == static_cast< std::size_t >( v.m_commands );
+        int bad_command = -1, bad_byte = -1;
         for ( int c = 0; same && c < v.m_commands; ++c )
         {
             const golden_txt_command_t& want = g_golden_spd_commands[ v.m_first + c ];
@@ -1898,11 +1899,19 @@ inline bool verify_ui_speedometer_draw( )
             const auto& memory = sort.m_buffers[ e.m_index ].m_memory;
             same = std::memcmp( have.m_words, want.m_words, sizeof( have.m_words ) ) == 0 && have.m_words[ 3 ] + record.size( ) <= memory.size( ) &&
                    std::memcmp( memory.data( ) + have.m_words[ 3 ], record.data( ), record.size( ) ) == 0;
+            if ( !same )
+            {
+                bad_command = c;
+                for ( std::size_t q = 0; bad_byte < 0 && q < record.size( ) && have.m_words[ 3 ] + q < memory.size( ); ++q )
+                    if ( memory[ have.m_words[ 3 ] + q ] != record[ q ] )
+                        bad_byte = static_cast< int >( q );
+            }
             ++commands;
         }
         if ( !same && ++failed <= 8 )
-            LOG_ERROR( "ui speedometer draw: vector %d (sweep %d, fn %d) gave %d commands, retail %d - or a word / record byte differs", static_cast< int >( k ),
-                v.m_sweep, v.m_fn, static_cast< int >( list.size( ) - before ), v.m_commands );
+            LOG_ERROR( "ui speedometer draw: vector %d (sweep %d, fn %d) gave %d commands, retail %d - or a word / record byte differs (command %d, "
+                       "record byte %d; -1 = a word)", static_cast< int >( k ), v.m_sweep, v.m_fn, static_cast< int >( list.size( ) - before ), v.m_commands,
+                bad_command, bad_byte );
     }
     if ( failed == 0 )
         LOG_SUCCESS( "ui_speedometer_draw matches retail's VuHUDSpeedometerEntity draws 0x42BA00 / 0x42C1E0 (rect draw 0x507A00, texture draw "

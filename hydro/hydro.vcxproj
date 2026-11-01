@@ -197,6 +197,7 @@
     <ClInclude Include="workspace\core\world\effects.hxx" />
     <ClInclude Include="workspace\core\world\entities.hxx" />
     <ClInclude Include="workspace\core\world\field.hxx" />
+    <ClInclude Include="workspace\core\world\front.hxx" />
     <ClInclude Include="workspace\core\world\frontcam.hxx" />
     <ClInclude Include="workspace\core\world\graph.hxx" />
     <ClInclude Include="workspace\core\world\grid.hxx" />

@@ -71,11 +71,16 @@ inline void c_world::load_huds( )
                         race_unwired( m_race, std::string( "the race HUD's external input " ) + e.m_type + " . " + plug + " (audio: a platform hook) - not run" );
                     return ui_ret_t{ };
                 };
-                hooks.m_broadcast_out = [ this ]( std::uint32_t hash, const ui_params_t& ) {
+                hooks.m_broadcast_out = [ this, index ]( std::uint32_t hash, const ui_params_t& bp ) {
+                    if ( m_hud_posting )
+                        return;   // the world's own post into this HUD (hud_post) coming back out: already delivered
                     if ( hash == fsm_hash( "OnStartLightsOut" ) )
-                        race_broadcast( "OnStartLightsOut" );
+                        race_broadcast( "OnStartLightsOut", &bp, index );
                     else
+                    {
                         race_unwired( m_race, "a race HUD broadcast with no world subscriber recreated - not run" );
+                        hud_post( hash, bp, index );
+                    }
                 };
                 // m_string_db (VuStringDB slot 6, the toast's template) is not wired: no string DB here (UNKNOWN on use).
                 h.ui = std::make_unique< c_ui_race_hud >( *h.ui_tree, hooks );
@@ -226,8 +231,36 @@ inline void c_world::hud( int project, race_hud_verb_t verb, float dt )
 // 0x405470, an empty VuParams): VuRaceGame's 0x48A780 (the condition StartLightsOut) and every VuHumanDriver's 0x40F680
 // (driver +0xC0 = 0x3E800000, 0.25) - the only two subscribers in a race (the string's six copies: the ghost / slalom / time
 // trial games' ctors hold the others). The handler tree's order is not modelled: the two writes are independent.
-inline void c_world::race_broadcast( const char* name )
+//
+// The race HUDs are subscribers too (their entities' handlers, registered by their gameInitialize - so only a LIVE HUD
+// holds them): hud_post delivers the broadcast to every live HUD but the one it came from (whose binding already ran its
+// own handlers, c_ui_binding::broadcast). The order between the race's subscribers and the HUDs' follows the
+// registration order the UI binding states (the race's registered before the HUDs loaded: they run first).
+inline void c_world::hud_post( std::uint32_t hash, const ui_params_t& p, int origin )
 {
+    for ( int k = 0; k < 3; ++k )
+    {
+        hud_project_t& h = m_huds[ k ];
+        if ( k == origin || !h.ui || !h.live )
+            continue;
+        m_hud_posting = true;
+        h.ui->binding( ).post( hash, p );
+        m_hud_posting = false;
+    }
+}
+
+inline void c_world::race_broadcast( const char* name, const ui_params_t* params, int origin )
+{
+    const ui_params_t none{ };
+    const ui_params_t& p = params ? *params : none;
+    struct post_after_t   // the HUDs' delivery after the race's own subscribers, on every path out
+    {
+        c_world* w;
+        std::uint32_t hash;
+        const ui_params_t& p;
+        int origin;
+        ~post_after_t( ) { w->hud_post( hash, p, origin ); }
+    } post_after{ this, fsm_hash( name ), p, origin };
     if ( std::strcmp( name, "OnStartLightsOut" ) == 0 )
     {
         race_rules_on_start_lights_out( m_race.rules );
@@ -243,9 +276,9 @@ inline void c_world::race_broadcast( const char* name )
     race_unwired( m_race, std::string( "a broadcast with no subscriber recreated: " ) + name );
 }
 
-// ui_hud_env_fill before each HUD call: the rules' boats (their 0x520 images), the human's index, the count, no
-// settings (the units: g 0x758FE0 - not wired), the track's built / circuit answers; the control method g 0x758FC0
-// +0x18 is not wired (0).
+// ui_hud_env_fill before each HUD call: the rules' boats (their 0x520 images), the human's index, the count, the
+// settings' units (below), the track's built / circuit answers; the control method g 0x758FC0 +0x18 = the session's
+// (race_world_t::control_method - the input layer's answer, a platform hook: 0, the gamepad method).
 inline void c_world::hud_env( hud_project_t& h )
 {
     std::vector< const std::uint8_t* > images;
@@ -258,8 +291,14 @@ inline void c_world::hud_env( hud_project_t& h )
                 local = static_cast< std::int32_t >( k );
     }
     ui_hud_env_t& env = h.ui->env( );
-    ui_hud_env_fill( env, h.boats, images, local, static_cast< std::int32_t >( images.size( ) ), nullptr );
+    // The units: VuSettingsManager g 0x758FE0 +0x44 (ctor 0x4B4650: ""), which its slot 1 0x4B4870 fills first from the
+    // defaults - VuDBAsset_load_Units 0x4B4FC0: gameutil +4 (ConstantDB) ["VuDBAsset"]["DefaultSettings"]["Metro"]
+    // ["Units"], a string's text else the static "" 0x819950 - then from the profile (g 0x759084: saves, re-made, NOT
+    // 1:1 - the test profile holds no saved settings, so the defaults stand).
+    const value_t& units = member( member( member( member( m_constant_db, "VuDBAsset" ), "DefaultSettings" ), "Metro" ), "Units" );
+    const std::string units_text = units.tag == 4 ? units.text : std::string( );
+    ui_hud_env_fill( env, h.boats, images, local, static_cast< std::int32_t >( images.size( ) ), units_text.c_str( ) );
     env.m_track_built = m_race.track && track_is_built( *m_race.track );
     env.m_track_circuit = env.m_track_built && track_is_circuit( *m_race.track );
-    env.m_control_method = 0;
+    env.m_control_method = m_race.world.control_method;
 }
