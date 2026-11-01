@@ -2,6 +2,9 @@
 
 #include <workspace/core/ui/bind.hxx>
 #include <workspace/core/ui/frame.hxx>
+#include <workspace/core/ui/gauge.hxx>
+#include <workspace/core/ui/map.hxx>
+#include <workspace/core/ui/split.hxx>
 #include <workspace/core/ui/wiring.hxx>
 
 #include <cstdint>
@@ -62,6 +65,23 @@ inline void ui_hud_env_fill( ui_hud_env_t& env, std::vector< ui_hud_boat_t >& bo
     env.m_world.m_boat_count = count;
 }
 
+// The gauges' inputs (batch 18): what the speedometer 0x42BA00 and the minimap
+// 0x427BD0 read outside their own loaded fields. m_live false: both stay
+// `other` leaves (the old behaviour). The boat fields are the boat side's
+// (the local boat's +0x21C / +0x31C.. and every boat's +0x50 / +0x224 / +0x220 /
+// +0x490: inputs); the display is g 0x75907C slot 16 (the D3D11 layer - a
+// platform HOOK); m_assets fills the textures, the materials and the record's
+// +0 (the entity's handle) - the asset factory's answers at the ctor.
+struct ui_hud_gauges_t
+{
+    bool m_live = false;
+    ui_speedometer_boat_t m_boat;
+    std::int32_t m_display[ 2 ] = { 0, 0 };
+    ui_map_world_t m_map;
+    std::function< void( const entity_t&, ui_speedometer_t& ) > m_speedometer;
+    std::function< void( const entity_t&, ui_minimap_t& ) > m_minimap;
+};
+
 class c_ui_race_hud
 {
 public:
@@ -69,6 +89,7 @@ public:
     c_ui_race_hud( entity_t& root, ui_bind_hooks_t hooks ) : m_root( root ), m_binding( root, with_env( std::move( hooks ) ) ) { }
 
     ui_hud_env_t& env( ) { return m_env; }
+    ui_hud_gauges_t& gauges( ) { return m_gauges; }
     c_ui_binding& binding( ) { return m_binding; }
 
     void initialize( ) { m_binding.hud_initialize( ); }
@@ -88,6 +109,7 @@ public:
     // 0x42A0C0) are recreated (gauge.hxx / map.hxx / controls.hxx) but read the
     // boat's physics, the display and the input devices: `other` emits them
     // (the caller's - it holds those); without it they count unrecreated.
+    // With gauges( ).m_live the speedometer / minimap emit here from its inputs.
     ui_frame_t draw( ui_gfx_sort_t& sort, const ui_impl_t& impl, ui_frame_inputs_t in, float alpha = 1.0f,
                      const std::function< void( const ui_frame_draw_t& ) >& other = nullptr )
     {
@@ -157,6 +179,12 @@ public:
             else if ( ui_frame_ready( d.m_kind, &in ) )
             {
                 if ( !ui_frame_emit( sort, impl, d, in ) )
+                    ++frame.m_unknown;
+                d.m_emitted = true;
+            }
+            else if ( m_gauges.m_live && control_gauge( e ) )
+            {
+                if ( !draw_gauge( sort, impl, d, in ) )
                     ++frame.m_unknown;
                 d.m_emitted = true;
             }
@@ -238,6 +266,51 @@ private:
         }
     }
 
+    bool control_gauge( const entity_t& e )
+    {
+        const ui_bound_t* b = bound( e );
+        return b && ( b->m_speedometer || b->m_vtable == k_ui_hud_minimap_vtable );
+    }
+
+    // A gauge leaf: the speedometer's draw component target 0x42BA00 (the alpha
+    // unread; +0xE0 = the runtime units its OnUITick 0x42B860 wrote) or the
+    // minimap's slot 13 0x427BD0, over OUR loaded fields and m_gauges' inputs.
+    bool draw_gauge( ui_gfx_sort_t& sort, const ui_impl_t& impl, const ui_frame_draw_t& d, const ui_frame_inputs_t& in )
+    {
+        const entity_t& e = *d.m_entity;
+        const ui_bound_t& b = *bound( e );
+        ui_font_draw_env_t env = in.m_env;
+        std::memcpy( env.m_matrix, d.m_matrix.data( ), 64 );
+        env.m_top = d.m_top;
+        const auto fields = [ &e ]( float* scale, float* rect, ui_anchor_t& anchor, float& depth )
+        {
+            ui_frame_take( e, "Screen Scale", scale, 8 );
+            const char* const names[ 4 ] = { "X", "Y", "Width", "Height" };
+            for ( int k = 0; k < 4; ++k )
+                ui_frame_take( e, names[ k ], &rect[ k ], 4 );
+            ui_frame_take( e, "Horizontal Anchor", &anchor.m_horizontal, 4 );
+            ui_frame_take( e, "Vertical Anchor", &anchor.m_vertical, 4 );
+            ui_frame_take( e, "Horizontal Ratio", &anchor.m_h_ratio, 4 );
+            ui_frame_take( e, "Vertical Ratio", &anchor.m_v_ratio, 4 );
+            depth = ui_frame_depth( e );
+        };
+        if ( b.m_speedometer )
+        {
+            ui_speedometer_t s;
+            fields( s.m_screen_scale, s.m_rect, s.m_anchor, s.m_depth );
+            s.m_metric = static_cast< std::int32_t >( b.m_speedometer->m_metric );
+            if ( m_gauges.m_speedometer )
+                m_gauges.m_speedometer( e, s );
+            ui_speedometer_draw( sort, env, impl.m_crop, s, m_gauges.m_boat, m_gauges.m_display );
+            return true;
+        }
+        ui_minimap_t m;
+        fields( m.m_screen_scale, m.m_rect, m.m_anchor, m.m_depth );
+        if ( m_gauges.m_minimap )
+            m_gauges.m_minimap( e, m );
+        return ui_minimap_draw( sort, env, impl.m_crop, m, m_gauges.m_map );
+    }
+
     ui_bound_t* bound( const entity_t& e )
     {
         const int k = m_binding.bound_index( e );
@@ -252,5 +325,6 @@ private:
 
     entity_t& m_root;
     ui_hud_env_t m_env;   // declared before m_binding: the binding keeps its address
+    ui_hud_gauges_t m_gauges;
     c_ui_binding m_binding;
 };
