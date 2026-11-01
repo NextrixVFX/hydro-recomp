@@ -943,21 +943,30 @@ inline void water_built_remove( water_built_t& b, int wave )
         water_built_destroy( b, wave );
 }
 
-// Slot 0 with 1, the scalar deleting dtor. The point wave's 0x5A3310: its
-// vtable restored, VuWaterWave's dtor 0x5A6470 - 0x529800 on g_vuwater (a
-// no-op once the tick has unlinked it), then while +8 is set, slot 0 of the
-// object there (UNREAD: counted; every wave built here has +8 = 0) - then
-// freed. Every other class's dtor is unread: counted, and the wave is NOT
-// marked gone.
+// Slot 0 with 1, the scalar deleting dtor - every class's is its vtable
+// restored, VuWaterWave's dtor 0x5A6470, then operator delete: point 0x5A3310,
+// whirlpool 0x5A1440, banked turn 0x5A4D50, ramp 0x5A2340, bump 0x5A3FB0,
+// directional 0x59AAA0, wake 0x52BE40, flat wake 0x52BE80, VuWaterWave's own
+// 0x5A6440; the oceans' 0x59CAB0 (VuWaterBaseOceanWave, rectangular and
+// circular alike) first frees the field when +0x4C is set (0x59CF90: the
+// arrays +0x90 / +0x94 / +0xA0, the +0x98 / +0x9C tables, the two buffers'
+// pairs from +0xB8 - here the ocean's field is dropped). 0x5A6470: 0x529800 on
+// g_vuwater (a no-op once the tick has unlinked it), then while +8 is set,
+// slot 0 of the object there (UNREAD: counted; every wave built here has +8 =
+// 0).
 inline void water_built_destroy( water_built_t& b, int wave )
 {
     if ( b.wave_gone.size( ) < b.waves.size( ) )
         b.wave_gone.resize( b.waves.size( ), 0 );
-    if ( b.wave_kind[ static_cast< std::size_t >( wave ) ] != water_kind_point )
+    const int kind = b.wave_kind[ static_cast< std::size_t >( wave ) ];
+    if ( kind == water_kind_none )
     {
-        ++b.unread_dtors;
+        ++b.unread_dtors;   // a class this file does not build
         return;
     }
+    if ( kind == water_kind_rectangular || kind == water_kind_circular )
+        if ( water_built_t::ocean_t* o = water_ocean_of( b, wave ) )
+            o->field = decltype( o->field )( );
     water_built_remove( b, wave );
     if ( b.waves[ wave ].word[ 2 ] != 0 )
         ++b.unread_dtors;
