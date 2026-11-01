@@ -118,8 +118,10 @@
     <ClInclude Include="workspace\core\boat\camera.hxx" />
     <ClInclude Include="workspace\core\boat\construct.hxx" />
     <ClInclude Include="workspace\core\boat\contact.hxx" />
+    <ClInclude Include="workspace\core\boat\damage.hxx" />
     <ClInclude Include="workspace\core\boat\driver.hxx" />
     <ClInclude Include="workspace\core\boat\entity.hxx" />
+    <ClInclude Include="workspace\core\boat\events.hxx" />
     <ClInclude Include="workspace\core\boat\fleet.hxx" />
     <ClInclude Include="workspace\core\boat\fluid.hxx" />
     <ClInclude Include="workspace\core\boat\hull.hxx" />
@@ -161,6 +163,7 @@
     <ClInclude Include="workspace\core\ui\fsm.hxx" />
     <ClInclude Include="workspace\core\ui\gauge.hxx" />
     <ClInclude Include="workspace\core\ui\hud.hxx" />
+    <ClInclude Include="workspace\core\ui\image.hxx" />
     <ClInclude Include="workspace\core\ui\leave.hxx" />
     <ClInclude Include="workspace\core\ui\map.hxx" />
     <ClInclude Include="workspace\core\ui\navigate.hxx" />
