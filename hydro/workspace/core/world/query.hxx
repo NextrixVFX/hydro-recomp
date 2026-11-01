@@ -16,8 +16,10 @@
 // Objects are held by index, not by pointer (retail is 32-bit; this build is
 // not): a tree node's +20 / +24 are node or object indices, -1 for retail's
 // null; a vertex's surface tag is surface index + 1, 0 for retail's null.
-// Only the ctx+96 == 0 paths are recreated (VuFluidSolver_prepare passes 0);
-// the +96 paths of 0x529ED0 / 0x529F70 return false (not recreated).
+// Both ctx+96 paths are recreated: 0 (VuFluidSolver_prepare's, 40-byte
+// water_vertex_t records) and set (the water renderer 0x597D70's: raw records
+// with a stride, ctx.records / ctx.stride - 0x529ED0 / 0x529F70's +96
+// branches; the waves' +96 kernels are world/wave.hxx's *_vertex96).
 
 // One record of the vertex array the query fills (retail's 40-byte stride, the
 // VuFluidSolver's +56 array): +0 the world position; +12 a word retail never
@@ -102,7 +104,18 @@ struct water_query_t
     uint32_t tag;
     uint32_t flag96;
     uint32_t flag100;
+    // flag96 set: ctx+0x50 / +0x54 as raw records and their stride in bytes
+    // (the renderer 0x597D70's 32-byte vertices) - see world/wave.hxx's +96
+    // kernels for the layout. `vertices` is unused then.
+    unsigned char* records;
+    int stride;
 };
+
+// One +96 record's floats by byte offset.
+inline float* water_record( water_query_t& ctx, int i, int offset )
+{
+    return reinterpret_cast< float* >( ctx.records + static_cast< std::ptrdiff_t >( i ) * ctx.stride + offset );
+}
 
 // A wave's slot 3 (vt+12, thiscall(ctx*), retn 4): a Vu virtual - a hook.
 // False when absent (not recreated).
@@ -194,6 +207,21 @@ inline bool water_contains( const water_surface_t& s, const water_query_t& ctx )
 // per vertex +16 / +20 / +24 = 0, +28 stale (held 0 here), +32 = height.
 inline void water_fill( water_query_t& ctx, float height )
 {
+    if ( ctx.flag96 )
+    {
+        // The +96 branch: +8 = height, +0xC / +0x10 / +0x14 = 0, +0x18 = 1.0,
+        // +0x1C = 0.
+        for ( int i = 0; i < ctx.count; ++i )
+        {
+            *water_record( ctx, i, 8 ) = height;
+            *water_record( ctx, i, 0xC ) = 0.0f;
+            *water_record( ctx, i, 0x10 ) = 0.0f;
+            *water_record( ctx, i, 0x14 ) = 0.0f;
+            *water_record( ctx, i, 0x18 ) = 1.0f;
+            *water_record( ctx, i, 0x1C ) = 0.0f;
+        }
+        return;
+    }
     for ( int i = 0; i < ctx.count; ++i )
     {
         water_vertex_t& v = ctx.vertices[ i ];
@@ -226,13 +254,42 @@ inline float water_bits( uint32_t u )
 // 80 vertices), where a kernel would need a 2.5 KB frame to reach a tag.
 inline bool water_tag( water_query_t& ctx, const water_t& w, const int* found, int count, std::vector< uint32_t >& tags )
 {
-    if ( ctx.flag96 )
-        return false;   // the ctx+96 branch: not recreated
     if ( ctx.count > 256 )
         return false;   // see above
     ctx.flag100 = 1;
     tags.assign( ctx.count > 0 ? ctx.count : 0, 0 );
     ctx.tags = tags.data( );
+    if ( ctx.flag96 )
+    {
+        // The +96 branch (0x52A1D5): the position is +0 / +4 / +8 (read
+        // first), then +0xC / +0x10 = 0, +8 = 0xFEFFFFFF, +0x14 = 0, +0x18 =
+        // 1.0, +0x1C = 0; the same surface test, the height into +8. The local
+        // y / z sums are commuted against the base branch (same bits).
+        for ( int i = 0; i < ctx.count; ++i )
+        {
+            const float p[ 3 ] = { *water_record( ctx, i, 0 ), *water_record( ctx, i, 4 ), *water_record( ctx, i, 8 ) };
+            *water_record( ctx, i, 0xC ) = 0.0f;
+            *water_record( ctx, i, 0x10 ) = 0.0f;
+            *water_record( ctx, i, 8 ) = water_bits( 0xFEFFFFFFu );
+            *water_record( ctx, i, 0x14 ) = 0.0f;
+            *water_record( ctx, i, 0x18 ) = 1.0f;
+            *water_record( ctx, i, 0x1C ) = 0.0f;
+            for ( int k = 0; k < count; ++k )
+            {
+                const water_surface_t& s = w.surfaces[ found[ k ] ];
+                float lx, ly, lz;
+                water_local( s, p, lx, ly, lz );
+                if ( water_ge( s.half_x, water_abs( lx ) ) && water_ge( s.half_y, water_abs( ly ) ) && water_ge( s.above, lz ) &&
+                     water_ge( lz, -s.below ) )
+                {
+                    tags[ i ] = static_cast< uint32_t >( found[ k ] + 1 );
+                    *water_record( ctx, i, 8 ) = s.height;
+                    break;
+                }
+            }
+        }
+        return true;
+    }
     for ( int i = 0; i < ctx.count; ++i )
     {
         water_vertex_t& v = ctx.vertices[ i ];
@@ -303,8 +360,6 @@ inline bool water_waves( const water_t& w, int root, water_query_t& ctx, const f
 inline bool water_query( const water_t& w, water_query_t& ctx, water_kernel_fn kernel, void* user, std::vector< uint32_t >& tags )
 {
     const float rect[ 4 ] = { ctx.aabb[ 0 ], ctx.aabb[ 1 ], ctx.aabb[ 4 ], ctx.aabb[ 5 ] };
-    if ( ctx.flag96 )
-        return false;   // 0x529ED0's +96 branch: not recreated
     // ctx+0x4C set: 0x529ED0 with that surface's height, then its waves. No
     // caller recreated so far sets it (prepare's ctor zeroes it), so it is
     // unmeasured: not recreated.
