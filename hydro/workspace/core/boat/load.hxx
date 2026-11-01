@@ -83,6 +83,11 @@ struct boat_load_t
     std::uint8_t shape_image[ 0x90 ]{};
     bool has_shape = false;
     compound_shape_t compound;
+    // The Pfx step (0x419EF0 / 0x419D70 x2 / 0x419FF0) handed over WHOLE: set, it is called with Default's and the
+    // boat's Pfx sections, the driver class and the owner's flag bit 2 - bind it to boat/effects.hxx boat_pfx_fill
+    // on the controller (boat +0x234) and its boat_pfx_fill_hooks_t. Null: the step stays the four logged calls.
+    bool ( *pfx_fill )( void* user, const value_t& fallback, const value_t& own, const boat_driver_t& driver, bool create ) = nullptr;
+    void* pfx_user = nullptr;
 };
 
 inline std::uint32_t load_word( const std::uint8_t* b, int at )
@@ -363,12 +368,20 @@ inline bool boat_load_sections( boat_load_t& io )
     if ( flags & 4 )
         call( 0x410610, "animation+0x0", "" );
     // Pfx: 0x419EF0, the reader 0x419D70 twice (the model skeleton's
-    // findNodeByName - not recreated: HOOKS), 0x419FF0 behind its owner's bit 2.
-    call( 0x419EF0, "pfx", "" );
-    call( 0x419D70, "pfx", "Default/Pfx" );
-    call( 0x419D70, "pfx", name == "Default" ? "Default/Pfx" : "boat/Pfx" );
-    if ( io.pfx_owner_flags & 4 )
-        call( 0x419FF0, "pfx", "" );
+    // findNodeByName - a hook), 0x419FF0 behind its owner's bit 2: boat/effects.hxx boat_pfx_fill.
+    if ( io.pfx_fill )
+    {
+        if ( !io.pfx_fill( io.pfx_user, member( fallback, "Pfx" ), member( own, "Pfx" ), io.driver, ( io.pfx_owner_flags & 4 ) != 0 ) )
+            return false;
+    }
+    else
+    {
+        call( 0x419EF0, "pfx", "" );
+        call( 0x419D70, "pfx", "Default/Pfx" );
+        call( 0x419D70, "pfx", name == "Default" ? "Default/Pfx" : "boat/Pfx" );
+        if ( io.pfx_owner_flags & 4 )
+            call( 0x419FF0, "pfx", "" );
+    }
     // Damage: 0x412170 (each piece's scalar deleting dtor - a hook - then the
     // count +0xA0 = 0), the debris reader 0x411EF0 twice (VuPiece's loader:
     // HOOKS), the model 0x520080(+4, +0x78), +0xCC = count > 0.
