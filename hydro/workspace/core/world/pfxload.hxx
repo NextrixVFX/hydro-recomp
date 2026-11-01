@@ -381,6 +381,7 @@ inline const pfx_node_type_t g_pfx_node_types[] = {
     { "VuPfxTrailPattern", nullptr, 0x750294u, 0x90u, 0x58E900u, PFX_PROPS( Trail ) },
     { "VuPfxTickLinearAcceleration", "", 0x75021Cu, 0x44u, 0x58E540u, PFX_PROPS( TickLinearAcceleration ) },
     { "VuPfxTickDampenVelocity", "", 0x75018Cu, 0x38u, 0x58E2B0u, PFX_PROPS( TickDampenVelocity ) },
+    // (the spring's registry create 0x58DDF0, verified by case pfx_load)
     { "VuPfxSpringConstraint", "", 0x750104u, 0x4Cu, 0x58DDF0u, PFX_PROPS( SpringConstraint ) },
     // the game's (0x4D8F79..)
     { "VuPfxEmitBoatHull", "VuPfxQuadPattern", 0x746B6Cu, 0x74u, 0x4CDEA0u, PFX_PROPS( EmitBoatHull ) },

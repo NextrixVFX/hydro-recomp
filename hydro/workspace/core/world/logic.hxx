@@ -716,6 +716,9 @@ inline const logic_type_t g_logic_types[] = {
     { 0x5EF500u, 0x736D98u, "VuAmbientLightEntity|VuEntity" },
     { 0x5EEA00u, 0x736D90u, "VuDirectionalLightEntity|VuEntity" },
     { 0x5F4790u, 0x736E00u, "VuSubstituteAssetEntity|VuEntity" },
+    // batch 24: VuLensWaterEmitterEntity's getType 0x5E64B0 (`mov eax, 0x736D40; ret`; lens.hxx). The rows above the inventory
+    // missed (cited only as C++ literals): 0x619FF0 0x5CE2C0 0x5CE080 0x5EF500 0x5EEA00.
+    { 0x5E64B0u, 0x736D40u, "VuLensWaterEmitterEntity|VuEntity" },
 };
 
 // VuControlComponent's slot 1 0x619F50 (mov eax, 0x6F6FC8; ret): the component's name.

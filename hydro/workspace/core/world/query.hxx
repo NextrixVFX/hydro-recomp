@@ -256,6 +256,24 @@ inline bool water_ge( float a, float b )
     return _mm_comige_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) != 0;
 }
 
+// 0x594BD0 (thiscall VuWaterSurface; const VuVector3* point; retn 4; float in xmm0): the distance from a point to the
+// surface's box - the point in the surface's space (rows +0x90, x / y as water_map_sample's), its z less (above - below)
+// x 0.5 (0x6F765C); per axis |c| (VuVector_abs) less half_x (+0xF0) / half_y (+0xF4) / (below + above) x 0.5, each maxss'ed
+// with 0 (a NaN answers 0), then VuMath_sqrt( (dy^2 + dx^2) + dz^2 ). Its one caller is the water renderer's submit
+// 0x595520 (render side: the LOD over the shader's +0x17C range).
+inline float water_surface_distance( const water_surface_t& s, const float* p )
+{
+    const float* m = s.inverse;
+    const float lx = ( ( m[ 4 ] * p[ 1 ] + p[ 0 ] * m[ 0 ] ) + m[ 8 ] * p[ 2 ] ) + m[ 12 ];
+    const float ly = ( ( m[ 1 ] * p[ 0 ] + m[ 5 ] * p[ 1 ] ) + m[ 9 ] * p[ 2 ] ) + m[ 13 ];
+    const float lz = ( ( ( m[ 2 ] * p[ 0 ] + m[ 6 ] * p[ 1 ] ) + m[ 10 ] * p[ 2 ] ) + m[ 14 ] ) - ( s.above - s.below ) * 0.5f;
+    const __m128 zero = _mm_setzero_ps( );
+    const float dx = _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( water_abs( lx ) - s.half_x ), zero ) );
+    const float dy = _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( water_abs( ly ) - s.half_y ), zero ) );
+    const float dz = _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( water_abs( lz ) - ( s.below + s.above ) * 0.5f ), zero ) );
+    return _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( dy * dy + dx * dx ) + dz * dz ) ) );
+}
+
 // The overlap test both walks open with (0x52AA60 / 0x52A8D0): rect = (min x,
 // min y, max x, max y) from the ctx aabb; four comiss / jb, each false on NaN.
 inline bool water_overlap( const float* rect, const float* node )
