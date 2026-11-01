@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/assets/factory.hxx>
+#include <workspace/core/boat/powerup.hxx>
 
 #include <algorithm>
 #include <array>
@@ -215,6 +216,75 @@ inline int package_check_ops( c_asset_factory& f, package_check_t& c )
         }
     }
     return failed;
+}
+
+// powerup_destroy (boat/powerup.hxx) against retail's 0x43B830 / 0x43DCC0 (body 0x43B890) run whole on images (case
+// powerup_dtors, cases/race.py): the hook log in order, every string's words after, +0x118, eax.
+inline bool verify_powerup_dtors( )
+{
+    const unsigned* g = g_golden_powerup_dtors_words;
+    const std::uint32_t ent = 0x100, head = 0x400, node = 0x440;
+    const std::uint32_t offs[ 6 ] = { 0x138, 0xE8, 0xC8, 0xB0, 0x94, 0x74 };
+    auto text_at = []( int k ) { return 0x800u + 0x40u * static_cast< std::uint32_t >( k ); };
+    auto sym = [ & ]( std::uint32_t x ) -> unsigned {
+        if ( x == 0 ) return 0;
+        if ( x == ent ) return 1;
+        if ( x == head ) return 2;
+        if ( x == node ) return 3;
+        if ( x == ent + 0x118 ) return 4;
+        for ( int k = 0; k < 6; ++k )
+            if ( x == text_at( k ) ) return 5u + static_cast< unsigned >( k );
+        return 0x100 + ( x & 0xFF );
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned kind = *g++, flags = *g++, leftmost = *g++, untouched = *g++;
+        std::map< std::uint32_t, std::uint32_t > mem;
+        vu_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0x5A5A5A5Au : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        mem[ ent + 0x118 ] = head;
+        mem[ head ] = leftmost == 2 ? head : node;
+        for ( int k = 0; k < 6; ++k )
+        {
+            const unsigned n = *g++;
+            const unsigned first = n != 0 ? *g : 0u;
+            g += ( n + 3 ) / 4;
+            mem[ ent + offs[ k ] ] = n < 16 ? first : text_at( k );
+            mem[ ent + offs[ k ] + 0x10 ] = n;
+            mem[ ent + offs[ k ] + 0x14 ] = n < 16 ? 15u : ( n | 15u );
+        }
+        std::vector< std::vector< unsigned > > glog( *g++ ), log;
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        const unsigned* after = g;
+        g += 6 * 3 + 2;
+        powerup_dtor_hooks_t h;
+        h.free_block = [ & ]( std::uint32_t a ) { log.push_back( { 1u, sym( a ) } ); };
+        h.map_erase = [ & ]( std::uint32_t m, std::uint32_t first, std::uint32_t last ) { log.push_back( { 2u, sym( m ), sym( first ), sym( last ) } ); };
+        h.entity_dtor = [ & ]( ) { log.push_back( { 3u, 1u } ); };
+        const std::uint32_t r = powerup_destroy( kind == 1 ? powerup_dtor_kind_t::entity : powerup_dtor_kind_t::hidden_package, w, ent, flags, h );
+        bool ok = log == glog && untouched == 1;
+        for ( int k = 0; k < 6 && ok; ++k )
+        {
+            const std::uint32_t at = ent + offs[ k ];
+            ok = ( w.get( at ) & 0xFFu ) == after[ 3 * k ] && w.get( at + 0x10 ) == after[ 3 * k + 1 ] && w.get( at + 0x14 ) == after[ 3 * k + 2 ];
+        }
+        ok = ok && sym( w.get( ent + 0x118 ) ) == after[ 18 ] && ( r == ent ? 1u : 0u ) == after[ 19 ];
+        if ( !ok && ++failed <= 4 )
+            LOG_ERROR( "powerup dtor vector %u (kind %u flags %u) differs from retail: %d log entries, retail %d", v, kind, flags,
+                static_cast< int >( log.size( ) ), static_cast< int >( glog.size( ) ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "powerup_destroy matches retail's 0x43B830 / 0x43DCC0 (body 0x43B890) on %u images: the hook log, every string, +0x118, eax", nv );
+    else
+        LOG_ERROR( "powerup_destroy FAILED %d of %u against 0x43B830 / 0x43DCC0", failed, nv );
+    return failed == 0;
 }
 
 inline bool verify_asset_package( )
