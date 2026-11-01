@@ -3,6 +3,7 @@
 #include <workspace/core/boat/camera.hxx>
 #include <workspace/core/boat/respawn.hxx>
 #include <workspace/core/boat/anim.hxx>
+#include <workspace/core/boat/human.hxx>
 
 #include <array>
 #include <cstdio>
@@ -460,11 +461,182 @@ inline bool verify_boat_anim( )
     return false;
 }
 
+// VuHumanDriver's tick 0x40F270 against retail's own runs on Hydroelectric's track (oracle case human_tick):
+// each tick's blocks fed to human_tick with the scripted input, accelerometer and settings; the driver / boat /
+// body / camera words after (but the stale ones; the driver's +0x84 as the sector index) and the hook stream
+// compared.
+inline bool verify_human_tick( )
+{
+    const std::unique_ptr< entity_t > tree = track_document_tree( );
+    track_manager_t tm;
+    if ( !tree || !track_build_from_tree( *tree, tm ) )
+    {
+        LOG_ERROR( "human_tick: the track did not build" );
+        return false;
+    }
+    static const int sizes[ 8 ] = { 0xD0, 0x520, 0xC8, 0x2D4, 0x308, 0x80, 0x1D0, 0x60 };
+    static const int after_of[ 4 ] = { 0, 1, 3, 4 };
+    struct run_t
+    {
+        float axes[ 3 ] = { };
+        std::uint8_t held = 0, jump = 0, recover = 0;
+        float acc[ 4 ] = { };
+        bool acc_ok = false;
+        std::vector< unsigned > log;
+    } run;
+    auto code = []( const char* n ) -> unsigned {
+        static const char* names[ 6 ] = { "Brake", "Throttle", "Steering", "Boost", "Jump", "Recover" };
+        for ( unsigned k = 0; k < 6; ++k )
+            if ( std::strcmp( n, names[ k ] ) == 0 )
+                return k + 1;
+        return 99;
+    };
+    static unsigned ( *s_code )( const char* ) = nullptr;
+    s_code = code;
+    human_hooks_t hooks;
+    hooks.user = &run;
+    hooks.axis = []( void* u, std::int32_t pad, const char* n ) {
+        run_t& r = *static_cast< run_t* >( u );
+        const unsigned c = s_code( n );
+        r.log.insert( r.log.end( ), { 1u, static_cast< unsigned >( pad ), c } );
+        return c >= 1 && c <= 3 ? r.axes[ c - 1 ] : 0.0f;
+    };
+    hooks.held = []( void* u, std::int32_t pad, const char* n ) -> std::uint8_t {
+        run_t& r = *static_cast< run_t* >( u );
+        const unsigned c = s_code( n );
+        r.log.insert( r.log.end( ), { 2u, static_cast< unsigned >( pad ), c } );
+        return c == 4 ? r.held : 0;
+    };
+    hooks.pressed = []( void* u, std::int32_t pad, const char* n ) -> std::uint8_t {
+        run_t& r = *static_cast< run_t* >( u );
+        const unsigned c = s_code( n );
+        r.log.insert( r.log.end( ), { 3u, static_cast< unsigned >( pad ), c } );
+        return c == 5 ? r.jump : c == 6 ? r.recover : 0;
+    };
+    hooks.accel = []( void* u, float* out ) {
+        run_t& r = *static_cast< run_t* >( u );
+        r.log.push_back( 4 );
+        std::memcpy( out, r.acc, 16 );
+        return r.acc_ok;
+    };
+    hooks.rumble = []( void* u, float lo, float hi ) {
+        run_t& r = *static_cast< run_t* >( u );
+        std::uint32_t a, b;
+        std::memcpy( &a, &lo, 4 );
+        std::memcpy( &b, &hi, 4 );
+        r.log.insert( r.log.end( ), { 5u, 0u, 6u, a, b } );
+    };
+    hooks.voice = []( void* u, const char* line ) {
+        run_t& r = *static_cast< run_t* >( u );
+        r.log.insert( r.log.end( ), { 7u, std::strcmp( line, "NeedBoostBeforeJump" ) == 0 ? 1u : std::strcmp( line, "NeedPickUpPowerBoost" ) == 0 ? 2u : 99u } );
+    };
+    hooks.misfire = []( void* u ) { static_cast< run_t* >( u )->log.push_back( 8 ); };
+    hooks.jump_refused = []( void* u ) { static_cast< run_t* >( u )->log.push_back( 9 ); };
+    hooks.jump_sound = []( void* u ) { static_cast< run_t* >( u )->log.push_back( 10 ); };
+    hooks.menu_change = []( void* u ) {
+        run_t& r = *static_cast< run_t* >( u );
+        r.log.insert( r.log.end( ), { 11u, 12u } );
+    };
+    const unsigned* g = g_golden_human_tick_words;
+    int compared = 0, failed = 0, bad = 0, ticks = 0;
+    const unsigned ns = *g++;
+    for ( unsigned s = 0; s < ns; ++s )
+    {
+        const unsigned nt = *g++;
+        for ( unsigned t = 0; t < nt; ++t, ++ticks )
+        {
+            float dt;
+            std::memcpy( &dt, g++, 4 );
+            human_env_t env;
+            env.control_method = static_cast< std::int32_t >( *g++ );
+            env.brake_only_0 = static_cast< std::uint8_t >( *g++ );
+            env.brake_only_1 = static_cast< std::uint8_t >( *g++ );
+            std::memcpy( &env.tilt_blend, g++, 4 );
+            env.rumble = static_cast< std::uint8_t >( *g++ );
+            std::memcpy( run.axes, g, 12 );
+            g += 3;
+            run.held = static_cast< std::uint8_t >( *g++ );
+            run.jump = static_cast< std::uint8_t >( *g++ );
+            run.recover = static_cast< std::uint8_t >( *g++ );
+            std::memcpy( run.acc, g, 16 );
+            g += 4;
+            run.acc_ok = *g++ != 0;
+            int sector = static_cast< std::int32_t >( *g++ );
+            const int sector_after = static_cast< std::int32_t >( *g++ );
+            std::vector< std::uint8_t > blocks[ 8 ];
+            for ( int k = 0; k < 8; ++k )
+            {
+                blocks[ k ].assign( reinterpret_cast< const std::uint8_t* >( g ), reinterpret_cast< const std::uint8_t* >( g ) + sizes[ k ] );
+                g += sizes[ k ] / 4;
+            }
+            human_pilot_t pilot;
+            pilot.driver = blocks[ 0 ].data( );
+            pilot.sector = sector;
+            human_tick_t tick;
+            tick.boat = blocks[ 1 ].data( );
+            tick.transform = blocks[ 2 ].data( );
+            tick.body = blocks[ 3 ].data( );
+            tick.camera = blocks[ 4 ].data( );
+            tick.animation = blocks[ 5 ].data( );
+            tick.solver = blocks[ 7 ].data( );
+            run.log.clear( );
+            human_driver_tick( tm, pilot, tick, dt, env, hooks );
+            const int failed_before = failed;
+            const unsigned* after[ 4 ];
+            for ( int k = 0; k < 4; ++k )
+            {
+                after[ k ] = g;
+                g += sizes[ after_of[ k ] ] / 4;
+            }
+            for ( int k = 0; k < 4; ++k )
+            {
+                const int n = sizes[ after_of[ k ] ] / 4;
+                std::vector< bool > stale( n, false );
+                const unsigned nst = *g++;
+                for ( unsigned j = 0; j < nst; ++j )
+                    stale[ *g++ ] = true;
+                if ( k == 0 )
+                    stale[ 0x84 / 4 ] = true;   // the sector pointer: compared as the index below
+                for ( int w = 0; w < n; ++w )
+                {
+                    if ( stale[ w ] )
+                        continue;
+                    std::uint32_t mine;
+                    std::memcpy( &mine, blocks[ after_of[ k ] ].data( ) + 4 * w, 4 );
+                    ++compared;
+                    if ( mine != after[ k ][ w ] && ++failed <= 8 )
+                        LOG_ERROR( "human_tick %u/%u block %d +0x%X: 0x%08X, retail 0x%08X", s, t, after_of[ k ], 4 * w, mine, after[ k ][ w ] );
+                }
+            }
+            ++compared;
+            if ( pilot.sector != sector_after && ++failed <= 8 )
+                LOG_ERROR( "human_tick %u/%u: sector %d, retail %d", s, t, pilot.sector, sector_after );
+            std::vector< unsigned > expect;
+            const unsigned nl = *g++;
+            expect.assign( g, g + nl );
+            g += nl;
+            ++compared;
+            if ( expect != run.log && ++failed <= 8 )
+                LOG_ERROR( "human_tick %u/%u: the hook stream differs (%zu words vs retail %zu)", s, t, run.log.size( ), expect.size( ) );
+            bad += failed != failed_before ? 1 : 0;
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuHumanDriver's tick 0x40F270 (0x40F690 input, 0x40FA90 wrong way, 0x40FC60 + 0x41DEC0, 0x41D6B0, 0x40FD30, "
+                     "slot 21) matches retail on Hydroelectric's track: %d ticks, %d values, bit for bit", ticks, compared );
+        return true;
+    }
+    LOG_ERROR( "human_tick FAILED %d of %d values (%d of %d ticks)", failed, compared, bad, ticks );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
     ok = verify_boat_camera( ) && ok;
     ok = verify_boat_respawn( ) && ok;
     ok = verify_boat_anim( ) && ok;
+    ok = verify_human_tick( ) && ok;
     return ok;
 }
