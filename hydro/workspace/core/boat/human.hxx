@@ -310,6 +310,30 @@ inline void human_rumble( const human_tick_t& t, const human_env_t& env, const h
     state_put_f( drv, 0xCC, 0.0f );
 }
 
+// The sector refresh 0x40F270 and the ghost's 0x40EBA0 share: the sector is
+// re-found (the track manager's slot 21 0x4D09F0 with the position and the
+// checkpoint id) when there is none or the least of its four planes at the
+// position ((n.y p.y + n.x p.x) + n.z p.z + d; minss from FLT_MAX) is below 0
+// or a NaN (comiss / jae).
+inline void human_sector_refresh( const track_manager_t& tm, const float* pos, int& sector, std::int32_t checkpoint )
+{
+    bool refind = sector < 0;
+    if ( !refind )
+    {
+        const std::uint8_t* q = tm.sectors[ sector ].image;
+        float m = 3.4028235e38f;
+        for ( int k = 0; k < 4; ++k )
+        {
+            const int at = 0x40 + 16 * k;
+            const float d = ( ( state_f( q, at + 4 ) * pos[ 1 ] + state_f( q, at ) * pos[ 0 ] ) + state_f( q, at + 8 ) * pos[ 2 ] ) + state_f( q, at + 12 );
+            m = track_minss( m, d );
+        }
+        refind = !human_ge( m, 0.0f );
+    }
+    if ( refind )
+        sector = track_nearest( tm, pos, checkpoint, false );
+}
+
 // VuHumanDriver slot 18 0x40F270 (thiscall, the driver; dt; retn 4). With dt >
 // 0 (ordered) the input 0x40F690, the wrong-way meter 0x40FA90 and, while
 // +0xB9, 0x40FC60; then +0xB8 = 0 and the rumble 0x40FD30. The sector is
@@ -333,22 +357,7 @@ inline void human_tick( const track_manager_t& tm, const human_tick_t& t, float 
     }
     drv[ 0xB8 ] = 0;
     human_rumble( t, env, hooks );
-    const float* pos = reinterpret_cast< const float* >( t.transform + 0x80 );
-    bool refind = *t.sector < 0;
-    if ( !refind )
-    {
-        const std::uint8_t* q = tm.sectors[ *t.sector ].image;
-        float m = 3.4028235e38f;
-        for ( int k = 0; k < 4; ++k )
-        {
-            const int at = 0x40 + 16 * k;
-            const float d = ( ( state_f( q, at + 4 ) * pos[ 1 ] + state_f( q, at ) * pos[ 0 ] ) + state_f( q, at + 8 ) * pos[ 2 ] ) + state_f( q, at + 12 );
-            m = track_minss( m, d );
-        }
-        refind = !human_ge( m, 0.0f );
-    }
-    if ( refind )
-        *t.sector = track_nearest( tm, pos, human_i32( drv, 0x78 ), false );
+    human_sector_refresh( tm, reinterpret_cast< const float* >( t.transform + 0x80 ), *t.sector, human_i32( drv, 0x78 ) );
     const float sign = drv[ 0x8C ] ? 1.0f : -1.0f;
     state_put_f( t.boat, 0x51C, ai_maxss( 0.0f, ai_minss( 1.0f, ( sign * 2.0f ) * dt + state_f( t.boat, 0x51C ) ) ) );
 }
