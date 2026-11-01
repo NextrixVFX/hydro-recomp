@@ -506,6 +506,270 @@ inline bool verify_collision_impact( )
         LOG_ERROR( "collision_impact FAILED %d", bad );
     return bad == 0;
 }
+// VuCollisionManager's tick 0x4AD970 / scrape tick 0x4ADC00 (removal 0x4AE4F0) / reset 0x4AD2B0 (world/collide.hxx
+// collision_manager_tick / collision_scrape_tick / collision_manager_reset on pfxmgr.hxx's manager and a pfx_heap_t holding
+// the case's fake instances) against retail (case collision_scrape): per op the hook log (groups, audio, creates, the
+// instance slots, the dev page), the records (bodies, parts, +0x10, event, handle), count, capacity, the groups; at the end
+// every process's +0x20 and the manager's entries.
+inline bool verify_collision_scrape( )
+{
+    constexpr std::uint32_t arg = 0x30000000u, block0 = arg + 0x6400u;
+    const unsigned* s = g_golden_csc_words;
+    collision_tables_t t;
+    t.types = static_cast< std::int32_t >( *s++ );
+    const unsigned nc = *s++;
+    for ( unsigned c = 0; c < nc; ++c, s += 2 )
+    {
+        const std::string a = s[ 0 ] ? "scrape_" + std::to_string( c ) : "", b = s[ 1 ] ? "Generic/Scrape/p" + std::to_string( c ) : "";
+        t.scrape_sfx.data.emplace_back( );
+        t.scrape_pfx.data.emplace_back( );
+        std::memcpy( t.scrape_sfx.data.back( ).data( ), a.c_str( ), a.size( ) + 1 );
+        std::memcpy( t.scrape_pfx.data.back( ).data( ), b.c_str( ), b.size( ) + 1 );
+    }
+    collision_mesh_asset_t meshes[ 2 ];
+    for ( collision_mesh_asset_t& m : meshes )
+    {
+        m.triangles.bytes.resize( 64 );
+        std::memcpy( m.triangles.bytes.data( ), s, 64 );
+        m.triangles.size = m.triangles.capacity = 16;
+        s += 16;
+        m.materials.bytes.assign( 32 * 44, 0x77u );
+        for ( int i = 0; i < 32; ++i )
+            m.materials.bytes[ static_cast< std::size_t >( 44 * i + 40 ) ] = static_cast< std::uint8_t >( *s++ );
+        m.materials.size = m.materials.capacity = 32;
+    }
+    pfx_heap_t heap;
+    heap.add( arg + 0x6200u, 0x6000u );
+    const unsigned ni = *s++;
+    for ( unsigned i = 0; i < ni; ++i, s += 2 )
+        heap[ arg + s[ 0 ] ] = s[ 1 ];
+    const unsigned np = *s++;
+    const unsigned* procs = s;
+    s += np;
+    struct log_t : cim_log_t
+    {
+        unsigned page = 0;
+        int bad_group = 0;
+    } L;
+    L.tables = &t;
+    pfx_manager_ops_t ops;
+    ops.user = &L;
+    ops.create = []( void* u, const char* path ) {
+        log_t& l = *static_cast< log_t* >( u );
+        const std::uint32_t a = l.create.front( );
+        l.create.pop_front( );
+        l.add( { 6u, cim_cell( l.tables->scrape_pfx, path ), a ? ( a - block0 ) / 0x280u : 0xFFFFFFFFu } );
+        return a;
+    };
+    pfx_manager_t pm;
+    pfx_manager_init( pm, ops );
+    collision_scrape_hooks_t k;
+    k.user = &L;
+    k.get_event = []( void* u, std::uint32_t group, const char* name, std::uint32_t& ev ) {
+        log_t& l = *static_cast< log_t* >( u );
+        const unsigned ok = l.event.front( );
+        l.event.pop_front( );
+        l.bad_group += group != arg + 0x200u;
+        ev = ok ? 0xE000u + l.entries : 0u;
+        l.add( { 1u, cim_cell( l.tables->scrape_sfx, name ), 1u, ev } );
+    };
+    k.set_position = []( void* u, std::uint32_t ev, const float* p ) {
+        unsigned w[ 3 ];
+        std::memcpy( w, p, 12 );
+        static_cast< log_t* >( u )->add( { 2u, ev, w[ 0 ], w[ 1 ], w[ 2 ], 0u, 0u } );
+    };
+    k.get_parameter = []( void* u, std::uint32_t ev, const char* name, std::uint32_t& p ) {
+        log_t& l = *static_cast< log_t* >( u );
+        const unsigned ok = l.param.front( );
+        l.param.pop_front( );
+        if ( ok )
+            p = 0xF000u + l.entries;
+        l.add( { 3u, ev, std::strcmp( name, "speed" ) == 0 ? 1u : 0u, ok } );
+        return ok != 0u;
+    };
+    k.set_value = []( void* u, std::uint32_t p, float v ) {
+        unsigned w;
+        std::memcpy( &w, &v, 4 );
+        static_cast< log_t* >( u )->add( { 4u, p, w } );
+    };
+    k.start = []( void* u, std::uint32_t ev ) { static_cast< log_t* >( u )->add( { 5u, ev } ); };
+    k.stop = []( void* u, std::uint32_t ev, bool immediate ) { static_cast< log_t* >( u )->add( { 11u, ev, immediate ? 1u : 0u } ); };
+    k.pfx_position = []( void* u, std::uint32_t i, const float* p ) {
+        unsigned w[ 3 ];
+        std::memcpy( w, p, 12 );
+        static_cast< log_t* >( u )->add( { 7u, ( i - block0 ) / 0x280u, w[ 0 ], w[ 1 ], w[ 2 ] } );
+    };
+    k.pfx_start = []( void* u, std::uint32_t i ) { static_cast< log_t* >( u )->add( { 9u, ( i - block0 ) / 0x280u } ); };
+    k.pfx_walk = []( void* u, std::uint32_t i ) { static_cast< log_t* >( u )->add( { 10u, ( i - block0 ) / 0x280u } ); };
+    k.pfx_stop = []( void* u, std::uint32_t i, bool immediate ) {
+        static_cast< log_t* >( u )->add( { 12u, ( i - block0 ) / 0x280u, immediate ? 1u : 0u } );
+    };
+    collision_tick_hooks_t th;
+    th.user = &L;
+    th.get_group = []( void* u, const char* name, std::uint32_t& g ) {
+        const bool scrapes = std::strcmp( name, "Global/Scrapes/Scrapes_Player" ) == 0;
+        const unsigned which = std::strcmp( name, "Global/Collisions/Collisions_Player" ) == 0 ? 0u : scrapes ? 1u : 9u;
+        static_cast< log_t* >( u )->add( { 13u, which, 1u, 1u } );
+        g = scrapes ? arg + 0x200u : arg + 0x280u;
+    };
+    th.dev_page = []( void* u, std::int32_t n ) {
+        log_t& l = *static_cast< log_t* >( u );
+        if ( l.page != 1u )
+            return;
+        l.add( { 15u } );
+        l.add( { 16u, 1u, 1u, static_cast< unsigned >( n ) } );
+    };
+    const collision_impact_hooks_t ih;
+    collision_manager_t m;
+    m.scrapes.data.resize( 2 );
+    m.scrapes.capacity = 2;
+    std::vector< std::uint8_t > bodies[ 4 ], owners[ 4 ];
+    for ( int i = 0; i < 4; ++i )
+    {
+        bodies[ i ].assign( 0x300, 0 );
+        owners[ i ].assign( 0x480, 0 );
+    }
+    const unsigned nt = *s++;
+    int bad = 0, unread = 0;
+    unsigned records = 0, points = 0;
+    for ( unsigned tk = 0; tk < nt; ++tk )
+    {
+        const unsigned kind = *s++;
+        L.page = *s++;
+        const collision_mesh_asset_t* mesh_of[ 4 ];
+        for ( int i = 0; i < 4; ++i, s += 14 )
+        {
+            std::uint8_t* b = bodies[ i ].data( );
+            std::memcpy( b + 0xF4, &s[ 0 ], 4 );
+            const std::uint16_t g = static_cast< std::uint16_t >( s[ 1 ] );
+            std::memcpy( b + 0x2CA, &g, 2 );
+            owners[ i ][ 0x467 ] = static_cast< std::uint8_t >( s[ 2 ] );
+            b[ 0x2C8 ] = static_cast< std::uint8_t >( s[ 3 ] );
+            mesh_of[ i ] = s[ 4 ] ? &meshes[ s[ 4 ] - 1u ] : nullptr;
+            std::memcpy( b + 0x40, s + 5, 12 );
+            std::memcpy( b + 0x140, s + 8, 12 );
+            std::memcpy( b + 0x150, s + 11, 12 );
+        }
+        const unsigned nm = *s++;
+        std::vector< collision_manifold_t > mf( nm );
+        std::vector< std::vector< std::uint8_t > > pts( nm );
+        for ( unsigned j = 0; j < nm; ++j )
+        {
+            const unsigned ia = s[ 0 ], ib = s[ 1 ], n = s[ 2 ];
+            s += 3;
+            pts[ j ].assign( 0x120u * ( n ? n : 1u ), 0 );
+            for ( unsigned c = 0; c < n; ++c, s += 8 )
+            {
+                std::uint8_t* p = pts[ j ].data( ) + 0x120u * c;
+                std::memcpy( p + 0x20, s, 12 );
+                std::memcpy( p + 0x30, s + 3, 12 );
+                std::memcpy( p + 0x64, s + 6, 8 );
+            }
+            points += n;
+            mf[ j ] = { bodies[ ia ].data( ), bodies[ ib ].data( ), owners[ ia ].data( ), owners[ ib ].data( ), mesh_of[ ia ], mesh_of[ ib ],
+                        static_cast< std::int32_t >( n ), pts[ j ].data( ) };
+        }
+        unsigned n = *s++;
+        L.event.assign( s, s + n );
+        s += n;
+        n = *s++;
+        L.param.assign( s, s + n );
+        s += n;
+        n = *s++;
+        L.create.clear( );
+        for ( unsigned i = 0; i < n; ++i )
+            L.create.push_back( s[ i ] == 0xFFFFFFFFu ? 0u : block0 + 0x280u * s[ i ] );
+        s += n;
+        L.log.clear( );
+        L.entries = 0;
+        if ( kind == 0u )
+            unread += collision_manager_tick( m, t, mf.data( ), static_cast< std::int32_t >( nm ), pm, ops, heap, 0u, ih, k, th );
+        else
+            collision_manager_reset( m, pm, heap, 0u, k );
+        bad += !L.event.empty( ) + !L.param.empty( ) + !L.create.empty( );
+        const unsigned nl = *s++;
+        bad += L.log != std::vector< unsigned >( s, s + nl );
+        s += nl;
+        const unsigned count = *s++, cap = *s++;
+        bad += ( count != static_cast< unsigned >( m.scrapes.count ) ) + ( cap != static_cast< unsigned >( m.scrapes.capacity ) );
+        for ( unsigned i = 0; i < count; ++i, s += 7 )
+        {
+            if ( i >= static_cast< unsigned >( m.scrapes.count ) )
+            {
+                ++bad;
+                continue;
+            }
+            const collision_scrape_t& r = m.scrapes.data[ i ];
+            unsigned ia = 9u, ib = 9u;
+            for ( unsigned q = 0; q < 4; ++q )
+            {
+                ia = r.body_a == bodies[ q ].data( ) ? q : ia;
+                ib = r.body_b == bodies[ q ].data( ) ? q : ib;
+            }
+            bad += ( ia != s[ 0 ] ) + ( ib != s[ 1 ] ) + ( static_cast< unsigned >( r.part_a ) != s[ 2 ] ) + ( static_cast< unsigned >( r.part_b ) != s[ 3 ] ) +
+                   ( r.alive != s[ 4 ] ) + ( r.event != s[ 5 ] ) + ( r.handle != s[ 6 ] );
+        }
+        records += count;
+        bad += ( s[ 0 ] != ( m.group_impact == arg + 0x280u ? 1u : 0u ) ) + ( s[ 1 ] != ( m.group_scrape == arg + 0x200u ? 1u : 0u ) );
+        s += 2;
+    }
+    const unsigned nf = *s++;
+    for ( unsigned i = 0; i < nf && i < np; ++i )
+        bad += heap[ arg + procs[ i ] + 0x20u ] != s[ i ];
+    s += nf;
+    const unsigned ne = *s++;
+    for ( unsigned i = 0; i < ne; ++i, s += 2 )
+    {
+        const pfx_manager_entry_t& x = pm.entries[ static_cast< std::size_t >( pm.table[ i ] ) ];
+        bad += ( x.flags != s[ 0 ] ) + ( x.serial != s[ 1 ] );
+    }
+    bad += unread + L.bad_group;
+    if ( bad == 0 )
+        LOG_SUCCESS( "collision_manager_tick / collision_scrape_tick / collision_manager_reset match VuCollisionManager's 0x4AD970 / 0x4ADC00 / "
+                     "0x4AD2B0 on a retail VuPfxManager: %u ops, %u contact points, %u records seen, %u fountain processes", nt, points, records, np );
+    else
+        LOG_ERROR( "collision_scrape FAILED %d", bad );
+    return bad == 0;
+}
+// VuDynamicsImpl slot 25 0x4F8900 (engine dynamics/manager.hxx vu_dynamics_sync) against retail (case dynamics_sync): the
+// wait's calls, +0xD after - cleared whatever the wait answered - and the answer true.
+inline bool verify_dynamics_sync( )
+{
+    const unsigned* s = g_golden_dsy_words;
+    const unsigned n = *s++;
+    int bad = 0;
+    for ( unsigned i = 0; i < n; ++i )
+    {
+        struct log_t
+        {
+            unsigned answer = 0;
+            std::vector< unsigned > calls;
+        } L;
+        vu_dynamics_t d{ };
+        d.pending = static_cast< std::uint8_t >( s[ 0 ] );
+        L.answer = s[ 1 ];
+        d.thread = s[ 2 ];
+        d.hooks.user = &L;
+        d.hooks.wait = []( void* u, std::uint32_t handle, std::int32_t timeout ) {
+            log_t& l = *static_cast< log_t* >( u );
+            l.calls.push_back( handle );
+            l.calls.push_back( static_cast< unsigned >( timeout ) );
+            return l.answer != 0u;
+        };
+        const bool made = vu_dynamics_sync( d );
+        const unsigned nc = s[ 3 ];
+        s += 4;
+        bad += L.calls != std::vector< unsigned >( s, s + 2 * nc );
+        s += 2 * nc;
+        bad += ( d.pending != s[ 0 ] ) + ( s[ 1 ] != 1u ) + !made;
+        s += 2;
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "vu_dynamics_sync matches VuDynamicsImpl slot 25 0x4F8900 on %u vectors (+0xD cleared whatever the wait answers)", n );
+    else
+        LOG_ERROR( "dynamics_sync FAILED %d", bad );
+    return bad == 0;
+}
 // VuCollisionManager's ctor 0x4ACDF0 / init 0x4AD110 (world/collide.hxx collision_manager_construct / _init, the loads 0x4AD690)
 // against retail (case collision_init) on the pack's SurfaceTableDB, with boat/surface.hxx's table built from SurfaceDB.
 inline bool verify_collision_init( )

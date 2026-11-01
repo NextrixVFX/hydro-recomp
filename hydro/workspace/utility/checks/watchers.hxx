@@ -1188,10 +1188,81 @@ inline bool verify_fe_camera( )
         LOG_ERROR( "fe_camera FAILED %d", bad );
     return bad == 0;
 }
+// VuFrontEndGameMode's camera rig (world/frontcam.hxx front_rig_*: ctor 0x4BE1C0, handlers 0x4BE5D0 / 0x4BE650 / 0x4BE710 /
+// 0x4BE7D0, tick 0x4BE490 with the pose 0x4BEA90 / 0x4BEC60 / 0x5314C0 / 0x531180) against retail (case fe_rig): one rig carried
+// across 70 ops, after each the rig's words +0xC .. +0x2BC (the camera inside) word for word, stale words masked.
+inline bool verify_fe_rig( )
+{
+    const unsigned* s = g_golden_frg_words;
+    int bad = s[ 0 ] != 1u;
+    const unsigned n = s[ 1 ];
+    s += 2;
+    front_rig_t r;
+    unsigned ticks = 0, lerps = 0, nans = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        unsigned kind = 99, type = 0, size = 0, value[ 4 ] = {};
+        if ( v )
+        {
+            kind = s[ 0 ];
+            type = s[ 1 ];
+            std::memcpy( value, s + 2, 16 );
+            size = s[ 6 ];
+            s += 7;
+        }
+        camera_env_t env;
+        env.display_w = static_cast< std::int32_t >( s[ 0 ] );
+        env.display_h = static_cast< std::int32_t >( s[ 1 ] );
+        env.vertical_fov.type = static_cast< std::int32_t >( s[ 2 ] );
+        env.vertical_fov.payload = static_cast< std::uint64_t >( s[ 3 ] ) | ( static_cast< std::uint64_t >( s[ 4 ] ) << 32 );
+        s += 5;
+        bool stale[ 173 ] = {};
+        const unsigned ns = *s++;
+        for ( unsigned i = 0; i < ns; ++i )
+            stale[ s[ i ] ] = true;
+        s += ns;
+        std::uint8_t params[ 0x84 ] = {};
+        std::memcpy( params, &type, 4 );
+        std::memcpy( params + 4, value, 16 );
+        std::memcpy( params + 0x80, &size, 4 );
+        float dt;
+        std::memcpy( &dt, value, 4 );
+        switch ( kind )
+        {
+        case 99: front_rig_construct( r, env ); break;
+        case 0: front_rig_eye( r, params ); break;
+        case 1: front_rig_target( r, params ); break;
+        case 2: front_rig_draw_distance( r, params ); break;
+        case 3: front_rig_interpolation( r, params ); ++lerps; break;
+        default: front_rig_tick( r, dt, env ); ++ticks; break;
+        }
+        for ( unsigned w = 0; w < 173; ++w )
+        {
+            unsigned g;
+            std::memcpy( &g, r.w + 0xC + 4 * w, 4 );
+            if ( stale[ w ] || g == s[ w ] )
+                continue;
+            // A NaN made by an invalid operation: SSE hardware's default NaN is 0xFFC00000, Unicorn's softfloat answers
+            // 0x7FC00000 - the same NaN class on both sides is counted, not failed.
+            if ( ( g & 0x7FFFFFFFu ) > 0x7F800000u && ( s[ w ] & 0x7FFFFFFFu ) > 0x7F800000u )
+                ++nans;
+            else
+                ++bad;
+        }        s += 173;
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "front_rig_* match VuFrontEndGameMode's camera rig (ctor 0x4BE1C0, 0x4BE5D0 / 0x4BE650 / 0x4BE710 / 0x4BE7D0, tick 0x4BE490 -> 0x4BEA90 / "
+                     "0x4BEC60 / 0x531000 / 0x5314C0 / 0x531180, 0x50BBE0 / 0x50BDA0) on %u ops (%u ticks, %u interpolations): the rig and its camera "
+                     "word for word (%u NaN words: hardware vs Unicorn default NaN)", n - 1, ticks, lerps, nans );
+    else
+        LOG_ERROR( "fe_rig FAILED %d", bad );
+    return bad == 0;
+}
 inline bool verify_watchers_all( )
 {
     bool ok = true;
     ok = verify_fe_camera( ) && ok;
+    ok = verify_fe_rig( ) && ok;
     ok = verify_water_types_game( ) && ok;
     ok = verify_water_ctors_game( ) && ok;
     ok = verify_water_create( ) && ok;
