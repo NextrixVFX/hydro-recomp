@@ -236,3 +236,51 @@ inline bool verify_dynamics_impl( )
         LOG_ERROR( "race_dynamics frame FAILED %d", race_bad );
     return failed == 0 && race_bad == 0;
 }
+
+// btRigidBody::checkCollideWithOverride 0x50E7B0 and VuCollisionManager's slots 4 / 3 (engine dynamics/wrapper.hxx
+// rigid_check_collide_with, vu_collision_manager_clear_global / _release) against retail (case rigid_collide).
+inline bool verify_rigid_collide( )
+{
+    const unsigned* s = g_golden_rgc_words;
+    const unsigned n = *s++;
+    int bad = 0;
+    const int bodies[ 3 ] = { 0, 0, 0 };
+    for ( unsigned c = 0; c < n; ++c )
+    {
+        const unsigned type = *s++, count = *s++, nr = *s++;
+        std::vector< rigid_constraint_ref_t > refs;
+        for ( unsigned i = 0; i < nr; ++i, s += 2 )
+            refs.push_back( { &bodies[ s[ 0 ] ], &bodies[ s[ 1 ] ] } );
+        const bool got = rigid_check_collide_with( type, &bodies[ 1 ], refs.data( ), static_cast< std::int32_t >( count ) );
+        bad += ( got ? 1u : 0u ) != *s++;
+    }
+    int manager = 0;
+    int* global = &manager;
+    vu_collision_manager_clear_global( global );
+    bad += ( global ? 1u : 0u ) != *s++;
+    struct log_t
+    {
+        std::vector< unsigned > words;
+        const void* manager;
+    } log{ {}, &manager };
+    vu_collision_manager_hooks_t h{};
+    h.user = &log;
+    h.remove_contact_listener = []( void* u, const void* l ) {
+        log_t& x = *static_cast< log_t* >( u );
+        x.words.insert( x.words.end( ), { 1u, l == static_cast< const unsigned char* >( x.manager ) + 4 ? 1u : 0u } );
+    };
+    h.asset_release = []( void* u, std::uint32_t a ) { static_cast< log_t* >( u )->words.insert( static_cast< log_t* >( u )->words.end( ), { 2u, a } ); };
+    h.unregister = []( void* u, const void* m ) {
+        log_t& x = *static_cast< log_t* >( u );
+        x.words.insert( x.words.end( ), { 3u, m == x.manager ? 2u : 0u } );
+    };
+    vu_collision_manager_release( &manager, 0xABCDu, h );   // the case's +0x10
+    const unsigned ne = *s++;
+    bad += log.words != std::vector< unsigned >( s, s + 2 * ne );
+    if ( bad == 0 )
+        LOG_SUCCESS( "rigid_check_collide_with matches btRigidBody::checkCollideWithOverride 0x50E7B0 on %u vectors; VuCollisionManager's "
+                     "0x4ACD20 / 0x4AD270 match", n );
+    else
+        LOG_ERROR( "rigid_collide FAILED %d", bad );
+    return bad == 0;
+}

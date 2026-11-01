@@ -304,3 +304,58 @@ inline void vu_dynamics_release( vu_dynamics_wrapper_t& w )
         set = false;
     }
 }
+
+// ---------------------------------------------------------------------------
+// btRigidBody::checkCollideWithOverride 0x50E7B0 (VuRigidBody's slot 0;
+// thiscall body; other; retn 4 -> al) - the dispatcher's needsCollision hook
+// (collision/dispatch.hxx answers -1 for it): true unless the other is a rigid
+// body (its +0xF4 internal type & 2) that one of this body's constraint
+// references (+0x1FC a signed count, +0x204 the array) joins - a constraint's
+// +0x18 (rbA) or +0x1C (rbB) is the other. Verified: case rigid_collide.
+struct rigid_constraint_ref_t
+{
+    const void* a;   // the constraint's +0x18
+    const void* b;   // +0x1C
+};
+
+inline bool rigid_check_collide_with( std::uint32_t other_internal_type, const void* other, const rigid_constraint_ref_t* refs, std::int32_t count )
+{
+    if ( ( other_internal_type & 2u ) == 0u )
+        return true;
+    for ( std::int32_t i = 0; i < count; ++i )
+        if ( refs[ i ].a == other || refs[ i ].b == other )
+            return false;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// VuCollisionManager (g 0x758FBC; vtables 0x745434 and the contact-listener
+// interface 0x74542C at +4). Slot 4 0x4ACD20: the global = 0. Slot 3 0x4AD270
+// (release): g_vudynamicsimpl's slot 14 (vu_dynamics_remove_contact_listener)
+// with this + 4 (null when this is null), the asset manager's (g 0x759004)
+// vt+0x24 release of +0x10, the tick manager's (g 0x759008) vt+0x28 with this.
+// Verified: case rigid_collide.
+struct vu_collision_manager_hooks_t
+{
+    void* user = nullptr;
+    void ( *remove_contact_listener )( void* user, const void* listener ) = nullptr;
+    void ( *asset_release )( void* user, std::uint32_t asset ) = nullptr;
+    void ( *unregister )( void* user, const void* manager ) = nullptr;
+};
+
+inline void vu_collision_manager_release( const void* manager, std::uint32_t asset, const vu_collision_manager_hooks_t& h )
+{
+    const void* listener = manager ? static_cast< const unsigned char* >( manager ) + 4 : nullptr;
+    if ( h.remove_contact_listener )
+        h.remove_contact_listener( h.user, listener );
+    if ( h.asset_release )
+        h.asset_release( h.user, asset );
+    if ( h.unregister )
+        h.unregister( h.user, manager );
+}
+
+template < typename T >
+inline void vu_collision_manager_clear_global( T*& global )
+{
+    global = nullptr;
+}
