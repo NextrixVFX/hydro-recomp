@@ -80,6 +80,7 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     std::map< std::string, filter_t > fresh_filters;
     std::vector< std::string > fresh_initialized;
     std::set< std::string > fresh_ifs;
+    std::map< std::string, entity_t* > fresh_logic;
     std::string fresh_sky;
     // The event graph addresses an entity by its names below the project
     // root, '/'-joined.
@@ -241,6 +242,9 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
             fresh_initialized.push_back( trail );
         if ( e.m_ctor && e.m_type == "VuIfEntity" )
             fresh_ifs.insert( trail );
+        // The logic entities (world/logic.hxx): their state is the tree's (race.hxx logic_state_t).
+        if ( logic_state_of( e ) && !trail.empty( ) )
+            fresh_logic[ trail ] = &e;
         // VuTriggerPlaneEntity / VuTriggerBoxEntity (engine entity/trigger.hxx):
         // the volume is the transform - VuTriggerPlaneEntity_bounds 0x5D18B0
         // composes VuMatrix_multiply(fromScale(scale +0xB0), out, world
@@ -396,7 +400,8 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
                 m_place_owner = trail;
                 for ( int instance = 0; instance < 3; ++instance )
                     if ( !names[ instance ]->empty( ) )
-                        place_model( *names[ instance ], matrix, 0, -1, tint, nullptr, -1, &item.placements[ instance ] );
+                        place_model( *names[ instance ], matrix, 0, -1, tint, nullptr, -1, &item.placements[ instance ], &item.nodes[ instance ] );
+                item.owner = &e;
                 m_collect = nullptr;
                 // 0x531D10 with the LOD 0 instance's scene aabb (its +0x10 scene's +0x5C), or the zero aabb
                 // 0x7593F0 when it holds no scene; +0x1E's draw-manager hand-off is the renderer's (a hook).
@@ -464,6 +469,13 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     m_filters = std::move( fresh_filters );
     m_initialized = std::move( fresh_initialized );
     m_ifs = std::move( fresh_ifs );
+    m_logic = std::move( fresh_logic );
+    // Dev trace: each logic entity's links (both ends are recorded, so its inputs' senders are here too).
+    for ( const auto& pair : m_graph )
+        if ( m_logic.count( pair.first.first ) != 0 )
+            for ( const edge_t& edge : pair.second )
+                LOG_VERBOSE( "logic link: %s . %s <-> %s . %s", pair.first.first.c_str( ), pair.first.second.c_str( ), edge.entity.c_str( ),
+                             edge.plug.c_str( ) );
     if ( !fresh_sky.empty( ) )
         m_sky = fresh_sky;
     adopt_rotators( std::move( collected ) );

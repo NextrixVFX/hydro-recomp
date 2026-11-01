@@ -476,3 +476,55 @@ inline bool dynamic_prop_step( const dynamic_prop_t& p, dynamic_prop_live_t& liv
     }
     return true;
 }
+// VuDynamicGamePropEntity's contact callback 0x437F40 (the body's +0x2C4 VuRigidBodyContactCallback at entity
+// +0xB4; thiscall, the contact record*; retn 4 - read from the disassembly): nothing when the other body's flags
+// +0xD8 & 4, when the hit timer +0x17C is not >= 1.0 (comiss 0x6F76B8; jb: a NaN returns) or when the other's
+// +0x2CA byte & 0x10 (a boat) is clear. Else the relative normal speed at the contact point: v = linear (+0x140)
+// + angular (+0x150) x (point - origin +0x40) for this prop's body (the rigid body component +0x70's +0x100) minus
+// the other's, dot = (n.y dv.y + dv.x n.x) + n.z dv.z - each product / difference in the disassembly's operand
+// order. When Threshold (+0x10C) x -0.44704 (0x6F7890) > dot (comiss; jbe: ordered): 0x433B70 points the weak
+// ref +0x168 at the other's +0x2C0 owner (released first; a null owner leaves it empty), +0x164 = 1, +0x17C = 0,
+// +0x178 = maxss(+0x178, 0x4AD340(this body, the other, point, normal)) - boat/events.hxx body_contact_strength.
+struct dynamic_prop_hit_t
+{
+    std::uint8_t pending = 0;               // +0x164
+    const std::uint8_t* target = nullptr;   // +0x174 (the weak ref's object): the other BODY whose +0x2C0 owner it holds
+    float strength = 0.0f;                  // +0x178
+};
+
+// `owner`: the other body's +0x2C0 is non-null - the caller's (a body's owner is resolved by the session, the image's
+// +0x2C0 word is not a pointer here).
+inline bool dynamic_prop_contact( const dynamic_prop_t& p, dynamic_prop_hit_t& hit, float& timer, const std::uint8_t* e, const std::uint8_t* o,
+                                  const float* point, const float* n, bool owner )
+{
+    std::uint32_t of;
+    std::memcpy( &of, o + 0xD8, 4 );
+    if ( of & 4u )
+        return false;
+    if ( !_mm_comige_ss( _mm_set_ss( timer ), _mm_set_ss( 1.0f ) ) )
+        return false;
+    if ( ( o[ 0x2CA ] & 0x10u ) == 0 )
+        return false;
+    const float o_ry = sse_sub( point[ 1 ], dp_f( o, 0x44 ) );
+    const float o_rx = sse_sub( point[ 0 ], dp_f( o, 0x40 ) );
+    const float o_rz = sse_sub( point[ 2 ], dp_f( o, 0x48 ) );
+    const float vox = sse_add( sse_sub( sse_mul( o_rz, dp_f( o, 0x154 ) ), sse_mul( o_ry, dp_f( o, 0x158 ) ) ), dp_f( o, 0x140 ) );
+    const float voz = sse_add( sse_sub( sse_mul( o_ry, dp_f( o, 0x150 ) ), sse_mul( o_rx, dp_f( o, 0x154 ) ) ), dp_f( o, 0x148 ) );
+    const float voy = sse_add( sse_sub( sse_mul( o_rx, dp_f( o, 0x158 ) ), sse_mul( o_rz, dp_f( o, 0x150 ) ) ), dp_f( o, 0x144 ) );
+    const float e_rz = sse_sub( point[ 2 ], dp_f( e, 0x48 ) );
+    const float e_rx = sse_sub( point[ 0 ], dp_f( e, 0x40 ) );
+    const float e_ry = sse_sub( point[ 1 ], dp_f( e, 0x44 ) );
+    const float vex = sse_add( sse_sub( sse_mul( e_rz, dp_f( e, 0x154 ) ), sse_mul( e_ry, dp_f( e, 0x158 ) ) ), dp_f( e, 0x140 ) );
+    const float vey = sse_add( sse_sub( sse_mul( e_rx, dp_f( e, 0x158 ) ), sse_mul( e_rz, dp_f( e, 0x150 ) ) ), dp_f( e, 0x144 ) );
+    const float vez = sse_add( sse_sub( sse_mul( e_ry, dp_f( e, 0x150 ) ), sse_mul( e_rx, dp_f( e, 0x154 ) ) ), dp_f( e, 0x148 ) );
+    const float dvx = sse_sub( vex, vox ), dvy = sse_sub( vey, voy ), dvz = sse_sub( vez, voz );
+    const float dot = sse_add( sse_add( sse_mul( n[ 1 ], dvy ), sse_mul( dvx, n[ 0 ] ) ), sse_mul( n[ 2 ], dvz ) );
+    const float limit = sse_mul( p.threshold_mph, support_bits( 0xBEE4E26Du ) );
+    if ( !dp_gt( limit, dot ) )
+        return false;
+    hit.target = owner ? o : nullptr;
+    hit.pending = 1;
+    timer = 0.0f;
+    hit.strength = _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( hit.strength ), _mm_set_ss( body_contact_strength( e, o, point, n ) ) ) );
+    return true;
+}

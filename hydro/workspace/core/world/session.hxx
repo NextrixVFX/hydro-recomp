@@ -19,6 +19,7 @@
 #include <workspace/core/world/pfxmgr.hxx>
 #include <workspace/core/world/pfxsim.hxx>
 #include <workspace/core/world/dynprop.hxx>
+#include <workspace/core/boat/effects.hxx>
 #include <workspace/core/world/race.hxx>
 #include <workspace/core/world/rules.hxx>
 #include <workspace/core/world/start.hxx>
@@ -117,6 +118,10 @@ struct race_world_t
     pfx_runtime_t* pfx = nullptr;
     pfx_manager_t* pfx_manager = nullptr;
     const pfx_manager_ops_t* pfx_ops = nullptr;
+    // A dynamic prop's Build tick 0x546130: its static model component's draw matrix (+0x13C = fromScale(transform
+    // +0xB0) x world +0x50) and world aabb (0x531D10) re-made and handed to the renderer - the world's static draw of
+    // that owner (c_world: the placements moved). Null: not drawn from the bodies (logged).
+    std::function< void( const entity_t& owner ) > prop_draw;
     std::uint32_t viewports = 1;
     std::int32_t control_method = 0;
     std::int32_t display_w = 1280;
@@ -197,11 +202,13 @@ struct race_session_t
         dynamic_prop_init_t init;
         bool buoy = false;
         float timer = 0.0f;              // +0x17C (the Decision tick's)
+        dynamic_prop_hit_t hit;          // +0x164 / +0x174 / +0x178 (the contact callback 0x437F40's)
         std::uint8_t step_tag = 0;       // the entity's +0xB0 part: the step callback's identity in +0x48
         race_session_t* session = nullptr;
     };
     std::vector< std::unique_ptr< dyn_prop_t > > dyn_props;
     int buoy_hits = 0;                   // dev count (not retail): OnCheckPointBuoyHit broadcasts made
+    int prop_hits = 0, prop_splashes = 0;   // dev counts (not retail): 0x437F40 hits taken, dynamic-prop splashes started
     // The gfx-settings blender g 0x759430 (world/blend.hxx; 0x52F620 at the session's start) and the level's gfx-settings
     // entities' blend views (the zones in its list; the global's not listed - its timer only), made by their gameInitialize.
     gfx_blender_t blender;
@@ -586,20 +593,110 @@ inline bool race_session_gfx_game_initialize( race_session_t& s, entity_t& e )
     return true;
 }
 
-// The Decision tick of a dynamic game prop (0x4077E8 -> vt+0x40 slot 16 0x438260, READ from the disassembly):
-// +0x17C += dt; a pending hit (+0x164 - set only by the base contact callback 0x437F40, not recreated: never set
-// here) would send its +0x174 target the camera-shake / rumble events (0x5155C0) and play the Sfx Name (FMOD - an
-// audio hook); a pending splash (+0x181) is cleared and the Splash Pfx Name created by g 0x75905C's 0x52BCD0 at the
-// transform's position - the particle create is not wired here (logged, UNKNOWN).
+// VuParams' float add 0x405120: a {2, value} record (dropped past the 0x80 bytes).
+inline void race_dyn_prop_param( std::uint8_t* params, std::int32_t& size, float v )
+{
+    if ( size + 8 > 0x80 )
+        return;
+    const std::uint32_t type = 2u;
+    std::memcpy( params + size, &type, 4 );
+    std::memcpy( params + size + 4, &v, 4 );
+    size += 8;
+}
+
+// THE DECISION TICK of a dynamic game prop (0x4077E8 -> vt+0x40 slot 16 0x438260), read whole from the disassembly:
+// +0x17C += dt (addss dt, +0x17C). A pending hit (+0x164, set by the contact callback 0x437F40 - world/dynprop.hxx
+// dynamic_prop_contact): with a target (+0x174) a VuParams {Shake Magnitude, Duration, Falloff, Frequency} (+0x128
+// .. +0x134, 0x405120 each) goes to the target's event map (+0xC, 0x5155C0) as FNV-1a "OnCameraShake" (0x685E80),
+// then {Rumble Low, High} (+0x138 / +0x13C, the size re-zeroed) as "OnRumble" (0x685E90) - a session boat's map
+// holds 0x41E7B0 / 0x41E950 (boat events.hxx boat_on_camera_shake on its camera +0x224, boat_on_rumble on its driver
+// +0x220). Then with an Sfx Name (+0x120 != 0) FMOD's getEvent / set3DAttributes(transform +0x80) / "intensity"
+// (0x685E9C) = +0x178 / start / release (imports 0x64C348 .. 0x64C358 - the audio PLATFORM, a hook). +0x164 = 0, the
+// weak ref +0x168 released (vt+0). A pending splash (+0x181): cleared; createEffect 0x52BCD0 on g 0x75905C by the
+// Splash Pfx Name (pfxmgr.hxx pfx_manager_create), the entry's serial bumped (pfx_manager_handle), its instance's
+// slot 10 (fstp: discarded); a nonzero handle that looks up (pfx_manager_lookup) -> the instance's slot 0
+// setPosition(transform +0x80) and slot 11 start.
 inline void race_session_dyn_prop_decision( void* user, float dt )
 {
     race_session_t::dyn_prop_t& d = *static_cast< race_session_t::dyn_prop_t* >( user );
+    race_session_t& s = *d.session;
     d.timer = sse_add( dt, d.timer );
+    if ( d.hit.pending )
+    {
+        if ( d.hit.target )
+        {
+            race_session_boat_t* boat = nullptr;
+            for ( const auto& b : s.boats )
+                if ( reinterpret_cast< const std::uint8_t* >( &b->body.body ) == d.hit.target )
+                    boat = b.get( );
+            std::uint8_t shake[ 0x84 ] = { }, rumble[ 0x84 ] = { };
+            std::int32_t n = 0;
+            race_dyn_prop_param( shake, n, d.p->shake_magnitude );
+            race_dyn_prop_param( shake, n, d.p->shake_duration );
+            race_dyn_prop_param( shake, n, d.p->shake_falloff );
+            race_dyn_prop_param( shake, n, d.p->shake_frequency );
+            std::memcpy( shake + 0x80, &n, 4 );
+            n = 0;
+            race_dyn_prop_param( rumble, n, d.p->rumble_low );
+            race_dyn_prop_param( rumble, n, d.p->rumble_high );
+            std::memcpy( rumble + 0x80, &n, 4 );
+            if ( boat && boat->io.camera && boat->driver && !boat->driver->graph.empty( ) )
+            {
+                boat_on_camera_shake( boat->io.camera, shake );
+                std::uint8_t* drv = boat->driver->graph[ 0 ].image.data( );
+                boat_on_rumble( drv, load_word( drv, 0 ), rumble );
+                LOG_VERBOSE( "race: dynamic prop '%s' hit %s: OnCameraShake / OnRumble (strength %.3f)", d.entity->m_name.c_str( ), boat->name.c_str( ),
+                             d.hit.strength );
+            }
+            else
+                race_unwired( s, "a dynamic prop's hit target is no session boat (its event map's OnCameraShake / OnRumble) - UNKNOWN, not run" );
+        }
+        if ( !d.p->sfx.empty( ) )
+            race_unwired( s, "audio: a dynamic prop's hit Sfx (FMOD getEvent / set3DAttributes / intensity / start - platform)" );
+        d.hit.pending = 0;
+        d.hit.target = nullptr;
+    }
     if ( d.live.splash )
     {
         d.live.splash = 0;
-        race_unwired( *d.session, "a dynamic prop's splash pfx (g 0x75905C 0x52BCD0, '" + d.p->splash_pfx + "') - not wired, not created (UNKNOWN)" );
+        if ( !s.world.pfx || !s.world.pfx_manager || !s.world.pfx_ops )
+        {
+            race_unwired( s, "a dynamic prop's splash 0x52BCD0 with no VuPfx runtime / manager - UNKNOWN, not run" );
+            return;
+        }
+        pfx_manager_t& m = *s.world.pfx_manager;
+        const int e = pfx_manager_create( m, d.p->splash_pfx.c_str( ), *s.world.pfx_ops );
+        if ( e < 0 )
+            return;
+        const boat_pfx_ops_t o = boat_pfx_runtime_ops( *s.world.pfx );
+        const std::uint32_t h = pfx_manager_handle( m, e );
+        if ( o.duration )
+            o.duration( o.user, m.entries[ static_cast< std::size_t >( e ) ].instance );
+        if ( h == 0u )
+            return;
+        const int x = pfx_manager_lookup( m, h );
+        const transform_component_t* t = entity_transform( *d.entity );
+        if ( x < 0 || !t )
+            return;
+        const std::uint32_t inst = m.entries[ static_cast< std::size_t >( x ) ].instance;
+        o.set_position( o.user, inst, t->world + 12 );
+        o.start( o.user, inst );
+        ++s.prop_splashes;
+        LOG_VERBOSE( "race: dynamic prop '%s' splash '%s' started", d.entity->m_name.c_str( ), d.p->splash_pfx.c_str( ) );
     }
+}
+
+// The Build tick 0x546130 (thiscall; dt; retn 4 - dt unread), read whole: matrix = VuMatrix_multiply(
+// VuMatrix_fromScale 0x407DB0(transform +0xB0), out, transform +0x50) (transform_draw_matrix) into the static model
+// component (+0x6C) +0x13C, then 0x531D10(component, the LOD 0 instance's (+0xCC) scene +0x5C aabb or the zero aabb
+// 0x7593F0, +0x13C) - the world's (race_world_t::prop_draw).
+inline void race_session_dyn_prop_build( void* user, float )
+{
+    race_session_t::dyn_prop_t& d = *static_cast< race_session_t::dyn_prop_t* >( user );
+    if ( d.session->world.prop_draw )
+        d.session->world.prop_draw( *d.entity );
+    else
+        race_unwired( *d.session, "a dynamic prop's Build tick 0x546130 with no renderer hand-off (prop_draw) - not drawn from its body" );
 }
 
 // One dynamic game prop's gameInitialize (world/dynprop.hxx, verified by the cases dynamic_prop_bodies /
@@ -690,6 +787,8 @@ inline bool race_session_dynamic_prop( race_session_t& s, entity_t& e, const bod
     }
     if ( d->init.decision_tick )
         tick_register( s.ticks, { dp, race_session_dyn_prop_decision, dp }, "Decision" );
+    if ( d->init.build_tick )
+        tick_register( s.ticks, { dp, race_session_dyn_prop_build, dp }, "Build" );
     s.level_bodies.push_back( std::move( b ) );
     s.dyn_props.push_back( std::move( d ) );
     return true;
@@ -725,6 +824,14 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
         {
             if ( race_session_dynamic_prop( s, e, hooks, id ) )
                 ++dynamic;
+            return;
+        }
+        // The logic entities' slot 6 (world/logic.hxx): VuSwitchEntity's 0x5E24E0 (state = Initial State); every other
+        // logic class's slot 6 is 0x401560 (a bare ret - read from each vtable's +0x18).
+        if ( logic_state_t* ls = logic_state_of( e ) )
+        {
+            if ( e.m_type == "VuSwitchEntity" )
+                logic_switch_init( ls->value );
             return;
         }
         if ( e.m_type != "VuPropEntity" )

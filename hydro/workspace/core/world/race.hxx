@@ -11,7 +11,9 @@
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/entity/property.hxx>
 #include <workspace/core/game/types.hxx>
+#include <workspace/core/entity/values.hxx>
 #include <workspace/core/world/dynprop.hxx>
+#include <workspace/core/world/logic.hxx>
 #include <workspace/core/world/rules.hxx>
 #include <workspace/core/world/tick.hxx>
 
@@ -59,6 +61,103 @@
 // there are no boats, so the AI fleet (fleet_add_driver / fleet_start /
 // fleet_run), the per-frame race and the hull draw are not composed.
 
+// The engine's logic entities (world/logic.hxx) as tree state: the handlers'
+// logic_entity_t (words from +0x60, the VuString) and the node defaults the
+// template mark copies. Each class's property set, read from its ctor (node
+// name / class / target): VuAddIntegerConstantEntity 0x5DC910 "C" int
+// (VuBasicProperty<int> 0x73A218) +0x60; VuIntegerEntity 0x5DD710 "Value" int
+// +0x60; VuSetBooleanEntity 0x5E2F40 "Value" bool (0x737450) +0x60;
+// VuSetIntegerEntity 0x5E32C0 "Value" int +0x60; VuSetStringEntity 0x5E3640 /
+// VuStringEntity 0x5E5240 "Value" VuStringProperty (0x406B70, vt 0x7374B8:
+// the string load 0x406C20) on the VuString +0x60; VuRandomTriggerEntity
+// 0x5E10E0 "Weight 1" .. "Weight 8" float (0x737484) +0x60 .. +0x7C;
+// VuSwitchEntity 0x5E21B0 "Initial State" VuStaticIntEnumProperty (0x74C354,
+// table 0x754A0C: Undefined 0, Off 1, On 2) +0x60; VuCounterEntity 0x5E4C00
+// "Initial Count" / "Target Count" int +0x60 / +0x64. The rest (the integer
+// math, the compares, sequencer, trigger array, platform / build filters)
+// declare no property. Every ctor default is 0 / "" (the ctors' stores).
+struct logic_state_t
+{
+    logic_entity_t value;
+    logic_entity_t defaults;
+};
+
+inline std::shared_ptr< void > logic_state_for( const std::string& cls )
+{
+    const std::uint32_t vt = logic_vtable_of( cls.c_str( ) );
+    if ( vt == 0u )
+        return nullptr;
+    auto s = std::make_shared< logic_state_t >( );
+    s->value = logic_construct( vt );
+    s->defaults = s->value;
+    return s;
+}
+
+inline logic_state_t* logic_state_of( entity_t& e )
+{
+    return e.m_state && logic_vtable_of( e.m_type.c_str( ) ) != 0u ? static_cast< logic_state_t* >( e.m_state.get( ) ) : nullptr;
+}
+
+inline void logic_load_properties( entity_t& e, const value_t& p )
+{
+    logic_state_t* s = logic_state_of( e );
+    if ( !s )
+        return;
+    logic_entity_t& v = s->value;
+    const logic_entity_t& d = s->defaults;
+    const auto int_at = [ & ]( const char* name, int k ) {
+        std::int32_t t = 0;
+        property_int( p, name, t, static_cast< std::int32_t >( d.words[ k ] ) );
+        v.words[ k ] = static_cast< std::uint32_t >( t );
+    };
+    const std::string& c = e.m_type;
+    if ( c == "VuAddIntegerConstantEntity" )
+        int_at( "C", 0 );
+    else if ( c == "VuIntegerEntity" || c == "VuSetIntegerEntity" )
+        int_at( "Value", 0 );
+    else if ( c == "VuCounterEntity" )
+    {
+        int_at( "Initial Count", 0 );
+        int_at( "Target Count", 1 );
+    }
+    else if ( c == "VuSetBooleanEntity" )
+    {
+        std::uint8_t b = 0;
+        property_bool( p, "Value", b, static_cast< std::uint8_t >( d.words[ 0 ] & 0xFFu ) );
+        v.words[ 0 ] = ( v.words[ 0 ] & 0xFFFFFF00u ) | b;
+    }
+    else if ( c == "VuSetStringEntity" || c == "VuStringEntity" )
+        property_string( p, "Value", v.text, d.text );
+    else if ( c == "VuIsSkuEntity" )   // ctor 0x42CD60: "SKU" VuStringProperty (0x406B70) on the VuString +0x60
+        property_string( p, "SKU", v.text, d.text );
+    else if ( c == "VuIsEventTypeEntity" )   // ctor 0x42C850: "Type" (vt 0x74C394: the string loads 0x406C20 / 0x406CD0 / 0x406AB0), "AttractEvent"
+        property_string( p, "Type", v.text, d.text );
+    else if ( c == "VuRandomTriggerEntity" )
+    {
+        static const char* names[ 8 ] = { "Weight 1", "Weight 2", "Weight 3", "Weight 4", "Weight 5", "Weight 6", "Weight 7", "Weight 8" };
+        for ( int k = 0; k < 8; ++k )
+        {
+            float f, fd;
+            std::memcpy( &fd, &d.words[ k ], 4 );
+            property_float( p, names[ k ], f, fd, false );
+            std::memcpy( &v.words[ k ], &f, 4 );
+        }
+    }
+    else if ( c == "VuSwitchEntity" )
+    {
+        static const property_choice_t choices[ 3 ] = { { "Undefined", 0 }, { "Off", 1 }, { "On", 2 } };
+        std::int32_t t = 0;
+        property_enum( p, "Initial State", t, static_cast< std::int32_t >( d.words[ 0 ] ), choices, 3 );
+        v.words[ 0 ] = static_cast< std::uint32_t >( t );
+    }
+}
+
+inline void logic_mark_properties( entity_t& e )
+{
+    if ( logic_state_t* s = logic_state_of( e ) )
+        s->defaults = s->value;
+}
+
 // The callbacks the race project's tree is loaded with: the verified entity
 // loads (engine entity/node.hxx, hydro game/types.hxx) plus the AI waypoint's
 // property set (boat track.hxx, ctor 0x431770) - the track manager reads it -
@@ -81,10 +180,12 @@ inline entity_world_t race_entity_world( const entity_registry_t& registry, std:
             s = multi_delay_state_for( cls );   // world/rules.hxx (ctor 0x5DFD80)
         if ( !s )
             s = dynamic_prop_state_for( cls );   // world/dynprop.hxx (ctors 0x4367E0 / 0x434F80)
+        if ( !s )
+            s = logic_state_for( cls );   // world/logic.hxx's classes (above)
         return s ? s : entity_state_for( cls );
     };
-    world.m_properties_load = []( entity_t& e, const value_t& p ) { waypoint_load_properties( e, p ); nuisance_start_load_properties( e, p ); multi_delay_load_properties( e, p ); dynamic_prop_load_properties( e, p ); entity_load_properties( e, p ); };
-    world.m_properties_mark = []( entity_t& e ) { waypoint_mark_properties( e ); nuisance_start_mark_properties( e ); multi_delay_mark_properties( e ); dynamic_prop_mark_properties( e ); entity_mark_properties( e ); };
+    world.m_properties_load = []( entity_t& e, const value_t& p ) { waypoint_load_properties( e, p ); nuisance_start_load_properties( e, p ); multi_delay_load_properties( e, p ); dynamic_prop_load_properties( e, p ); logic_load_properties( e, p ); entity_load_properties( e, p ); };
+    world.m_properties_mark = []( entity_t& e ) { waypoint_mark_properties( e ); nuisance_start_mark_properties( e ); multi_delay_mark_properties( e ); dynamic_prop_mark_properties( e ); logic_mark_properties( e ); entity_mark_properties( e ); };
     return world;
 }
 

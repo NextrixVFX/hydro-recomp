@@ -22,6 +22,7 @@
 #include <workspace/core/world/grid.hxx>
 #include <workspace/core/world/livery.hxx>
 #include <workspace/core/world/race.hxx>
+#include <workspace/core/world/strings.hxx>
 #include <workspace/core/world/session.hxx>
 #include <workspace/core/world/build.hxx>
 #include <workspace/core/world/drive.hxx>
@@ -159,7 +160,7 @@ private:
 
     // place_model: models.hxx
     // `skin`: per shader, what a skin pass (world/livery.hxx) changed for the draw (livery_draw_of).
-    void place_model( const std::string& asset, const float* world, int bob = 0, int alpha_override = -1, const float* tint = nullptr, const std::vector< livery_draw_t >* skin = nullptr, int geometry_override = -1, std::vector< int >* out_placements = nullptr );
+    void place_model( const std::string& asset, const float* world, int bob = 0, int alpha_override = -1, const float* tint = nullptr, const std::vector< livery_draw_t >* skin = nullptr, int geometry_override = -1, std::vector< int >* out_placements = nullptr, std::vector< std::array< float, 16 > >* out_nodes = nullptr );
 
     const value_t* template_root( const std::string& name )
     {
@@ -526,6 +527,11 @@ private:
     {
         int type = 0;
         bool value = false;
+        // The whole value word (type 1 an int, 3 a bool in its low byte) and,
+        // for type 4, the char* - what the logic entities (world/logic.hxx)
+        // answer and read back.
+        std::uint32_t word = 0;
+        const char* text = nullptr;
     };
 
 
@@ -548,6 +554,28 @@ private:
 
     // update_delays: graph.hxx
     void update_delays( float dt );
+
+    // VuStringDBImpl's init (slot 5 0x53B700), once: the languages = the factory's getAssetNames("VuStringAsset")
+    // (the pack's names; only their membership is read), then setLanguage (slot 11 0x53B9C0) with the PLATFORM's
+    // language (g_vumetrosys vt+0x48 - a hook: --language, else "en-us"; the dev config's override is compiled out
+    // of retail). The asset: the pack's VuStringAsset/<language> through VuDBAsset's read 0x5C1270.
+    void string_db_ready( )
+    {
+        if ( m_string_db_ready )
+            return;
+        m_string_db_ready = true;
+        for ( const std::string& n : m_archive.names( "VuStringAsset/" ) )
+            m_string_db.languages.push_back( n );
+        const char* lang = c_engine::option( "language" );
+        const bool ok = string_db_set_language( m_string_db, lang ? lang : "en-us", [ this ]( const std::string& l ) -> const value_t* {
+            std::vector< std::uint8_t > blob;
+            if ( !m_archive.read( ( "VuStringAsset/" + l ).c_str( ), blob ) || !pfx_asset_document( blob, m_string_asset ) )
+                return nullptr;
+            return &m_string_asset;
+        } );
+        LOG_INFO( "VuStringDB: language %s (the platform's answer: %s), %u strings%s", m_string_db.language.c_str( ), lang ? "--language" : "en-us, a hook",
+                  static_cast< unsigned >( m_string_db.strings.size( ) ), ok ? "" : " - the asset did not load (UNKNOWN)" );
+    }
 
     // The race HUD projects and their countdown (world/huds.hxx).
     void load_huds( );
@@ -590,8 +618,9 @@ private:
     // skin_props: animate.hxx
     void skin_props( float dt );
 
-    // update_static_draws: models.hxx
+    // update_static_draws / prop_draw: models.hxx
     void update_static_draws( );
+    void prop_draw( const entity_t& owner );
 
     void wipe_scene( )
     {
@@ -618,6 +647,9 @@ private:
         m_graph.clear( );
         m_point_waves.clear( );
         m_unhandled_events = 0;
+        m_unhandled_by.clear( );
+        m_logic.clear( );
+        m_logic_fired = 0;
         m_fired = 0;
         // The light rig and the asset substitutions are per scene, so they
         // must be dropped with it or a second level would inherit the first's.
@@ -945,6 +977,10 @@ public:
         m_authored_far = 500.0f;
         // A race defers OnProjectInitialized to retail's place (0x4BA060: after the boats' load and the project's
         // gameInitialize, before begin - race_session_start's callback); otherwise it goes out at the end of the load.
+        // g_vugameutil +0x50 as the game-tier logic filters read it (world/logic.hxx logic_game_t).
+        m_game_util = util;
+        m_logic_game.game_data = &m_game_util;
+        m_logic_game.unrecreated = &m_logic_unrecreated;
         m_defer_project_initialized = race && front_end && race_game_kind( race_game_data_text( util, nullptr, "GameType" ) ) == race_game_kind_t::race;
         m_project_initialized = false;
         load_project( path.c_str( ) );
@@ -996,6 +1032,7 @@ public:
             return;
         }
         m_race.world.triggers = [ this ] { race_triggers( ); };
+        m_race.world.prop_draw = [ this ]( const entity_t& owner ) { prop_draw( owner ); };
         // VuRaceGame's ctor 0x489030 loads its three HUD projects (0x4B4360) - before the boat load.
         load_huds( );
         m_race.world.hud = [ this ]( int project, race_hud_verb_t verb, float step ) { hud( project, verb, step ); };
@@ -1189,6 +1226,7 @@ public:
         m_race.world.view = &m_water_view;
         m_race.world.water_tick = [ this ]( float step ) { water_frame( step ); };
         m_race.world.triggers = [ this ] { race_triggers( ); };
+        m_race.world.prop_draw = [ this ]( const entity_t& owner ) { prop_draw( owner ); };
         if ( !m_race.active )
             water_frame( dt );
 
@@ -1199,6 +1237,16 @@ public:
         // consumed - SUBSTITUTION, the renderer's. The far plane stays the gfx settings' (the camera's +0x17C is
         // boat +0x408, which the Build tick 0x41F330 fills). No race: dev_vantage's orbit / freecam (scaffold).
         race_session_frame( m_race, dt );
+        // Dev trace (--verbose, ours): the event census at the session's milestone frames - the logic handlers run
+        // and every plug fire that reached no handler, by class . plug.
+        if ( g_verbose && m_race.active && ( m_race.frames == 960 || m_race.frames == 1920 || m_race.frames == 3840 || m_race.frames == 7680 ) )
+        {
+            std::string by;
+            for ( const auto& u : m_unhandled_by )
+                by += ( by.empty( ) ? "" : ", " ) + u.first + " x" + std::to_string( u.second );
+            LOG_VERBOSE( "event census: frame %d: %d delivered (%d logic handlers), %d unhandled: %s", m_race.frames, m_fired, m_logic_fired,
+                         m_unhandled_events, by.c_str( ) );
+        }
         if ( m_race.active && m_race.viewport_set )
         {
             std::memcpy( m_eye, m_race.viewport_camera + 0x00, sizeof( m_eye ) );
@@ -1399,6 +1447,10 @@ private:
         float aabb[ 8 ]{};
         std::vector< int > placements[ 3 ];
         int shown = -2;   // the instance whose placements are visible (-1 none; -2 before the first frame)
+        // The owner (its Build tick re-hands the draw matrix: a dynamic prop's 0x546130) and each placement's part
+        // node matrix (placed = draw matrix x node, models.hxx place_model).
+        const entity_t* owner = nullptr;
+        std::vector< std::array< float, 16 > > nodes[ 3 ];
     };
 
     // One Vu3dDrawAnimatedModelComponent instance. The clip and phase are
@@ -1565,6 +1617,21 @@ private:
     // Events delivered to node kinds that are not built yet. Counted rather
     // than guessed at, so the size of the remaining graph stays visible.
     int m_unhandled_events = 0;
+    // The same, per "class . plug" (the census a run logs at the end of the race).
+    std::map< std::string, int > m_unhandled_by;
+    // The engine's logic entities (world/logic.hxx) by path: their tree state (race.hxx logic_state_t), dispatched
+    // by graph.hxx; m_logic_fired counts their handlers run.
+    std::map< std::string, entity_t* > m_logic;
+    int m_logic_fired = 0;
+    // Their game environment: the gameutil +0x50 root (load_scene's), no SKU (the asset manager's vt+0x7C: a platform
+    // answer, not supplied) and no entity repository (find / word: not wired) - those filters count unrecreated.
+    value_t m_game_util;
+    // VuStringDBImpl (world/strings.hxx), the HUD's m_string_db; m_string_asset the loaded document.
+    string_db_t m_string_db;
+    value_t m_string_asset;
+    bool m_string_db_ready = false;
+    logic_game_t m_logic_game;
+    int m_logic_unrecreated = 0;
     // UpdateBranchProbabilities events reached without their VuParams (UNKNOWN, graph.hxx).
     int m_waypoint_params_unknown = 0;
     // Assets already scored by the extent test, so it reports once each.

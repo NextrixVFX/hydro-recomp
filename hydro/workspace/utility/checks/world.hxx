@@ -3370,6 +3370,8 @@ inline bool verify_dynamic_prop_step( )
     return failed == 0;
 }
 
+#include <workspace/utility/checks/session.hxx>
+
 inline bool verify_world_all( )
 {
     bool ok = true;
@@ -3422,5 +3424,6 @@ inline bool verify_world_all( )
     ok = verify_split_handlers( ) && ok;
     ok = verify_static_model_draw( ) && ok;
     ok = verify_static_world_aabb( ) && ok;
+    ok = verify_session_all( ) && ok;
     return ok;
 }

@@ -82,7 +82,9 @@ inline void c_world::load_huds( )
                         hud_post( hash, bp, index );
                     }
                 };
-                // m_string_db (VuStringDB slot 6, the toast's template) is not wired: no string DB here (UNKNOWN on use).
+                // m_string_db: VuStringDB's getString (slot 6 0x53B830, world/strings.hxx) on the world's string DB.
+                string_db_ready( );
+                hooks.m_string_db = [ this ]( const char* key ) { return string_db_get( m_string_db, key ? key : "" ); };
                 h.ui = std::make_unique< c_ui_race_hud >( *h.ui_tree, hooks );
             }
             else
@@ -307,4 +309,58 @@ inline void c_world::hud_env( hud_project_t& h )
     env.m_track_built = m_race.track && track_is_built( *m_race.track );
     env.m_track_circuit = env.m_track_built && track_is_circuit( *m_race.track );
     env.m_control_method = m_race.world.control_method;
+    // The gauges' inputs (core/ui overlay.hxx ui_hud_gauges_t): the speedometer 0x42BA00's local boat - its body
+    // (+0x21C) linear velocity +0x140 / +0x144, +0x31C, +0x320, +0x32C, +0x310, the animation object's (+0x230) +0x78,
+    // +0x32D - and the minimap 0x427BD0's boats: the transform's (+0x50) world row 3 (+0x80 / +0x84) and row 1
+    // (+0x50 / +0x54), the camera's (+0x224) +0x130 / +0x134, the driver slot 12 (the rules' human answer), +0x490.
+    // The display size is g 0x75907C slot 16 (the D3D11 layer - the session's display_w / _h, a platform hook); the
+    // textures / materials (m_speedometer / m_minimap) are the asset factory's - not set here. The draw needs the
+    // HUD render pass (not scheduled).
+    ui_hud_gauges_t& g = h.ui->gauges( );
+    g.m_live = true;
+    g.m_display[ 0 ] = m_race.world.display_w;
+    g.m_display[ 1 ] = m_race.world.display_h;
+    g.m_boat = ui_speedometer_boat_t{ };
+    g.m_map = ui_map_world_t{ };
+    g.m_map.m_manager = true;
+    const auto f32 = []( const std::uint8_t* p, int at ) { float v; std::memcpy( &v, p + at, 4 ); return v; };
+    const auto i32 = []( const std::uint8_t* p, int at ) { std::int32_t v; std::memcpy( &v, p + at, 4 ); return v; };
+    for ( std::size_t k = 0; k < m_race.rules_boats.size( ) && k < m_race.boats.size( ); ++k )
+    {
+        const race_rules_boat_t& rb = m_race.rules_boats[ k ];
+        const race_session_boat_t& sb = *m_race.boats[ k ];
+        if ( !rb.boat )
+            continue;
+        ui_map_boat_t mb;
+        if ( rb.transform )
+        {
+            mb.m_position[ 0 ] = f32( rb.transform, 0x80 );
+            mb.m_position[ 1 ] = f32( rb.transform, 0x84 );
+            mb.m_direction[ 0 ] = f32( rb.transform, 0x50 );
+            mb.m_direction[ 1 ] = f32( rb.transform, 0x54 );
+        }
+        if ( sb.io.camera )
+        {
+            mb.m_heading[ 0 ] = f32( sb.io.camera, 0x130 );
+            mb.m_heading[ 1 ] = f32( sb.io.camera, 0x134 );
+        }
+        mb.m_answer = rb.human;
+        mb.m_kind = i32( rb.boat, 0x490 );
+        g.m_map.m_boats.push_back( mb );
+        if ( static_cast< std::int32_t >( k ) == local )
+        {
+            g.m_map.m_local_present = true;
+            g.m_map.m_local = mb;
+            const std::uint8_t* body = reinterpret_cast< const std::uint8_t* >( &sb.body );
+            g.m_boat.m_present = true;
+            g.m_boat.m_velocity[ 0 ] = f32( body, 0x140 );
+            g.m_boat.m_velocity[ 1 ] = f32( body, 0x144 );
+            g.m_boat.m_boost_count = i32( rb.boat, 0x31C );
+            g.m_boat.m_digit_scale = f32( rb.boat, 0x320 );
+            g.m_boat.m_byte_32c = rb.boat[ 0x32C ];
+            g.m_boat.m_boost = f32( rb.boat, 0x310 );
+            g.m_boat.m_mode = sb.io.animation ? i32( sb.io.animation, 0x78 ) : 0;
+            g.m_boat.m_byte_32d = rb.boat[ 0x32D ];
+        }
+    }
 }
