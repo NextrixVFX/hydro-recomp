@@ -507,9 +507,37 @@ inline bool verify_pfx_run( )
     return failed == 0;
 }
 
+// The water classes' getType slots (world/surface.hxx g_water_types) against retail (case water_types): per slot the
+// descriptor it returns and the chain of names its descriptor walks to.
+inline bool verify_water_types( )
+{
+    int bad = 0;
+    const std::size_t n = sizeof( g_water_types ) / sizeof( g_water_types[ 0 ] );
+    for ( std::size_t i = 0; i < g_golden_wty_count; ++i )
+    {
+        const golden_water_type_t& g = g_golden_wty[ i ];
+        const water_type_t* t = nullptr;
+        for ( std::size_t k = 0; k < n; ++k )
+            if ( g_water_types[ k ].address == g.address )
+                t = &g_water_types[ k ];
+        if ( t == nullptr || t->descriptor != g.descriptor || std::strcmp( t->chain, g.chain ) != 0 )
+        {
+            ++bad;
+            LOG_ERROR( "water_types 0x%X: descriptor / chain differ (retail 0x%X %s)", g.address, g.descriptor, g.chain );
+        }
+    }
+    bad += n != g_golden_wty_count ? 1 : 0;
+    if ( bad == 0 )
+        LOG_SUCCESS( "g_water_types match the water classes' %d getType slots (descriptor and chain each)", static_cast< int >( n ) );
+    else
+        LOG_ERROR( "water_types FAILED %d", bad );
+    return bad == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_water_types( ) && ok;
     ok = verify_pfx_run( ) && ok;
     ok = verify_pfx_lifecycle( ) && ok;
     ok = verify_pattern_draw( ) && ok;

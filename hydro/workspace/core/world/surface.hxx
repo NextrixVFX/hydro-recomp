@@ -1184,3 +1184,41 @@ inline int water_build_maps( water_built_t& b, water_map_fetch_fn fetch, void* u
     }
     return missing;
 }
+
+// THE WATER CLASSES' getType SLOTS (6 bytes each: mov eax, descriptor; ret) -
+// the static VuRTTI descriptor each returns (+0 the name, +4 the parent;
+// statically initialised .data) and the chain it names. FACT: VuWaterRampEntity
+// derives from VuWaterSurfaceEntity; VuActiveCameraTriggerEntity's 0x4AA970 is
+// VuEntity's own.
+struct water_type_t
+{
+    std::uint32_t address;
+    std::uint32_t descriptor;
+    const char* chain;
+};
+
+inline const water_type_t g_water_types[] = {
+    { 0x4AA970u, 0x7367F8u, "VuEntity" },
+    { 0x5226C0u, 0x7368B0u, "VuFluidsMeshAsset|VuAsset" },
+    { 0x59AA90u, 0x736A70u, "VuWaterDirectionalWave|VuWaterWave" },
+    { 0x59CA90u, 0x736A80u, "VuWaterBaseOceanWave|VuWaterWave" },
+    { 0x59CAF0u, 0x736A90u, "VuWaterRectangularOceanWave|VuWaterBaseOceanWave|VuWaterWave" },
+    { 0x59CB00u, 0x736A98u, "VuWaterCircularOceanWave|VuWaterBaseOceanWave|VuWaterWave" },
+    { 0x5A1430u, 0x736AA0u, "VuWaterWhirlpoolWave|VuWaterWave" },
+    { 0x5A2330u, 0x736AA8u, "VuWaterRampWave|VuWaterWave" },
+    { 0x5A3FA0u, 0x736AB8u, "VuWaterBumpWave|VuWaterWave" },
+    { 0x5A4D40u, 0x736AC0u, "VuWaterBankedTurnWave|VuWaterWave" },
+    { 0x5A6380u, 0x736AC8u, "VuWaterWave" },
+    { 0x5C7CF0u, 0x736B38u, "VuWaterMapAsset|VuAsset" },
+    { 0x5D2AF0u, 0x736BE0u, "VuWaterTextureSettingsEntity|VuEntity" },
+    { 0x5D3170u, 0x736BE8u, "VuBankedTurnWaveEntity|VuEntity" },
+    { 0x5D3B40u, 0x736BF0u, "VuBumpWaveEntity|VuEntity" },
+    { 0x5D4220u, 0x736BF8u, "VuPointWaveEntity|VuEntity" },
+    { 0x5D6C20u, 0x736C18u, "VuWaterRampEntity|VuWaterSurfaceEntity|VuEntity" },
+    { 0x5D7920u, 0x736C20u, "VuWhirlpoolWaveEntity|VuEntity" },
+    { 0x5D8160u, 0x736C28u, "VuBaseOceanWaveEntity|VuEntity" },
+    { 0x5D8190u, 0x736C38u, "VuRectangularOceanWaveEntity|VuBaseOceanWaveEntity|VuEntity" },
+    { 0x5D81B0u, 0x736C40u, "VuCircularOceanWaveEntity|VuBaseOceanWaveEntity|VuEntity" },
+    { 0x5D96E0u, 0x736C48u, "VuDirectionalWaveEntity|VuEntity" },
+    { 0x5DA450u, 0x736C50u, "VuWaterSurfaceEntity|VuEntity" },
+};
