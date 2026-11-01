@@ -3417,6 +3417,7 @@ inline bool verify_world_all( )
     ok = verify_race_progress( ) && ok;
     ok = verify_multi_delay( ) && ok;
     ok = verify_race_game_fsm( ) && ok;
+    ok = verify_timetrial_game_fsm( ) && ok;
     ok = verify_buoy_hit( ) && ok;
     ok = verify_tick_same_pass( ) && ok;
     ok = verify_game_ctors( ) && ok;
