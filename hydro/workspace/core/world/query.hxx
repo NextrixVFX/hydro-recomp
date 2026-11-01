@@ -113,6 +113,29 @@ inline bool water_map_load( const std::uint8_t* data, std::size_t size, water_ma
     return true;
 }
 
+// The unload 0x5C8780 (thiscall asset): +0x58 / +0x5C = 0; the three byte
+// arrays freed and their (pointer, size, capacity) words zeroed; each entry
+// of +0x84 (count +0x88) its byte array freed (+8) and the entry deleted;
+// the entry array freed, +0x84 / +0x88 / +0x8C = 0. Returns the CRT frees it
+// makes (the entries' deletes not counted), for the check.
+inline int water_map_unload( water_map_t& m )
+{
+    const int calls = 4 + static_cast< int >( m.entries.size( ) );
+    m = water_map_t{};
+    return calls;
+}
+
+// Slot 0 0x5C7D00 (the scalar deleting dtor): vtable 0x752498, the unload,
+// the four (now null) arrays freed again, VuAsset's dtor 0x515D00 (engine:
+// `base`, optional), operator delete with 1.
+inline int water_map_destroy( water_map_t& m, void ( *base )( void* user ), void* user )
+{
+    const int calls = water_map_unload( m ) + 4;
+    if ( base )
+        base( user );
+    return calls;
+}
+
 // The VuWaterSurface fields the query reads: +20 the height, +40 / +44 the
 // depth below / above, +144 .. +200 the world-to-surface transform (rows of
 // a row-vector 4x4: +144 row 0, +160 row 1, +176 row 2, +192 the

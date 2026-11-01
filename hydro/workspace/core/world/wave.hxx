@@ -691,6 +691,35 @@ inline void ocean_patch_vertex( const ocean_patch_t& wave, bool circle, float x,
     displacement[ 2 ] = static_cast< float >( rate ) + displacement[ 2 ];
 }
 
+// VuWaterInfiniteOceanWave's base kernel @0x59e070 (slot 3 @0x59d900, both
+// flags clear; the ctx+100 variant @0x59e520 is the tag-tested sibling - the
+// caller's test). The rectangular body WITHOUT the centre and WITHOUT any
+// footprint or fade: (x, y) rotated as read (x*c - y*s, s*x + y*c), scaled,
+// the same cells, bernstein weights and patch term order (both buffers),
+// height += the current field, displacement[ 2 ] += (now - previous) / the
+// buffers' time gap in double. Read from the disassembly.
+inline void ocean_infinite_vertex( const ocean_patch_t& wave, float x, float y, float* displacement, float& height )
+{
+    const float a = ( x * wave.cosine ) - ( y * wave.sine );
+    const float b = ( wave.sine * x ) + ( y * wave.cosine );
+    const float va = a * wave.scale;
+    const float vb = b * wave.scale;
+    const int ia = ocean_cell( va );
+    const int ib = ocean_cell( vb );
+    const float u = va - static_cast< float >( ia );
+    const float w = vb - static_cast< float >( ib );
+    const int cell = ( ( ib & wave.mask ) << wave.shift ) + ( ia & wave.mask );
+    float bu[ 4 ];
+    float bw[ 4 ];
+    ocean_bernstein( u, bu );
+    ocean_bernstein( w, bw );
+    const float lift = ocean_patch_eval( wave.patches[ wave.current ] + 16 * cell, bu, bw );
+    const float last = ocean_patch_eval( wave.patches[ wave.previous ] + 16 * cell, bu, bw );
+    height = height + lift;
+    const double rate = static_cast< double >( lift - last ) / ( wave.now - wave.time[ wave.previous ] );
+    displacement[ 2 ] = static_cast< float >( rate ) + displacement[ 2 ];
+}
+
 // VuWaterWakeWave's base kernel @0x52ca60 (slot 3 @0x52c260, both flags
 // clear) and its ctx+100 variant @0x52ce20. A wake wave is the stretch of a
 // boat's wake between TWO SEGMENT RECORDS, each 13 floats, copied in by the
@@ -1083,9 +1112,22 @@ inline float wave_bits( std::uint32_t u )
 }
 
 // VuWaterWave's constructor @0x5a6390 (called with 0): +56 / +60 / +64 / +68
-// zero, +72 = 1.0. Its +12 .. +52 defaults are overwritten by every subclass.
+// zero, +72 = 1.0, +12 .. +52 its defaults (every subclass but the infinite
+// ocean overwrites them).
 inline void wave_base( wave_image_t& w )
 {
+    // the box (-FLT_MAX x3, +24 a stack word: UNKNOWN; FLT_MAX x3, +40 a stack
+    // word: UNKNOWN), centre 0 / 0, radius FLT_MAX - what VuWaterInfiniteOcean
+    // Wave keeps (it has no bounds of its own)
+    w.set( 12, 0xFF7FFFFFu );
+    w.set( 16, 0xFF7FFFFFu );
+    w.set( 20, 0xFF7FFFFFu );
+    w.set( 28, 0x7F7FFFFFu );
+    w.set( 32, 0x7F7FFFFFu );
+    w.set( 36, 0x7F7FFFFFu );
+    w.set( 44, 0 );
+    w.set( 48, 0 );
+    w.set( 52, 0x7F7FFFFFu );
     w.set( 56, 0 );
     w.set( 60, 0 );
     w.set( 64, 0 );

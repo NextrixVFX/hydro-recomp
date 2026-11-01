@@ -252,6 +252,39 @@ inline void water_tree_release_leaf( water_tree_t& t, int leaf )
     t.free = leaf;
 }
 
+// 0x598fc0 (thiscall tree; node*; retn 4): an internal node's (second child
+// non-null) first then second subtree first, then the node itself - the root
+// pointer nulled when it is the root - onto the free list: one node fewer in
+// use, one more free. The LEAF COUNT (+0x14) IS NOT TOUCHED.
+inline void water_tree_free( water_tree_t& t, int n )
+{
+    if ( t.nodes[ n ].second >= 0 )
+    {
+        water_tree_free( t, t.nodes[ n ].first );
+        water_tree_free( t, t.nodes[ n ].second );
+    }
+    if ( n == t.root )
+        t.root = -1;
+    t.nodes[ n ].first = t.free;
+    --t.used;
+    ++t.free_count;
+    t.free = n;
+}
+
+// 0x598d10, the tree's dtor: the root's subtree freed as 0x598fc0 does (the
+// same body inlined on the root), then every chunk of the +0xC std::list
+// released (the blocks, the list nodes, the sentinel - operator delete; the
+// list's size +0x10 = 0). The nodes are dropped here; the counters are left
+// as the dead object's.
+inline void water_tree_destroy( water_tree_t& t )
+{
+    if ( t.root >= 0 )
+        water_tree_free( t, t.root );
+    t.nodes.clear( );
+    t.nodes.shrink_to_fit( );
+    t.free = -1;
+}
+
 // ---------------------------------------------------------------------------
 // VuWater HOLDING ITS WAVES: the add @0x529a90 and the removal @0x529b90, with
 // the two surface-tree walks @0x52b4d0 (a box) and @0x52b3e0 (a point) and the
@@ -277,6 +310,7 @@ struct water_held_surface_t
     float below = 0.0f;   // +0x28, read by the point lookup @0x52aec0
     float above = 0.0f;   // +0x2C
     water_tree_t waves;
+    int leaf = -1;   // +0xF8: its leaf in the surface tree (0x529860's), -1 once removed
 };
 
 struct water_held_wave_t
