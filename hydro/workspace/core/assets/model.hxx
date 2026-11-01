@@ -1203,3 +1203,158 @@ inline bool model_bone( const std::vector< std::uint8_t >& blob, const char* bon
     }
     return false;
 }
+
+// One chunk's vertex and index bytes into a model_buffer_t - the RENDERER's unpack (retail hands these bytes to
+// the device as they are; the layout is the shader's declaration). The same per-stride unpack load_model uses:
+// position float3 @0, normal snorm16 x3 @12, uv float2 @20 (V flipped - the vertex shader's first instruction),
+// colour bytes @28 on stride 32, the skin binding (weights @28, bones @32) on stride 36.
+inline void model_read_chunk( const std::uint8_t* vertices, std::uint32_t stride, std::uint32_t bytes,
+    const std::uint8_t* indices, std::uint32_t index_count, model_buffer_t& buffer )
+{
+    const std::uint32_t count = stride != 0 ? bytes / stride : 0;
+    buffer.vertices.resize( count );
+    if ( stride == 36 )
+    {
+        buffer.skin.resize( count );
+        for ( std::uint32_t vertex = 0; vertex < count; ++vertex )
+        {
+            const std::uint8_t* tail = vertices + static_cast< std::size_t >( vertex ) * stride + 28;
+            model_skin_t& bind = buffer.skin[ vertex ];
+            float total = 0.0f;
+            for ( int slot = 0; slot < 4; ++slot )
+            {
+                bind.weight[ slot ] = static_cast< float >( tail[ slot ] );
+                bind.bone[ slot ] = tail[ 4 + slot ];
+                total += bind.weight[ slot ];
+            }
+            const float scale = total > 0.0f ? 1.0f / total : 0.0f;
+            for ( int slot = 0; slot < 4; ++slot )
+                bind.weight[ slot ] *= scale;
+        }
+    }
+    for ( std::uint32_t vertex = 0; vertex < count; ++vertex )
+    {
+        const std::uint8_t* source = vertices + static_cast< std::size_t >( vertex ) * stride;
+        mesh_vertex_t& item = buffer.vertices[ vertex ];
+        item.position[ 0 ] = model_f32( source );
+        item.position[ 1 ] = model_f32( source + 4 );
+        item.position[ 2 ] = model_f32( source + 8 );
+        item.color[ 0 ] = item.color[ 1 ] = item.color[ 2 ] = item.color[ 3 ] = 1.0f;
+        if ( stride >= 28 )
+        {
+            auto snorm = []( const std::uint8_t* b ) -> float
+            {
+                const int value = static_cast< int >( static_cast< std::int16_t >(
+                    static_cast< std::uint16_t >( b[ 0 ] ) | ( static_cast< std::uint16_t >( b[ 1 ] ) << 8 ) ) );
+                return static_cast< float >( value ) / 32767.0f;
+            };
+            item.normal[ 0 ] = snorm( source + 12 );
+            item.normal[ 1 ] = snorm( source + 14 );
+            item.normal[ 2 ] = snorm( source + 16 );
+            item.uv[ 0 ] = model_f32( source + 20 );
+            item.uv[ 1 ] = 1.0f - model_f32( source + 24 );
+            buffer.authored = true;
+            if ( stride == 32 )
+                for ( int c = 0; c < 4; ++c )
+                    item.color[ c ] = static_cast< float >( source[ 28 + c ] ) / 255.0f;
+        }
+        else
+        {
+            item.uv[ 0 ] = model_f32( source + 12 );
+            item.uv[ 1 ] = 1.0f - model_f32( source + 16 );
+        }
+        if ( !std::isfinite( item.position[ 0 ] ) || !std::isfinite( item.position[ 1 ] ) || !std::isfinite( item.position[ 2 ] ) )
+            item.position[ 0 ] = item.position[ 1 ] = item.position[ 2 ] = 0.0f;
+    }
+    buffer.indices.resize( index_count );
+    std::memcpy( buffer.indices.data( ), indices, static_cast< std::size_t >( index_count ) * 2 );
+    if ( !buffer.authored )
+        model_normals( buffer );
+}
+
+// A VuStaticModelAsset through retail's scene load (scene.hxx scene_load_static) into the renderer's model_t:
+// one buffer per chunk; one part per (mesh part, node instancing that mesh) - meshes in order, each part, then the
+// instancing nodes in tree order - placed at the node's chained matrix (0x5C26F0's node x parent, through
+// VuMatrix_multiply 0x4078C0 from the identity). The material is the part's shader's first table (the program's;
+// 0x5929B0's first 0x541290 / 0x5414C0): the "map1" texture, the "map2" texture on a "Blend" shader (detail),
+// "EnvironmentTexture" (the cube), DiffuseColor / SpecularColor (type 2, three floats) and SpecularAmount /
+// EnvironmentAmount (type 1). RENDERER CONCERNS, NOT RETAIL (flagged): which table entries the draw reads (retail
+// binds them through the pipeline state - not recreated), the alpha test (model_alpha's path rule), the paint rule.
+inline bool load_model_scene( const std::vector< std::uint8_t >& blob, model_t& model )
+{
+    model = {};
+    scene_t scene;
+    if ( !scene_load_static( blob.data( ), blob.size( ), scene ) )
+        return false;
+    model.buffers.resize( scene.chunks.size( ) );
+    for ( std::size_t k = 0; k < scene.chunks.size( ); ++k )
+    {
+        const scene_chunk_t& c = scene.chunks[ k ];
+        model_read_chunk( blob.data( ) + c.vertices.offset, c.stride, c.vertices.size, blob.data( ) + c.index_bytes.offset,
+            c.indices, model.buffers[ k ] );
+    }
+    // Each node's world: node x parent (roots x the identity), in tree order.
+    std::vector< std::array< float, 16 > > world( scene.nodes.size( ) );
+    const auto place = [ & ]( const auto& self, int node, const float* parent ) -> void
+    {
+        scene_multiply( scene.nodes[ node ].matrix, world[ node ].data( ), parent );
+        for ( int child : scene.nodes[ node ].children )
+            self( self, child, world[ node ].data( ) );
+    };
+    for ( int root : scene.roots )
+        place( place, root, scene_identity( ) );
+    for ( std::size_t mesh = 0; mesh < scene.meshes.size( ); ++mesh )
+        for ( const scene_part_t& p : scene.meshes[ mesh ].parts )
+            for ( std::size_t node = 0; node < scene.nodes.size( ); ++node )
+            {
+                if ( scene.nodes[ node ].mesh != static_cast< int >( mesh ) )
+                    continue;
+                const model_buffer_t& buffer = model.buffers[ p.chunk ];
+                if ( static_cast< std::size_t >( p.first_index ) + 3u * p.triangles > buffer.indices.size( ) )
+                    return false;
+                model_part_t part{};
+                std::memcpy( part.node, world[ node ].data( ), sizeof( part.node ) );
+                part.buffer = static_cast< int >( p.chunk );
+                part.index_start = static_cast< int >( p.first_index );
+                part.index_count = static_cast< int >( 3u * p.triangles );
+                const scene_shader_t& shader = scene.shaders[ p.shader ];
+                const scene_table_t& table = shader.tables[ 0 ];
+                std::string second;
+                for ( const scene_texture_t& t : table.textures )
+                {
+                    if ( t.slot == "map1" && part.texture.empty( ) )
+                        part.texture = t.asset;
+                    else if ( t.slot == "map2" && second.empty( ) )
+                        second = t.asset;
+                    if ( t.name == "EnvironmentTexture" )
+                        part.cube = t.asset;
+                }
+                for ( const scene_constant_t& c : table.constants )
+                {
+                    float v[ 3 ];
+                    std::memcpy( v, c.value, sizeof( v ) );
+                    if ( c.name == "DiffuseColor" && c.type == 2 )
+                        std::memcpy( part.diffuse, v, sizeof( v ) );
+                    else if ( c.name == "SpecularColor" && c.type == 2 )
+                        std::memcpy( part.specular, v, sizeof( v ) );
+                    else if ( c.name == "SpecularAmount" && c.type == 1 )
+                        part.specular_amount = v[ 0 ];
+                    else if ( c.name == "EnvironmentAmount" && c.type == 1 )
+                        part.environment_amount = v[ 0 ];
+                }
+                const bool blend = shader.name == "Blend" && !second.empty( );
+                if ( blend )
+                    part.detail = second;
+                // The one-bit alpha texture is bound by the shader's other two programs' tables (the depth / shadow
+                // passes: "OneBitAlphaTexture" beside "gAlphaTestEnabled") - which retail binds is the renderer's.
+                bool one_bit = false;
+                for ( int other = 1; other < 3; ++other )
+                    for ( const scene_texture_t& t : shader.tables[ other ].textures )
+                        one_bit = one_bit || t.name == "OneBitAlphaTexture";
+                part.alpha_test = model_alpha( part.texture, one_bit );
+                if ( blend && part.alpha_test == 0 )
+                    part.alpha_test = 10;
+                model.parts.push_back( std::move( part ) );
+            }
+    return !model.parts.empty( );
+}
