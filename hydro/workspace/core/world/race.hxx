@@ -82,6 +82,34 @@ inline entity_world_t race_entity_world( const entity_registry_t& registry, std:
     return world;
 }
 
+// VuTransformComponent::setWorldTransform 0x5344A0 on an entity of the tree,
+// whole: transform_set_world (world/transform.hxx: the world, its euler and
+// 0x534830's local against the parent's transform world - the owner's +0x34,
+// the entity's m_parent), then 0x534C00(notify) on the owner's children
+// (game/types.hxx transform_walk_children - its children's watchers are hooks
+// it does not fire), then, with notify, the component's watcher +0xC0 vt+8 =
+// `watcher` (null: none installed). False, nothing written: the entity has no
+// modelled transform, or its parent has none (its world is UNKNOWN).
+inline bool entity_set_world( entity_t& owner, const float* matrix, bool notify, const std::function< void( ) >& watcher )
+{
+    transform_component_t* t = entity_transform( owner );
+    if ( !t )
+        return false;
+    const transform_component_t* parent = nullptr;
+    if ( owner.m_parent )
+    {
+        parent = entity_transform( *owner.m_parent );
+        if ( !parent || owner.m_parent->m_world_unknown )
+            return false;
+    }
+    transform_set_world( *t, matrix, parent ? parent->world : nullptr );
+    owner.m_world_unknown = false;
+    transform_walk_children( owner, t->world );
+    if ( notify && watcher )
+        watcher( );
+    return true;
+}
+
 // ---- VuGame's boat load 0x481CE0 ------------------------------------------
 //
 // The VuBoatEntity as the entity tree sees it (create 0x41B690 = operator

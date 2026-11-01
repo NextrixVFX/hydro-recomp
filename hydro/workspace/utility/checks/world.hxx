@@ -2113,9 +2113,85 @@ inline bool verify_boat_build_audio( )
     return failed == 0;
 }
 
+// entity_set_world (world/race.hxx) = transform_set_world (world/transform.hxx)
+// + the child walk + the watcher, against retail's 0x5344A0 with 0x534830 run
+// whole (oracle case transform_set_world; 0x534C00 and the watcher's vt+8
+// intercepted): per vector, half under a parent (its transform's world the
+// hand-built parent's), the component's local +0x10, world +0x50, rotation
+// +0x90 and world euler +0xA0 (lanes 0 - 2; each fourth lane is a stack word
+// retail never writes) bit for bit, and the watcher fired iff notify (its low
+// byte - `cmp byte`) and a watcher.
+inline bool verify_transform_set_world( )
+{
+    int failed = 0, parents = 0, fired = 0;
+    for ( std::size_t index = 0; index < g_golden_transform_set_world_count; ++index )
+    {
+        const unsigned* s = g_golden_transform_set_world_words + g_golden_transform_set_world_offsets[ index ];
+        const bool has_parent = *s++ != 0;
+        float matrix[ 16 ], parent_world[ 16 ];
+        std::memcpy( matrix, s, 64 );
+        s += 16;
+        if ( has_parent )
+        {
+            std::memcpy( parent_world, s, 64 );
+            s += 16;
+        }
+        const unsigned notify = *s++, watcher = *s++;
+        const unsigned* after = s;
+        s += 40;
+        const unsigned ncalls = *s++;
+        int want_fired = 0;
+        for ( unsigned k = 0; k < ncalls; ++k )
+            want_fired += s[ 3 * k ] == 2 ? 1 : 0;
+        entity_t parent, owner;
+        auto component = []( entity_t& e ) {
+            auto st = std::make_shared< transform_state_t >( );
+            std::memset( &st->c, 0x77, sizeof( st->c ) );
+            e.m_components.push_back( entity_component_t{ "VuTransformComponent", k_transform_component_vtable, st } );
+            return st;
+        };
+        auto ps = component( parent );
+        auto os = component( owner );
+        if ( has_parent )
+        {
+            std::memcpy( ps->c.world, parent_world, 64 );
+            owner.m_parent = &parent;
+            ++parents;
+        }
+        int got_fired = 0;
+        const std::function< void( ) > hook = [ &got_fired ] { ++got_fired; };
+        const bool ran = entity_set_world( owner, matrix, ( notify & 0xFFu ) != 0, watcher ? hook : std::function< void( ) >( ) );
+        fired += got_fired;
+        const transform_component_t& c = os->c;
+        int bad = -1;
+        for ( int w = 0; w < 40 && ran; ++w )
+        {
+            if ( w == 35 || w == 39 )
+                continue;
+            const float* f = w < 16 ? &c.local[ w ] : w < 32 ? &c.world[ w - 16 ] : w < 36 ? &c.rotation[ w - 32 ] : &c.world_rotation[ w - 36 ];
+            if ( std::memcmp( f, &after[ w ], 4 ) != 0 )
+            {
+                bad = w;
+                break;
+            }
+        }
+        if ( !ran || bad >= 0 || got_fired != want_fired )
+            if ( ++failed <= 4 )
+                LOG_ERROR( "transform set world vector %d (%s): %s word +0x%X (watcher %d / %d)", static_cast< int >( index ),
+                           has_parent ? "parent" : "no parent", ran ? "differs at" : "did not run", 0x10 + 4 * bad, got_fired, want_fired );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "entity_set_world matches VuTransformComponent's setWorldTransform 0x5344A0 + 0x534830 over %d vectors (%d under a parent, "
+                     "%d watcher calls): local, world, both eulers bit for bit", static_cast< int >( g_golden_transform_set_world_count ), parents, fired );
+    else
+        LOG_ERROR( "transform set world FAILED %d of %d vectors", failed, static_cast< int >( g_golden_transform_set_world_count ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_transform_set_world( ) && ok;
     ok = verify_boat_build_audio( ) && ok;
     ok = verify_water_surface_list( ) && ok;
     ok = verify_race_game_ctor( ) && ok;
