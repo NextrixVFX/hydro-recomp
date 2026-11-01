@@ -1096,9 +1096,12 @@ inline bool verify_ui_info_draw( )
     return failed == 0;
 }
 
+#include <workspace/utility/checks/leaves.hxx>
+
 inline bool verify_ui_menu_all( )
 {
     bool ok = true;
+    ok = verify_ui_leaves_all( ) && ok;
     ok = verify_ui_info_draw( ) && ok;
     ok = verify_ui_screen_frame_records( ) && ok;
     ok = verify_ui_button_draw( ) && ok;
