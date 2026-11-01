@@ -586,6 +586,76 @@ inline bool verify_ui_hud_frames( )
             env.m_driver.m_slot12 = gw.m_driver[ 0 ] > 0;
             env.m_driver.m_8c = static_cast< std::uint8_t >( gw.m_driver[ 1 ] );
             env.m_driver.m_388 = static_cast< std::uint8_t >( gw.m_driver[ 2 ] );
+            // batch 18: the gauges' inputs (the case's HF_GAUGES for this world)
+            ui_hud_gauges_t& gauges = hud.gauges( );
+            gauges = ui_hud_gauges_t( );
+            if ( static_cast< std::size_t >( st.m_world ) < g_golden_hf_gauges_count )
+            {
+                const golden_hf_gauge_t& gg = g_golden_hf_gauges[ st.m_world ];
+                gauges.m_live = true;
+                gauges.m_display[ 0 ] = gg.m_display[ 0 ];
+                gauges.m_display[ 1 ] = gg.m_display[ 1 ];
+                const bool local = gw.m_manager != 0 && gw.m_local >= 0 && gw.m_local < gw.m_boats;
+                ui_speedometer_boat_t& sb = gauges.m_boat;
+                sb.m_present = local && gg.m_present != 0;
+                std::memcpy( sb.m_velocity, gg.m_velocity, 8 );
+                sb.m_boost_count = gg.m_count;
+                std::memcpy( &sb.m_digit_scale, &gg.m_scale, 4 );
+                std::memcpy( &sb.m_boost, &gg.m_boost, 4 );
+                sb.m_mode = gg.m_mode;
+                sb.m_byte_32d = static_cast< std::uint8_t >( gg.m_byte_32d );
+                sb.m_byte_32c = local ? static_cast< std::uint8_t >( g_golden_hf_boats[ gw.m_first_boat + gw.m_local ].m_byte_812 ) : 0;
+                gauges.m_map.m_manager = gw.m_manager != 0;
+                for ( int k = 0; k < gg.m_fleet; ++k )
+                {
+                    const golden_hf_fleet_t& gf = g_golden_hf_fleet[ gg.m_first_fleet + k ];
+                    ui_map_boat_t mb;
+                    std::memcpy( mb.m_position, &gf.m_floats[ 0 ], 8 );
+                    std::memcpy( mb.m_direction, &gf.m_floats[ 2 ], 8 );
+                    std::memcpy( mb.m_heading, &gf.m_floats[ 4 ], 8 );
+                    mb.m_answer = gf.m_answer != 0;
+                    mb.m_kind = gf.m_kind;
+                    gauges.m_map.m_boats.push_back( mb );
+                }
+                gauges.m_map.m_local_present = local && gw.m_local < gg.m_fleet;
+                if ( gauges.m_map.m_local_present )
+                    gauges.m_map.m_local = gauges.m_map.m_boats[ static_cast< std::size_t >( gw.m_local ) ];
+                const char* asset = gp.m_asset;
+                const auto self = [ &bind, asset ]( const entity_t& who )
+                {
+                    const int at = bind.bound_index( who );
+                    for ( std::size_t k = 0; k < g_golden_hf_gauge_entities_count; ++k )
+                        if ( g_golden_hf_gauge_entities[ k ].m_index == at && std::strcmp( g_golden_hf_gauge_entities[ k ].m_asset, asset ) == 0 )
+                            return g_golden_hf_gauge_entities[ k ].m_address;
+                    return 0u;
+                };
+                gauges.m_speedometer = [ self ]( const entity_t& who, ui_speedometer_t& s )
+                {
+                    const auto texture = []( std::uint32_t slot )
+                    {
+                        ui_texture_t t;
+                        for ( const golden_hf_texture_t& g : g_golden_hf_spd_textures )
+                            if ( g.m_slot == slot )
+                                t = { g.m_handle, g.m_width, g.m_height };
+                        return t;
+                    };
+                    s.m_material = g_golden_hf_gauge_materials[ 0 ][ 0 ];
+                    s.m_material_key = g_golden_hf_gauge_materials[ 0 ][ 1 ];
+                    s.m_back_imperial = texture( 0xA0 );
+                    s.m_back_metric = texture( 0xA4 );
+                    s.m_needle = texture( 0xA8 );
+                    for ( int k = 0; k < 8; ++k )
+                        s.m_boost[ k ] = texture( 0xC0u + 4u * static_cast< std::uint32_t >( k ) );
+                    s.m_self = self( who );
+                };
+                gauges.m_minimap = [ self ]( const entity_t& who, ui_minimap_t& m )
+                {
+                    m.m_material = g_golden_hf_gauge_materials[ 1 ][ 0 ];
+                    m.m_material_key = g_golden_hf_gauge_materials[ 1 ][ 1 ];
+                    m.m_icon = g_golden_hf_gauge_materials[ 2 ][ 0 ];
+                    m.m_self = self( who );
+                };
+            }
             parse_floats( st.m_points, floats );
             points.clear( );
             for ( std::size_t k = 0; k + 1 < floats.size( ); k += 2 )
@@ -640,6 +710,9 @@ inline bool verify_ui_hud_frames( )
                 const ui_frame_t frame = hud.draw( sort, impl, in, 1.0f );
                 bool same = frame.m_unknown == 0 && list.size( ) - before == static_cast< std::size_t >( st.m_commands ) &&
                             sort.m_key_lo == st.m_key[ 0 ] && sort.m_key_hi == st.m_key[ 1 ];
+                if ( !same && failed < 8 )
+                    LOG_ERROR( "ui hud frames: draw step %d: %d commands (retail %d), %d unknown", s, static_cast< int >( list.size( ) - before ), st.m_commands,
+                               frame.m_unknown );
                 for ( int c = 0; same && c < st.m_commands; ++c )
                 {
                     const golden_txt_command_t& want = g_golden_hf_commands[ st.m_first_command + c ];
@@ -648,6 +721,15 @@ inline bool verify_ui_hud_frames( )
                     const auto& memory = sort.m_buffers[ txt.m_index ].m_memory;
                     same = std::memcmp( have.m_words, want.m_words, sizeof( have.m_words ) ) == 0 && have.m_words[ 3 ] + record.size( ) <= memory.size( ) &&
                            std::memcmp( memory.data( ) + have.m_words[ 3 ], record.data( ), record.size( ) ) == 0;
+                    if ( !same && failed < 8 )
+                    {
+                        int byte = -1;
+                        for ( std::size_t q = 0; byte < 0 && q < record.size( ) && have.m_words[ 3 ] + q < memory.size( ); ++q )
+                            if ( memory[ have.m_words[ 3 ] + q ] != record[ q ] )
+                                byte = static_cast< int >( q );
+                        LOG_ERROR( "ui hud frames: draw step %d command %d (callback 0x%08X / retail 0x%08X): record byte %d differs (-1 = a word)", s, c,
+                                   have.m_words[ 2 ], want.m_words[ 2 ], byte );
+                    }
                     ++commands;
                 }
                 int u = 0;
@@ -709,7 +791,8 @@ inline bool verify_ui_hud_frames( )
                      "0x425DC0 / 0x425F10, touch callbacks 0x425400 / 0x425490 / 0x4254B0, VuTouch list 0x53FB90 / 0x53FA60): %d entities and "
                      "%d event-map rows, %d steps, %d trace entries in order (%d hooks, %d world-owned / audio "
                      "inputs, %d unrecreated handlers), %d states; %d draws (0x423A70, text / image leaves live over the runtime state): %d leaves "
-                     "emitted, %d commands and records byte for byte, %d unrecreated leaves (speedometer / minimap / controls - stubbed) in order",
+                     "emitted (batch 18: the speedometer 0x42BA00 and minimap 0x427BD0 live too), %d commands and records byte for byte, %d "
+                     "unrecreated leaves (stubbed) in order",
             static_cast< int >( g_golden_hf_projects_count ), entities, rows, steps, traces, hooks_seen, unknown_inputs, unknown_events, states, draws,
             emitted, commands, stubs );
     else
@@ -808,6 +891,86 @@ inline bool verify_ui_front_end_defaults( )
     return failed == 0;
 }
 
+// ui_race_checkpoint (core/ui split.hxx) against retail's VuRaceGame slot 15
+// 0x48B180 on a fake game (oracle case race_split): +0x6D8 / +0x6DC, every
+// condition's value / pulse bytes (and the record before the vector - the
+// missing-condition write), the split vector after.
+inline bool verify_ui_race_split( )
+{
+    int failed = 0, runs = 0, pulses = 0, splits = 0, missing = 0;
+    for ( std::size_t r = 0; r < g_golden_spl_vectors_count; ++r )
+    {
+        const golden_spl_vector_t& v = g_golden_spl_vectors[ r ];
+        const golden_spl_conditions_t& gc = g_golden_spl_conditions[ v.m_conditions ];
+        const golden_spl_json_t& gj = g_golden_spl_json[ v.m_json ];
+        c_fsm fsm;
+        for ( int k = 0; k < gc.m_count; ++k )
+        {
+            fsm_condition_t c;
+            c.m_name = gc.m_names[ k ];
+            c.m_hash = fsm_hash( gc.m_names[ k ] );
+            fsm.m_conditions.push_back( c );
+        }
+        ui_race_split_t g;
+        g.m_laps = v.m_laps;
+        std::memcpy( &g.m_best_time, &v.m_best, 4 );
+        g.m_best_splits.tag = static_cast< std::uint32_t >( gj.m_tag );
+        for ( int k = 0; gj.m_tag == 5 && k < gj.m_count; ++k )
+        {
+            const golden_spl_element_t& ge = g_golden_spl_elements[ gj.m_first + k ];
+            value_t e;
+            e.tag = static_cast< std::uint32_t >( ge.m_tag );
+            e.integer = static_cast< int >( ge.m_bits );
+            std::memcpy( &e.real, &ge.m_bits, 4 );
+            e.int64 = ge.m_int64;
+            g.m_best_splits.list.push_back( e );
+        }
+        std::memcpy( &g.m_split_delta, &g_golden_spl_sentinel, 4 );
+        std::memcpy( &g.m_result_delta, &g_golden_spl_sentinel, 4 );
+        for ( int k = 0; k < v.m_prior; ++k )
+        {
+            float t;
+            std::memcpy( &t, &g_golden_spl_words[ v.m_first_word + k ], 4 );
+            g.m_splits.push_back( t );
+        }
+        ui_race_split_boat_t boat;
+        boat.m_human = v.m_human != 0;
+        boat.m_lap = v.m_lap;
+        std::memcpy( &boat.m_race_time, &v.m_race, 4 );
+        const bool ok = ui_race_checkpoint( g, fsm, boat, v.m_finish != 0 );
+        // the bytes as retail's records hold them: +0x1C value, +0x1D pulse; the record before the vector first
+        std::string have = ok ? "0000" : "0001";
+        for ( const fsm_condition_t& c : fsm.m_conditions )
+        {
+            char text[ 8 ];
+            std::snprintf( text, sizeof( text ), "%02x%02x", c.m_value, c.m_pulse );
+            have += text;
+            pulses += c.m_pulse;
+        }
+        missing += ok ? 0 : 1;
+        std::uint32_t deltas[ 2 ];
+        std::memcpy( &deltas[ 0 ], &g.m_split_delta, 4 );
+        std::memcpy( &deltas[ 1 ], &g.m_result_delta, 4 );
+        bool same = have == v.m_pulses && deltas[ 0 ] == v.m_deltas[ 0 ] && deltas[ 1 ] == v.m_deltas[ 1 ] &&
+                    g.m_splits.size( ) == static_cast< std::size_t >( v.m_after );
+        for ( int k = 0; same && k < v.m_after; ++k )
+            same = std::memcmp( &g.m_splits[ static_cast< std::size_t >( k ) ], &g_golden_spl_words[ v.m_first_word + v.m_prior + k ], 4 ) == 0;
+        splits += v.m_after;
+        ++runs;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui race split: vector %d differs from retail (conditions %s / %s, deltas 0x%08X 0x%08X / 0x%08X 0x%08X, splits %d / %d)",
+                       static_cast< int >( r ), have.c_str( ), v.m_pulses, deltas[ 0 ], deltas[ 1 ], v.m_deltas[ 0 ], v.m_deltas[ 1 ],
+                       static_cast< int >( g.m_splits.size( ) ), v.m_after );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_race_checkpoint matches retail's VuRaceGame slot 15 0x48B180 (0x555C60 condition lookup, getValue 0x4FC590, push_back "
+                     "0x440990) on %d vectors: +0x6D8 / +0x6DC, %d pulses set, %d missing-condition writes, %d split times after",
+            runs, pulses, missing, splits );
+    else
+        LOG_ERROR( "the race split FAILED %d vectors against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_update_all( )
 {
 
@@ -815,5 +978,6 @@ inline bool verify_ui_update_all( )
     ok = verify_ui_frames( ) && ok;
     ok = verify_ui_hud_frames( ) && ok;
     ok = verify_ui_front_end_defaults( ) && ok;
+    ok = verify_ui_race_split( ) && ok;
     return ok;
 }
