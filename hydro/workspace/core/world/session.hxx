@@ -908,6 +908,43 @@ inline void race_session_mine_hide( race_session_t::dyn_prop_t& d )
     }
 }
 
+// The explosion part's trigger 0x547BB0 (thiscall part, const VuMatrix&; retn 4) - the mine's (+0x184) and VuExplosionEntity's
+// (+0x64): +0 = the matrix's row 3 (16 bytes), the explosion manager g 0x759034 vt+0x18 = 0x510180 (explosion_add over the
+// human listeners) on the part (+0x10 .. +0x30 the nine Explosion floats), the pfx 0x52BCD0 by +0x34's name (its +0x70
+// handle, slot +0x28 discarded, then by the handle's lookup slot 8 setMatrix( the matrix ), slot +0x2C start) and FMOD's
+// event by +0x4C's name at the row-3 position (getEvent / set3DAttributes / start - platform).
+inline void race_session_explode( race_session_t& s, const float* m, const float* explosion9, const std::string& pfx, const std::string& audio,
+                                  const char* who )
+{
+    std::uint8_t params[ 0x38 ] = { };
+    std::memcpy( params, m + 12, 16 );
+    std::memcpy( params + 0x10, explosion9, 36 );
+    s.explosion_hits += explosion_add( params, s.explosion_listeners, hull_sqrt );
+    if ( !pfx.empty( ) && s.world.pfx && s.world.pfx_manager && s.world.pfx_ops )
+    {
+        pfx_manager_t& pm = *s.world.pfx_manager;
+        const int e = pfx_manager_create( pm, pfx.c_str( ), *s.world.pfx_ops );
+        if ( e >= 0 )
+        {
+            const boat_pfx_ops_t o = boat_pfx_runtime_ops( *s.world.pfx );
+            const std::uint32_t hd = pfx_manager_handle( pm, e );
+            if ( o.duration )
+                o.duration( o.user, pm.entries[ static_cast< std::size_t >( e ) ].instance );
+            const int x = hd ? pfx_manager_lookup( pm, hd ) : -1;
+            if ( x >= 0 )
+            {
+                const std::uint32_t inst = pm.entries[ static_cast< std::size_t >( x ) ].instance;
+                o.set_matrix( o.user, inst, m );
+                o.start( o.user, inst );
+            }
+        }
+    }
+    else if ( !pfx.empty( ) )
+        race_unwired( s, std::string( who ) + "'s explosion pfx 0x52BCD0 with no VuPfx runtime / manager - UNKNOWN, not run" );
+    if ( !audio.empty( ) )
+        race_unwired( s, std::string( "audio: " ) + who + "'s explosion event (FMOD getEvent / set3DAttributes / start - platform)" );
+}
+
 // The mine's Decision tick 0x438EA0 (world/mine.hxx mine_tick): the hide; the explosion part 0x547BB0 - its params
 // (+0 the position: the transform's row 3, +0x10 .. +0x30 the nine Explosion floats) to the explosion manager's add
 // 0x510180 (explosion_add over the human listeners), the pfx 0x52BCD0 by "Explosion Pfx System Name" (slot 10 discarded,
@@ -926,35 +963,7 @@ inline void race_session_mine_tick( void* user, float )
     }
     mine_tick_hooks_t h;
     h.hide = [ &d ] { race_session_mine_hide( d ); };
-    h.explode = [ &s, &d ]( const float* m ) {
-        std::uint8_t params[ 0x38 ] = { };
-        std::memcpy( params, m + 12, 16 );
-        std::memcpy( params + 0x10, d.p->explosion, 36 );
-        s.explosion_hits += explosion_add( params, s.explosion_listeners, hull_sqrt );
-        if ( !d.p->explosion_pfx.empty( ) && s.world.pfx && s.world.pfx_manager && s.world.pfx_ops )
-        {
-            pfx_manager_t& pm = *s.world.pfx_manager;
-            const int e = pfx_manager_create( pm, d.p->explosion_pfx.c_str( ), *s.world.pfx_ops );
-            if ( e >= 0 )
-            {
-                const boat_pfx_ops_t o = boat_pfx_runtime_ops( *s.world.pfx );
-                const std::uint32_t hd = pfx_manager_handle( pm, e );
-                if ( o.duration )
-                    o.duration( o.user, pm.entries[ static_cast< std::size_t >( e ) ].instance );
-                const int x = hd ? pfx_manager_lookup( pm, hd ) : -1;
-                if ( x >= 0 )
-                {
-                    const std::uint32_t inst = pm.entries[ static_cast< std::size_t >( x ) ].instance;
-                    o.set_matrix( o.user, inst, m );
-                    o.start( o.user, inst );
-                }
-            }
-        }
-        else if ( !d.p->explosion_pfx.empty( ) )
-            race_unwired( s, "a mine's explosion pfx 0x52BCD0 with no VuPfx runtime / manager - UNKNOWN, not run" );
-        if ( !d.p->explosion_audio.empty( ) )
-            race_unwired( s, "audio: a mine's explosion event (FMOD getEvent / set3DAttributes / start - platform)" );
-    };
+    h.explode = [ &s, &d ]( const float* m ) { race_session_explode( s, m, d.p->explosion, d.p->explosion_pfx, d.p->explosion_audio, "a mine" ); };
     h.point_wave = [ &s ]( const std::uint32_t* desc ) {
         if ( !s.world.water )
         {

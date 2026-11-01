@@ -128,6 +128,51 @@ inline std::shared_ptr< void > dynamic_prop_state_for( const std::string& cls )
     return s;
 }
 
+// ---- VuExplosionEntity (create -> ctor 0x5E6150; vtable 0x755488; world batch 29) ---------------------------------
+// The ctor: VuEntity's 0x500710, a VuTransformComponent (+0x50), a Vu3dLayoutComponent, a VuScriptComponent (+0x60), the
+// explosion part at +0x64 (defaults 0x438BA0, nodes 0x5476D0 - the mine's part: nine VuBasicProperty<float> +0x74 ..
+// +0x94, "Explosion Pfx System Name" +0x98, "Explosion Audio Event Name" +0xB0), the layout's draw 0x5E63F0 (the
+// editor's) and the input plug "Trigger" (0x5E6410 -> 0x5E63D0: the part's 0x547BB0( transform +0x50 ), VuRetVal 0).
+struct explosion_entity_t
+{
+    float explosion[ 9 ] = { 50.0f, 10.0f, 0.25f, 0.0f, 1.0f, 50.0f, 1.0f, 1.0f, 64.0f };
+    std::string pfx;     // +0x98
+    std::string audio;   // +0xB0
+};
+
+struct explosion_entity_state_t
+{
+    explosion_entity_t value;
+    explosion_entity_t defaults;
+};
+
+inline std::shared_ptr< void > explosion_entity_state_for( const std::string& cls )
+{
+    return cls == "VuExplosionEntity" ? std::make_shared< explosion_entity_state_t >( ) : nullptr;
+}
+
+inline explosion_entity_state_t* explosion_entity_state_of( const entity_t& e )
+{
+    return e.m_type == "VuExplosionEntity" && e.m_state ? static_cast< explosion_entity_state_t* >( e.m_state.get( ) ) : nullptr;
+}
+
+inline void explosion_entity_load_properties( entity_t& e, const value_t& p )
+{
+    explosion_entity_state_t* s = explosion_entity_state_of( e );
+    if ( !s )
+        return;
+    for ( int k = 0; k < 9; ++k )
+        property_float( p, k_mine_explosion_names[ k ], s->value.explosion[ k ], s->defaults.explosion[ k ], false );
+    property_string( p, "Explosion Pfx System Name", s->value.pfx, s->defaults.pfx );
+    property_string( p, "Explosion Audio Event Name", s->value.audio, s->defaults.audio );
+}
+
+inline void explosion_entity_mark_properties( entity_t& e )
+{
+    if ( explosion_entity_state_t* s = explosion_entity_state_of( e ) )
+        s->defaults = s->value;
+}
+
 // The loads in node order, each reset to its default first.
 inline void dynamic_prop_load_properties( entity_t& e, const value_t& p )
 {

@@ -1241,6 +1241,9 @@ inline void race_drive_sync_target( race_session_t& s, int child )
 // - VuAiNuisanceDriverStartEntity's "DriverTarget" 0x42FF90 / "DriverDisable" 0x430020 (boat nuisance.hxx, on the
 //   session's words; `params` the event's VuParams - 0x80 data bytes, +0x80 the size - null: an empty one).
 // True when the plug is one of these (consumed); false: not a race-side receiver.
+inline void race_session_explode( race_session_t& s, const float* m, const float* explosion9, const std::string& pfx, const std::string& audio,
+                                  const char* who );
+
 inline bool race_event_dispatch( race_session_t& s, const std::string& entity, const std::string& plug, const std::uint8_t* params )
 {
     // VuPropEntity's inputs (ctor 0x5464C0, plug inits 0x546EE0): "Show" 0x546380 - the static model component (+0x70) onto
@@ -1311,6 +1314,34 @@ inline bool race_event_dispatch( race_session_t& s, const std::string& entity, c
             LOG_INFO( "race: event %s . %s (control; sync %d)", entity.c_str( ), plug.c_str( ), s.dynamics ? s.dynamics->syncs : -1 );
             return true;
         }
+    // VuExplosionEntity's "Trigger" (0x5E6410's plug, 0x5E63D0): the part (+0x64) 0x547BB0( transform +0x50 ) (session.hxx
+    // race_session_explode), VuRetVal 0.
+    if ( plug == "Trigger" && s.tree )
+    {
+        entity_t* e = s.tree;
+        std::size_t at = 0;
+        while ( e && at <= entity.size( ) )
+        {
+            const std::size_t slash = entity.find( '/', at );
+            const std::string part = entity.substr( at, slash == std::string::npos ? std::string::npos : slash - at );
+            e = entity_find_child( *e, part );
+            if ( slash == std::string::npos )
+                break;
+            at = slash + 1;
+        }
+        if ( const explosion_entity_state_t* x = e ? explosion_entity_state_of( *e ) : nullptr )
+        {
+            const transform_component_t* t = entity_transform( *e );
+            if ( !t || e->m_world_unknown )
+                race_unwired( s, "VuExplosionEntity . Trigger 0x5E63D0 on an entity whose world is unknown - UNKNOWN, not run" );
+            else
+            {
+                race_session_explode( s, t->world, x->value.explosion, x->value.pfx, x->value.audio, "VuExplosionEntity" );
+                LOG_INFO( "race: event %s . Trigger (VuExplosionEntity 0x5E63D0: 0x547BB0; sync %d)", entity.c_str( ), s.dynamics ? s.dynamics->syncs : -1 );
+            }
+            return true;
+        }
+    }
     // VuFloatingMineEntity's "Detonate" (0x439020's plug; thunk 0x4390BE -> vt+0x44 0x438DF0): +0x215 = 1, VuRetVal 0.
     if ( plug == "Detonate" )
         for ( const auto& dp : s.dyn_props )
