@@ -279,7 +279,7 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
         // as its transform watcher 0x5EB4A0 hands it too) and start() iff
         // Initially Active. The manager's lookup is the platform side: an
         // empty name is skipped here (what retail's manager returns for it
-        // is unread), and c_pfx stands in for the system.
+        // is unread); the system is the verified runtime's (world/effects.hxx).
         if ( e.m_type == "VuStaticPfxEntity" && e.m_state )
         {
             const static_pfx_t& p = static_cast< const static_pfx_state_t* >( e.m_state.get( ) )->value;
@@ -290,7 +290,7 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
             {
                 float color[ 4 ];
                 static_pfx_color( p, color );
-                m_pfx.add( m_archive, p.effect_name, t->world, p.pfx_scale, color, p.initially_active != 0 );
+                m_pfx.add_static( m_archive, p.effect_name, t->world, p.pfx_scale, color, p.initially_active != 0 );
                 ++pfx_placed;
             }
         }

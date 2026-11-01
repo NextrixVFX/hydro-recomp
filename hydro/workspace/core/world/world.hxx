@@ -12,6 +12,7 @@
 #include <workspace/core/assets/tree.hxx>
 #include <workspace/core/game/input.hxx>
 #include <workspace/core/world/control.hxx>
+#include <workspace/core/world/effects.hxx>
 #include <workspace/core/world/pfx.hxx>
 #include <workspace/core/entity/light.hxx>
 #include <workspace/core/entity/node.hxx>
@@ -1114,8 +1115,15 @@ public:
         trace::frame( ).props += trace::now( ) - props_start;
 
         const double pfx_start = trace::now( );
-        m_pfx.draw( dt, m_eye, m_target, [ this ]( const std::string& path ) { return texture_for( path ); },
-            [ this ]( const std::string& path ) -> const std::vector< pfx_part_t >& { return pfx_parts( path ); } );
+        // --no-pfx (diagnostic, ours): no pfx tick and no pfx draw - the A/B for a change that moves only the pfx.
+        if ( c_engine::option( "no-pfx" ) == nullptr )
+        {
+            m_pfx.frame( dt, m_eye );
+            m_pfx.draw( m_eye, m_target, [ this ]( const std::string& path ) { return texture_for( path ); },
+                [ this ]( const std::string& path ) -> const std::vector< pfx_part_t >& { return pfx_parts( path ); } );
+        }
+        else
+            c_engine::drop( 11 );
         m_coronas.tick( dt );
         m_coronas.draw( m_eye, m_target, [ this ]( const std::string& path ) { return texture_for( path ); } );
         trace::frame( ).pfx += trace::now( ) - pfx_start;
@@ -1146,7 +1154,8 @@ private:
     float m_orbit = 0.0f;
 
     c_archive m_archive{};
-    c_pfx m_pfx{};
+    // The world's VuPfx (world/effects.hxx: the verified runtime; the old c_pfx simulation is gone).
+    c_effects m_pfx{};
     c_corona_entity m_coronas{};
     std::map< std::string, std::vector< cached_part_t > > m_models;
     std::map< std::string, std::vector< pfx_part_t > > m_pfx_models;
