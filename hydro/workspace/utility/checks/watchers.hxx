@@ -1,5 +1,6 @@
 #pragma once
 
+#include <workspace/core/world/frontcam.hxx>
 #include <workspace/core/world/watchers.hxx>
 
 // THE WATER ENTITIES' CONTROL / MOTION HANDLERS (world/watchers.hxx) against retail on Hydroelectric's built water.
@@ -1138,9 +1139,59 @@ inline bool verify_water_create( )
         LOG_ERROR( "water_create FAILED %d of %d", bad, compared );
     return bad == 0;
 }
+// VuFrontEndCameraEntity's lookAt 0x43A4D0 / tick 0x43A430 (world/frontcam.hxx) against retail (case fe_camera): one camera
+// from 0x50BA20 carried across the vectors; per vector the camera after each call and viewport 0's copy, stale words masked.
+inline bool verify_fe_camera( )
+{
+    const unsigned* s = g_golden_fec_words;
+    front_camera_t c;
+    front_camera_construct( c );
+    int bad = std::memcmp( c.camera, s, 0x240 ) != 0;
+    s += 144;
+    const unsigned n = *s++;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        float world[ 16 ];
+        std::memcpy( world, s, 64 );
+        s += 16;
+        camera_env_t env;
+        env.display_w = static_cast< std::int32_t >( *s++ );
+        env.display_h = static_cast< std::int32_t >( *s++ );
+        env.vertical_fov.type = static_cast< std::int32_t >( *s++ );
+        env.vertical_fov.payload = static_cast< std::uint64_t >( s[ 0 ] ) | ( static_cast< std::uint64_t >( s[ 1 ] ) << 32 );
+        s += 2;
+        bool stale[ 144 ] = {};
+        const unsigned ns = *s++;
+        for ( unsigned i = 0; i < ns; ++i )
+            stale[ s[ i ] ] = true;
+        s += ns;
+        auto same = [ & ]( const std::uint8_t* got, const unsigned* want ) {
+            int d = 0;
+            for ( unsigned w = 0; w < 144; ++w )
+                d += !stale[ w ] && std::memcmp( got + 4 * w, want + w, 4 ) != 0;
+            return d;
+        };
+        front_camera_look( c, world );
+        bad += same( c.camera, s );
+        s += 144;
+        std::uint8_t viewport[ 0x240 ] = {};
+        front_camera_tick( c, env, viewport );
+        bad += same( c.camera, s );
+        s += 144;
+        bad += same( viewport, s );
+        s += 144;
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "front_camera_look / _tick match VuFrontEndCameraEntity's 0x43A4D0 / 0x43A430 (0x50BA20, 0x50BDA0, 0x4D2C60, 0x50BBE0) on %u "
+                     "frames: camera and viewport 0 word for word", n );
+    else
+        LOG_ERROR( "fe_camera FAILED %d", bad );
+    return bad == 0;
+}
 inline bool verify_watchers_all( )
 {
     bool ok = true;
+    ok = verify_fe_camera( ) && ok;
     ok = verify_water_types_game( ) && ok;
     ok = verify_water_ctors_game( ) && ok;
     ok = verify_water_create( ) && ok;
