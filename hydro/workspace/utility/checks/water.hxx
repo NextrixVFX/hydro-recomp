@@ -2568,6 +2568,7 @@ inline bool verify_water_all( )
     ok = verify_control_entity( ) && ok;
     ok = verify_lens_water( ) && ok;
     ok = verify_audio_emitter( ) && ok;
+    ok = verify_force_affector( ) && ok;
     ok = verify_settings_triggers( ) && ok;
     ok = verify_key_motion( ) && ok;
     ok = verify_ocean_kernels96( ) && ok;

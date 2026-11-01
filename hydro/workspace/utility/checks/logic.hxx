@@ -978,3 +978,135 @@ inline bool verify_settings_triggers( )
         LOG_ERROR( "settings_triggers FAILED %d", bad );
     return bad == 0;
 }
+
+// VuForceAffectorEntity (world/force.hxx) against retail (case force_affector): the ctor defaults; per step the log (the
+// box scaling, the ghost add / remove, the step callback, the Build tick {0x73A84C, this, 0x439ED0, 0}), the VuRetVal, the
+// objects' force words after the step, the active byte and the ghost words (each row's w lane - a stack word retail never
+// wrote - excepted).
+#include <workspace/core/world/force.hxx>
+
+inline bool verify_force_affector( )
+{
+    logic_check_t c{ g_golden_fae_words };
+    int bad = 0, steps = 0, pushes = 0, reported = 0;
+    {
+        const force_affector_t d;
+        const std::uint32_t want[ 5 ] = { d.initially_active, control_w( d.acceleration ), control_w( d.max_speed ), d.active, 0x73A88Cu };
+        for ( std::uint32_t x : want )
+            bad += c.next( ) == x ? 0 : 1;
+    }
+    struct env_t { std::vector< std::vector< std::uint32_t > > log; };
+    const unsigned n = c.next( );
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        force_affector_t e;
+        e.initially_active = static_cast< std::uint8_t >( c.next( ) );
+        e.acceleration = control_f( c.next( ) );
+        e.max_speed = control_f( c.next( ) );
+        float tm[ 16 ], scale[ 3 ];
+        for ( float& x : tm )
+            x = control_f( c.next( ) );
+        for ( float& x : scale )
+            x = control_f( c.next( ) );
+        env_t env;
+        force_affector_hooks_t h;
+        h.user = &env;
+        h.set_scaling = []( void* u, const float* s )
+        {
+            static_cast< env_t* >( u )->log.push_back( { 1u, 1u, control_w( s[ 0 ] ), control_w( s[ 1 ] ), control_w( s[ 2 ] ), control_w( s[ 3 ] ) } );
+        };
+        h.add_object = []( void* u, std::uint32_t g, std::uint32_t m ) { static_cast< env_t* >( u )->log.push_back( { 2u, 1u, g, m } ); };
+        h.remove_object = []( void* u ) { static_cast< env_t* >( u )->log.push_back( { 3u, 1u } ); };
+        h.step_callback = []( void* u, bool add ) { static_cast< env_t* >( u )->log.push_back( { 4u, add ? 1u : 0u, 1u } ); };
+        h.tick_register = []( void* u, bool on )
+        {
+            if ( on )
+                static_cast< env_t* >( u )->log.push_back( { 5u, key_motion_fnv( "Build" ), 0x73A84Cu, 1u, 0x439ED0u, 0u } );
+            else
+                static_cast< env_t* >( u )->log.push_back( { 6u, 1u } );
+        };
+        int unrecreated = 0;
+        h.unrecreated = &unrecreated;
+        const unsigned ns = c.next( );
+        for ( unsigned s = 0; s < ns; ++s )
+        {
+            const unsigned op = c.next( );
+            std::vector< std::uint32_t > arg( c.next( ) );
+            for ( auto& x : arg )
+                x = c.next( );
+            std::vector< std::uint32_t > want_ret( c.next( ) );
+            for ( auto& x : want_ret )
+                x = c.next( );
+            std::vector< std::vector< std::uint32_t > > want_log( c.next( ) );
+            for ( auto& w : want_log )
+            {
+                w.resize( c.next( ) );
+                for ( auto& x : w )
+                    x = c.next( );
+            }
+            std::uint32_t want_state[ 17 ];
+            for ( auto& x : want_state )
+                x = c.next( );
+            env.log.clear( );
+            std::vector< std::uint32_t > got_ret{ 0u };
+            switch ( op )
+            {
+                case 0: force_affector_game_init( e, tm, scale, h ); break;
+                case 1: force_affector_activate( e, tm, scale, h ); break;
+                case 2: force_affector_deactivate( e, h ); break;
+                case 3:
+                {
+                    for ( int k = 0; k < 16; ++k )
+                        e.ghost[ k ] = control_f( arg[ static_cast< std::size_t >( k ) ] );
+                    float sc[ 3 ] = { control_f( arg[ 16 ] ), control_f( arg[ 17 ] ), control_f( arg[ 18 ] ) };
+                    const int nb = static_cast< int >( arg[ 20 ] );
+                    std::vector< force_body_t > bodies( static_cast< std::size_t >( nb ) );
+                    for ( int k = 0; k < nb; ++k )
+                    {
+                        const std::uint32_t* a = arg.data( ) + 21 + 14 * k;
+                        force_body_t& b = bodies[ static_cast< std::size_t >( k ) ];
+                        b.type = a[ 0 ];
+                        for ( int j = 0; j < 3; ++j )
+                        {
+                            b.position[ j ] = control_f( a[ 1 + j ] );
+                            b.velocity[ j ] = control_f( a[ 4 + j ] );
+                            b.factor[ j ] = control_f( a[ 8 + j ] );
+                            b.force[ j ] = control_f( a[ 11 + j ] );
+                        }
+                        b.inverse_mass = control_f( a[ 7 ] );
+                    }
+                    force_affector_step( e, sc, bodies.data( ), nb );
+                    got_ret.clear( );
+                    for ( int k = 0; k < nb; ++k )
+                    {
+                        const std::uint32_t* a = arg.data( ) + 21 + 14 * k;
+                        for ( int j = 0; j < 3; ++j )
+                        {
+                            const std::uint32_t f = control_w( bodies[ static_cast< std::size_t >( k ) ].force[ j ] );
+                            got_ret.push_back( f );
+                            pushes += f != a[ 11 + j ] ? 1 : 0;
+                        }
+                    }
+                    break;
+                }
+                case 4: force_affector_build( e, false, h ); break;
+                case 5: force_affector_game_release( e, h ); break;
+                default: ++bad; break;
+            }
+            int diff = ( got_ret == want_ret ? 0 : 1 ) + ( env.log == want_log ? 0 : 1 ) + ( e.active == want_state[ 0 ] ? 0 : 1 );
+            for ( int k = 0; k < 16; ++k )
+                diff += control_w( e.ghost[ k ] ) == want_state[ 1 + k ] ? 0 : 1;
+            if ( diff && reported++ < 6 )
+                LOG_ERROR( "force_affector scenario %u step %u (op %u): %d words differ", v, s, op, diff );
+            bad += diff + unrecreated;
+            unrecreated = 0;
+            ++steps;
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuForceAffectorEntity matches retail: %u scenarios, %d steps (slots 6 / 7, Activate / Deactivate, the step 0x439970: "
+                     "%d force components changed, the Build tick)", n, steps, pushes );
+    else
+        LOG_ERROR( "force_affector FAILED %d", bad );
+    return bad == 0;
+}
