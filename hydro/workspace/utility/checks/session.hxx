@@ -304,9 +304,55 @@ inline bool verify_action_mode( )
     return failed == 0;
 }
 
+// dynamic_prop_load_properties' mine half (world/dynprop.hxx) against retail's VuEntity::load 0x5009D0 on every
+// VuFloatingMineEntity in the templates / projects plus hand-built ones (oracle case mine_properties): the nine explosion
+// floats, the seven wave floats (bit for bit) and the two names.
+inline bool verify_mine_properties( )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_mine_properties_document );
+    static std::vector< value_t > documents;
+    documents.push_back( c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_mine_properties_document_bytes ) ).parse( ) );
+    static const entity_registry_t registry = build_entity_registry( { } );
+    entity_world_t world = race_entity_world( registry, nullptr );
+    const std::unique_ptr< entity_t > tree = entity_load_project( member( documents.back( ), "VuProject" ), "Data/Projects/Check.vuprj", world );
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_mine_properties_count; ++k )
+    {
+        const golden_entity_targets_t& want = g_golden_mine_properties[ k ];
+        const entity_t* e = nullptr;
+        if ( tree )
+            for ( auto& child : tree->m_children )
+                if ( child->m_name == want.m_child )
+                    e = child.get( );
+        const dynamic_prop_state_t* s = e && e->m_state && e->m_type == "VuFloatingMineEntity" ? static_cast< const dynamic_prop_state_t* >( e->m_state.get( ) ) : nullptr;
+        if ( !s || !s->mine || want.m_count != 16 )
+        {
+            LOG_ERROR( "mine properties: %s (%s) missing, without state or not 16 words", want.m_child, want.m_source );
+            ++failed;
+            continue;
+        }
+        std::uint32_t got[ 16 ];
+        std::memcpy( got, s->value.explosion, 36 );
+        std::memcpy( got + 9, s->value.wave, 28 );
+        bool bad = s->value.explosion_pfx != want.m_texts[ 0 ] || s->value.explosion_audio != want.m_texts[ 1 ];
+        for ( int w = 0; w < 16; ++w )
+            bad = bad || got[ w ] != want.m_values[ w ];
+        if ( bad && ++failed <= 8 )
+            LOG_ERROR( "mine properties: %s (%s) differ from retail's (pfx '%s' / '%s', audio '%s' / '%s')", want.m_child, want.m_source,
+                       s->value.explosion_pfx.c_str( ), want.m_texts[ 0 ], s->value.explosion_audio.c_str( ), want.m_texts[ 1 ] );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "dynamic_prop_load_properties (mine) matches VuFloatingMineEntity's loads on %d entities (16 floats + 2 names), bit for bit",
+                     static_cast< int >( g_golden_mine_properties_count ) );
+    else
+        LOG_ERROR( "the mine properties FAILED on %d of %d entities", failed, static_cast< int >( g_golden_mine_properties_count ) );
+    return failed == 0;
+}
+
 inline bool verify_session_all( )
 {
     bool ok = true;
+    ok = verify_mine_properties( ) && ok;
     ok = verify_action_mode( ) && ok;
     ok = verify_front_end_trigger( ) && ok;
     ok = verify_logic_properties( ) && ok;

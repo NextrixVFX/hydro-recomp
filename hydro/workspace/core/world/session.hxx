@@ -838,7 +838,7 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
             self( self, *c );
         if ( race_session_gfx_game_initialize( s, e ) )
             return;
-        if ( dynamic_prop_class( e.m_type ) )
+        if ( dynamic_prop_class( e.m_type ) && e.m_type != "VuFloatingMineEntity" )   // the mine's slot 6 0x438CF0: below
         {
             if ( race_session_dynamic_prop( s, e, hooks, id ) )
                 ++dynamic;
