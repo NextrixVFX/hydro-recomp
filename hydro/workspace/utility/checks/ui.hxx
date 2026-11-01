@@ -7,6 +7,7 @@
 #include <workspace/core/ui/draw.hxx>
 #include <workspace/core/ui/flow.hxx>
 #include <workspace/core/ui/screen.hxx>
+#include <workspace/core/ui/wiring.hxx>
 
 #include <algorithm>
 #include <array>
@@ -1131,9 +1132,189 @@ inline bool verify_ui_text_draw( )
     return failed == 0;
 }
 
+// The UI wiring end to end against retail (oracle case ui_wiring): the real
+// Screens projects loaded through ui_scripted_world (plugs from game/plugs.hxx,
+// links by script_load), every output plug whose links all reach a screen
+// action found the same way retail's case finds them (owner pre-order index,
+// plug index, name, return type, each link's owner + plug), fired through
+// c_ui_wiring::fire (0x5023A0) - the VuRetVal and every broadcast (hash, params
+// bytes); then each fire's broadcasts into ONE c_front_end in order, its whole
+// state and hooks after each fire.
+inline bool verify_ui_wiring( )
+{
+    const ui_loaded_t& base = ui_loaded( );
+    std::vector< std::string > names( g_golden_entity_templates, g_golden_entity_templates + g_golden_entity_templates_count );
+    static const entity_registry_t registry = build_entity_registry( names );
+    const std::map< std::string, value_t >* templates = &base.templates;
+    const entity_world_t world = ui_scripted_world( registry, [ templates ]( const std::string& name ) -> const value_t*
+    {
+        const auto found = templates->find( "VuTemplateAsset/" + name );
+        return found == templates->end( ) ? nullptr : &found->second;
+    } );
+    const unsigned* cdb = g_golden_vujb_words + g_golden_vujb_offsets[ 0 ];
+    const unsigned char* cdb_raw = reinterpret_cast< const unsigned char* >( cdb + 2 );
+    const value_t constant_db = c_reader( std::vector< std::uint8_t >( cdb_raw, cdb_raw + cdb[ 1 ] ) ).parse( );
+    std::vector< std::pair< std::string, std::string > > fe_log;
+    front_end_engine_t engine;
+    engine.m_display = []( int& w, int& h ) { w = 1280; h = 720; };
+    engine.m_sound = [ &fe_log ]( const char* name ) { fe_log.push_back( { "sound", name } ); };
+    engine.m_load_project = [ &fe_log ]( const std::string& name ) { fe_log.push_back( { "load", name } ); return 0; };
+    engine.m_analytics = [ &fe_log ]( const char* event, const std::string& ) { fe_log.push_back( { "analytics", event } ); };
+    c_front_end fe( engine, constant_db );
+    int failed = 0;
+    auto bad = [ &failed ]( const char* what, int k )
+    {
+        if ( ++failed <= 8 )
+            LOG_ERROR( "ui wiring: %s differs from retail (fire %d)", what, k );
+    };
+    auto same_state = [ &fe, &engine ]( const golden_wire_state_t& st ) -> bool
+    {
+        if ( fe.m_mode != st.m_mode || fe.m_next != st.m_next || fe.m_current != st.m_current )
+            return false;
+        if ( fe.m_stack.size( ) != static_cast< std::size_t >( st.m_stack ) )
+            return false;
+        for ( int k = 0; k < st.m_stack; ++k )
+            if ( fe.m_stack[ k ] != g_golden_wire_stack[ st.m_first_stack + k ] )
+                return false;
+        if ( static_cast< unsigned >( fe.m_depth ) != st.m_depth || engine.m_operation != st.m_operation || engine.m_screen != st.m_screen )
+            return false;
+        if ( ( fe.m_fsm.current( ) != nullptr ) != ( st.m_state != nullptr ) || ( st.m_state && fe.m_fsm.current( )->m_name != st.m_state ) )
+            return false;
+        std::uint32_t time = 0;
+        std::memcpy( &time, &fe.m_fsm.m_time, 4 );
+        if ( time != st.m_time || fe.m_fsm.m_conditions.size( ) != static_cast< std::size_t >( st.m_condition_count ) )
+            return false;
+        for ( int k = 0; k < st.m_condition_count; ++k )
+            if ( static_cast< unsigned >( fe.m_fsm.m_conditions[ k ].m_value | ( fe.m_fsm.m_conditions[ k ].m_pulse << 8 ) ) != st.m_conditions[ k ] )
+                return false;
+        return true;
+    };
+    if ( !same_state( g_golden_wire_initial ) )
+        bad( "the front end's initial state", -1 );
+    std::vector< std::pair< std::uint32_t, ui_params_t > > sent;
+    c_ui_wiring wiring;
+    wiring.m_broadcast = [ &sent ]( std::uint32_t hash, const ui_params_t& p ) { sent.push_back( { hash, p } ); };
+    std::size_t next = 0;
+    int links = 0;
+    for ( std::size_t w = 0; w < g_golden_wire_projects_count; ++w )
+    {
+        const golden_ui_project_t* project = nullptr;
+        for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+            if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, g_golden_wire_projects[ w ] ) == 0 )
+                project = &g_golden_ui_projects[ p ];
+        if ( !project )
+        {
+            bad( "a project's presence in the loaded set", -1 );
+            continue;
+        }
+        const unsigned char* raw = reinterpret_cast< const unsigned char* >( project->m_words );
+        const value_t document = c_reader( std::vector< std::uint8_t >( raw, raw + project->m_bytes ) ).parse( );
+        const std::unique_ptr< entity_t > root = entity_load_project( member( document, "VuProject" ), project->m_path, world );
+        std::vector< entity_t* > order;
+        const auto walk = [ &order ]( const auto& self, entity_t& e ) -> void
+        {
+            order.push_back( &e );
+            for ( auto& child : e.m_children )
+                self( self, *child );
+        };
+        if ( root )
+            walk( walk, *root );
+        // the case's selection: an output plug, links non-empty, every link's owner a screen action
+        std::vector< std::pair< int, int > > found;
+        for ( std::size_t i = 0; i < order.size( ); ++i )
+        {
+            const script_component_t* sc = script_of( *order[ i ] );
+            for ( std::size_t k = 0; sc && k < sc->m_plugs.size( ); ++k )
+            {
+                const script_plug_t& p = sc->m_plugs[ k ];
+                if ( p.m_row->m_input || p.m_links.empty( ) )
+                    continue;
+                bool all = true;
+                ui_action_kind_t kind;
+                for ( const script_link_t& l : p.m_links )
+                    all = all && ui_action_kind_of( l.m_entity->m_type, kind );
+                if ( all )
+                    found.push_back( { static_cast< int >( i ), static_cast< int >( k ) } );
+            }
+        }
+        std::size_t first = next;
+        while ( next < g_golden_wire_fires_count && std::strcmp( g_golden_wire_fires[ next ].m_project, g_golden_wire_projects[ w ] ) == 0 )
+            ++next;
+        if ( found.size( ) != next - first )
+        {
+            LOG_ERROR( "ui wiring: %s has %d wired output plugs, retail %d", g_golden_wire_projects[ w ], static_cast< int >( found.size( ) ),
+                static_cast< int >( next - first ) );
+            bad( "the wired plugs' count", static_cast< int >( first ) );
+            continue;
+        }
+        for ( std::size_t f = first; f < next; ++f )
+        {
+            const golden_wire_fire_t& want = g_golden_wire_fires[ f ];
+            const int row = static_cast< int >( f );
+            const auto [ index, plug ] = found[ f - first ];
+            entity_t& owner = *order[ static_cast< std::size_t >( index ) ];
+            const script_plug_t& p = script_of( owner )->m_plugs[ static_cast< std::size_t >( plug ) ];
+            if ( index != want.m_index || plug != want.m_plug_index || owner.m_name != want.m_name || std::strcmp( p.m_row->m_name, want.m_plug ) != 0 ||
+                 p.m_row->m_type != want.m_type )
+            {
+                bad( "the fired plug", row );
+                continue;
+            }
+            bool same = p.m_links.size( ) == static_cast< std::size_t >( want.m_links );
+            for ( int k = 0; same && k < want.m_links; ++k )
+            {
+                const script_link_t& l = p.m_links[ static_cast< std::size_t >( k ) ];
+                const golden_wire_link_t& gl = g_golden_wire_links[ want.m_first_link + k ];
+                const auto at = std::find( order.begin( ), order.end( ), l.m_entity );
+                same = at - order.begin( ) == gl.m_index && std::strcmp( script_of( *l.m_entity )->m_plugs[ static_cast< std::size_t >( l.m_plug ) ].m_row->m_name, gl.m_plug ) == 0;
+            }
+            if ( !same )
+                bad( "the resolved links", row );
+            links += want.m_links;
+            sent.clear( );
+            const ui_ret_t ret = wiring.fire( owner, plug, ui_params_t{ } );
+            char text[ 20 ];
+            std::snprintf( text, sizeof( text ), "%08X%08X", ret.m_words[ 0 ], ret.m_words[ 1 ] );
+            if ( !ret.m_known || std::strcmp( text, want.m_ret ) != 0 )
+                bad( "the VuRetVal", row );
+            same = sent.size( ) == static_cast< std::size_t >( want.m_logs );
+            for ( int k = 0; same && k < want.m_logs; ++k )
+                same = std::strcmp( g_golden_wire_logs[ want.m_first_log + k ].m_kind, "broadcast" ) == 0 &&
+                       sent[ static_cast< std::size_t >( k ) ].first == g_golden_wire_logs[ want.m_first_log + k ].m_hash &&
+                       ui_hex( sent[ static_cast< std::size_t >( k ) ].second ) == g_golden_wire_logs[ want.m_first_log + k ].m_params;
+            if ( !same )
+                bad( "the broadcasts", row );
+            fe_log.clear( );
+            for ( const auto& b : sent )
+                fe.handle( b.first, b.second );
+            same = fe_log.size( ) == static_cast< std::size_t >( want.m_fe_logs );
+            for ( int k = 0; same && k < want.m_fe_logs; ++k )
+                same = fe_log[ static_cast< std::size_t >( k ) ].first == g_golden_wire_fe_logs[ want.m_first_fe_log + k ].m_kind &&
+                       fe_log[ static_cast< std::size_t >( k ) ].second == g_golden_wire_fe_logs[ want.m_first_fe_log + k ].m_a;
+            if ( !same )
+                bad( "the front end's hooks", row );
+            if ( !same_state( want.m_front_end ) )
+                bad( "the front end's state", row );
+        }
+    }
+    if ( next != g_golden_wire_fires_count )
+        bad( "the fires' project order", static_cast< int >( next ) );
+    if ( wiring.m_unknown != 0 )
+        bad( "an input without a recreated handler", -1 );
+    if ( failed == 0 )
+        LOG_SUCCESS( "the UI wiring matches retail on %d Screens projects (ui_scripted_world: plugs.hxx + script_load; "
+                     "c_ui_wiring::fire = 0x5023A0 -> Trigger 0x472800 -> the actions' slot 12 -> c_front_end): %d wired output plugs, "
+                     "%d links, VuRetVal, broadcasts hash + params, the front end's state + hooks after each fire",
+            static_cast< int >( g_golden_wire_projects_count ), static_cast< int >( g_golden_wire_fires_count ), links );
+    else
+        LOG_ERROR( "the UI wiring FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_wiring( ) && ok;
     ok = verify_ui_text_draw( ) && ok;    ok = verify_ui_fade( ) && ok;
     ok = verify_ui_hud_speedometer( ) && ok;
     ok = verify_ui_hud_element( ) && ok;
