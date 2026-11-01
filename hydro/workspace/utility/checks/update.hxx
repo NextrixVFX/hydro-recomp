@@ -356,6 +356,9 @@ inline bool verify_ui_hud_frames( )
     static const entity_registry_t registry = build_entity_registry( names );
     const std::map< std::string, value_t >* templates = &base.templates;
     int failed = 0, steps = 0, traces = 0, states = 0, rows = 0, entities = 0, unknown_inputs = 0, unknown_events = 0, hooks_seen = 0;
+    int draws = 0, commands = 0, stubs = 0, emitted = 0;
+    const ui_texture_t texture_a = { g_golden_hf_textures[ 0 ].m_handle, g_golden_hf_textures[ 0 ].m_width, g_golden_hf_textures[ 0 ].m_height };
+    const golden_txt_env_t& txt = g_golden_txt_envs[ 0 ];
     auto bad = [ &failed ]( const char* what, const char* project, int step )
     {
         if ( ++failed <= 8 )
@@ -447,6 +450,44 @@ inline bool verify_ui_hud_frames( )
             if ( b->m_vtable == k_ui_multi_delay_vtable )
                 delay = b->m_entity;
         std::vector< ui_hud_boat_t > boats;
+        // The draw steps' environment (the case's TxtWorld environment 0): ONE sort per project (one harness each).
+        ui_gfx_sort_t sort;
+        sort.m_buffers[ 0 ].m_capacity = 0x300000;
+        sort.m_buffers[ 1 ].m_used = 0x35;
+        sort.m_buffers[ 1 ].m_capacity = 0x100000;
+        for ( auto& sb : sort.m_buffers )
+            sb.m_memory.resize( static_cast< std::size_t >( sb.m_capacity ) );
+        ui_frame_inputs_t in;
+        for ( int m = 0; m < 2; ++m )
+        {
+            in.m_env.m_material[ m ] = 0x5D001000u + 0x800u * static_cast< std::uint32_t >( m );   // TxtWorld's font materials
+            in.m_env.m_material_key[ m ] = g_golden_txt_material_keys[ m ];
+        }
+        in.m_env.m_texture_material = g_golden_img_materials[ 0 ][ 0 ];
+        in.m_env.m_texture_material_key = g_golden_img_materials[ 0 ][ 1 ];
+        in.m_env.m_rect_material = g_golden_img_materials[ 1 ][ 0 ];
+        in.m_env.m_rect_material_key = g_golden_img_materials[ 1 ][ 1 ];
+        in.m_db.m_present = true;
+        in.m_db.m_slot12 = txt.m_sdb_answer != 0;
+        in.m_fontdb = &ui_font_db( 0 );
+        const std::uint32_t font = gp.m_font;
+        in.m_font = [ font ]( const entity_t& ) { ui_text_font_t f; f.m_asset = true; f.m_asset_font = font; return f; };
+        in.m_texture = [ &texture_a ]( const entity_t& who, int ) -> const ui_texture_t* { return who.m_name.size( ) % 2 ? &texture_a : nullptr; };
+        in.m_params_tail = [ &bind, &gp ]( const entity_t& who, std::uint8_t params[ 60 ] )
+        {
+            const int at = bind.bound_index( who );
+            for ( int k = 0; k < gp.m_tails; ++k )
+                if ( g_golden_hf_tails[ gp.m_first_tail + k ].m_index == at )
+                {
+                    const std::vector< std::uint8_t > tail = ui_unhex( g_golden_hf_tails[ gp.m_first_tail + k ].m_state );
+                    std::memcpy( params + 41, tail.data( ), 19 );
+                }
+        };
+        in.m_string = []( const std::string& id ) { return id + "~"; };   // the case's VuStringDB slot 7
+        ui_impl_t impl;
+        const std::vector< std::uint8_t > crop = ui_unhex( gp.m_crop );
+        if ( crop.size( ) == 64 )
+            std::memcpy( impl.m_crop.m_matrix, crop.data( ), 64 );
         for ( int s = 0; s < gp.m_steps; ++s )
         {
             const golden_hf_step_t& st = g_golden_hf_steps[ gp.m_first_step + s ];
@@ -493,6 +534,44 @@ inline bool verify_ui_hud_frames( )
                 if ( delay )
                     bind.fire_plug( *delay, st.m_arg, ui_params_t( ) );
             }
+            else if ( std::strcmp( st.m_op, "draw" ) == 0 )
+            {
+                sort.m_index = txt.m_index;
+                sort.m_key_lo = txt.m_key_lo;
+                sort.m_key_hi = txt.m_key_hi;
+                std::vector< ui_gfx_command_t >& list = sort.m_commands[ txt.m_index ];
+                const std::size_t before = list.size( );
+                const ui_frame_t frame = hud.draw( sort, impl, in, 1.0f );
+                bool same = frame.m_unknown == 0 && list.size( ) - before == static_cast< std::size_t >( st.m_commands ) &&
+                            sort.m_key_lo == st.m_key[ 0 ] && sort.m_key_hi == st.m_key[ 1 ];
+                for ( int c = 0; same && c < st.m_commands; ++c )
+                {
+                    const golden_txt_command_t& want = g_golden_hf_commands[ st.m_first_command + c ];
+                    const ui_gfx_command_t& have = list[ before + static_cast< std::size_t >( c ) ];
+                    const std::vector< std::uint8_t > record = ui_unhex( want.m_record );
+                    const auto& memory = sort.m_buffers[ txt.m_index ].m_memory;
+                    same = std::memcmp( have.m_words, want.m_words, sizeof( have.m_words ) ) == 0 && have.m_words[ 3 ] + record.size( ) <= memory.size( ) &&
+                           std::memcmp( memory.data( ) + have.m_words[ 3 ], record.data( ), record.size( ) ) == 0;
+                    ++commands;
+                }
+                int u = 0;
+                for ( const ui_frame_draw_t& d : frame.m_draws )
+                {
+                    emitted += d.m_emitted ? 1 : 0;
+                    if ( d.m_emitted )
+                        continue;
+                    std::uint32_t abits;
+                    std::memcpy( &abits, &d.m_alpha, 4 );
+                    same = same && u < st.m_stubs && g_golden_hf_stubs[ st.m_first_stub + u ].m_index == bind.bound_index( *d.m_entity ) &&
+                           g_golden_hf_stubs[ st.m_first_stub + u ].m_alpha == abits;
+                    ++u;
+                }
+                same = same && u == st.m_stubs;
+                stubs += u;
+                ++draws;
+                if ( !same )
+                    bad( "the draw (commands / records / unrecreated leaves / key)", gp.m_asset, s );
+            }
             else
             {
                 ui_params_t p;
@@ -531,17 +610,112 @@ inline bool verify_ui_hud_frames( )
                      "VuHUDEntity tick 0x423A20, gameRelease 0x500B80; Show / Hide / SetAlpha / SetStringID, VuTriggerForwarderEntity 0x5E0FC0, "
                      "VuIfEntity, VuIsCircuitTrack 0x42E1F0, VuControlMethodEntity 0x42EAE0 / 0x42EC80, VuStartLightsOutAction 0x405470, the toast, "
                      "the speedometer): %d entities and %d event-map rows, %d steps, %d trace entries in order (%d hooks, %d world-owned / audio "
-                     "inputs, %d unrecreated handlers), %d states",
-            static_cast< int >( g_golden_hf_projects_count ), entities, rows, steps, traces, hooks_seen, unknown_inputs, unknown_events, states );
+                     "inputs, %d unrecreated handlers), %d states; %d draws (0x423A70, text / image leaves live over the runtime state): %d leaves "
+                     "emitted, %d commands and records byte for byte, %d unrecreated leaves (speedometer / minimap / controls - stubbed) in order",
+            static_cast< int >( g_golden_hf_projects_count ), entities, rows, steps, traces, hooks_seen, unknown_inputs, unknown_events, states, draws,
+            emitted, commands, stubs );
     else
         LOG_ERROR( "the race HUD driver FAILED %d checks against retail's", failed );
     return failed == 0;
 }
 
+// THE TEST PROFILE (core/ui leave.hxx ui_profile_all_unlocked) through
+// ui_front_end_root and ui_front_end_game_data_root against retail's selector
+// chain + VuFrontEndGameMode exit 0x4BF9B0 under the same answers (oracle case
+// front_end_defaults: front_end_root's harness, every unlock / license /
+// progress / package answer true, ranks 0, store beta false, 0x45E300 live;
+// then the exit with VuRandom = gd_rng(12345)): per mode and run the root after
+// the boat screen, the root after the exit (GameData built), VuRandom after,
+// the number of VuStringDB calls.
+inline bool verify_ui_front_end_defaults( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0, runs = 0;
+    const value_t boat_db = ui_fr_document( 0 ), skin_db = ui_fr_document( 1 ), track_db = ui_fr_document( 2 ), champ_db = ui_fr_document( 3 ),
+                  option_db = ui_fr_document( 4 );
+    ui_front_end_dbs_t dbs;
+    dbs.m_option_db = &option_db;
+    dbs.m_boat_db = &boat_db;
+    dbs.m_skin_db = &skin_db;
+    dbs.m_track_db = &track_db;
+    dbs.m_champ_db = &champ_db;
+    const ui_profile_t p = ui_profile_all_unlocked( );
+    for ( std::size_t r = 0; r < g_golden_fd_runs_count; ++r )
+    {
+        const golden_fd_run_t& run = g_golden_fd_runs[ r ];
+        const golden_fr_pair_t* pair = nullptr;
+        for ( std::size_t k = 0; k < g_golden_fr_pairs_count; ++k )
+            if ( std::strcmp( g_golden_fr_pairs[ k ].m_mode, run.m_mode ) == 0 )
+                pair = &g_golden_fr_pairs[ k ];
+        const auto entity_at = [ & ]( const char* project, int index ) -> const entity_t*
+        {
+            for ( std::size_t q = 0; q < g_golden_ui_projects_count; ++q )
+                if ( std::strcmp( g_golden_ui_projects[ q ].m_asset, project ) == 0 && index >= 0 &&
+                     static_cast< std::size_t >( index ) < loaded.trees[ q ].size( ) )
+                    return loaded.trees[ q ][ static_cast< std::size_t >( index ) ].second;
+            return nullptr;
+        };
+        const entity_t* ge = pair ? entity_at( pair->m_game_project, pair->m_game_index ) : nullptr;
+        const entity_t* be = pair ? entity_at( pair->m_boat_project, pair->m_boat_index ) : nullptr;
+        if ( !ge || !be )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "ui front end defaults: the %s screens not loaded", run.m_mode );
+            continue;
+        }
+        value_t root = c_reader( ui_unhex( run.m_root ) ).parse( );
+        ui_config_hooks_t h;
+        h.touch = [ ]( ) { };
+        h.draw_add = [ ]( ) { };
+        h.fire = [ ]( const std::string&, const ui_params_t& ) { return true; };
+        h.broadcast = [ ]( std::uint32_t, const ui_params_t& ) { };
+        h.sound = [ ]( const char* ) { };
+        h.trophy = [ ]( const char* ) { };
+        const bool done = ui_front_end_root( root, run.m_mode, ui_front_end_screen( *ge, pair->m_game_flags ), ui_front_end_screen( *be, pair->m_boat_flags ),
+                                             dbs, run.m_op, p, h );
+        std::string after;
+        vujb_dump( root, after );
+        const std::vector< std::uint8_t > rng0 = ui_unhex( run.m_rng ), rng1 = ui_unhex( run.m_rng_after );
+        fleet_random_t rng;
+        std::memcpy( &rng.seed, rng0.data( ), 4 );
+        std::memcpy( &rng.last, rng0.data( ) + 4, 4 );
+        std::memcpy( rng.table, rng0.data( ) + 8, 128 );
+        ui_game_env_t env;
+        env.boat_db = &boat_db;
+        env.track_db = &track_db;
+        env.random = &rng;
+        env.player_name = "Player One";
+        int strings = 0;
+        env.string_db = [ &strings ]( const char* id ) { ++strings; return std::string( "S" ) + id; };
+        static const value_t null_round{ };
+        env.championship = &null_round;
+        ui_front_end_game_data_root( root, env );
+        std::string game_after;
+        vujb_dump( root, game_after );
+        const bool same = done && after == run.m_after && game_after == run.m_game_after && strings == run.m_strings && rng1.size( ) == 136 &&
+                          std::memcmp( &rng.seed, rng1.data( ), 4 ) == 0 && std::memcmp( &rng.last, rng1.data( ) + 4, 4 ) == 0 &&
+                          std::memcmp( rng.table, rng1.data( ) + 8, 128 ) == 0;
+        ++runs;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui front end defaults: %s run %d (op \"%s\") differs from retail (root after %s, GameData root %s, strings %d / %d)", run.m_mode,
+                       static_cast< int >( r ), run.m_op, after == run.m_after ? "same" : "DIFFERS", game_after == run.m_game_after ? "same" : "DIFFERS",
+                       strings, run.m_strings );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the everything-unlocked test profile (ui_profile_all_unlocked) through ui_front_end_root + ui_front_end_game_data_root matches "
+                     "retail's selector chain and VuFrontEndGameMode exit 0x4BF9B0 under the same answers on %d runs (5 modes x op \"\" / \"push\"): "
+                     "the root after the boat screen, the GameData root, VuRandom, the string calls", runs );
+    else
+        LOG_ERROR( "the front-end test profile FAILED %d runs against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_update_all( )
 {
+
     bool ok = true;
     ok = verify_ui_frames( ) && ok;
     ok = verify_ui_hud_frames( ) && ok;
+    ok = verify_ui_front_end_defaults( ) && ok;
     return ok;
 }

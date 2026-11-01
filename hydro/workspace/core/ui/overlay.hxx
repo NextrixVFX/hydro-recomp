@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/ui/bind.hxx>
+#include <workspace/core/ui/frame.hxx>
 #include <workspace/core/ui/wiring.hxx>
 
 #include <cstdint>
@@ -74,6 +75,98 @@ public:
     void release( ) { m_binding.hud_release( ); }
     void tick( float dt ) { m_binding.hud_tick( dt ); }
     void post( const char* event, const ui_params_t& p ) { m_binding.post( fsm_hash( event ), p ); }
+    // VuHUDEntity slot 13 0x423A70 (vt+0x34; the state draws pass 1.0) over the
+    // tree as ui_screen_frame does for a screen (frame.hxx): the key bits, the
+    // crop matrix / VuUIImpl +0x8C pushed, each DIRECT child's first UI draw
+    // component, containers 0x62F7E0 walked into; the leaves with `in`'s
+    // inputs plus the HUD's runtime state: Visible / alpha as Show / Hide /
+    // SetAlpha left them, the text getters (slot 12): VuHUDElementEntity
+    // 0x423F40 over env( ).m_world (its wrong-way Type writes +0x108), VuUITextEntity
+    // 0x446DE0 = VuStringDB slot 7 (in.m_string) on the runtime String ID, the
+    // toast 0x4242D0 = its +0x118. The speedometer 0x42BA00, the minimap 0x427BD0
+    // and the pause / recover / on-screen controls (0x4257A0 / 0x425F70 /
+    // 0x42A0C0) are recreated (gauge.hxx / map.hxx / controls.hxx) but read the
+    // boat's physics, the display and the input devices: `other` emits them
+    // (the caller's - it holds those); without it they count unrecreated.
+    ui_frame_t draw( ui_gfx_sort_t& sort, const ui_impl_t& impl, ui_frame_inputs_t in, float alpha = 1.0f,
+                     const std::function< void( const ui_frame_draw_t& ) >& other = nullptr )
+    {
+        in.m_shown = [ this ]( const entity_t& e, std::uint8_t& visible, float& a )
+        {
+            const ui_bound_t* b = bound( e );
+            if ( !b || !b->m_shown )
+                return false;
+            visible = b->m_shown->m_visible ? 1 : 0;
+            a = b->m_shown->m_alpha;
+            return true;
+        };
+        const std::function< std::string( const entity_t& ) > base_text = in.m_text;
+        const std::function< std::string( const std::string& ) > string7 = in.m_string;
+        in.m_text = [ this, base_text, string7 ]( const entity_t& e ) -> std::string
+        {
+            ui_bound_t* b = bound( e );
+            if ( b && b->m_element )
+            {
+                b->m_element->m_alpha = b->m_shown->m_alpha;
+                const std::string text = b->m_element->text( m_env.m_world );
+                b->m_shown->m_alpha = b->m_element->m_alpha;
+                return text;
+            }
+            if ( b && b->m_toast )
+                return b->m_toast->m_text;
+            if ( b && b->m_vtable == k_ui_text_vtable )
+                return string7 ? string7( b->m_shown->m_string_id ) : std::string( );
+            return base_text ? base_text( e ) : std::string( );
+        };
+        ui_frame_t frame;
+        ui_gfx_stacks_t stacks;
+        int depth = 0;
+        std::function< void( const entity_t&, int, float ) > walk = [ & ]( const entity_t& e, int component, float a )
+        {
+            const ui_draw_target_t* target = ui_draw_target_of( e );
+            if ( target && target->m_kind == ui_frame_kind_t::container )
+            {
+                ++frame.m_containers;
+                ++depth;
+                ui_container_draw( e, a, walk );
+                --depth;
+                return;
+            }
+            ui_frame_draw_t d;
+            d.m_entity = &e;
+            d.m_component = component;
+            d.m_alpha = a;
+            if ( !stacks.m_matrices.empty( ) )
+                d.m_matrix = stacks.m_matrices.back( );
+            if ( !stacks.m_floats.empty( ) )
+                d.m_top = stacks.m_floats.back( );
+            d.m_key_lo = sort.m_key_lo;
+            d.m_key_hi = sort.m_key_hi;
+            d.m_depth = depth;
+            d.m_kind = target ? target->m_kind : ui_frame_kind_t::other;
+            d.m_target = target ? target->m_target : 0u;
+            const std::size_t before = sort.m_commands[ sort.m_index ].size( );
+            if ( ui_frame_ready( d.m_kind, &in ) )
+            {
+                if ( !ui_frame_emit( sort, impl, d, in ) )
+                    ++frame.m_unknown;
+                d.m_emitted = true;
+            }
+            else if ( other && d.m_kind == ui_frame_kind_t::other )
+            {
+                other( d );
+                d.m_emitted = true;
+            }
+            else
+                ++frame.m_unrecreated;
+            d.m_first = static_cast< int >( before );
+            d.m_commands = static_cast< int >( sort.m_commands[ sort.m_index ].size( ) - before );
+            frame.m_draws.push_back( d );
+        };
+        ui_hud_draw( sort, stacks, impl, m_root, alpha, walk );
+        return frame;
+    }
+
     // An output plug of `long_name` (the entity's path under the root, "/"-joined, root first).
     ui_ret_t fire( const std::string& long_name, const char* plug, const ui_params_t& p )
     {
@@ -86,6 +179,12 @@ public:
     }
 
 private:
+    ui_bound_t* bound( const entity_t& e )
+    {
+        const int k = m_binding.bound_index( e );
+        return k >= 0 ? m_binding.m_bound[ static_cast< std::size_t >( k ) ].get( ) : nullptr;
+    }
+
     ui_bind_hooks_t with_env( ui_bind_hooks_t hooks )
     {
         hooks.m_hud = &m_env;
