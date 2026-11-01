@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <cstring>
+#include <map>
+#include <utility>
 #include <vector>
 #include <xmmintrin.h>
 
@@ -766,4 +768,91 @@ inline void pfx_heap_pattern_tick( pfx_heap_t& h, std::uint32_t r, std::uint32_t
         h.set( pattern + 0x2C + 4 * k, lo[ k ] );
         h.set( pattern + 0x3C + 4 * k, hi[ k ] );
     }
+}
+// ---------------------------------------------------------------------------
+// THE EXPORT FOR THE WORLD AGENT (c_pfx is world-owned): one VuPfx runtime as
+// the race holds it - VuPfxImpl's resources with retail's own pool sizes (the
+// pairs 0x51C840 passes), a node area the effect loader fills, the global
+// VuRand. Per frame, per live system instance: pfx_runtime_frame (retail's
+// VuPfxSystemInstance slot 13, run by its owner's tick); once per frame after
+// them all: pfx_impl_tick (VuPfxImpl's "Final" tick 0x51DD80). Draw data: the
+// pattern instances on the instance's +0x10 list - pfx_geom_draw_matrix /
+// pfx_geom_draw_colour per geom particle, the particle list itself for the
+// quad / trail renderers (0x58BD60 / 0x58D030, GPU: hooks).
+// NOT RECREATED (the caller's, or UNKNOWN): the effect asset's node load
+// (VuPfxNode slot 2 0x563D40 - "Properties" through each node class's property
+// list, "ChildNodes" through the node registry 0x51C840) - the caller places
+// nodes with pfx_runtime_node at their params' retail offsets; the project map
+// lookup 0x51DBD0; the VuRand's seeding.
+struct pfx_runtime_t
+{
+    pfx_heap_t heap;
+    std::uint32_t resources = 0x00100000u;
+    std::uint32_t nodes = 0x00200000u, next_node = 0x00200000u;
+    std::map< std::uint32_t, std::vector< std::uint32_t > > children;
+    pfx_rand_t rand;
+    pfx_frame_t frame;
+    pfx_sim_hooks_t hooks;
+};
+
+inline void pfx_runtime_init( pfx_runtime_t& rt, std::uint32_t node_bytes = 0x100000u )
+{
+    static const std::uint32_t pairs[ 8 ] = { 512u, 188u, 1024u, 108u, 4096u, 52u, 0x4000u, 100u };
+    std::uint32_t blocks[ 4 ], at = 0x00400000u;
+    rt.heap.regions.clear( );
+    rt.heap.add( rt.resources, 0x64 );
+    for ( int k = 0; k < 4; ++k )
+    {
+        const std::uint32_t bytes = pairs[ 2 * k ] * ( ( pairs[ 2 * k + 1 ] + 15u ) & 0xFFFFFFF0u );
+        blocks[ k ] = at;
+        rt.heap.add( at, bytes );
+        at += ( bytes + 0xFFFFu ) & 0xFFFF0000u;
+    }
+    rt.heap.add( rt.nodes, node_bytes );
+    rt.next_node = rt.nodes;
+    pfx_resources_ctor( rt.heap, rt.resources );
+    pfx_resources_init( rt.heap, rt.resources, pairs, blocks );
+    rt.frame.rand = &rt.rand;
+    rt.hooks.user = &rt;
+    rt.hooks.children = []( void* u, std::uint32_t node ) -> const std::vector< std::uint32_t >* {
+        auto& m = static_cast< pfx_runtime_t* >( u )->children;
+        auto it = m.find( node );
+        return it == m.end( ) ? nullptr : &it->second;
+    };
+    rt.hooks.pattern_tick = []( void* u, pfx_heap_t& h, std::uint32_t pattern, float dt ) {
+        pfx_runtime_t& r = *static_cast< pfx_runtime_t* >( u );
+        pfx_heap_pattern_tick( h, r.resources, pattern, dt, r.frame );
+    };
+}
+
+// A node: its class's node vtable (g_pfx_classes .vtable), its params as
+// (retail offset, word) pairs, its children in the order retail's std::map by
+// child name would hold them. Returns its address (0x100 bytes each).
+inline std::uint32_t pfx_runtime_node( pfx_runtime_t& rt, std::uint32_t vtable,
+    const std::vector< std::pair< std::uint32_t, std::uint32_t > >& params, const std::vector< std::uint32_t >& kids )
+{
+    const std::uint32_t a = rt.next_node;
+    rt.next_node += 0x100u;
+    rt.heap[ a ] = vtable;
+    for ( const auto& p : params )
+        rt.heap[ a + p.first ] = p.second;
+    rt.children[ a ] = kids;
+    return a;
+}
+
+inline std::uint32_t pfx_runtime_create( pfx_runtime_t& rt, std::uint32_t system_node )
+{
+    return pfx_system_instance_create( rt.heap, rt.resources, system_node, rt.hooks );
+}
+
+// One instance's frame: its position / velocity (+0x4C / +0x5C, as its owner
+// sets them through slots 0 / 3) and the viewports' cameras, then slot 13.
+// Returns the unrecreated paths this frame reached (0 = all retail's).
+inline int pfx_runtime_frame( pfx_runtime_t& rt, std::uint32_t instance, float dt, const float* cameras, int camera_count )
+{
+    rt.frame.cameras = cameras;
+    rt.frame.camera_count = camera_count;
+    rt.frame.unrecreated = 0;
+    pfx_system_tick( rt.heap, instance, dt, rt.hooks );
+    return rt.frame.unrecreated;
 }
