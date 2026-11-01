@@ -237,8 +237,6 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
             m_wave_scale = p->normal_texture_scale;
             m_wave_wind = p->wind_speed;
             m_wave_size = p->world_size;
-            m_ocean.add( 6.0f, m_wave_size, 0.0f, m_wave_wind, p->directional_power, p->suppression_wave_length, m_wave_height, p->gravity,
-                nullptr, nullptr, 1.0f, 1.0f, true );
         }
         if ( const auto* p = entity_action< sky_box_properties_t >( e ); p && e.m_type == "VuSkyBoxEntity" && !p->model_asset.empty( ) )
             fresh_sky = p->model_asset;

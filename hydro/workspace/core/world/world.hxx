@@ -416,20 +416,6 @@ private:
                 // value and leaves a constructor default alone, which is
                 // already stored.
                 const c_entity_binder bind( type->text, overlay, properties );
-                m_ocean.add(
-                    bind.real( "Complexity" ),
-                    bind.real( "Bin Siz" ),
-                    bind.real( "Wave Direction" ),
-                    bind.real( "Wind Speed" ),
-                    bind.real( "Directional Power" ),
-                    bind.real( "Suppression Wave Length" ),
-                    bind.real( "Height Multiplier" ),
-                    bind.real( "Gravity" ),
-                    rectangular ? center : nullptr,
-                    rectangular ? extent : nullptr,
-                    bind.real( "Decay Ratio X %" ),
-                    bind.real( "Decay Ratio Y %" )
-                );
             }
             // VuPointWaveEntity comes from the retail tree (load_entity_tree: m_point_waves).
             // VuGlobalGfxSettingsEntity feeds the fog and the far plane from the
@@ -584,7 +570,6 @@ private:
         for ( int alpha = 0; alpha <= 11; ++alpha )
             c_engine::drop( alpha );
         m_pfx.clear( );
-        m_ocean.clear( );
         m_draws = 0;
         m_stack.clear( );
         m_sky.clear( );
@@ -946,7 +931,6 @@ public:
             return;
 
         const double ocean_start = trace::now( );
-        m_ocean.advance( dt );
         // VuWater's tick 0x529E30 on the built water (surface.hxx water_built_tick), then the query's view rebuilt.
         // The expire hook is VuPointWaveEntity's OnExpired 0x5D4B60: the wave half (water_point_wave_expired),
         // then the entity's "OnExpired" plug through the event graph (the entity's +0xA0 = 0 is not modelled - no
@@ -1021,7 +1005,6 @@ private:
     c_archive m_archive{};
     c_pfx m_pfx{};
     c_corona_entity m_coronas{};
-    c_ocean m_ocean{};
     std::map< std::string, std::vector< cached_part_t > > m_models;
     std::map< std::string, std::vector< pfx_part_t > > m_pfx_models;
     std::map< std::string, std::vector< model_bone_t > > m_skeletons;
