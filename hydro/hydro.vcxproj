@@ -241,6 +241,7 @@
     <ClInclude Include="workspace\core\world\tick.hxx" />
     <ClInclude Include="workspace\core\world\transform.hxx" />
     <ClInclude Include="workspace\core\world\tree.hxx" />
+    <ClInclude Include="workspace\core\world\voice.hxx" />
     <ClInclude Include="workspace\core\world\wake.hxx" />
     <ClInclude Include="workspace\core\world\watchers.hxx" />
     <ClInclude Include="workspace\core\world\water.hxx" />

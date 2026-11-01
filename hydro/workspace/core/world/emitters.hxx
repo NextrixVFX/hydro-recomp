@@ -6,6 +6,7 @@
 // verified by case breakable_properties) and "Initially Active" +0x84 (bool, 0).
 
 #include <workspace/core/entity/property.hxx>
+#include <workspace/core/world/keyframe.hxx>
 #include <workspace/core/world/keymotion.hxx>
 #include <workspace/core/world/sound.hxx>
 
@@ -52,8 +53,60 @@ struct substitute_asset_state_t
     bool post_loaded = false;
 };
 
+// VuControlEntity (world/keyframe.hxx control_entity_t, the water agent's - case control_entity): the ctor 0x5CCBA0's six
+// VuBasicProperty<bool> (0x737450: property_bool) "Initially Active" +0x64, "One Shot" +0x65, "Network Synchronized" +0x66,
+// "Loop" +0x67, "Ease In/Out" +0x68 (default 1), "Real Time" +0x69. Its VuControlKeyframeEntity children have no property
+// of their own (ctor 0x5CC780): their list is made by the bind 0x5CC820 in slot 4 (control_post_load).
+struct control_entity_state_t
+{
+    control_entity_t value;
+    std::uint8_t d[ 6 ] = { 0, 0, 0, 0, 1, 0 };
+};
+
+inline std::uint8_t* control_entity_bools( control_entity_t& v, int k )
+{
+    std::uint8_t* const b[ 6 ] = { &v.initially_active, &v.one_shot, &v.network_sync, &v.loop, &v.ease, &v.real_time };
+    return b[ k ];
+}
+
+inline const char* const k_control_entity_bools[ 6 ] = { "Initially Active", "One Shot", "Network Synchronized", "Loop", "Ease In/Out",
+                                                         "Real Time" };
+
+inline void control_entity_load_properties( entity_t& e, const value_t& p )
+{
+    if ( e.m_type != "VuControlEntity" || !e.m_state )
+        return;
+    control_entity_state_t& s = *static_cast< control_entity_state_t* >( e.m_state.get( ) );
+    for ( int k = 0; k < 6; ++k )
+        property_bool( p, k_control_entity_bools[ k ], *control_entity_bools( s.value, k ), s.d[ k ] );
+}
+
+inline void control_entity_mark_properties( entity_t& e )
+{
+    if ( e.m_type != "VuControlEntity" || !e.m_state )
+        return;
+    control_entity_state_t& s = *static_cast< control_entity_state_t* >( e.m_state.get( ) );
+    for ( int k = 0; k < 6; ++k )
+        s.d[ k ] = *control_entity_bools( s.value, k );
+}
+
+// VuEntity::load 0x5009D0's vt+8 (a normal load) / 0x5015D0's vt+0xC (a template override) on a VuControlEntity: its slots
+// 2 / 3 0x5CD2C0 / 0x5CD2E0 keep data["ChildEntities"] (+0x90 / +0x94) for slot 4.
+inline void control_entity_post_load( entity_t& e, const value_t& data, bool override )
+{
+    if ( e.m_type != "VuControlEntity" || !e.m_state )
+        return;
+    control_entity_t& v = static_cast< control_entity_state_t* >( e.m_state.get( ) )->value;
+    if ( override )
+        control_load_template( v, data );
+    else
+        control_load( v, data );
+}
+
 inline std::shared_ptr< void > audio_emitter_state_for( const std::string& cls )
 {
+    if ( cls == "VuControlEntity" )
+        return std::make_shared< control_entity_state_t >( );
     if ( cls == "VuSubstituteAssetEntity" )
         return std::make_shared< substitute_asset_state_t >( );
     if ( cls == "VuKeyframeMotionEntity" )

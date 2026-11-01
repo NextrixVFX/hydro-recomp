@@ -16,9 +16,8 @@
 // VuHUDEntity tick vt+0x30 / draw vt+0x34, VuAudioEventEntity Start) is the UI
 // agent's / the audio layer's: counted unhandled or logged, never drawn here.
 
-inline void c_world::load_huds( )
+inline void c_world::load_huds( const char* const* k_names )   // the game ctor's three loads (world/rules.hxx)
 {
-    const char* const* k_names = k_race_hud_projects;   // the ctor 0x489030's three loads (world/rules.hxx)
     m_multi_delays.clear( );
     m_start_lights.clear( );
     for ( int p = 0; p < 3; ++p )

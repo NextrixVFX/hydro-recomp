@@ -180,6 +180,7 @@ copy /Y "$(ProjectDir)impl\engine.hxx" "$(ProjectDir)..\hydro\impl\engine\engine
     <ClInclude Include="workspace\core\entity\draw.hxx" />
     <ClInclude Include="workspace\core\entity\dynamic.hxx" />
     <ClInclude Include="workspace\core\entity\gfx.hxx" />
+    <ClInclude Include="workspace\core\entity\json.hxx" />
     <ClInclude Include="workspace\core\entity\light.hxx" />
     <ClInclude Include="workspace\core\entity\node.hxx" />
     <ClInclude Include="workspace\core\entity\object.hxx" />
