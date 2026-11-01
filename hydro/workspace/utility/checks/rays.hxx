@@ -1353,3 +1353,46 @@ inline bool verify_bt_dtors( )
     LOG_ERROR( "bt_dtors FAILED %d of %u", failed, n );
     return false;
 }
+// verify_needs_collision (boat batch 18): engine collision/dispatch.hxx
+// dispatcher_needs_collision (now calling dynamics/wrapper.hxx
+// rigid_check_collide_with for the +0x108 override) against cases/boat.py
+// needs_collision - 0x56D710 run whole on the real VuRigidBody vtable.
+inline bool verify_needs_collision( )
+{
+    const unsigned* g = g_golden_needs_collision_words;
+    const unsigned n = *g++;
+    int failed = 0, overrides = 0, refused = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        collision_object_t o[ 3 ];
+        o[ 0 ].activation_state = static_cast< int >( *g++ );
+        o[ 1 ].activation_state = static_cast< int >( *g++ );
+        o[ 0 ].check_collide = *g++ != 0;
+        o[ 1 ].internal_type = static_cast< int >( *g++ );
+        o[ 0 ].constraint_ref_count = static_cast< std::int32_t >( *g++ );
+        solver_rigid_t bodies[ 3 ];
+        for ( int k = 0; k < 3; ++k )
+            o[ k ].body.object = &bodies[ k ];
+        std::vector< rigid_constraint_ref_t > refs( *g++ );
+        for ( rigid_constraint_ref_t& r : refs )
+        {
+            r.a = &bodies[ *g++ ];
+            r.b = &bodies[ *g++ ];
+        }
+        o[ 0 ].constraint_refs = refs.data( );
+        const int want = static_cast< int >( *g++ );
+        const int got = dispatcher_needs_collision( o[ 0 ], o[ 1 ] );
+        overrides += o[ 0 ].check_collide ? 1 : 0;
+        refused += want == 0 ? 1 : 0;
+        if ( got != want && ++failed <= 4 )
+            LOG_ERROR( "needs_collision %u: %d (retail %d)", v, got, want );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "needsCollision 0x56D710 + VuRigidBody slot 0 0x50E7B0 (dispatcher_needs_collision) match retail: %u vectors, %d through "
+                     "the override, %d refused", n, overrides, refused );
+        return true;
+    }
+    LOG_ERROR( "needs_collision FAILED %d of %u", failed, n );
+    return false;
+}
