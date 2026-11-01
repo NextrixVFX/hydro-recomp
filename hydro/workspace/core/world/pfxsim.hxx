@@ -1280,3 +1280,72 @@ inline int pfx_runtime_frame( pfx_runtime_t& rt, std::uint32_t instance, float d
     pfx_system_tick( rt.heap, instance, dt, rt.hooks );
     return rt.frame.unrecreated;
 }
+
+// ---------------------------------------------------------------------------
+// THE INSTANCE CALLS - EXPORT for the boat agent (verified: case pfx_calls, every
+// call through VuPfxSystemInstance's vtable 0x74FF8C on retail's memory with the
+// real frames after it). What the boat's emitter lists (0x419700's helpers:
+// 0x41ABE0 = slot 11 per record, 0x41AC50( list, immediate ) = slot 12,
+// 0x41AB70( list, colour ) = slot 5, 0x41AAD0 = slot 3 with the body's linear
+// velocity +0x140, 0x41A790 = slot 2 / slot 13 / slot 7 per record, 0x41ACC0 =
+// slot 14, 0x41A0E0 = g_vupfximpl's release 0x51DAE0) and the hull's splash
+// (0x416630: VuPfxManager createEffect 0x52BCD0 - pfxmgr.hxx pfx_manager_create /
+// pfx_manager_lookup -, then the entry's instance +0x68 slot 10, slot 2, slot 3,
+// slot 11) make. `instance` is a system instance address on h (rt.heap): what
+// pfx_runtime_create / pfx_runtime_create_path / the manager entry's instance hold.
+// Slot 2's euler is surface.hxx's water_world_euler (its CRT SUBSTITUTION); its
+// fourth lane +0x78 is retail's stack word: UNKNOWN, left as it is.
+inline void pfx_instance_set_matrix( pfx_heap_t& h, std::uint32_t instance, const float* m16 )   // slot 2 0x58AB00
+{
+    std::uint32_t m[ 16 ];
+    std::memcpy( m, m16, 64 );
+    pfx_system_set_matrix( h.find( instance ), m );
+}
+
+inline void pfx_instance_set_velocity( pfx_heap_t& h, std::uint32_t instance, const float* v4 )   // slot 3 0x58A650: +0x5C
+{
+    std::uint32_t v[ 4 ];
+    std::memcpy( v, v4, 16 );
+    pfx_system_set_words5c( h.find( instance ), v );
+}
+
+inline void pfx_instance_set_scale( pfx_heap_t& h, std::uint32_t instance, float s )   // slot 4 0x58A670: +0xA8
+{
+    h.set( instance + 0xA8, s );
+}
+
+inline void pfx_instance_set_colour( pfx_heap_t& h, std::uint32_t instance, const float* c4 )   // slot 5 0x58A690: +0xAC
+{
+    std::uint32_t c[ 4 ];
+    std::memcpy( c, c4, 16 );
+    pfx_system_set_wordsac( h.find( instance ), c );
+}
+
+// Slot 7 0x58A6D0: the AABB's address, this + 0x80 - min +0x80 .. +0x88, max
+// +0x90 .. +0x98 (pads +0x8C / +0x9C UNKNOWN), as slot 13 left it.
+inline const float* pfx_instance_aabb( pfx_heap_t& h, std::uint32_t instance )
+{
+    return reinterpret_cast< const float* >( h.find( instance + pfx_system_aabb_offset( ) ) );
+}
+
+inline float pfx_instance_duration( pfx_heap_t& h, std::uint32_t instance )   // slot 10 0x58A700: the node's Duration
+{
+    return h.f( h[ instance + 0x0C ] + 0x30 );
+}
+
+inline std::uint32_t pfx_instance_state( pfx_heap_t& h, std::uint32_t instance )   // slot 6 0x58A6C0: +0x7C
+{
+    return h[ instance + 0x7C ];
+}
+
+inline void pfx_instance_start( pfx_heap_t& h, std::uint32_t instance ) { pfx_system_start( h, instance ); }   // slot 11 0x58AC90
+
+inline void pfx_instance_stop( pfx_heap_t& h, std::uint32_t resources, std::uint32_t instance, bool immediate )   // slot 12 0x58ACC0
+{
+    pfx_system_stop( h, resources, instance, immediate );
+}
+
+inline void pfx_instance_tick( pfx_heap_t& h, std::uint32_t instance, float dt, const pfx_sim_hooks_t& k )   // slot 13 0x58AD70
+{
+    pfx_system_tick( h, instance, dt, k );
+}

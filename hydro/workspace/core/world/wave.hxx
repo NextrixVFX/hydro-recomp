@@ -1471,7 +1471,9 @@ inline void wave_frame( wave_image_t& w, int matrix, int inverse, float z_scale 
 // (seeded with +-FLT_MAX), z from +84 -+ +104, and the radius
 // sqrt( hy*hy + hx*hx ). The fold's +24 / +40 come from a stack slot this
 // function never writes for them: UNKNOWN, not reproduced.
-inline void wave_rect_bounds( wave_image_t& w )
+// `flat_z`: VuWaterDirectionalFlowWave's 0x59C4C0 - the same body (census
+// vdiff: one load moved) but z min = z max = +84, no half height.
+inline void wave_rect_bounds( wave_image_t& w, bool flat_z = false )
 {
     const float c = wave_x87_cos( w.f( 92 ) );
     const float s = wave_x87_sin( w.f( 92 ) );
@@ -1508,10 +1510,10 @@ inline void wave_rect_bounds( wave_image_t& w )
     max_x = mx( x1 + b, max_x );
     w.setf( 12, min_x );
     w.setf( 16, min_y );
-    w.setf( 20, w.f( 84 ) - w.f( 104 ) );
+    w.setf( 20, flat_z ? w.f( 84 ) : w.f( 84 ) - w.f( 104 ) );
     w.setf( 28, max_x );
     w.setf( 32, max_y );
-    w.setf( 36, w.f( 104 ) + w.f( 84 ) );
+    w.setf( 36, flat_z ? w.f( 84 ) : w.f( 104 ) + w.f( 84 ) );
     w.setf( 44, x );
     w.setf( 48, y );
     w.setf( 52, _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( hy * hy ) + ( hx * hx ) ) ) ) );
@@ -1583,6 +1585,54 @@ inline wave_image_t bump_create( const wave_source_t& s )
     w.set( 108, s.e( 0x64 ) );
     wave_frame( w, 112, 176, w.f( 104 ) );
     wave_rect_bounds( w );
+    return w;
+}
+
+// VuDirectionalFlowWaveEntity (no level authors one; verified on synthetic
+// entities, case flow_wave). Its descriptor 0x5D6810 (thiscall entity; desc*;
+// retn 4), 13 words into a zeroed 0x34 bytes: 0..3 the transform's +0x80
+// position, 4 its +0xA8, 5 / 6 its +0xB0 / +0xB4, 7..10 the entity's Flow
+// Velocity +0x60 .. +0x6C (four lanes; the fourth is the vector load's stack
+// word after a load - UNKNOWN - the ctor's 0 before), 11 / 12 its Longitudinal
+// +0x70 and Lateral Decay Ratio % +0x74.
+inline void flow_desc( const wave_source_t& s, std::uint32_t* d )
+{
+    for ( int k = 0; k < 4; ++k )
+        d[ k ] = s.t( 0x80 + 4 * k );
+    d[ 4 ] = s.t( 0xA8 );
+    d[ 5 ] = s.t( 0xB0 );
+    d[ 6 ] = s.t( 0xB4 );
+    for ( int k = 0; k < 6; ++k )
+        d[ 7 + k ] = s.e( 0x60 + 4 * k );
+}
+
+// 0x59C3C0 (thiscall wave; desc*; retn 4) - the ctor half and the entity's
+// re-describe 0x5D6740's: the 13 words to +76 .. +127 (rep movsd), the frame
+// at +128 (scale z 1.0) and its inverse at +192 - flow_vertex's +104 .. +112
+// flow, +120 / +124 the edges, +192 the transform.
+inline void flow_set( wave_image_t& w, const std::uint32_t* d )
+{
+    for ( int k = 0; k < 13; ++k )
+        w.set( 76 + 4 * k, d[ k ] );
+    wave_frame( w, 128, 192, 1.0f );
+}
+
+// VuWater 0x5289B0 (thiscall water; desc*; retn 4): new 0x100, +8 / +0x38 /
+// +0x3C / +0x40 zeroed, VuWaterWave's ctor 0x5A6390( 0 ), vtable 0x7507B0,
+// +0x4C .. +0x7F zeroed, 0x59C3C0, the bounds 0x59C4C0 (z min = z max = the
+// position's); then +4 incremented and the allocators' common tail (the
+// caller's: surface.hxx water_build_entity).
+inline wave_image_t flow_create( const wave_source_t& s )
+{
+    wave_image_t w{};
+    w.set( 8, 0 );
+    wave_base( w );
+    for ( int o = 76; o < 128; o += 4 )
+        w.set( o, 0 );
+    std::uint32_t d[ 13 ];
+    flow_desc( s, d );
+    flow_set( w, d );
+    wave_rect_bounds( w, true );
     return w;
 }
 

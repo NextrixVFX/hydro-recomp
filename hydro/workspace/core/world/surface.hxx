@@ -47,7 +47,8 @@
 // from the ctors under emulation; the ramp's three from its ctor 0x5D6D50).
 enum class water_prop_t : std::uint8_t
 {
-    real, angle, percent, int_enum
+    real, angle, percent, int_enum,
+    vec3   // a VuVector3 property (entity/property.hxx property_vector3): three lanes; the fourth target word is not loaded
 };
 
 struct water_prop_row_t
@@ -57,6 +58,7 @@ struct water_prop_row_t
     water_prop_t kind;
     std::uint32_t fallback;
     const property_choice_t* choices;
+    std::uint32_t fallback_y = 0, fallback_z = 0;   // a vec3's other two lanes
 };
 
 // The choice tables, read out of the image: 0x736010 (X Size / Y Size) and
@@ -138,6 +140,16 @@ inline const water_prop_row_t k_water_bump_props[] = {
     { "Lateral Decay Ratio %", 0x64, water_prop_t::percent, 0x3F000000u, nullptr },
     { nullptr, 0, water_prop_t::real, 0, nullptr } };
 
+// VuDirectionalFlowWaveEntity's ctor 0x5D6410 (engine schema.hxx's capture):
+// Flow Velocity (a VuVector3 at +0x60, (0, 5, 0); its fourth word +0x6C the
+// ctor's 0, after a load the vector load's stack word - UNKNOWN), the two decay
+// ratios (percentages, 0.5).
+inline const water_prop_row_t k_water_flow_props[] = {
+    { "Flow Velocity", 0x60, water_prop_t::vec3, 0, nullptr, 0x40A00000u, 0 },
+    { "Longitudinal Decay Ratio %", 0x70, water_prop_t::percent, 0x3F000000u, nullptr },
+    { "Lateral Decay Ratio %", 0x74, water_prop_t::percent, 0x3F000000u, nullptr },
+    { nullptr, 0, water_prop_t::real, 0, nullptr } };
+
 // The classes built here, in the kind order the oracle case uses.
 enum water_kind_t
 {
@@ -149,13 +161,18 @@ enum water_kind_t
     water_kind_infinite,
     // made at run time by a hull's wake update 0x417D80 (world/wake.hxx): VuWaterWakeWave (0x5287D0, vtable 0x74D148) and
     // VuWaterFlatWakeWave (0x528850, vtable 0x74D164); slot 2 both 0x52C210, slot 0 0x52BE40 / 0x52BE80
-    water_kind_wake, water_kind_flat_wake
+    water_kind_wake, water_kind_flat_wake,
+    // VuDirectionalFlowWaveEntity's VuWaterDirectionalFlowWave (0x5289B0, vtable 0x7507B0; slot 6 0x5D66D0, slot 7 0x5D6710):
+    // no level authors one (verified on synthetic entities, case flow_wave)
+    water_kind_flow
 };
 
 inline water_kind_t water_kind_of( const std::string& cls )
 {
     if ( cls == "VuInfiniteOceanWaveEntity" )
         return water_kind_infinite;
+    if ( cls == "VuDirectionalFlowWaveEntity" )
+        return water_kind_flow;
     static const char* const names[] = { "VuWaterSurfaceEntity", "VuWaterRampEntity", "VuRectangularOceanWaveEntity",
         "VuCircularOceanWaveEntity", "VuBankedTurnWaveEntity", "VuWhirlpoolWaveEntity", "VuDirectionalWaveEntity", "VuBumpWaveEntity" };
     for ( int k = 0; k < water_kind_none; ++k )
@@ -209,6 +226,7 @@ inline void water_props_rows( water_kind_t kind, const water_prop_row_t* rows[ 3
     case water_kind_directional: rows[ 0 ] = k_water_directional_props; break;
     case water_kind_bump: rows[ 0 ] = k_water_bump_props; break;
     case water_kind_infinite: rows[ 0 ] = k_water_ocean_props; break;
+    case water_kind_flow: rows[ 0 ] = k_water_flow_props; break;
     default: break;
     }
 }
@@ -230,6 +248,13 @@ inline std::shared_ptr< water_entity_state_t > water_entity_state_for( const std
             const int k = static_cast< int >( r->offset - 0x60 ) / 4;
             s->value.word[ k ] = r->fallback;
             s->value.known[ k ] = true;
+            if ( r->kind == water_prop_t::vec3 )
+            {
+                s->value.word[ k + 1 ] = r->fallback_y;
+                s->value.word[ k + 2 ] = r->fallback_z;
+                s->value.word[ k + 3 ] = 0;   // the ctor's fourth lane
+                s->value.known[ k + 1 ] = s->value.known[ k + 2 ] = s->value.known[ k + 3 ] = true;
+            }
         }
     s->defaults = s->value;
     return s;
@@ -249,6 +274,15 @@ inline void water_entity_load( water_entity_state_t& s, const value_t& propertie
             const int k = static_cast< int >( r->offset - 0x60 ) / 4;
             std::uint32_t& word = s.value.word[ k ];
             const std::uint32_t fallback = s.defaults.word[ k ];
+            if ( r->kind == water_prop_t::vec3 )
+            {
+                float v[ 3 ], fb[ 3 ];
+                std::memcpy( fb, &s.defaults.word[ k ], 12 );
+                property_vector3( properties, r->name, v, fb );
+                std::memcpy( &s.value.word[ k ], v, 12 );
+                s.value.known[ k + 3 ] = false;   // the vector load's 16-byte store: its fourth lane a stack word (UNKNOWN)
+                continue;
+            }
             if ( r->kind == water_prop_t::int_enum )
             {
                 std::int32_t v;
@@ -828,6 +862,7 @@ inline std::uint32_t water_wave_vtable( water_kind_t k )
     case water_kind_infinite: return 0x7508C0u;
     case water_kind_wake: return 0x74D148u;
     case water_kind_flat_wake: return 0x74D164u;
+    case water_kind_flow: return 0x7507B0u;
     default: return 0u;
     }
 }
@@ -914,6 +949,7 @@ inline void water_build_entity( water_built_t& b, water_kind_t kind, const water
     case water_kind_whirlpool: add_wave( from_image( whirlpool_create( in.source( ) ) ), kind ); break;
     case water_kind_directional: add_wave( from_image( directional_create( in.source( ) ) ), kind ); break;
     case water_kind_bump: add_wave( from_image( bump_create( in.source( ) ) ), kind ); break;
+    case water_kind_flow: add_wave( from_image( flow_create( in.source( ) ) ), kind ); break;   // slot 6 0x5D66D0 (entity +0x78 = it)
     default: ++b.skipped; break;
     }
 }
@@ -1061,7 +1097,7 @@ inline void water_built_remove( water_built_t& b, int wave )
 // Slot 0 with 1, the scalar deleting dtor - every class's is its vtable
 // restored, VuWaterWave's dtor 0x5A6470, then operator delete: point 0x5A3310,
 // whirlpool 0x5A1440, banked turn 0x5A4D50, ramp 0x5A2340, bump 0x5A3FB0,
-// directional 0x59AAA0, wake 0x52BE40, flat wake 0x52BE80, VuWaterWave's own
+// directional 0x59AAA0, directional flow 0x59C350, wake 0x52BE40, flat wake 0x52BE80, VuWaterWave's own
 // 0x5A6440; the oceans' 0x59CAB0 (VuWaterBaseOceanWave, rectangular and
 // circular alike) first frees the field when +0x4C is set (0x59CF90: the
 // arrays +0x90 / +0x94 / +0xA0, the +0x98 / +0x9C tables, the two buffers'
@@ -1465,7 +1501,8 @@ inline int water_built_tick( water_built_t& b, float dt, const water_built_hooks
         }
         case water_kind_ramp:
         case water_kind_banked:
-        case water_kind_bump: alive = static_wave_tick( static_cast< int >( v.word[ 1 ] ) ); break;
+        case water_kind_bump:
+        case water_kind_flow: alive = static_wave_tick( static_cast< int >( v.word[ 1 ] ) ); break;   // 0x59C380
         case water_kind_rectangular:
         case water_kind_circular:
         case water_kind_infinite:   // its vtable 0x7508C0's slot 2 is 0x59CC00 too
@@ -1566,7 +1603,7 @@ inline int water_built_tick( water_built_t& b, float dt, const water_built_hooks
 // make? Counted so the gap is visible.
 inline bool water_class_unbuilt( const std::string& cls )
 {
-    static const char* const others[] = { "VuDirectionalFlowWaveEntity", "VuStaticWakeWaveEntity", "VuWakeWaveEntity" };
+    static const char* const others[] = { "VuStaticWakeWaveEntity", "VuWakeWaveEntity" };
     for ( const char* o : others )
         if ( cls == o )
             return true;

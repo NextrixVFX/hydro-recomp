@@ -26,6 +26,7 @@
 //   banked turn  0x5A5040 -> 0x5A55C0 / 0x5A5830 (0x5A5AB0 / 0x5A5F10)
 //   whirlpool    0x5A16A0 -> 0x5A1AD0 / 0x5A1D20 (0x5A1F80 / 0x5A2160)
 //   point        0x5A3510 -> 0x5A36A0 / 0x5A3820 (0x5A39B0 / 0x5A3CA0), vtable 0x750978
+//   dir. flow    0x59C390 -> 0x59C7C0 / 0x59C920 (+0x60 set: nothing), vtable 0x7507B0
 //
 // THE TAG VARIANT IS THE BASE BODY BEHIND ONE TEST, read by an instruction
 // diff of each pair (hydro-tools census/vdiff.py): per vertex i,
@@ -49,9 +50,9 @@
 // water_built_tick.
 //
 // NOT RECREATED, so the hook answers false (UNKNOWN) and the query with it:
-//   - wake / flow waves: none is made by water_build_world and their creation
-//     at run time is not recreated. Point waves come from
-//     water_create_point_wave (surface.hxx, 0x528E10).
+//   - any kind not listed above. (Point waves come from water_create_point_wave,
+//     0x528E10; wakes from world/wake.hxx; directional flow waves from
+//     water_build_entity's water_kind_flow - no level authors one.)
 
 struct water_wave_kernel_t
 {
@@ -63,6 +64,7 @@ struct water_wave_kernel_t
     banked_turn_t banked{};
     point_wave_t point{};
     ocean_patch_t ocean{};
+    flow_t flow{};   // VuWaterDirectionalFlowWave 0x59C7C0 (appended)
     wake_wave_t wake{};   // the wakes (world/wake.hxx): +0x4C .. +0xBF   // patches[] point into the build's field (b.oceans): null = not built
 };
 
@@ -154,6 +156,14 @@ inline water_wave_kernel_t water_wave_kernel( water_kind_t kind, const water_wor
         break;
     case water_kind_wake:
     case water_kind_flat_wake: k.wake = water_wake_of( w ); break;
+    case water_kind_flow:   // 0x59C7C0
+        for ( int i = 0; i < 3; ++i )
+            k.flow.flow[ i ] = w.f( 104 + 4 * i );
+        k.flow.edge_b = w.f( 120 );
+        k.flow.edge_a = w.f( 124 );
+        for ( int i = 0; i < 16; ++i )
+            k.flow.transform[ i ] = w.f( 192 + 4 * i );
+        break;
     case water_kind_point:   // 0x5A36A0
         k.point.centre_x = w.f( 76 );
         k.point.centre_y = w.f( 80 );
@@ -266,6 +276,7 @@ inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
         case water_kind_wake:
         case water_kind_flat_wake:
         case water_kind_point: break;
+        case water_kind_flow: return true;   // 0x59C390: ctx+0x60 set - nothing
         case water_kind_rectangular:
         case water_kind_circular:
         case water_kind_infinite:
@@ -327,6 +338,7 @@ inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
     case water_kind_bump:
     case water_kind_banked:
     case water_kind_wake:
+    case water_kind_flow:   // 0x59C390 -> 0x59C7C0 / 0x59C920 (the base behind the tag test: census vdiff)
     case water_kind_point: break;
     case water_kind_flat_wake: return true;   // slot 3 0x52CA30 does nothing without ctx+0x60
     case water_kind_rectangular:
@@ -359,6 +371,7 @@ inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
         case water_kind_ramp: ramp_vertex( k.ramp, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height ); break;
         case water_kind_bump: bump_vertex( k.bump, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height ); break;
         case water_kind_banked: banked_turn_vertex( k.banked, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height ); break;
+        case water_kind_flow: flow_vertex( k.flow, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height ); break;
         default: point_wave_vertex( k.point, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height ); break;
         }
     }
