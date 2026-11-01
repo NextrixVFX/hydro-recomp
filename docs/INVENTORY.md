@@ -18,10 +18,10 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 1316 | 593698 |
-| callee | 952 | 238257 |
-| cited | 283 | 111481 |
-| absent | 6087 | 1282824 |
+| verified | 1341 | 600172 |
+| callee | 950 | 237788 |
+| cited | 292 | 117665 |
+| absent | 6055 | 1270635 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -30,17 +30,17 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 
 | subsystem | functions | verified | callee | cited | absent | verified bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| unattributed | 1845 | 330 | 208 | 60 | 1247 | 219030 of 695394 |
+| unattributed | 1845 | 337 | 205 | 67 | 1236 | 221405 of 695394 |
 | physics (Bullet) | 646 | 218 | 25 | 39 | 364 | 79507 of 256657 |
 | entity / component / script framework | 1094 | 119 | 180 | 46 | 749 | 37250 of 207438 |
 | HUD / UI / fonts | 648 | 52 | 147 | 7 | 442 | 32758 of 184315 |
-| game modes / race | 766 | 66 | 58 | 13 | 629 | 33260 of 179957 |
-| rendering / gfx | 552 | 67 | 46 | 24 | 415 | 23331 of 126915 |
-| water | 325 | 99 | 71 | 34 | 121 | 42138 of 96416 |
+| game modes / race | 766 | 66 | 58 | 14 | 628 | 33260 of 179957 |
+| rendering / gfx | 552 | 67 | 46 | 25 | 414 | 23331 of 126915 |
+| water | 325 | 117 | 72 | 33 | 103 | 46237 of 96416 |
 | boat | 264 | 138 | 42 | 14 | 70 | 60912 of 87400 |
 | engine core / math / containers | 391 | 32 | 15 | 17 | 327 | 5728 of 76072 |
 | other classes | 731 | 9 | 3 | 1 | 718 | 5251 of 67698 |
-| assets | 286 | 22 | 34 | 2 | 228 | 3533 of 61239 |
+| assets | 286 | 22 | 34 | 3 | 227 | 3533 of 61239 |
 | particles | 215 | 126 | 50 | 7 | 32 | 35565 of 45495 |
 | audio | 163 | 6 | 33 | 0 | 124 | 838 of 30823 |
 | input | 156 | 1 | 6 | 6 | 143 | 24 of 30388 |
@@ -58,8 +58,8 @@ Over-approximate (a referenced vtable brings every slot) and under-approximate (
 
 | tier | functions | verified | callee | cited | absent | runtime / STL / thunk | platform layer | game + engine logic not verified |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| race | 4905 | 1180 | 651 | 268 | 2806 | 68 | 610 | 3127 |
-| game | 2431 | 134 | 300 | 14 | 1983 | 77 | 313 | 1908 |
+| race | 4905 | 1200 | 647 | 277 | 2781 | 68 | 610 | 3107 |
+| game | 2431 | 139 | 302 | 14 | 1976 | 77 | 313 | 1903 |
 | service | 452 | 0 | 0 | 0 | 452 | 45 | 98 | 309 |
 | dead | 850 | 2 | 1 | 1 | 846 | 61 | 126 | 661 |
 
