@@ -7,6 +7,7 @@
 #include <workspace/core/boat/respawn.hxx>
 #include <workspace/core/dynamics/contact.hxx>
 #include <workspace/core/ui/config.hxx>
+#include <workspace/core/world/dynamics.hxx>
 #include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/start.hxx>
 #include <workspace/core/world/tick.hxx>
@@ -55,6 +56,7 @@ struct race_session_boat_t
     boat_graph_t graph;
     std::unique_ptr< race_boat_driver_t > driver;
     vu_rigid_body_t body{};
+    collision_object_t collision{};   // the body's collision object in the race's dynamics world (world/dynamics.hxx)
     boat_engine_t engine{};
     boat_load_t io{};
     bool sections = false;    // 0x420A70 ran to its end
@@ -136,6 +138,9 @@ struct race_session_t
     // boat contact.hxx contact_added): built by race_drive_setup, installed by whatever steps the bodies.
     std::shared_ptr< race_contact_t > contact_user;
     contact_callbacks_t contact{};
+    // g_vudynamicsimpl 0x75900C: the dynamics world (world/dynamics.hxx), made before the boats as the engine
+    // init 0x566230 makes it; its DynamicsSync / DynamicsKick ticks registered first in their phases.
+    std::unique_ptr< race_dynamics_t > dynamics;
 };
 
 // The Decision tick 0x41EFF0 and the Viewports tick 0x4AB0A0 composed on the
@@ -295,6 +300,69 @@ inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb
     return ok;
 }
 
+inline void race_unwired( race_session_t& s, const std::string& what );
+
+// VuBoatEntity slot 17 0x421980 / slot 18 0x421940 (boat entity.hxx
+// boat_enable / boat_disable: VuDynamicsImpl slots 15 / 11 and 16 / 12 -
+// manager.hxx) on the race's dynamics world. The body's collision object is
+// its compound (0x420A70's +0xCC, boat load.hxx io.compound) under the body's
+// transform, its processing threshold the body's +0xC4; its motion state
+// (+0x1F4 = boat +0x5C) is boat_motion_set 0x41E460 on the boat's transform
+// component (+0x50). The +0x60 interface's step-callback slots: slot 0
+// 0x410B30 (a ret 8 - nothing), slot 1 tickThunk 0x41E5E0 - NOT WIRED (its
+// hull / fluid / engine contexts are not composed from the race's boat
+// images): it stops the dynamics frame (world/dynamics.hxx).
+inline void race_session_enable( race_session_t& s, race_session_boat_t& b, bool on )
+{
+    if ( !s.dynamics )
+        return;
+    race_dynamics_t& d = *s.dynamics;
+    std::uint8_t* boat = b.graph.objects[ 0 ].image.data( );
+    void* tick = boat + 0x60;
+    if ( !b.sections )
+    {
+        race_unwired( s, "the boat's slot 17 / 18 on a boat whose sections load stopped (no shape) - not run (UNKNOWN)" );
+        return;
+    }
+    if ( d.objects.find( &b.body ) == d.objects.end( ) )
+    {
+        float pth;
+        std::memcpy( &pth, reinterpret_cast< const std::uint8_t* >( &b.body ) + 0xC4, 4 );
+        b.collision = collision_object_t{ };
+        b.collision.body = concave_body_t{ b.body.body.basis, nullptr, nullptr, &b.body.body, &b.io.compound, pth };
+        d.objects[ &b.body ] = &b.collision;
+        std::uint8_t* transform = race_session_image( b, 0, 0x50 );
+        d.motion[ &b.body.body ] = [ &s, boat, transform ]( const float* basis, const float* origin ) {
+            if ( !transform || !boat_motion_set( boat, transform, false, basis, origin ) )
+                race_unwired( s, "the boat's setWorldTransform 0x41E460 with no transform image - UNKNOWN, not written" );
+        };
+        race_step_callback_t cb;
+        cb.slot0 = []( float, bool ) {};   // 0x410B30: ret 8
+        cb.unwired = "the boat's step callback tickThunk 0x41E5E0 (the hull update 0x416D20, 0x414010, 0x4219C0) has no context "
+                     "composed from the race's boat images - the dynamics frame (DynamicsKick / DynamicsSync) is STOPPED (UNKNOWN)";
+        d.callbacks[ tick ] = cb;
+    }
+    const bool ok = on ? boat_enable( d.impl, boat[ 0x2A0 ], b.body, tick ) : boat_disable( d.impl, boat[ 0x2A0 ], b.body, tick );
+    if ( !ok )
+        race_unwired( s, on ? "the boat's slot 17 0x421980 reached a dynamics path not modelled - UNKNOWN"
+                            : "the boat's slot 18 0x421940 reached a dynamics path not modelled - UNKNOWN" );
+}
+
+// The DynamicsSync / DynamicsKick ticks 0x4F8A20 / 0x4F8A90 (world/dynamics.hxx).
+inline void race_session_dynamics_sync( void* user, float dt )
+{
+    race_session_t& s = *static_cast< race_session_t* >( user );
+    race_dynamics_sync( *s.dynamics, dt );
+}
+
+inline void race_session_dynamics_kick( void* user, float dt )
+{
+    race_session_t& s = *static_cast< race_session_t* >( user );
+    race_dynamics_kick( *s.dynamics, dt );
+    if ( !s.dynamics->stopped.empty( ) )
+        race_unwired( s, s.dynamics->stopped );
+}
+
 // The Decision / Build delegates the boat's gameInitialize registers (0x41EFF0
 // / 0x41F330 behind the thunks 0x4077ED / 0x404AB2):
 // - Decision 0x41EFF0 = boat_decision_tick (core/boat state.hxx) composed on
@@ -415,6 +483,8 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
                                 const c_archive& archive, entity_t& tree, const track_manager_t* track, fleet_random_t& random )
 {
     s = race_session_t{ };
+    s.dynamics = std::make_unique< race_dynamics_t >( );   // the engine init's VuDynamicsImpl (0x4F8050) + 0x4024E0's gravity
+    race_dynamics_init( *s.dynamics, &s.contact );
     s.random = &random;
     s.game_data = game_data;
     race_game_construct( s.game );   // the VuRaceGame ctor 0x489030 (its base 0x480BA0's values)
@@ -498,6 +568,8 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
 
     // The tick manager (ctor 0x4F6F60, slot 5 0x4F7050) and the AI manager's tick.
     tick_manager_init( s.ticks );
+    tick_register( s.ticks, { s.dynamics.get( ), race_session_dynamics_sync, &s }, "DynamicsSync" );   // 0x4F8050's registrations
+    tick_register( s.ticks, { s.dynamics.get( ), race_session_dynamics_kick, &s }, "DynamicsKick" );
     tick_register( s.ticks, { &s.fleet, race_session_fleet, &s }, "Decision" );
     tick_register( s.ticks, { &s.manager, race_session_viewports, &s }, "Viewports" );
 
@@ -560,6 +632,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         ih.entry = s.start_boats[ static_cast< std::size_t >( k ) ].boat;
         ih.kind = s.start_boats[ static_cast< std::size_t >( k ) ].kind;
         race_session_tick_t* user = tick_users[ static_cast< std::size_t >( k ) ].get( );
+        ih.slot17 = [ &s, &b ] { race_session_enable( s, b, true ); };
         race_boat_game_initialize( &b, s.ticks, { &b, race_session_decision, user }, { &b, race_session_build, user }, b.draw_added, ih );
     };
     sh.add_driver = [ &s ]( int k )
@@ -663,6 +736,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
                 ih.entry = sb.boat;
                 ih.kind = sb.kind;
                 race_session_tick_t* user = tick_users.back( ).get( );
+                ih.slot17 = [ &s, &b ] { race_session_enable( s, b, true ); };
                 race_boat_game_initialize( &b, s.ticks, { &b, race_session_decision, user }, { &b, race_session_build, user }, b.draw_added, ih );
             };
             nuisance_start_game_initialize( start->m_name, *static_cast< const nuisance_start_t* >( start->m_state.get( ) ), nh );
@@ -676,6 +750,9 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
                       static_cast< int >( s.nuisance.size( ) ) );
     }
     race_drive_setup( s, db.constant_db );
+    LOG_INFO( "race: the dynamics world holds %d rigid bod(ies) / %d collision object(s) / %d step callback(s) after the boats' slot 17 0x421980; gravity z 0x%08X",
+              static_cast< int >( s.dynamics->world.bodies.size( ) ), static_cast< int >( s.dynamics->collision.objects.size( ) ),
+              static_cast< int >( s.dynamics->impl.step_callbacks.size( ) ), [ & ] { std::uint32_t u; std::memcpy( &u, &s.dynamics->world.gravity[ 2 ], 4 ); return u; }( ) );
     int placed = 0;
     for ( const race_start_boat_t& b : s.start_boats )
         placed += b.transform ? 1 : 0;

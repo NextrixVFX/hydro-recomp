@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/boat/ai.hxx>
+#include <workspace/core/boat/nuisance.hxx>
 #include <workspace/core/boat/track.hxx>
 
 #include <cstdint>
@@ -545,4 +546,53 @@ inline void fleet_replan( const fleet_manager_t& m, std::vector< fleet_pilot_t >
             break;
         }
     }
+}
+// ---- The small slots ----
+//
+// Slot 15 0x404210: fld the .data float 0x735790 (150.0 - nothing writes it;
+// its only reference is this load), returned in ST0.
+inline float fleet_slot15( ) { return 150.0f; }
+
+// Slot 3 0x404570 (gameRelease): +0x1C = 0, then g_vutickmanagerimpl
+// 0x759008's vt+0x28(this) - `unregister`, a hook.
+inline void fleet_release( fleet_manager_t& m, const std::function< void( ) >& unregister )
+{
+    m.state = 0;
+    if ( unregister )
+        unregister( );
+}
+
+// Slot 9 0x403510 (reset), on retail's words (vu_words_t: nuisance.hxx):
+// +0x34 / +0x38 = 0; operator delete of each of the +0x24 entries +0x2C[k]
+// that is set; _aligned_free(+0x2C) when the byte +0x30 (owned) is set; +0x24
+// / +0x28 / +0x2C = 0; the byte +0x30 = 1; +0x1C = 1. On the model:
+// fleet_reset - start / end 0 (not -1), no entries, state 1.
+struct fleet_reset_hooks_t
+{
+    std::function< void( std::uint32_t ) > free_block;     // operator delete
+    std::function< void( std::uint32_t ) > aligned_free;   // _aligned_free
+};
+
+inline void fleet_reset_words( const vu_words_t& w, std::uint32_t self, const fleet_reset_hooks_t& h )
+{
+    w.put( self + 0x34, 0u );
+    w.put( self + 0x38, 0u );
+    for ( std::int32_t k = 0; k < static_cast< std::int32_t >( w.get( self + 0x24 ) ); ++k )
+        if ( const std::uint32_t e = w.get( w.get( self + 0x2C ) + 4u * static_cast< std::uint32_t >( k ) ) )
+            if ( h.free_block ) h.free_block( e );
+    if ( ( w.get( self + 0x30 ) & 0xFFu ) && h.aligned_free )
+        h.aligned_free( w.get( self + 0x2C ) );
+    w.put( self + 0x24, 0u );
+    w.put( self + 0x28, 0u );
+    w.put( self + 0x2C, 0u );
+    w.put( self + 0x30, ( w.get( self + 0x30 ) & 0xFFFFFF00u ) | 1u );
+    w.put( self + 0x1C, 1u );
+}
+
+inline void fleet_reset( fleet_manager_t& m )
+{
+    m.start = 0;
+    m.end = 0;
+    m.entries.clear( );
+    m.state = 1;
 }

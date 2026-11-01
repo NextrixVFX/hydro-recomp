@@ -90,10 +90,16 @@
     <ClInclude Include="workspace\core\boat\contact.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\boat\damage.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\boat\driver.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\boat\entity.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\boat\events.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\boat\fleet.hxx">
@@ -219,6 +225,9 @@
     <ClInclude Include="workspace\core\ui\hud.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\ui\image.hxx">
+      <Filter>workspace\core\ui</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\ui\leave.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
@@ -250,6 +259,9 @@
       <Filter>workspace\core\world</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\world\drive.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\world\dynamics.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\world\effects.hxx">

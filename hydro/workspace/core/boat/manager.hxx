@@ -333,3 +333,33 @@ inline void boat_manager_game_release( std::int32_t& references, const boat_mana
 // (+0x0C .. +0x3C) and - when +0x54 owns it - the +0x48 array's; the
 // VuSystemComponent vtable back. boat_manager_list_t's std::vector owns its
 // block here (SUBSTITUTION for the VuArray's aligned block): nothing to call.
+
+// ---- Small helpers (the debug camera's profile load 0x4AB480 calls the two
+// readers - a platform hook itself) and the atexit stubs ----
+
+// 0x4ABB40 (ecx = the bytes, edx = the count, the seed on the stack; cdecl
+// cleanup): FNV-1a - h = (h ^ byte) x 0x1000193 per byte, from the seed.
+inline std::uint32_t boat_fnv_range( const std::uint8_t* p, std::uint32_t n, std::uint32_t seed )
+{
+    for ( std::uint32_t k = 0; k < n; ++k )
+        seed = ( seed ^ p[ k ] ) * 0x1000193u;
+    return seed;
+}
+
+// 0x4ABB10 (thiscall(reader, dst, n), retn 8): memcpy_s(dst, n, +0 base +
+// +8 position, n), then the position += n (no bound: the caller's).
+struct boat_stream_t
+{
+    const std::uint8_t* base = nullptr;   // +0
+    std::uint32_t position = 0;           // +8
+};
+
+inline void boat_stream_read( boat_stream_t& s, void* dst, std::uint32_t n )
+{
+    std::memcpy( dst, s.base + s.position, n );
+    s.position += n;
+}
+
+// The atexit stubs: 0x4AA960 zeroes g 0x758FB8, 0x403250 g 0x758F8C (static
+// pointers the CRT clears at exit).
+inline void boat_atexit_clear( std::uint32_t& global ) { global = 0; }

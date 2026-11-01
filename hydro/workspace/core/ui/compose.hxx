@@ -33,6 +33,7 @@ struct ui_impl_t
 {
     ui_crop_t m_crop;          // +12 (0x81A104)
     float m_float = 1.0f;      // +0x8C (0x81A184)
+    float m_aspect = 1.7777778f;   // +0x90 (0x81A188: 0x626190 stores 0x3FE38E39 = 16 / 9; the image draw 0x629300 reads it)
 };
 
 // The VuUIDrawComponent descriptor 0x736E78: 0x628070 takes the first

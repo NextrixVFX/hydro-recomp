@@ -1,11 +1,13 @@
 #pragma once
 
+#include <workspace/core/boat/nuisance.hxx>
 #include <workspace/core/boat/sections.hxx>
 #include <workspace/core/entity/object.hxx>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <vector>
 
 // The boat's AI driver, as postLoad 0x41CFF0 builds it for Driver Type "AI"
@@ -284,4 +286,72 @@ inline void ai_driver_load( std::uint8_t* driver, boat_strings_t& strings, const
     const float x = ( hi[ 0 ] - lo[ 0 ] ) * half;
     const float r = x > y ? x : y;
     std::memcpy( driver + 0x98, &r, 4 );
+}
+// ---- The drivers' dtors (vtable slot 0, scalar-deleting: thiscall(driver,
+// flags), retn 4; eax = this), on retail's words ----
+//
+// The VuDriverEntity part (0x40EA30 is it whole, for VuDriverEntity /
+// VuGhostDriver / VuHumanDriver): +0 = 0x737D4C; the +0x60 string's heap text
+// freed when its capacity +0x74 is >= 16, then +0x74 = 15, +0x70 = 0, the byte
+// +0x60 = 0; VuEntity's dtor 0x500870. The VuAiDriver part before it (0x40B7E0,
+// with no vtable store of its own): _aligned_free(+0x8C) with +0x84 = 0x746CDC
+// stored first (the VuRandomTrackPlan's dtor, inlined). VuAiUiDriver 0x40E530
+// -> 0x40E560: +0 = 0x737CDC, then the AI part. VuAiNuisanceDriver 0x40D920
+// -> 0x40D950: +0 = 0x737C4C; the stop mode 2 when the byte +0xF8 is set
+// (else 0); with an FMOD event +0xFC: setCallback(event, 0, 0), with a mode
+// stop(event, mode == 2), then +0xFC = 0; the weak reference +0xE4 (vtable
+// 0x737C44 stored) released inline (vu_weak_ref_release); then the AI part.
+// Then, with flags & 1, operator delete(this). The imports and 0x500870 are
+// hooks, in retail's order.
+enum class driver_dtor_kind_t
+{
+    entity,     // 0x40EA30
+    ai,         // 0x40B7E0
+    ui,         // 0x40E530
+    nuisance,   // 0x40D920
+};
+
+struct driver_dtor_hooks_t
+{
+    std::function< void( std::uint32_t ) > free_block;                     // operator delete
+    std::function< void( std::uint32_t ) > aligned_free;                   // _aligned_free
+    std::function< void( std::uint32_t ) > event_clear_callback;           // FMOD::Event::setCallback(event, 0, 0)
+    std::function< void( std::uint32_t, bool ) > event_stop;               // FMOD::Event::stop(event, immediate)
+    std::function< void( ) > entity_dtor;                                  // 0x500870
+};
+
+inline std::uint32_t driver_destroy( driver_dtor_kind_t kind, const vu_words_t& w, std::uint32_t self, std::uint32_t flags,
+                                     const driver_dtor_hooks_t& h )
+{
+    if ( kind == driver_dtor_kind_t::nuisance )
+    {
+        w.put( self, 0x737C4Cu );
+        const std::uint32_t mode = ( w.get( self + 0xF8 ) & 0xFFu ) ? 2u : 0u;
+        if ( const std::uint32_t event = w.get( self + 0xFC ) )
+        {
+            if ( h.event_clear_callback ) h.event_clear_callback( event );
+            if ( mode && h.event_stop ) h.event_stop( event, mode == 2u );
+            w.put( self + 0xFC, 0u );
+        }
+        w.put( self + 0xE4, 0x737C44u );
+        vu_weak_ref_release( w, self + 0xE4 );
+    }
+    else if ( kind == driver_dtor_kind_t::ui )
+        w.put( self, 0x737CDCu );
+    if ( kind != driver_dtor_kind_t::entity )
+    {
+        const std::uint32_t block = w.get( self + 0x8C );
+        w.put( self + 0x84, 0x746CDCu );
+        if ( h.aligned_free ) h.aligned_free( block );
+    }
+    w.put( self, 0x737D4Cu );
+    if ( w.get( self + 0x74 ) >= 0x10u && h.free_block )
+        h.free_block( w.get( self + 0x60 ) );
+    w.put( self + 0x74, 0xFu );
+    w.put( self + 0x70, 0u );
+    w.put( self + 0x60, w.get( self + 0x60 ) & 0xFFFFFF00u );
+    if ( h.entity_dtor ) h.entity_dtor( );
+    if ( ( flags & 1u ) && h.free_block )
+        h.free_block( self );
+    return self;
 }
