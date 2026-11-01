@@ -396,6 +396,12 @@ inline bool verify_ui_screen_game_init( )
             leaderboard.m_root = &board_root;
             hooks.m_leaderboard = &leaderboard;
         }
+        // batch 23: the full leaderboard's slot 6 / 7 run live (the manager's read / count answered 0 as the case's)
+        const value_t option_db = ui_cx_document( 4 );
+        ui_leaderboard_hooks_t ladder;
+        ladder.m_option_db = &option_db;
+        ladder.m_total = [ ] { return 0; };
+        hooks.m_ladder = &ladder;
         c_ui_binding bind( *root, hooks );
         if ( static_cast< int >( bind.m_bound.size( ) ) != gp.m_count )
         {
@@ -421,7 +427,8 @@ inline bool verify_ui_screen_game_init( )
         const auto owner_of = [ &bind ]( const void* callback )
         {
             for ( const auto& b : bind.m_bound )
-                if ( ( b->m_button && b->m_button.get( ) == callback ) || ( b->m_combo && b->m_combo.get( ) == callback ) )
+                if ( ( b->m_button && b->m_button.get( ) == callback ) || ( b->m_combo && b->m_combo.get( ) == callback ) ||
+                     ( b->m_ladder && b->m_ladder.get( ) == callback ) )
                     return b->m_index;
             return -1;
         };
@@ -459,6 +466,15 @@ inline bool verify_ui_screen_game_init( )
                 }
             if ( !boards.empty( ) )
                 t += "|B" + boards;
+            std::string ladders;
+            for ( const auto& b : bind.m_bound )
+                if ( b->m_ladder )
+                {
+                    std::snprintf( word, sizeof word, "%d,%d,%d;", b->m_index, b->m_ladder->m_fsm.m_current, b->m_ladder->m_first );
+                    ladders += word;
+                }
+            if ( !ladders.empty( ) )
+                t += "|L" + ladders;
             return t;
         };
         // the trace from `first` as retail's log lines (init / release: repository, slots, 0x5EFA60; trigger: broadcasts)
@@ -479,7 +495,7 @@ inline bool verify_ui_screen_game_init( )
                     std::snprintf( line, sizeof line, "%s|%d", t.m_name == "repository_add" ? "repo_add" : "repo_remove", t.m_index );
                 else if ( t.m_kind == ui_trace_kind_t::game )
                     std::snprintf( line, sizeof line, "slot|%d|0x%06X", t.m_index, t.m_word );
-                else if ( t.m_kind == ui_trace_kind_t::hook && t.m_name.compare( 0, 6, "board_" ) == 0 )
+                else if ( t.m_kind == ui_trace_kind_t::hook && ( t.m_name.compare( 0, 6, "board_" ) == 0 || t.m_name.compare( 0, 7, "ladder_" ) == 0 ) )
                     std::snprintf( line, sizeof line, "%s", t.m_name.c_str( ) );
                 else if ( t.m_kind == ui_trace_kind_t::event && t.m_word == 0x5EFA60u )
                     std::snprintf( line, sizeof line, "event|%d|0x%06X", t.m_index, t.m_word );
@@ -553,7 +569,7 @@ inline bool verify_ui_screen_game_init( )
     }
     if ( failed == 0 )
         LOG_SUCCESS( "c_ui_binding project_initialize / project_release (+ VuUserNextUIAction's Trigger) match retail's 0x500B10 / 0x501260 / "
-                     "0x500B80 (button 0x4426E0 + 0x53FAE0, subtitles 0x46D7A0, 0x4253D0, mini leaderboard 0x47DAB0 / 0x47DB10; 0x470E50) on %d Screens projects: %d phases, %d log "
+                     "0x500B80 (button 0x4426E0 + 0x53FAE0, subtitles 0x46D7A0, 0x4253D0, mini leaderboard 0x47DAB0 / 0x47DB10, leaderboard 0x479C50 / 0x479CF0; 0x470E50) on %d Screens projects: %d phases, %d log "
                      "lines in order (%d slot 6 / 7 entries), %d triggers, the touch device / combos / flags after each",
             static_cast< int >( g_golden_sgi_projects_count ), phases, logs, slots, triggers );
     else
@@ -1006,10 +1022,143 @@ inline bool verify_ui_leaderboard_draw( )
     return failed == 0;
 }
 
+// verify_ui_leaderboard_tick (batch 23): c_ui_leaderboard (core/ui ladder.hxx) against retail's
+// VuUILeaderboardEntity per-frame half - slot 6 0x479C50, Decision 0x47B640, Read's enter 0x47BC90 /
+// exit 0x47BE70 / tick 0x47BEA0, 0x47A1B0, 0x47A280, the touch callbacks 0x479D30 / 0x479E30 /
+// 0x479E40, slot 7 0x479CF0 - over one script on the authored instance (oracle case
+// leaderboard_tick). The fields from OUR loaded entity (compared with retail's bytes first), the
+// records from OUR ui_leaderboard_combos over the real OptionDB; the platform leaderboard manager
+// (read / status / count), the tick manager, the touch device and FMOD are the script's hooks,
+// logged as retail's were. Per step: the hook log in order and the whole state string.
+inline bool verify_ui_leaderboard_tick( )
+{
+    int failed = 0, steps = 0, logs = 0, fields = 0;
+    const value_t option_db = ui_cx_document( 4 );
+    float delta, inverse[ 16 ];
+    std::memcpy( &delta, &g_golden_lt_delta, 4 );
+    std::memcpy( inverse, g_golden_lt_inverse, 64 );
+    const auto bits = []( float f ) { std::uint32_t u; std::memcpy( &u, &f, 4 ); return u; };
+    const auto snapshot = [ &bits ]( const c_ui_leaderboard& lb )
+    {
+        char word[ 160 ];
+        std::snprintf( word, sizeof word, "%d,%d,%d,%d,%d,%d,%d,0x%08X,0x%08X|", lb.m_s.m_focus, lb.m_first, lb.m_s.m_press, lb.m_entry, lb.m_down, lb.m_held,
+                       lb.m_up, bits( lb.m_point[ 0 ] ), bits( lb.m_point[ 1 ] ) );
+        std::string s = word;
+        for ( const ui_config_combo_t& c : lb.m_s.m_combos )
+        {
+            std::snprintf( word, sizeof word, "%d,%d,%d,%d,0x%08X;", c.m_focused, c.m_b41, c.m_b42, c.m_index, bits( c.m_shown ) );
+            s += word;
+        }
+        std::snprintf( word, sizeof word, "|%d,%d,%d|", lb.m_fsm.m_current, lb.m_fsm.m_previous, lb.m_fsm.m_next );
+        s += word;
+        for ( const fsm_condition_t& c : lb.m_fsm.m_conditions )
+        {
+            std::snprintf( word, sizeof word, "%d,%d;", c.m_value, c.m_pulse );
+            s += word;
+        }
+        std::snprintf( word, sizeof word, "|0x%08X", bits( lb.m_fsm.m_time ) );
+        return s + word;
+    };
+    for ( std::size_t k = 0; k < g_golden_lt_entities_count; ++k )
+    {
+        const golden_lt_entity_t& ge = g_golden_lt_entities[ k ];
+        const entity_t* e = ui_lv_entity( ge.m_project, ge.m_index );
+        const std::vector< std::uint8_t > raw = ui_unhex( ge.m_fields );
+        bool same = e && e->m_ctor && e->m_ctor->m_vtable == k_ui_leaderboard_vtable && raw.size( ) == 0x584;
+        ui_leaderboard_t f;
+        if ( same )
+        {
+            f = ui_leaderboard_of( *e );
+            const auto against = [ & ]( const void* ours, int offset, std::size_t n )
+            {
+                if ( std::memcmp( ours, raw.data( ) + ( offset - 0x60 ), n ) != 0 )
+                    same = false;
+                ++fields;
+            };
+            against( f.m_scale, 0x68, 8 );
+            against( f.m_pos, 0x70, 8 );
+            against( &f.m_combo_spacing, 0x78, 4 );
+            against( f.m_left, 0x25C, 16 );
+            against( f.m_right, 0x26C, 16 );
+            against( &f.m_rows, 0x27C, 4 );
+            against( f.m_button_touch, 0x4B0, 16 );
+            against( &f.m_button_spacing, 0x4E0, 4 );
+        }
+        std::vector< std::string > log;
+        int status = 0, total = 0;
+        float point[ 2 ] = { 0.0f, 0.0f };
+        ui_leaderboard_hooks_t hooks;
+        hooks.m_option_db = &option_db;
+        hooks.m_read = [ & ]( const std::string& key, int first, int rows ) { log.push_back( "read|" + key + "|" + std::to_string( first ) + "|" + std::to_string( rows ) ); };
+        hooks.m_status = [ & ] { log.push_back( "status" ); return status; };
+        hooks.m_total = [ & ] { log.push_back( "total" ); return total; };
+        hooks.m_tick_register = [ & ]( bool on ) { log.push_back( on ? "register|Decision" : "unregister|Decision" ); };
+        hooks.m_delta = [ & ] { return delta; };
+        hooks.m_touch = [ & ]( bool on ) { log.push_back( on ? "touch_add|0x5C|0" : "touch_remove|0x5C" ); };
+        hooks.m_sound = [ & ]( const char* name ) { log.push_back( std::string( "sound|" ) + name ); };
+        c_ui_leaderboard lb( f, hooks );
+        same = same && static_cast< int >( lb.m_s.m_combos[ 0 ].m_choice_ids.size( ) ) == ge.m_choices0 &&
+               static_cast< int >( lb.m_s.m_combos[ 1 ].m_choice_ids.size( ) ) == ge.m_choices1 && snapshot( lb ) == ge.m_initial;
+        if ( !same )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "ui leaderboard tick: %s entity %d: OUR loaded fields / ctor records / initial state differ from retail's", ge.m_project, ge.m_index );
+            continue;
+        }
+        for ( int s = 0; s < ge.m_steps; ++s )
+        {
+            const golden_lt_step_t& gs = g_golden_lt_steps[ ge.m_first + s ];
+            log.clear( );
+            float p[ 2 ];
+            std::memcpy( p, gs.m_point, 8 );
+            bool known = true;
+            switch ( gs.m_op )
+            {
+            case 0: known = lb.initialize( ); break;
+            case 1: known = lb.decision( ); break;
+            case 2: status = gs.m_args[ 0 ]; break;
+            case 3: total = gs.m_args[ 0 ]; break;
+            case 4: lb.touch_down( inverse, p ); break;
+            case 5: lb.touch_up( ); break;
+            case 6:
+                log.push_back( "point|0" );   // the device's vt+0x1C (0, out)
+                point[ 0 ] = p[ 0 ];
+                point[ 1 ] = p[ 1 ];
+                lb.touch_move( inverse, point );
+                break;
+            case 7: known = lb.change( gs.m_args[ 0 ], gs.m_args[ 1 ] ); break;
+            case 8: known = lb.page( gs.m_args[ 0 ] ); break;
+            default: lb.release( ); break;
+            }
+            bool ok = known && static_cast< int >( log.size( ) ) == gs.m_logs;
+            for ( int q = 0; ok && q < gs.m_logs; ++q )
+            {
+                ok = log[ static_cast< std::size_t >( q ) ] == g_golden_lt_logs[ gs.m_first_log + q ];
+                ++logs;
+            }
+            const std::string state = snapshot( lb );
+            ok = ok && state == gs.m_state;
+            ++steps;
+            if ( !ok && ++failed <= 8 )
+                LOG_ERROR( "ui leaderboard tick: %s step %d (op %d): %d log lines (retail %d), state %s (retail %s)", ge.m_project, s, gs.m_op,
+                           static_cast< int >( log.size( ) ), gs.m_logs, state.c_str( ), gs.m_state );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_leaderboard matches retail's VuUILeaderboardEntity slot 6 0x479C50 / Decision 0x47B640 / Read 0x47BC90 0x47BE70 0x47BEA0 / "
+                     "0x47A1B0 / 0x47A280 / touch 0x479D30 0x479E30 0x479E40 / slot 7 0x479CF0 on %d entities (%d of OUR loaded fields): %d steps, "
+                     "%d hook calls in order, the state after each",
+            static_cast< int >( g_golden_lt_entities_count ), fields, steps, logs );
+    else
+        LOG_ERROR( "the UI leaderboard tick FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_results_all( )
 {
     bool ok = true;
     ok = verify_ui_leaderboard_draw( ) && ok;
+    ok = verify_ui_leaderboard_tick( ) && ok;
     ok = verify_ui_race_results( ) && ok;
     ok = verify_ui_subtitles_combo( ) && ok;
     ok = verify_ui_screen_game_init( ) && ok;

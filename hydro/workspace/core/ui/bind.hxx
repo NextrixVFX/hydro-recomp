@@ -8,6 +8,7 @@
 #include <workspace/core/ui/navigate.hxx>
 #include <workspace/core/ui/results.hxx>
 #include <workspace/core/ui/board.hxx>
+#include <workspace/core/ui/ladder.hxx>
 #include <workspace/core/ui/screen.hxx>
 #include <workspace/core/ui/slider.hxx>
 #include <workspace/core/ui/ticker.hxx>
@@ -349,6 +350,10 @@ struct ui_bound_t
     ui_mini_board_hooks_t m_board_hooks;
     std::unique_ptr< c_ui_mini_board > m_board;
     bool m_board_ticking = false;                           // "Decision" registered (slot 6) and not yet unregistered (slot 7)
+    // batch 23: VuUILeaderboardEntity (ladder.hxx; bound when m_ladder is set)
+    ui_leaderboard_hooks_t m_ladder_hooks;
+    std::unique_ptr< c_ui_leaderboard > m_ladder;
+    bool m_ladder_ticking = false;                          // "Decision" 0x47B640 registered (slot 6) and not yet unregistered (slot 7)
 };
 
 struct ui_bind_hooks_t
@@ -407,6 +412,10 @@ struct ui_bind_hooks_t
     // m_count / m_row of board.hxx's hooks; the binding supplies the tick manager's register (traced
     // "board_tick|register|Decision"), m_delta and m_root itself). Null: VuUIMiniLeaderboardEntity not bound.
     const ui_mini_board_hooks_t* m_leaderboard = nullptr;
+    // Batch 23: the same manager for the full leaderboard (ladder.hxx's m_read / m_status / m_total and the
+    // OptionDB at gameutil +0x34; the binding supplies the tick register (traced "ladder_tick|register|Decision"),
+    // the touch add / remove (m_touch_device, priority 0), m_delta and the sound). Null: VuUILeaderboardEntity not bound.
+    const ui_leaderboard_hooks_t* m_ladder = nullptr;
 };
 
 // An entity's own property slot (its loaded ui_state_t), or null.
@@ -1079,6 +1088,49 @@ private:
                 h.m_root = m_hooks.m_root;   // gameutil +80 (else the leaderboard hooks' own)
             b.m_board = std::make_unique< c_ui_mini_board >( ui_mini_board_of( e ), h );
         }
+        else if ( b.m_vtable == k_ui_leaderboard_vtable && m_hooks.m_ladder )
+        {
+            // ctor 0x477FD0 registers no event handlers; slot 6 / 7, "Decision", the touch callbacks and the draw are ladder.hxx's
+            ui_leaderboard_hooks_t& h = b.m_ladder_hooks;
+            h = *m_hooks.m_ladder;
+            ui_bound_t* bp = &b;
+            const auto read = h.m_read;
+            h.m_read = [ this, bp, read ]( const std::string& key, int first, int rows )
+            {
+                trace( ui_trace_kind_t::hook, bp->m_index, "ladder_read|" + key + "|" + std::to_string( first ) + "|" + std::to_string( rows ), 0u,
+                       ui_params_t( ), true );
+                if ( read )
+                    read( key, first, rows );
+            };
+            const auto total = h.m_total;
+            h.m_total = [ this, bp, total ]
+            {
+                trace( ui_trace_kind_t::hook, bp->m_index, "ladder_total", 0u, ui_params_t( ), true );
+                return total ? total( ) : 0;
+            };
+            h.m_tick_register = [ this, bp ]( bool on )
+            {
+                // the tick manager g 0x759008 vt+0x20 / +0x24 (the binding's "Decision" list: decision( ))
+                trace( ui_trace_kind_t::hook, bp->m_index, on ? "ladder_tick|register|Decision" : "ladder_tick|unregister|Decision", 0u,
+                       ui_params_t( ), true );
+                bp->m_ladder_ticking = on;
+            };
+            h.m_touch = [ this, bp ]( bool on )
+            {
+                // 0x53FB90 {entity + 0x5C, 0} / 0x53FA60 on the touch device g 0x759070
+                if ( !m_hooks.m_touch_device )
+                    return;
+                if ( on )
+                    ui_touch_add( *m_hooks.m_touch_device, bp->m_ladder.get( ), 0u );
+                else
+                    ui_touch_remove( *m_hooks.m_touch_device, bp->m_ladder.get( ) );
+            };
+            h.m_delta = [ this ] { return m_hooks.m_delta ? m_hooks.m_delta( ) : 0.0f; };
+            h.m_sound = [ this ]( const char* name ) { trace( ui_trace_kind_t::sound, -1, name, 0u, ui_params_t( ), true ); };
+            if ( !h.m_option_db )
+                h.m_option_db = m_hooks.m_option_db;   // gameutil +0x34
+            b.m_ladder = std::make_unique< c_ui_leaderboard >( ui_leaderboard_of( e ), h );
+        }
         else if ( b.m_vtable == k_ui_subtitles_vtable )
         {
             ui_combo_box_hooks_t& h = b.m_combo_hooks;
@@ -1351,6 +1403,8 @@ private:
             known = true;
         else if ( vt == k_ui_mini_board_vtable && b && b->m_board )
             known = true;
+        else if ( vt == k_ui_leaderboard_vtable && b && b->m_ladder )
+            known = true;
         trace( ui_trace_kind_t::game, index, std::string( ), address, ui_params_t( ), known );
         if ( !known )
         {
@@ -1384,6 +1438,14 @@ private:
                 b->m_board->initialize( );
             else
                 b->m_board->release( );
+        }
+        else if ( vt == k_ui_leaderboard_vtable )
+        {
+            // slot 6 0x479C50 / slot 7 0x479CF0 (ladder.hxx)
+            if ( init )
+                b->m_ladder->initialize( );
+            else
+                b->m_ladder->release( );
         }
         else if ( init )
             b->m_combo->initialize( *m_hooks.m_touch_device, m_hooks.m_settings->m_subtitles ? 1u : 0u );
@@ -1443,6 +1505,14 @@ public:
         for ( auto& b : m_bound )
             if ( b->m_board && b->m_board_ticking )
                 b->m_board->decision( );
+            else if ( b->m_ladder && b->m_ladder_ticking )
+                b->m_ladder->decision( );   // batch 23: 0x47B640
+    }
+    // A bound full leaderboard (its FSM / records / touch callbacks; draw( ) for the frame's m_leaderboard), or null.
+    c_ui_leaderboard* leaderboard( const entity_t& e )
+    {
+        const int index = index_of( e );
+        return index >= 0 ? m_bound[ static_cast< std::size_t >( index ) ]->m_ladder.get( ) : nullptr;
     }
     // A bound mini leaderboard (its FSM / key; draw( ) for the frame's m_board), or null.
     c_ui_mini_board* mini_board( const entity_t& e )
