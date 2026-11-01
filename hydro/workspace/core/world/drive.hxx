@@ -9,6 +9,7 @@
 #include <workspace/core/boat/respawn.hxx>
 #include <workspace/core/boat/state.hxx>
 #include <workspace/core/game/input.hxx>
+#include <workspace/core/world/build.hxx>
 #include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/query.hxx>
 #include <workspace/core/world/session.hxx>
@@ -498,6 +499,27 @@ inline void race_drive_decision( race_session_t& s, std::size_t boat, float dt )
     r.d.local_players = s.world.viewports;
     r.human_driver.env.control_method = s.world.control_method;
     boat_decision_tick( r.d, dt, r.hooks );
+}
+
+// The Build tick 0x41F330 (world/build.hxx): steps 1 - 6 are NOT recreated
+// (declared, logged once each); step 7, 0x4200E0 = boat_build_audio, reads
+// nothing steps 1 - 6 write (body, engine, solver, camera +0x20, +0x30C,
+// +0x3F8..+0x404, +0x204, +0x484 / +0x48C) and runs. Its event slot / FMOD
+// calls are audio (platform): the slot answers false (no event made).
+inline void race_drive_build( race_session_t& s, std::size_t boat, float dt )
+{
+    race_drive_t& r = *s.drives[ boat ];
+    race_unwired( s, "the Build tick 0x41F330's steps 1 - 6 (gfx settings 0x52F690 -> +0x408, the water colour 0x52ACB0 / 0x535E10, the "
+                     "driver's vt+0x4C, the animation / model instances, the pfx 0x419700, the debris 0x411A50, the draw aabb) - NOT recreated" );
+    boat_build_audio_hooks_t h;
+    h.user = &s;
+    h.slot = []( void* u, std::uint8_t*, const std::string& ) {
+        race_unwired( *static_cast< race_session_t* >( u ), "audio: the Build tick's event slot 0x50FBF0 (FMOD - platform) - no event made" );
+        return false;
+    };
+    const auto it = race_drive_boat( r ).io.boat_strings.find( 0x204 );
+    const std::string name = it == race_drive_boat( r ).io.boat_strings.end( ) ? std::string( ) : it->second;
+    boat_build_audio( r.d.boat, r.d.body, r.d.engine, r.d.solver, r.d.camera, name, dt, h );
 }
 
 // 0x4AB0A0 on the session's boat manager: the chosen boat's camera image

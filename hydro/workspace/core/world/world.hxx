@@ -22,6 +22,7 @@
 #include <workspace/core/world/livery.hxx>
 #include <workspace/core/world/race.hxx>
 #include <workspace/core/world/session.hxx>
+#include <workspace/core/world/build.hxx>
 #include <workspace/core/world/drive.hxx>
 #include <workspace/core/world/water.hxx>
 #include <workspace/core/assets/texture.hxx>

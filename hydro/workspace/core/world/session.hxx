@@ -46,7 +46,7 @@
 //   Decision tick 0x41EFF0 runs (world/drive.hxx, its hooks recreated or each
 //   declared there), and with it the race camera 0x409900; the Viewports tick
 //   0x4AB0A0 copies the viewport boat's camera into the view. Still STOPPED
-//   (counted, logged once): the Build tick 0x41F330 (not recreated).
+//   (declared, logged once): the Build tick 0x41F330's steps 1 - 6 (its 0x4200E0 runs).
 // - The signed-in player's name (the human entry's Driver Name) is a platform
 //   service: empty here.
 
@@ -143,6 +143,7 @@ struct race_session_t
 inline void race_drive_setup( race_session_t& s, const value_t* constant_db );
 inline void race_drive_decision( race_session_t& s, std::size_t boat, float dt );
 inline void race_drive_viewports( race_session_t& s );
+inline void race_drive_build( race_session_t& s, std::size_t boat, float dt );
 
 // The graph object a boat-image pointer slot refers to (-1 none).
 inline int race_session_ref( const boat_graph_t& g, int object, int slot )
@@ -299,8 +300,8 @@ inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb
 // - Decision 0x41EFF0 = boat_decision_tick (core/boat state.hxx) composed on
 //   the boat's objects with its hooks by world/drive.hxx (race_drive_decision);
 //   a boat whose sections load stopped stays STOPPED (UNKNOWN, logged once).
-// - Build 0x41F330 is NOT RECREATED anywhere (it moves the draw matrix +0x49C
-//   and feeds the dynamics).
+// - Build 0x41F330 (world/build.hxx, read whole): its last step 0x4200E0
+//   (boat_build_audio, verified) runs; steps 1 - 6 are declared (drive.hxx).
 struct race_session_tick_t
 {
     race_session_t* session;
@@ -322,11 +323,16 @@ inline void race_session_decision( void* user, float dt )
                      t.boat->name.c_str( ) );
 }
 
-inline void race_session_build( void* user, float )
+inline void race_session_build( void* user, float dt )
 {
     race_session_tick_t& t = *static_cast< race_session_tick_t* >( user );
+    if ( t.boat->sections && t.index < t.session->drives.size( ) && t.session->drives[ t.index ] )
+    {
+        race_drive_build( *t.session, t.index, dt );
+        return;
+    }
     if ( t.session->stopped_build++ == 0 )
-        LOG_WARNING( t.boat->sections ? "race: VuBoatEntity Build tick 0x41F330 STOPPED (UNKNOWN) - not recreated (%s)"
+        LOG_WARNING( t.boat->sections ? "race: VuBoatEntity Build tick 0x41F330 STOPPED (UNKNOWN) - %s's Decision composition did not build"
                                       : "race: VuBoatEntity Build tick 0x41F330 STOPPED (UNKNOWN) - %s's sections load did not complete",
                      t.boat->name.c_str( ) );
 }
