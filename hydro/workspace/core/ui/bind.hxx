@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/ui/screen.hxx>
+#include <workspace/core/ui/slider.hxx>
 #include <workspace/core/ui/ticker.hxx>
 #include <workspace/core/ui/wiring.hxx>
 
@@ -50,6 +51,9 @@
 //   while strlen + 1 + 4 <= 0x80) broadcast as "OnSetInfoStringID"; its VuRetVal
 //   +0 = 0 (+4 the caller's).
 // - the screen actions and VuSetGameModeUIAction (wiring.hxx / action.hxx).
+// - the four VuSliderEntity subclasses (slider.hxx): OnUISetFocus 0x46F8F0,
+//   OnUITick 0x46F940, OnUIEvent 0x46FCC0; inputs Show / Hide / SetFocus; the
+//   settings manager, the touch device and the FMOD categories are hooks.
 // Anything else: an input plug reached is UNKNOWN (counted; its VuRetVal is
 // the m_answer hook's - e.g. VuLicenseEntity's IsFullVersion, a platform
 // service); a registered handler not recreated (k_ui_event_facts) is entered
@@ -68,6 +72,9 @@ struct ui_event_fact_t
 inline constexpr ui_event_fact_t k_ui_event_facts[] = {
     { 0x738614u, 0x407F5DB0u, 0x4232B0u },  // VuSysNotifyEntity
     { 0x756828u, 0xD5127E2Du, 0x5EFA60u },  // VuOnProjectInitializedEntity
+    { 0x73DF3Cu, 0x4CF1B9C6u, 0x404AB2u },  // VuUISubtitlesSettingEntity OnUISetFocus (thunk -> slot 14 0x475230)
+    { 0x73DF3Cu, 0x5E798927u, 0x4077DEu },  // its OnUITick (thunk -> slot 15 0x475280)
+    { 0x73DF3Cu, 0xFE191C9Eu, 0x4077E8u },  // its OnUIEvent (thunk -> slot 16 0x475640)
 };
 
 inline constexpr std::uint32_t k_ui_screen_vtable = 0x6F7140u;
@@ -88,6 +95,9 @@ enum class ui_trace_kind_t
     event,      // a registered handler not recreated: owner, its method
     string,     // VuStringDB slot 7 (the ticker's hook): the id
     measure,    // the font measure 0x5373D0 (the ticker's hook): the text, xmm3 bits, the font
+    touches,    // the touch device's count (slot 6, the slider's hook)
+    touch,      // the touch device's point (slot 7): the index
+    category,   // FMOD getCategory (the volume sliders' hook): the name
 };
 
 struct ui_trace_t
@@ -112,6 +122,8 @@ struct ui_bound_t
     std::unique_ptr< c_ui_button > m_button;
     std::unique_ptr< c_ui_event > m_event;
     std::unique_ptr< ui_info_ticker_t > m_ticker;
+    ui_slider_hooks_t m_slider_hooks;
+    std::unique_ptr< c_ui_slider > m_slider;
 };
 
 struct ui_bind_hooks_t
@@ -127,6 +139,13 @@ struct ui_bind_hooks_t
     ui_info_hooks_t m_info;
     std::function< float( ) > m_delta;
     std::function< std::uint32_t( const entity_t& ) > m_font;
+    // The sliders': HOOKS the touch device g 0x759070 (slot 6 count, slot 7 point),
+    // an input the inverse crop matrix (VuUIImpl +76; null = identity), the settings
+    // manager g 0x758FE0 (null = none: the getters' defaults).
+    std::function< int( ) > m_touch_count;
+    std::function< void( int, float[ 2 ] ) > m_touch_point;
+    const float* m_inverse = nullptr;
+    ui_settings_t* m_settings = nullptr;
 };
 
 // An entity's own property slot (its loaded ui_state_t), or null.
@@ -326,6 +345,41 @@ private:
                 ui_info_tick( t, width, m_hooks.m_delta ? m_hooks.m_delta( ) : 0.0f );
             } );
         }
+        else if ( ui_is_slider_vtable( b.m_vtable ) )
+        {
+            const ui_slider_t s = ui_bind_slider( e, b.m_vtable );
+            ui_slider_hooks_t& h = b.m_slider_hooks;
+            h.m_broadcast = [ this ]( std::uint32_t hash, const ui_params_t& p ) { broadcast( hash, p ); };
+            h.m_fire = [ this, &e ]( const char* plug, const ui_params_t& p ) { fire_named( e, plug, p ); };
+            h.m_connections = [ &e ]( const char* plug ) -> int
+            {
+                const script_component_t* sc = script_of( e );
+                const int k = plug_index( e, plug );
+                return sc && k >= 0 ? static_cast< int >( sc->m_plugs[ static_cast< std::size_t >( k ) ].m_links.size( ) ) : 0;
+            };
+            h.m_sound = [ this ]( const char* name ) { trace( ui_trace_kind_t::sound, -1, name, 0u, ui_params_t( ), true ); };
+            h.m_category = [ this ]( const char* name, float ) { trace( ui_trace_kind_t::category, -1, name, 0u, ui_params_t( ), true ); };
+            if ( m_hooks.m_touch_count )
+                h.m_touch_count = [ this ]
+                {
+                    trace( ui_trace_kind_t::touches, -1, std::string( ), 0u, ui_params_t( ), true );
+                    return m_hooks.m_touch_count( );
+                };
+            h.m_touch_point = [ this ]( int index, float out[ 2 ] )
+            {
+                trace( ui_trace_kind_t::touch, -1, std::string( ), static_cast< std::uint32_t >( index ), ui_params_t( ), true );
+                if ( m_hooks.m_touch_point )
+                    m_hooks.m_touch_point( index, out );
+            };
+            h.m_inverse = m_hooks.m_inverse;
+            h.m_settings = m_hooks.m_settings;
+            b.m_slider = std::make_unique< c_ui_slider >( ui_entity_id( ui_long_name( e ) ), s, h );
+            c_ui_slider& slider = *b.m_slider;
+            // 0x46E300 registers OnUISetFocus, OnUITick, OnUIEvent.
+            add( b, "OnUISetFocus", 0x46F8F0u, [ &slider ]( const ui_params_t& p ) { slider.on_set_focus( p ); } );
+            add( b, "OnUITick", 0x46F940u, [ &slider ]( const ui_params_t& ) { slider.on_tick( ); } );
+            add( b, "OnUIEvent", 0x46FCC0u, [ &slider ]( const ui_params_t& p ) { slider.on_event( p ); } );
+        }
         else
         {
             for ( const ui_event_fact_t& f : k_ui_event_facts )
@@ -358,8 +412,69 @@ private:
             for ( const char* name : { "SetFocus", "SetStringID", "Enable", "Disable", "IsEnabled" } )
                 if ( std::strcmp( plug, name ) == 0 )
                     return true;
+        if ( ui_is_slider_vtable( vt ) )
+            for ( const char* name : { "Show", "Hide", "SetFocus" } )
+                if ( std::strcmp( plug, name ) == 0 )
+                    return true;
         return ( vt == k_ui_if_vtable || vt == k_ui_set_info_vtable ) && std::strcmp( plug, "Trigger" ) == 0;
     }
+
+public:
+    // The slider's authored fields from OUR loaded properties (ctor 0x46E300's names).
+    static ui_slider_t ui_bind_slider( const entity_t& e, std::uint32_t vtable )
+    {
+        ui_slider_t s;
+        s.m_vtable = vtable;
+        const auto real = [ &e ]( const char* name, float& out )
+        {
+            if ( const ui_slot_t* v = ui_bind_slot( e, name ) )
+                std::memcpy( &out, v->m_bits, 4 );
+        };
+        const auto pair = [ &e ]( const char* name, float out[ 2 ] )
+        {
+            if ( const ui_slot_t* v = ui_bind_slot( e, name ) )
+                std::memcpy( out, v->m_bits, 8 );
+        };
+        const auto byte = [ &e ]( const char* name, std::uint8_t& out )
+        {
+            if ( const ui_slot_t* v = ui_bind_slot( e, name ) )
+                out = static_cast< std::uint8_t >( v->m_bits[ 0 ] & 0xFFu );
+        };
+        const auto word = [ &e ]( const char* name, std::int32_t& out )
+        {
+            if ( const ui_slot_t* v = ui_bind_slot( e, name ) )
+                std::memcpy( &out, v->m_bits, 4 );
+        };
+        std::uint8_t visible = 1;
+        byte( "Visible", visible );
+        s.m_visible = visible != 0;
+        pair( "Screen Scale", s.m_scale );
+        const char* const frame[ 4 ] = { "FrameX", "FrameY", "FrameWidth", "FrameHeight" };
+        const char* const text[ 4 ] = { "TextX", "TextY", "TextWidth", "TextHeight" };
+        const char* const dst[ 4 ] = { "Bar DstX", "Bar DstY", "Bar DstWidth", "Bar DstHeight" };
+        const char* const src[ 4 ] = { "Bar SrcX", "Bar SrcY", "Bar SrcWidth", "Bar SrcHeight" };
+        for ( int k = 0; k < 4; ++k )
+        {
+            real( frame[ k ], s.m_frame[ k ] );
+            real( text[ k ], s.m_text[ k ] );
+            real( dst[ k ], s.m_dst[ k ] );
+            real( src[ k ], s.m_src[ k ] );
+        }
+        word( "Horizontal Alignment", s.m_h_align );
+        word( "Vertical Alignment", s.m_v_align );
+        byte( "No Clip", s.m_no_clip );
+        byte( "Single Line", s.m_single_line );
+        byte( "Wordbreak", s.m_wordbreak );
+        if ( const ui_slot_t* v = ui_bind_slot( e, "String ID" ) )
+            s.m_string_id = v->m_text;
+        pair( "Bar Dst Delta", s.m_dst_delta );
+        pair( "Bar Src Delta", s.m_src_delta );
+        pair( "Bar Src On Delta", s.m_src_on_delta );
+        word( "Bar Count", s.m_count );
+        return s;
+    }
+
+private:
 
     ui_ret_t run_input( entity_t& owner, const char* plug, const ui_params_t& p )
     {
@@ -382,6 +497,19 @@ private:
             q.add_string( id ? id->m_text.c_str( ) : "" );
             broadcast( fsm_hash( "OnSetInfoStringID" ), q );
             out.m_known = false;  // +4 left as the caller's
+            return out;
+        }
+        if ( ui_is_slider_vtable( vt ) )
+        {
+            // 0x446C80 / 0x446FB0 / 0x46F850: VuRetVal +0 = 0 (+4 the caller's).
+            c_ui_slider& slider = *m_bound[ static_cast< std::size_t >( index_of( owner ) ) ]->m_slider;
+            if ( std::strcmp( plug, "Show" ) == 0 )
+                slider.m_visible = true;
+            else if ( std::strcmp( plug, "Hide" ) == 0 )
+                slider.m_visible = false;
+            else
+                slider.set_focus( );
+            out.m_known = false;
             return out;
         }
         c_ui_button* button = m_bound[ static_cast< std::size_t >( index_of( owner ) ) ]->m_button.get( );

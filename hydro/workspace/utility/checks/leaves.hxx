@@ -184,7 +184,7 @@ inline bool verify_ui_combo_draw( )
     for ( auto& b : sort.m_buffers )
         b.m_memory.resize( static_cast< std::size_t >( b.m_capacity ) );
     constexpr std::uint32_t k_material[ 2 ] = { 0x5D001000u, 0x5D001800u };   // TxtWorld's font materials
-    int failed = 0, commands = 0, fields = 0, rows = 0, strings = 0;
+    int failed = 0, commands = 0, fields = 0, rows = 0, strings = 0, layouts = 0;
     for ( std::size_t k = 0; k < g_golden_cbd_runs_count; ++k )
     {
         const golden_cbd_run_t& run = g_golden_cbd_runs[ k ];
@@ -307,10 +307,27 @@ inline bool verify_ui_combo_draw( )
         std::vector< ui_gfx_command_t >& list = sort.m_commands[ ge.m_index ];
         const std::size_t before = list.size( );
         bool known;
+        env.m_rect_material = g_golden_cbd_rect_material[ 0 ];
+        env.m_rect_material_key = g_golden_cbd_rect_material[ 1 ];
         if ( run.m_box )
         {
             const float d = depth * 0.005f + 0.5f;   // 0x475B10: 0x6F75C4, 0x6F765C
             known = !ce.m_combos.empty( ) && ui_combo_draw( sort, env, b, ce.m_combos[ 0 ], position, scale, d, in );
+        }
+        else if ( run.m_layout >= 0 )
+        {
+            // slot 15 0x448B90: TouchLeft / TouchRight from OUR loaded properties, compared with retail's +0x278..
+            float touch[ 8 ] = { };
+            const char* const names[ 8 ] = { "TouchLeft X", "TouchLeft Y", "TouchLeft Width", "TouchLeft Height",
+                                             "TouchRight X", "TouchRight Y", "TouchRight Width", "TouchRight Height" };
+            bool loaded = true;
+            for ( int t = 0; t < 8; ++t )
+                loaded = ui_frame_take( *e, names[ t ], &touch[ t ], 4 ) && loaded;
+            const std::vector< std::uint8_t > want = ui_unhex( run.m_touch );
+            loaded = loaded && want.size( ) == 32 && std::memcmp( touch, want.data( ), 32 ) == 0;
+            fields += 8;
+            known = loaded && ui_config_layout_draw( sort, env, ce, b, scale, position, spacing, depth, touch, touch + 4, in, run.m_layout != 0 );
+            ++layouts;
         }
         else
             known = ui_config_draw( sort, env, ce, b, scale, position, spacing, depth, in );
@@ -337,9 +354,10 @@ inline bool verify_ui_combo_draw( )
                 static_cast< int >( asked.size( ) ), run.m_strings );
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "ui_config_draw / ui_combo_draw match retail's VuBaseConfigEntity slot 16 0x448F40 -> 0x448F50 and 0x475B10 -> the combo box draw "
-                     "0x4578D0 (0x457E00, 0x457EB0) on %d runs (%d rows; %d of OUR loaded fields): %d commands and records byte for byte, %d string ids",
-            static_cast< int >( g_golden_cbd_runs_count ), rows, fields, commands, strings );
+        LOG_SUCCESS( "ui_config_draw / ui_combo_draw / ui_config_layout_draw match retail's VuBaseConfigEntity slot 16 0x448F40 -> 0x448F50, slot "
+                     "15 0x448B90 (%d layout runs) and 0x475B10 -> the combo box draw 0x4578D0 (0x457E00, 0x457EB0) on %d runs (%d rows; %d of OUR "
+                     "loaded fields): %d commands and records byte for byte, %d string ids",
+            layouts, static_cast< int >( g_golden_cbd_runs_count ), rows, fields, commands, strings );
     else
         LOG_ERROR( "the UI combo box draw FAILED %d checks against retail's", failed );
     return failed == 0;
@@ -776,11 +794,13 @@ inline bool verify_ui_difficulty( )
 }
 
 #include <workspace/utility/checks/update.hxx>
+#include <workspace/utility/checks/widgets.hxx>
 
 inline bool verify_ui_leaves_all( )
 {
     bool ok = true;
     ok = verify_ui_update_all( ) && ok;
+    ok = verify_ui_widgets_all( ) && ok;
     ok = verify_ui_difficulty( ) && ok;
     ok = verify_ui_screen_frame_leaves( ) && ok;
     ok = verify_ui_stat_bar( ) && ok;
