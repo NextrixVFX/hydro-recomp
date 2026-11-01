@@ -210,10 +210,13 @@ public:
 
     // A broadcast reaching the mode's event map: the handler registered under
     // the name (the map is keyed by the name's FNV-1a hash). Unknown: ignored.
-    void handle( const char* name, const ui_params_t& params )
+    void handle( const char* name, const ui_params_t& params ) { handle( fsm_hash( name ), params ); }
+
+    // The same by the hash a broadcast carries (VuEventManager_broadcast 0x505690).
+    void handle( std::uint32_t hash, const ui_params_t& params )
     {
         for ( event_t& e : m_events )
-            if ( fsm_hash( e.m_name ) == fsm_hash( name ) )
+            if ( fsm_hash( e.m_name ) == hash )
             {
                 e.m_handler( params );
                 return;

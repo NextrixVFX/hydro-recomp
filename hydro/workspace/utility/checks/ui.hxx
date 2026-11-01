@@ -1,5 +1,6 @@
 #pragma once
 
+#include <workspace/core/ui/action.hxx>
 #include <workspace/core/ui/entity.hxx>
 #include <workspace/core/ui/button.hxx>
 #include <workspace/core/ui/flow.hxx>
@@ -667,9 +668,103 @@ inline bool verify_ui_front_end_enter( )
     return failed == 0;
 }
 
+// c_ui_action (hydro core/ui/action.hxx) against retail's screen actions
+// (oracle case ui_actions): every authored VuPush / Pop / Set / Reload
+// ScreenUIAction in the real Screens projects as entity_load_project built it
+// (its "Screen" as the load left it), and hand-made ones with names around
+// VuParams' 0x80 limit (their ctors' property nodes too), each fired through
+// Trigger: the VuRetVal and every broadcast, params byte for byte.
+inline bool verify_ui_actions( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0;
+    auto bad = [ &failed ]( const char* what, int k )
+    {
+        if ( ++failed <= 8 )
+            LOG_ERROR( "ui actions: %s differs from retail (row %d)", what, k );
+    };
+    int authored = 0;
+    for ( std::size_t k = 0; k < g_golden_acts_count; ++k )
+    {
+        const golden_act_t& want = g_golden_acts[ k ];
+        const int row = static_cast< int >( k );
+        ui_action_kind_t kind;
+        if ( !ui_action_kind_of( want.m_class, kind ) )
+        {
+            bad( "the class", row );
+            continue;
+        }
+        std::string screen = want.m_screen ? want.m_screen : "";
+        if ( want.m_project )
+        {
+            const entity_t* have = nullptr;
+            for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+                if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, want.m_project ) == 0 && want.m_index >= 0 &&
+                     static_cast< std::size_t >( want.m_index ) < loaded.trees[ p ].size( ) )
+                    have = loaded.trees[ p ][ static_cast< std::size_t >( want.m_index ) ].second;
+            if ( !have || have->m_type != want.m_class || have->m_name != want.m_name || ui_is_state( *have ) != ( want.m_screen != nullptr ) )
+            {
+                if ( failed < 8 )
+                    LOG_ERROR( "ui actions: %s #%d is %s '%s' (state %d), retail %s '%s'", want.m_project, want.m_index, have ? have->m_type.c_str( ) : "-",
+                        have ? have->m_name.c_str( ) : "-", have ? static_cast< int >( ui_is_state( *have ) ) : -1, want.m_class, want.m_name );
+                bad( "the authored entity", row );
+                continue;
+            }
+            ++authored;
+            const ui_state_t* s = want.m_screen ? static_cast< const ui_state_t* >( have->m_state.get( ) ) : nullptr;
+            bool found = false;
+            for ( int n = 0; s && n < s->m_count; ++n )
+                if ( std::strcmp( s->m_rows[ n ]->m_name, "Screen" ) == 0 )
+                {
+                    found = true;
+                    if ( !want.m_screen || s->m_value[ n ].m_text != want.m_screen )
+                        bad( "the loaded Screen", row );
+                    screen = s->m_value[ n ].m_text;
+                }
+            if ( found != ( want.m_screen != nullptr ) )
+                bad( "the Screen node's presence", row );
+        }
+        else
+        {
+            int count = 0;
+            const ui_property_row_t* first = ui_rows_for( want.m_class, count );
+            if ( count != want.m_nodes )
+                bad( "the ctor's node count", row );
+            for ( int n = 0; first && n < count && n < want.m_nodes; ++n )
+                if ( std::strcmp( first[ n ].m_name, g_golden_act_nodes[ want.m_first_node + n ].m_name ) != 0 ||
+                     first[ n ].m_vtable != g_golden_act_nodes[ want.m_first_node + n ].m_vtable )
+                    bad( "a ctor node", row );
+        }
+        ui_params_t trigger;
+        for ( std::size_t c = 0; want.m_trigger[ c ] && want.m_trigger[ c + 1 ] && trigger.m_size < 128; c += 2 )
+            trigger.m_bytes[ trigger.m_size++ ] = static_cast< std::uint8_t >( std::stoul( std::string( want.m_trigger + c, 2 ), nullptr, 16 ) );
+        std::vector< std::pair< std::uint32_t, std::string > > log;
+        c_ui_action action( kind, screen );
+        action.m_broadcast = [ &log ]( std::uint32_t hash, const ui_params_t& p ) { log.push_back( { hash, ui_hex( p ) } ); };
+        char ret[ 20 ];
+        std::snprintf( ret, sizeof( ret ), "%08X%08X", action.trigger( trigger ), 0u );
+        if ( std::strcmp( ret, want.m_ret ) != 0 )
+            bad( "the VuRetVal", row );
+        bool same = log.size( ) == static_cast< std::size_t >( want.m_logs );
+        for ( int n = 0; same && n < want.m_logs; ++n )
+            same = log[ n ].first == g_golden_act_logs[ want.m_first_log + n ].m_hash && log[ n ].second == g_golden_act_logs[ want.m_first_log + n ].m_params;
+        if ( !same )
+            bad( "the broadcasts", row );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_action matches retail's screen actions (Trigger 0x472800 -> slot 12: push 0x4718C0, set 0x471600, pop 0x4719C0, "
+                     "reload 0x471AB0) on %d authored instances in the loaded Screens projects and %d hand-made: Screen, VuRetVal, "
+                     "broadcast hash + params",
+            authored, static_cast< int >( g_golden_acts_count ) - authored );
+    else
+        LOG_ERROR( "the screen actions FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_actions( ) && ok;
     ok = verify_ui_front_end_enter( ) && ok;
     ok = verify_ui_screen_events( ) && ok;
     ok = verify_ui_button( ) && ok;
