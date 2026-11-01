@@ -1,5 +1,6 @@
 #pragma once
 
+#include <workspace/core/ui/frame.hxx>
 #include <workspace/core/ui/navigate.hxx>
 
 #include <cstdio>
@@ -449,9 +450,91 @@ inline bool verify_ui_screen_draw( )
     return failed == 0;
 }
 
+// ui_screen_frame (core/ui frame.hxx, THE EXPORT) on every Screens/* root
+// under screen_draw's first environment: its depth-0 leaves must be exactly
+// retail's screen-level draws minus the containers (which the export walks
+// into), in order, with the same component, alpha bits and sort key. The
+// containers' own walks are verify_ui_container_draw's.
+inline bool verify_ui_screen_frame( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0, screens = 0, leaves = 0, texts = 0, unrecreated = 0, containers = 0;
+    for ( std::size_t r = 0; r < g_golden_scr_runs_count; ++r )
+    {
+        const golden_scr_run_t& run = g_golden_scr_runs[ r ];
+        if ( run.m_env != 0 )
+            continue;
+        const golden_scr_env_t& se = g_golden_scr_envs[ 0 ];
+        const golden_txt_env_t& e = g_golden_txt_envs[ se.m_txt ];
+        const entity_t* root = nullptr;
+        for ( std::size_t p = 0; p < g_golden_ui_projects_count && !root; ++p )
+            if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, run.m_project ) == 0 )
+                root = loaded.roots[ p ].get( );
+        if ( !root )
+        {
+            ++failed;
+            continue;
+        }
+        ui_gfx_sort_t sort;
+        sort.m_index = e.m_index;
+        sort.m_key_lo = e.m_key_lo;
+        sort.m_key_hi = se.m_key_hi;
+        ui_impl_t impl;
+        const std::vector< std::uint8_t > crop = ui_unhex( run.m_crop );
+        std::memcpy( impl.m_crop.m_matrix, crop.data( ), 64 );
+        std::memcpy( &impl.m_float, &se.m_float, 4 );
+        float alpha;
+        std::memcpy( &alpha, &se.m_alpha, 4 );
+        const ui_frame_t frame = ui_screen_frame( *root, impl, sort, alpha, se.m_layer );
+        std::vector< const ui_frame_draw_t* > top;
+        for ( const ui_frame_draw_t& d : frame.m_draws )
+        {
+            if ( d.m_depth == 0 )
+                top.push_back( &d );
+            texts += d.m_kind == ui_frame_kind_t::text ? 1 : 0;
+        }
+        std::size_t at = 0;
+        bool same = true;
+        for ( int c = 0; c < run.m_calls; ++c )
+        {
+            const golden_hud_call_t& want = g_golden_scr_calls[ run.m_first + c ];
+            if ( want.m_child >= 0 && root->m_children[ static_cast< std::size_t >( want.m_child ) ]->m_type == "VuUIContainerEntity" )
+                continue;
+            if ( at >= top.size( ) )
+            {
+                same = false;
+                break;
+            }
+            const ui_frame_draw_t& d = *top[ at++ ];
+            const entity_t* who = want.m_child < 0 ? root : root->m_children[ static_cast< std::size_t >( want.m_child ) ].get( );
+            std::uint32_t bits, ftop;
+            std::memcpy( &bits, &d.m_alpha, 4 );
+            std::memcpy( &ftop, &d.m_top, 4 );
+            const std::vector< std::uint8_t > matrix = ui_unhex( want.m_matrix );
+            same = same && d.m_entity == who && d.m_component == want.m_component && bits == want.m_alpha && ftop == want.m_float &&
+                   std::memcmp( d.m_matrix.data( ), matrix.data( ), 64 ) == 0 && d.m_key_lo == want.m_key[ 0 ] && d.m_key_hi == want.m_key[ 1 ];
+        }
+        same = same && at == top.size( );
+        ++screens;
+        leaves += static_cast< int >( frame.m_draws.size( ) );
+        unrecreated += frame.m_unrecreated;
+        containers += frame.m_containers;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui screen frame: %s's screen-level leaves differ from retail's draws", run.m_project );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_screen_frame (the export) reproduces retail's screen-level draws on %d Screens/* roots: %d leaf draws through %d "
+                     "container walks - %d text (ui_text_draw), %d whose draw is NOT recreated (images, buttons, other types)",
+            screens, leaves, containers, texts, unrecreated );
+    else
+        LOG_ERROR( "the screen frame export FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_menu_all( )
 {
     bool ok = true;
+    ok = verify_ui_screen_frame( ) && ok;
     ok = verify_ui_screen_draw( ) && ok;
     ok = verify_ui_config_next( ) && ok;
     ok = verify_ui_config_nav( ) && ok;
