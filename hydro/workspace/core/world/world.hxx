@@ -719,10 +719,12 @@ private:
 
     // SCAFFOLD - ours, no retail counterpart.
     //
-    // A vantage for looking at a loaded scene. Retail has nothing like it:
-    // every camera in the game is either VuBoatCamera, which needs a boat, or
-    // a VuSetFrontEndCameraEntity authored into a screen project, and a race
-    // project authors neither. So this orbits the bounding box of whatever the
+    // A vantage for looking at a loaded scene. Retail has nothing like it: a
+    // race's camera is VuBoatCamera (it needs a boat); the front end's is set by
+    // VuFrontEndGameMode's SetFrontEndCamera* handlers answering the events a
+    // VuSetFrontEndCameraEntity in a screen project broadcasts (no project
+    // authors a VuFrontEndCameraEntity; the water agent is recreating those
+    // handlers, world/frontcam.hxx). A race project authors none of them. So this orbits the bounding box of whatever the
     // entity walk actually placed. It is a measuring instrument, not a
     // recreation, and no part of it may be taken as retail behaviour.
     // SCAFFOLD - ours. A free camera for looking around a loaded level: F
