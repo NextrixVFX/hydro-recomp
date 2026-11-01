@@ -3,6 +3,7 @@
 #include <workspace/core/boat/construct.hxx>
 #include <workspace/core/boat/fleet.hxx>
 #include <workspace/core/boat/load.hxx>
+#include <workspace/core/boat/meshes.hxx>
 #include <workspace/core/ui/config.hxx>
 #include <workspace/core/world/start.hxx>
 #include <workspace/core/world/tick.hxx>
@@ -32,13 +33,11 @@
 //   per frame, VuTickManagerImpl's tick 0x4F72F0 (tick_run) over its phases.
 //
 // STOPPED / UNKNOWN (logged, never stood in for):
-// - "Race": its builder 0x4C0A50 draws the AI roster from VuRandom's global
-//   0x736810, whose state when the front end runs is NOT ESTABLISHED - no
-//   GameData, no race. "TimeTrial" and "Slalom" draw nothing and run.
-// - 0x420A70 reaches the hull's VuCollisionMeshAsset (getLockedReadOnly
-//   VertexIndexBase 0x527C50) and the VuFluidsMeshAsset counts: hydro has no
-//   reader of either yet (the boat agent's, not on main) - the sections load
-//   stops there, and with it everything that reads what it loads after: the
+// - VuRandom 0x736810 is seeded from the host clock as retail's 0x566230 does
+//   (fleet_random_seed): "Race" builds its AI roster from it - per run.
+// - 0x420A70 loads the collision / fluids meshes (the boat agent's meshes.hxx)
+//   and stops at the surface-type table (g_vudynamicsimpl +0x38 slot 2): not
+//   recreated - and with it everything that reads what it loads after: the
 //   transform-changed delegate (it reads the +0x290 centre), each boat's
 //   Decision 0x41EFF0 and Build 0x41F330 ticks, the race camera (the Camera
 //   section) and the Viewports tick. Each is counted and logged once.
@@ -58,6 +57,7 @@ struct race_session_boat_t
     bool sections = false;    // 0x420A70 ran to its end
     std::string stop;         // where it stopped (UNKNOWN), when it did
     std::string name, boat, skin;
+    boat_mesh_library_t meshes;   // the collision / fluids meshes the sections load created
     std::uint8_t draw_added = 0, instigator_registered = 0;
     // The hull draw (c_world): each model instance's placements, the one shown.
     std::vector< int > placements[ 3 ];
@@ -172,26 +172,54 @@ inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb
                 return true;
         return false;
     };
-    io.hooks.create = []( void* u, const char*, const std::string& ) { return static_cast< ctx_t* >( u )->next++; };
-    // Slot 9 release: 0x421870 hands it the +0x2B0 asset unconditionally - null
-    // on a fresh boat (the boat_load_sections case's factory answers that call
-    // too); releasing a real asset is not modelled (refused: the load stops).
-    io.hooks.release = []( void*, std::uint32_t asset ) { return asset == 0; };
-    io.hooks.mesh = []( void* u, std::uint32_t, striding_mesh_t& )
-    {
-        ctx_t& c = *static_cast< ctx_t* >( u );
-        c.b->stop = "VuCollisionMeshAsset/" + c.b->io.boat_strings[ 0x148 ] + " (its mesh reader 0x527C50 is not in hydro)";
-        return false;
+    // The asset factory's create / release (g 0x759004 slots 7 / 9): the VuCollisionMeshAsset / VuFluidsMeshAsset
+    // the load creates come from the boat agent's mesh library (core/boat/meshes.hxx: the 1:1 loads 0x51AF20 /
+    // 0x523770; its name list and refcounted cache are its flagged substitution); every other create hands a
+    // handle from 0x10000 (the rendering assets' loads are hooks); every other release is the null one 0x421870
+    // makes on a fresh boat. The surface-type table (g_vudynamicsimpl +0x38, slot 2 through 0x4F88A0) is NOT
+    // recreated: io.hooks.surface stays null and the load stops there (UNKNOWN); the collision mesh's material
+    // bytes (+40) take the library's null-surface 0 - nothing reads them before that stop.
+    b.meshes = boat_mesh_library_t{ };
+    b.meshes.read_user = const_cast< c_archive* >( &archive );
+    b.meshes.read = []( void* u, const std::string& asset, std::vector< std::uint8_t >& blob ) {
+        return static_cast< const c_archive* >( u )->read( asset.c_str( ), blob );
     };
-    io.hooks.fluid_counts = []( void* u, std::uint32_t, int&, int& )
-    {
+    io.hooks.create = []( void* u, const char* type, const std::string& n ) -> std::uint32_t {
         ctx_t& c = *static_cast< ctx_t* >( u );
-        c.b->stop = "VuFluidsMeshAsset/" + c.b->io.hull_strings[ 4 ] + " (its +0x7C / +0x88 counts: no reader in hydro)";
-        return false;
+        if ( std::strcmp( type, "VuCollisionMeshAsset" ) == 0 || std::strcmp( type, "VuFluidsMeshAsset" ) == 0 )
+            return boat_mesh_create( &c.b->meshes, type, n );
+        return 0x10000u + c.next++;
+    };
+    io.hooks.release = []( void* u, std::uint32_t asset ) {
+        if ( asset == 0 )
+            return true;
+        return asset < 0x10000u && boat_mesh_release( &static_cast< ctx_t* >( u )->b->meshes, asset );
+    };
+    io.hooks.surface = nullptr;
+    io.hooks.mesh = []( void* u, std::uint32_t a, striding_mesh_t& out ) {
+        const collision_mesh_asset_t* m = static_cast< ctx_t* >( u )->b->meshes.collision_of( a );
+        if ( !m )
+            return false;
+        collision_mesh_striding( *m, out );
+        return true;
+    };
+    io.hooks.fluid_counts = []( void* u, std::uint32_t a, int& vertices, int& edges ) {
+        boat_load_hooks_t lib{ };
+        boat_mesh_hooks( static_cast< ctx_t* >( u )->b->meshes, lib );
+        return lib.fluid_counts( lib.user, a, vertices, edges );
+    };
+    io.hooks.fluid_aabb = []( void* u, std::uint32_t a, float* box ) {
+        boat_load_hooks_t lib{ };
+        boat_mesh_hooks( static_cast< ctx_t* >( u )->b->meshes, lib );
+        return lib.fluid_aabb( lib.user, a, box );
     };
     const bool ok = boat_load_sections( io );
     if ( !ok && b.stop.empty( ) )
-        b.stop = "a 0x420A70 path not modelled (boat load.hxx returned false; collision mesh '" + io.boat_strings[ 0x148 ] + "')";
+        b.stop = io.hooks.surface == nullptr
+            ? "the surface-type table (g_vudynamicsimpl +0x38 slot 2, for '" + io.boat_strings[ 0x11C ] + "': not recreated) or a path before it ("
+                + std::to_string( b.meshes.entries.size( ) ) + " mesh asset(s) loaded: " + ( b.meshes.entries.empty( ) ? std::string( "none" ) : b.meshes.entries[ 0 ].key )
+                + ( b.meshes.entries.size( ) > 1 ? ", " + b.meshes.entries[ 1 ].key : std::string( ) ) + ")"
+            : "a 0x420A70 path not modelled (boat load.hxx returned false)";
     return ok;
 }
 
@@ -223,12 +251,6 @@ inline void race_session_build( void* user, float )
 inline void race_session_fleet( void* user, float dt )
 {
     race_session_t& s = *static_cast< race_session_t* >( user );
-    if ( !s.fleet.entries.empty( ) )
-    {
-        if ( s.stopped_fleet++ == 0 )
-            LOG_WARNING( "race: the AI manager's tick 0x403900 STOPPED (UNKNOWN) - its plans draw VuRandom 0x736810, whose state is not established" );
-        return;
-    }
     fleet_tick( s.fleet, *s.track, s.pilots, s.fleet_boats, s.random, dt );
 }
 
@@ -287,15 +309,24 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         LOG_ERROR( "race: BoatDB / TrackDB / ConstantDB not readable from the pack; no race" );
         return false;
     }
-    if ( mode == "Race" )
-    {
-        LOG_WARNING( "race: GameData UNKNOWN - the Race builder 0x4C0A50 picks the AI roster with VuRandom 0x736810, whose state at the "
-                     "front end is not established; no race (TimeTrial / Slalom draw nothing and run)" );
-        return false;
-    }
+    // VuRandom 0x736810's game seed: the engine init 0x566230 reseeds it from the clock (fleet_random_seed with seed
+    // 0: QueryPerformanceCounter's low + high words | 0x80000000, 40 steps). The clock is the platform's (VuMetroSys
+    // slot 12 0x4EC7C0, a HOOK): the host's performance counter, as retail - so the Race builder's AI roster and the
+    // AI plans differ per run, as in retail.
+    fleet_random_seed( s.random, 0, [ ]( ) -> std::int64_t {
+#if defined( _WIN32 )
+        LARGE_INTEGER c;
+        return QueryPerformanceCounter( &c ) ? static_cast< std::int64_t >( c.QuadPart ) : 0;
+#else
+        return 0;
+#endif
+    } );
+    LOG_INFO( "race: VuRandom 0x736810 seeded from the host clock (0x566230): seed 0x%08X - the AI roster and plans differ per run, as in retail",
+              static_cast< unsigned >( s.random.seed ) );
     ui_game_env_t env;
     env.boat_db = db.boat_db;
     env.track_db = db.track_db;
+    env.random = &s.random;
     ui_game_config_t built;
     s.game_data = ui_front_end_game_data( mode, track_name, course, boat, skin, env, &built );
     if ( !built.built )
@@ -450,10 +481,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     };
     sh.fleet_start = [ &s ]
     {
-        if ( s.fleet.entries.empty( ) )
-            fleet_start( s.fleet, *s.track, s.pilots, s.fleet_boats, s.random );
-        else
-            ++s.stopped_fleet;   // the plans draw VuRandom (state not established)
+        fleet_start( s.fleet, *s.track, s.pilots, s.fleet_boats, s.random );
     };
     sh.fleet_run = [ &s ] { fleet_run( s.fleet ); };
     race_begin( s.start, s.start_boats, s.manager, *track, *db.track_db, *db.constant_db, sh );
