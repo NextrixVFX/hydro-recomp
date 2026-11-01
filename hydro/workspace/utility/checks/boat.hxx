@@ -1890,8 +1890,28 @@ inline bool verify_track_build( )
     cmp( "slot 11", 0, 0, static_cast< std::uint32_t >( track_start_sector( tm ) ), static_cast< std::uint32_t >( g_golden_track_summary[ 5 ] ) );
     cmp( "slot 12", 0, 0, static_cast< std::uint32_t >( track_end_sector( tm ) ), static_cast< std::uint32_t >( g_golden_track_summary[ 6 ] ) );
     cmp( "slot 14", 0, 0, static_cast< std::uint32_t >( track_first_checkpoint( tm ) ), static_cast< std::uint32_t >( g_golden_track_summary[ 7 ] ) );
+    // The nearest-sector queries (slots 21 / 22) and the distance 0x4D17E0.
+    int inside = 0;
+    for ( std::size_t q = 0; q < g_golden_track_query_count; ++q )
+    {
+        const unsigned* x = g_golden_track_queries + 13 * q;
+        float p[ 4 ];
+        std::memcpy( p, x, 16 );
+        const std::int32_t cp = static_cast< std::int32_t >( x[ 4 ] );
+        const int id = static_cast< int >( q );
+        cmp( "slot 21", id, 0, static_cast< std::uint32_t >( track_nearest( tm, p, cp, false ) ), x[ 5 ] );
+        cmp( "slot 22", id, 0, static_cast< std::uint32_t >( track_nearest( tm, p, cp, true ) ), x[ 6 ] );
+        for ( int k = 0; k < 3; ++k )
+        {
+            const float d = track_distance( tm.sectors[ x[ 7 + 2 * k ] ].image, p );
+            inside += d == 0.0f ? 1 : 0;
+            cmp( "distance", id, k, bits( d ), x[ 8 + 2 * k ] );
+        }
+    }
     if ( failed == 0 )
     {
+        LOG_SUCCESS( "track_nearest (slots 21 / 22) and track_distance 0x4D17E0 match retail on %d points (%d of %d distances inside a sector)",
+            static_cast< int >( g_golden_track_query_count ), inside, static_cast< int >( 3 * g_golden_track_query_count ) );
         LOG_SUCCESS( "VuTrackManagerImpl (waypoint postLoad 0x432170 / slot 6 0x432400 -> 0x4CFAF0 / 0x4D0F90 / 0x4D0940 / 0x4CFD60, build "
                      "0x4CFFD0, queries) matches retail on Hydroelectric: %d waypoints, %d sectors, %d checkpoints, %d values, bit for bit",
             static_cast< int >( tm.waypoints.size( ) ), static_cast< int >( tm.sectors.size( ) ), static_cast< int >( tm.checkpoints.size( ) ), compared );

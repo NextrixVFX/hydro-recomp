@@ -469,6 +469,99 @@ inline bool track_is_circuit( const track_manager_t& tm ) { return !tm.sectors[ 
 inline float track_length( const track_manager_t& tm ) { return tm.length; }
 inline int track_first_checkpoint( const track_manager_t& tm ) { return tm.checkpoints.empty( ) ? -1 : tm.checkpoints[ 0 ]; }
 
+inline float track_minss( float a, float b ) { return _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); }
+
+// One edge of 0x4D17E0: t = maxss(0, minss(1, ((e.y d.y + e.x d.x) + e.z d.z)
+// / ((e.y e.y + e.x e.x) + e.z e.z))) with e = to - from, d = p - from; out =
+// (from + e t) - p per lane.
+inline void track_edge( const float* from, const float* to, const float* p, float* out )
+{
+    const float ex = to[ 0 ] - from[ 0 ], ey = to[ 1 ] - from[ 1 ], ez = to[ 2 ] - from[ 2 ];
+    const float num = ( ey * ( p[ 1 ] - from[ 1 ] ) + ex * ( p[ 0 ] - from[ 0 ] ) ) + ez * ( p[ 2 ] - from[ 2 ] );
+    const float den = ( ey * ey + ex * ex ) + ez * ez;
+    const float t = track_maxss( 0.0f, track_minss( 1.0f, num / den ) );
+    out[ 0 ] = ( from[ 0 ] + ex * t ) - p[ 0 ];
+    out[ 1 ] = ( from[ 1 ] + ey * t ) - p[ 1 ];
+    out[ 2 ] = ( from[ 2 ] + ez * t ) - p[ 2 ];
+}
+
+inline float track_edge_length( const float* d )
+{
+    return hull_sqrt( ( d[ 1 ] * d[ 1 ] + d[ 0 ] * d[ 0 ] ) + d[ 2 ] * d[ 2 ] );
+}
+
+// 0x4D17E0 (thiscall, the sector; point*; retn 4; xmm0), from its
+// disassembly: m = minss over the four planes' distances ((b . p.y + a .
+// p.x) + c . p.z) + d, from FLT_MAX; m >= 0 (ordered: inside every plane) is
+// 0; else (a NaN too) the least distance to the four edges p2 -> p3, p3 -> p1,
+// p1 -> p0, p0 -> p2 (the points +0x00 / +0x10 / +0x20 / +0x30), taken as
+// minss(|p1 p0|, |p0 p2|), then |p3 p1| against it, then |p2 p3|.
+inline float track_distance( const std::uint8_t* s, const float* p )
+{
+    float m = 3.4028235e38f;
+    for ( int k = 0; k < 4; ++k )
+    {
+        const int at = 0x40 + 16 * k;
+        const float d = ( ( state_f( s, at + 4 ) * p[ 1 ] + p[ 0 ] * state_f( s, at ) ) + state_f( s, at + 8 ) * p[ 2 ] ) + state_f( s, at + 12 );
+        m = track_minss( m, d );
+    }
+    if ( _mm_comige_ss( _mm_set_ss( m ), _mm_set_ss( 0.0f ) ) )
+        return 0.0f;
+    float p0[ 3 ], p1[ 3 ], p2[ 3 ], p3[ 3 ];
+    for ( int lane = 0; lane < 3; ++lane )
+    {
+        p0[ lane ] = state_f( s, 0x00 + 4 * lane );
+        p1[ lane ] = state_f( s, 0x10 + 4 * lane );
+        p2[ lane ] = state_f( s, 0x20 + 4 * lane );
+        p3[ lane ] = state_f( s, 0x30 + 4 * lane );
+    }
+    float a[ 3 ], b[ 3 ], c[ 3 ], d[ 3 ];
+    track_edge( p2, p3, p, a );
+    track_edge( p3, p1, p, b );
+    track_edge( p1, p0, p, c );
+    track_edge( p0, p2, p, d );
+    float r = track_minss( track_edge_length( c ), track_edge_length( d ) );
+    r = track_minss( track_edge_length( b ), r );
+    return track_minss( track_edge_length( a ), r );
+}
+
+// Slots 21 0x4D09F0 / 22 0x4D0AF0 (point*, checkpoint id or -1; retn 8): over
+// the sectors in order - those of that checkpoint id (+0xD0) unless -1, and
+// for slot 22 only those whose waypoint has Allow Recovery - the one nearest
+// (0x4D17E0; best > d, comiss, from FLT_MAX); on a tie (ucomiss, ordered) the
+// later one when the point's fraction along it (plane 0 / (plane 3 + plane 0))
+// is within [0, 1] (both comiss). -1 for none. The respawn 0x41D790 asks
+// slot 22 with the boat's position and its driver's +0x78.
+inline int track_nearest( const track_manager_t& tm, const float* p, std::int32_t checkpoint, bool recovery )
+{
+    float best = 3.4028235e38f;
+    int pick = -1;
+    for ( std::size_t k = 0; k < tm.sectors.size( ); ++k )
+    {
+        const track_sector_t& s = tm.sectors[ k ];
+        if ( checkpoint != -1 && static_cast< std::int32_t >( track_u32( s.image, 0xD0 ) ) != checkpoint )
+            continue;
+        if ( recovery && !tm.waypoints[ s.waypoint ].p.allow_recovery )
+            continue;
+        const float d = track_distance( s.image, p );
+        if ( best > d )
+        {
+            best = d;
+            pick = static_cast< int >( k );
+        }
+        else if ( d == best )
+        {
+            const std::uint8_t* q = s.image;
+            const float d0 = ( ( state_f( q, 0x40 ) * p[ 0 ] + state_f( q, 0x44 ) * p[ 1 ] ) + state_f( q, 0x48 ) * p[ 2 ] ) + state_f( q, 0x4C );
+            const float d3 = ( ( ( state_f( q, 0x70 ) * p[ 0 ] + state_f( q, 0x74 ) * p[ 1 ] ) + state_f( q, 0x78 ) * p[ 2 ] ) + state_f( q, 0x7C ) ) + d0;
+            const float f = d0 / d3;
+            if ( _mm_comige_ss( _mm_set_ss( f ), _mm_set_ss( 0.0f ) ) && _mm_comige_ss( _mm_set_ss( 1.0f ), _mm_set_ss( f ) ) )
+                pick = static_cast< int >( k );
+        }
+    }
+    return pick;
+}
+
 // The whole build from a loaded entity tree, as the race does it: every
 // VuAiWaypointEntity in VuEntity::gameInitialize 0x500B10's order (children
 // first, +0x38 order) gets its postLoad's edge points from its transform (the
