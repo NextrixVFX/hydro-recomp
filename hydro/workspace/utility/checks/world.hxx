@@ -442,6 +442,43 @@ inline bool verify_trigger_plane( )
     return failed == 0;
 }
 
+// trigger_box_crossing (hydro trigger/volume.hxx) against
+// VuTriggerBoxEntity_testCrossings 0x5D1AB0 run on seeded boxes and
+// instigators (oracle case trigger_box_test): one failure per (box, instigator)
+// pair whose answer (none / OnEnter / OnExit) differs.
+inline bool verify_trigger_box( )
+{
+    int failed = 0, pairs = 0, fires = 0;
+    for ( std::size_t p = 0; p < g_golden_trigger_boxes_count; ++p )
+    {
+        const golden_trigger_plane_t& box = g_golden_trigger_boxes[ p ];
+        float world[ 16 ], scale[ 3 ];
+        std::memcpy( world, box.m_world, sizeof( world ) );
+        std::memcpy( scale, box.m_scale, sizeof( scale ) );
+        for ( int k = 0; k < box.m_count; ++k )
+        {
+            const golden_trigger_instigator_t& g = g_golden_trigger_box_instigators[ box.m_first + k ];
+            trigger_instigator_t who{};
+            who.mask = g.m_mask;
+            std::memcpy( who.prev, g.m_prev, sizeof( who.prev ) );
+            std::memcpy( &who.radius, &g.m_radius, 4 );
+            std::memcpy( who.cur, g.m_cur, sizeof( who.cur ) );
+            std::memcpy( &who.rate, &g.m_rate, 4 );
+            const int ours = trigger_box_crossing( world, scale, box.m_mask, who );
+            ++pairs;
+            fires += g.m_fired >= 0;
+            if ( ours != g.m_fired && ++failed <= 8 )
+                LOG_ERROR( "trigger box: box %d instigator %d gives %d, retail %d", static_cast< int >( p ), k, ours, g.m_fired );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "trigger_box_crossing matches VuTriggerBoxEntity_testCrossings 0x5D1AB0 on %d boxes: %d box / instigator pairs, %d "
+                     "crossings fired", static_cast< int >( g_golden_trigger_boxes_count ), pairs, fires );
+    else
+        LOG_ERROR( "trigger_box_crossing FAILED %d of %d pairs", failed, pairs );
+    return failed == 0;
+}
+
 // static_model_select (engine entity/draw.hxx) against
 // Vu3dDrawStaticModelComponent's draw 0x5B0730 on seeded inputs (oracle case
 // static_model_draw): which model instance is drawn (or none) and the three
@@ -2881,6 +2918,7 @@ inline bool verify_world_all( )
     ok = verify_static_pfx( ) && ok;
     ok = verify_actions( ) && ok;
     ok = verify_trigger_plane( ) && ok;
+    ok = verify_trigger_box( ) && ok;
     ok = verify_static_model_draw( ) && ok;
     ok = verify_static_world_aabb( ) && ok;
     return ok;
