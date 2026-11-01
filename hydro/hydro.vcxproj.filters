@@ -321,6 +321,9 @@
     <ClInclude Include="workspace\core\world\build.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\world\bus.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\world\collide.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
