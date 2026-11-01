@@ -1581,6 +1581,96 @@ inline bool verify_powerup_contact( )
     return false;
 }
 
+// VuPowerUpEntity slots 13 / 12 / 7 against retail (oracle case powerup_world): +0x128, +0x110, the body, +0x130 /
+// +0x134 and the call order. The pfx hooks stand for the pfx manager's internals as the case recorded them (which
+// effect calls a live handle made); what is compared of them is when they run and the scale the power-up hands over.
+inline bool verify_powerup_world( )
+{
+    const unsigned* g = g_golden_powerup_world_words;
+    const unsigned ns = *g++;
+    int failed = 0, calls = 0;
+    auto bits = []( float x ) { std::uint32_t u; std::memcpy( &u, &x, 4 ); return u; };
+    for ( unsigned s = 0; s < ns; ++s )
+    {
+        const unsigned nc = *g++;
+        for ( unsigned c = 0; c < nc; ++c, ++calls )
+        {
+            const unsigned slot = *g++;
+            powerup_t p;
+            p.in_world = static_cast< std::uint8_t >( *g++ );
+            p.active = static_cast< std::uint8_t >( *g++ );
+            p.pfx = *g++;
+            const bool has_body = *g++ != 0;
+            std::memcpy( &p.scale_velocity, g++, 4 );
+            std::memcpy( &p.scale, g++, 4 );
+            p.reflect = static_cast< std::uint8_t >( *g++ );
+            const unsigned want[ 6 ] = { g[ 0 ], g[ 1 ], g[ 2 ], g[ 3 ], g[ 4 ], g[ 5 ] };
+            g += 6;
+            std::vector< std::vector< unsigned > > glog( *g++ );
+            for ( auto& e : glog )
+            {
+                e.assign( g + 1, g + 1 + *g );
+                g += 1 + e.size( );
+            }
+            auto golden_of = [ & ]( std::initializer_list< unsigned > codes ) {
+                std::vector< std::vector< unsigned > > out;
+                for ( const auto& e : glog )
+                    for ( unsigned k : codes )
+                        if ( e[ 0 ] == k )
+                            out.push_back( e );
+                return out;
+            };
+            std::vector< std::vector< unsigned > > log;
+            unsigned eff64 = 0xCD;
+            bool body = has_body;
+            powerup_world_hooks_t hooks;
+            hooks.create_pfx = [ & ]( const std::string&, std::uint8_t reflect, float scale ) {
+                log.push_back( { 1u, 1u } );
+                for ( auto& e : golden_of( { 3u, 4u, 5u } ) )
+                {
+                    if ( e[ 0 ] == 4u )
+                        e[ 1 ] = bits( scale );
+                    else if ( e[ 0 ] == 5u )
+                        eff64 = reflect;
+                    log.push_back( e );
+                }
+                return want[ 1 ];
+            };
+            hooks.release_pfx = [ & ]( std::uint32_t ) { for ( auto& e : golden_of( { 6u, 2u } ) ) log.push_back( e ); };
+            // The dynamics world is handed +0x114 whatever it holds (0 without a body).
+            hooks.add_body = [ & ]( ) { log.push_back( { 7u, has_body ? 1u : 0u } ); };
+            hooks.remove_body = [ & ]( ) { log.push_back( { 8u, has_body ? 1u : 0u } ); };
+            hooks.destroy_body = [ & ]( ) {
+                for ( auto& e : golden_of( { 10u } ) )
+                    log.push_back( e );
+                log.push_back( { 11u, 1u } );
+                body = false;
+            };
+            hooks.unregister_tick = [ & ]( ) { log.push_back( { 9u, 1u } ); };
+            if ( slot == 13 )
+                powerup_add_to_world( p, hooks );
+            else if ( slot == 12 )
+                powerup_remove_from_world( p, hooks );
+            else
+                powerup_game_release( p, has_body, hooks );
+            const unsigned mine[ 6 ] = { p.in_world, p.pfx, body ? 1u : 0u, bits( p.scale_velocity ), bits( p.scale ), eff64 };
+            bool same = log == glog;
+            for ( int k = 0; k < 6; ++k )
+                same = same && mine[ k ] == want[ k ];
+            if ( !same && ++failed <= 8 )
+                LOG_ERROR( "powerup_world sequence %u call %u (slot %u): +0x128 %u (retail %u), +0x110 0x%X (0x%X), %zu calls (%zu)", s, c, slot,
+                           mine[ 0 ], want[ 0 ], mine[ 1 ], want[ 1 ], log.size( ), glog.size( ) );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuPowerUpEntity slots 13 0x43BD40 / 12 0x43BD00 / 7 0x43BCA0 match retail: %u sequences, %d calls", ns, calls );
+        return true;
+    }
+    LOG_ERROR( "powerup_world FAILED %d of %d calls", failed, calls );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -1600,5 +1690,6 @@ inline bool verify_race_all( )
     ok = verify_mesh_assets( ) && ok;
     ok = verify_random_seed( ) && ok;
     ok = verify_powerup_contact( ) && ok;
+    ok = verify_powerup_world( ) && ok;
     return ok;
 }

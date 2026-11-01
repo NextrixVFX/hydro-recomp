@@ -30,8 +30,9 @@ inline float fleet_bits( std::uint32_t u ) { float f; std::memcpy( &f, &u, 4 ); 
 // retail uses as is); last = table[slot]; table[slot] = seed; the draw is
 // minss(cvtdq2ps(last) x 0x30000000 (2^-31), 0x3F7FFFFE) (VuMath_min).
 // Retail's AI plans draw from THE global one (0x736810 - statically seed -1
-// and a zeroed table; what seeds it in the game is NOT ESTABLISHED, see
-// engine utility/random.hxx): the caller owns this state.
+// and a zeroed table, warmed by the CRT initializer 0x64B620, then reseeded
+// from the clock by the engine init: fleet_random_seed below): the caller
+// owns this state.
 struct fleet_random_t
 {
     std::int32_t seed = -1;
