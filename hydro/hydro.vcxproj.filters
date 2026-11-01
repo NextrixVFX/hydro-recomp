@@ -117,6 +117,9 @@
     <ClInclude Include="workspace\core\game\input.hxx">
       <Filter>workspace\core\game</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\game\plugs.hxx">
+      <Filter>workspace\core\game</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\game\types.hxx">
       <Filter>workspace\core\game</Filter>
     </ClInclude>

@@ -272,6 +272,9 @@
     <ClInclude Include="workspace\core\entity\schema.hxx">
       <Filter>workspace\core\entity</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\entity\script.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\entity\trigger.hxx">
       <Filter>workspace\core\entity</Filter>
     </ClInclude>
