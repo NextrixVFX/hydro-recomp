@@ -229,6 +229,14 @@ struct race_session_t
         float timer = 0.0f;              // +0x17C (the Decision tick's)
         dynamic_prop_hit_t hit;          // +0x164 / +0x174 / +0x178 (the contact callback 0x437F40's)
         std::uint8_t step_tag = 0;       // the entity's +0xB0 part: the step callback's identity in +0x48
+        // VuBreakableDynamicGamePropEntity: +0x164 the break request, +0x168 the weak ref (its object +0x174 the target),
+        // +0x1A0 the kept velocity (its 4th word +0x1AC never written: UNKNOWN, 0 here), the breakable component's (+0x184)
+        // state +0xE4.
+        bool breakable = false;
+        std::uint8_t break_request = 0;
+        const void* break_target = nullptr;
+        float break_velocity[ 3 ] = { };
+        std::uint32_t break_state = 0;
         race_session_t* session = nullptr;
     };
     std::vector< std::unique_ptr< dyn_prop_t > > dyn_props;
@@ -1096,6 +1104,63 @@ inline void race_session_breakable_tick( void* user, float )
     b.target = nullptr;
 }
 
+// VuBreakableDynamicGamePropEntity's Decision tick (vt+0x40 slot 16 0x433890, dt), read whole: the breakable component's
+// (+0x184) 0x543640(dt) - its debris fade (the renderer's, as for VuBreakablePropEntity: only the state is kept). With
+// a request (+0x164): unless the component's state (+0xE4) is already set - the hide vt+0x34 (slot 13 0x438220:
+// race_session_mine_hide - the step callback out, the draw off, the body out of the world), the debris start 0x51E790
+// (the renderer's: UNKNOWN), state 1 (+0xE8 / +0xEC its fade from the component's own +0x68 / +0x6C / the draw
+// component's +0xA4 - not modelled), the draw add; "OnBreak" with the weak ref's object as its entity parameter
+// (0x505150 - not carried by our fire); the pfx by Breakable Pfx Name (+0x188: 0x52BCD0 on g 0x75905C, the serial bump,
+// slot 10 discarded, then lookup -> slot 2 setMatrix(the transform world), slot 3 the kept velocity +0x1A0, slot 11
+// start). Then +0x164 = 0 and the weak ref released either way; then the base Decision 0x438260 (+0x164 is 0 by now).
+inline void race_session_breakable_dynamic_tick( void* user, float dt )
+{
+    race_session_t::dyn_prop_t& d = *static_cast< race_session_t::dyn_prop_t* >( user );
+    race_session_t& s = *d.session;
+    if ( d.break_request )
+    {
+        if ( d.break_state == 0 )
+        {
+            race_session_mine_hide( d );
+            race_unwired( s, "a breakable dynamic prop's debris 0x51E790 / its draw (Vu3dDrawBreakableModelComponent - the renderer's, not recreated)" );
+            d.break_state = 1;
+            ++s.breaks;
+            if ( s.world.fire )
+                s.world.fire( *d.entity, "OnBreak" );
+            const transform_component_t* t = entity_transform( *d.entity );
+            if ( s.world.pfx && s.world.pfx_manager && s.world.pfx_ops && t )
+            {
+                pfx_manager_t& pm = *s.world.pfx_manager;
+                const int e = pfx_manager_create( pm, d.p->breakable_pfx.c_str( ), *s.world.pfx_ops );
+                if ( e >= 0 )
+                {
+                    const boat_pfx_ops_t o = boat_pfx_runtime_ops( *s.world.pfx );
+                    const std::uint32_t hd = pfx_manager_handle( pm, e );
+                    if ( o.duration )
+                        o.duration( o.user, pm.entries[ static_cast< std::size_t >( e ) ].instance );
+                    const int x = hd ? pfx_manager_lookup( pm, hd ) : -1;
+                    if ( x >= 0 )
+                    {
+                        const std::uint32_t inst = pm.entries[ static_cast< std::size_t >( x ) ].instance;
+                        std::uint32_t v[ 4 ] = { };
+                        std::memcpy( v, d.break_velocity, 12 );
+                        o.set_matrix( o.user, inst, t->world );
+                        o.set_velocity( o.user, inst, v );
+                        o.start( o.user, inst );
+                    }
+                }
+            }
+            else
+                race_unwired( s, "a breakable dynamic prop's pfx 0x52BCD0 with no VuPfx runtime / manager - UNKNOWN, not run" );
+            LOG_INFO( "race: breakable dynamic prop '%s' broke (sync %d)%s", d.entity->m_name.c_str( ), s.dynamics ? s.dynamics->syncs : -1,
+                      d.break_target ? " - by a body" : "" );
+        }
+        d.break_request = 0;
+        d.break_target = nullptr;
+    }
+    race_session_dyn_prop_decision( user, dt );
+}
+
 // One dynamic game prop's gameInitialize (world/dynprop.hxx, verified by the cases dynamic_prop_bodies /
 // dynamic_prop_step) made live: postLoad 0x5459F0's component step (retail runs it at load; nothing reads the
 // component in between), 0x437580, the body into the dynamics world (vt+0x3C), the motion state's
@@ -1123,6 +1188,14 @@ inline bool race_session_dynamic_prop( race_session_t& s, entity_t& e, const bod
     d->p = &static_cast< dynamic_prop_state_t* >( e.m_state.get( ) )->value;
     d->buoy = static_cast< dynamic_prop_state_t* >( e.m_state.get( ) )->buoy;
     d->mine = static_cast< dynamic_prop_state_t* >( e.m_state.get( ) )->mine;
+    d->breakable = static_cast< dynamic_prop_state_t* >( e.m_state.get( ) )->breakable;
+    if ( d->breakable )
+    {
+        // The ctor 0x433160's tail: the rigid component (+0x70) +0xF4 = the +0xB4 part (vtable 0x739EF0: the contact
+        // callback 0x4335A0) and +0xD8 |= 1 (no body yet).
+        rs->value.word_f4 = 1;
+        rs->value.flags_d8 |= 1u;
+    }
     if ( d->mine )
         d->p->hard_hit = 0;   // the mine's slot 6 0x438CF0 begins with +0x108 = 0, before 0x437580
     d->c = &rs->value;
@@ -1195,7 +1268,8 @@ inline bool race_session_dynamic_prop( race_session_t& s, entity_t& e, const bod
     // The Decision delegate (0x4077E8 -> vt+0x40) reaches the MINE's 0x438EA0 for a mine; the mine then registers it
     // once more itself (0x438D73) - two registrations when 0x437580 made one.
     if ( d->init.decision_tick )
-        tick_register( s.ticks, { dp, d->mine ? race_session_mine_tick : race_session_dyn_prop_decision, dp }, "Decision" );
+        tick_register( s.ticks, { dp, d->mine ? race_session_mine_tick : d->breakable ? race_session_breakable_dynamic_tick : race_session_dyn_prop_decision, dp },
+                       "Decision" );
     if ( d->mine )
         tick_register( s.ticks, { dp, race_session_mine_tick, dp }, "Decision" );
     if ( d->init.build_tick )
