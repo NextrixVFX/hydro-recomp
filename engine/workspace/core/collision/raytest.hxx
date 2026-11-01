@@ -32,7 +32,9 @@
 //     the child tree's btDbvt::rayTest 0x551F10 -> RayTester::Process
 //     0x54D700 (the child's world transform, the object's shape swapped for
 //     the child's, LocalInfoAdder2 vt 0x74E84C: needsCollision 0x54D690 /
-//     addSingleResult 0x54D6A0); the BVH mesh (21) is NOT here yet (refused).
+//     addSingleResult 0x54D6A0); the BVH mesh (21) through performRaycast
+//     0x5AECB0 (boat batch 16, below) - the result's addSingleResult answer
+//     IS read there (the Bridge callback's hitFraction).
 // The result callback is the caller's (btCollisionWorld::RayResultCallback:
 // +4 closestHitFraction, +8 collisionObject, +0xC group, +0xE mask, +0x10
 // flags; vt+4 needsCollision, vt+8 addSingleResult). Every path not recreated
@@ -352,6 +354,253 @@ inline float ray_inverse( float n )
     return n == 0.0f ? support_bits( 0x5D5E0B6Bu ) : 1.0f / n;
 }
 
+// ---- The BVH mesh's ray path (boat batch 16) ------------------------------
+//
+// rayTestSingle's type-21 branch (0x54CCC0 .. 0x54CF15): the ray in the
+// mesh's frame, a BridgeTriangleRaycastCallback (ctor 0x54D410, vtable
+// 0x74E85C: slot 1 processTriangle 0x5B8500, slot 2 reportHit 0x54D4D0) and
+// btBvhTriangleMeshShape::performRaycast 0x5AECB0 -> the quantized ray walk
+// 0x587E60 -> MyNodeOverlapCallback::processNode 0x5AED70 (bvh.hxx
+// mesh_process_node: the same lock, corner order and scaling products).
+// The callback (at retail's offsets): +0x10 from, +0x20 to (the local ray),
+// +0x30 flags (the result's +0x10), +0x34 hitFraction (1.0 in the ctor,
+// then the result's closestHitFraction +4), +0x40 the result, +0x44 the
+// object, +0x48 the shape, +0x50 the object's world transform (64 b).
+struct ray_triangle_t
+{
+    float from[ 4 ];
+    float to[ 4 ];
+    std::uint32_t flags;
+    float hit_fraction;
+    ray_callback_t* result;
+    collision_object_t* object;
+    const float* world;
+};
+
+// btTriangleRaycastCallback::reportHit as the Bridge overrides it 0x54D4D0
+// (thiscall; hitNormalLocal*, hitFraction, partId, triangleIndex; retn 10h):
+// LocalShapeInfo {part, triangle}; the normal by the world basis rows
+// (+0x50 / +0x60 / +0x70): r = (b[r][1] n.y + n.x b[r][0]) + b[r][2] n.z, w 0;
+// LocalRayResult {object +0x44, the info, the normal, the fraction}; the
+// result's addSingleResult(r, true) - its x87 answer returned.
+inline float ray_triangle_report( ray_triangle_t& c, const float* n, float fraction, int part, int index )
+{
+    const ray_shape_info_t info{ part, index };
+    const float* b = c.world;
+    ray_local_result_t r;
+    r.object = c.object;
+    r.info = &info;
+    for ( int row = 0; row < 3; ++row )
+        r.normal[ row ] = ( b[ 4 * row + 1 ] * n[ 1 ] + n[ 0 ] * b[ 4 * row ] ) + b[ 4 * row + 2 ] * n[ 2 ];
+    r.normal[ 3 ] = 0.0f;
+    r.fraction = fraction;
+    return c.result->add_single_result( c.result->user, *c.result, r, true );
+}
+
+// btTriangleRaycastCallback::processTriangle 0x5B8500 (thiscall; triangle*,
+// partId, triangleIndex; retn 0Ch), from its disassembly in operand order:
+// v10 = v1 - v0, v20 = v2 - v0, n = (v20.z v10.y - v20.y v10.z, v20.x v10.z -
+// v20.z v10.x, v20.y v10.x - v20.x v10.y); dist = (n.y v0.y + v0.x n.x) + n.z
+// v0.z; dist_a / dist_b the same form on from / to, minus dist. Leaves
+// unless dist_b dist_a < 0 (`comiss; jnb` - a NaN product goes on); flag 1
+// leaves when dist_a > 0 (`ja`); d = dist_a / (dist_a - dist_b), on only when
+// hitFraction > d (`jbe`); tolerance = ((n.x^2 + n.y^2) + n.z^2) x -1e-4
+// (0x6F7878); point = from (1 - d) + to d; the three edge tests (cp . n =
+// (cp.y n.y + cp.x n.x) + cp.z n.z, each `comiss; jb` against the tolerance:
+// a NaN leaves); n x 1 / sqrt(len2); flag 2 or 0 >= dist_a (`jnb`) reports
+// -n (xorps 0x6F7CD0), else n; hitFraction = the report's answer (fstp).
+inline void ray_triangle_process( void* user, float ( *t )[ 4 ], int part, int index )
+{
+    ray_triangle_t& c = *static_cast< ray_triangle_t* >( user );
+    const float* v0 = t[ 0 ];
+    const float* v1 = t[ 1 ];
+    const float* v2 = t[ 2 ];
+    const float e20y = v2[ 1 ] - v0[ 1 ], e10y = v1[ 1 ] - v0[ 1 ], e10z = v1[ 2 ] - v0[ 2 ];
+    const float e20x = v2[ 0 ] - v0[ 0 ], e20z = v2[ 2 ] - v0[ 2 ], e10x = v1[ 0 ] - v0[ 0 ];
+    const float nx = e20z * e10y - e20y * e10z;
+    const float ny = e20x * e10z - e20z * e10x;
+    const float nz = e20y * e10x - e20x * e10y;
+    const float dist = ( ny * v0[ 1 ] + v0[ 0 ] * nx ) + nz * v0[ 2 ];
+    const float dist_a = ( ( ny * c.from[ 1 ] + c.from[ 0 ] * nx ) + c.from[ 2 ] * nz ) - dist;
+    const float dist_b = ( ( c.to[ 1 ] * ny + c.to[ 0 ] * nx ) + c.to[ 2 ] * nz ) - dist;
+    if ( dist_b * dist_a >= 0.0f )
+        return;
+    if ( ( c.flags & 1u ) != 0 && dist_a > 0.0f )
+        return;
+    const float d = dist_a / ( dist_a - dist_b );
+    if ( !( c.hit_fraction > d ) )
+        return;
+    const float len2 = ( nx * nx + ny * ny ) + nz * nz;
+    const float tolerance = len2 * support_bits( 0xB8D1B717u );
+    const float k = 1.0f - d;
+    const float px = c.from[ 0 ] * k + c.to[ 0 ] * d;
+    const float py = c.from[ 1 ] * k + c.to[ 1 ] * d;
+    const float pz = c.from[ 2 ] * k + c.to[ 2 ] * d;
+    const float p0y = v0[ 1 ] - py, p1x = v1[ 0 ] - px, p0x = v0[ 0 ] - px, p0z = v0[ 2 ] - pz, p1y = v1[ 1 ] - py, p1z = v1[ 2 ] - pz;
+    {
+        const float cx = p1z * p0y - p1y * p0z;
+        const float cy = p1x * p0z - p1z * p0x;
+        const float cz = p1y * p0x - p1x * p0y;
+        if ( !( ( cy * ny + cx * nx ) + cz * nz >= tolerance ) )
+            return;
+    }
+    const float p2y = v2[ 1 ] - py, p2z = v2[ 2 ] - pz, p2x = v2[ 0 ] - px;
+    {
+        const float cx = p2z * p1y - p2y * p1z;
+        const float cy = p2x * p1z - p2z * p1x;
+        const float cz = p2y * p1x - p2x * p1y;
+        if ( !( ( cy * ny + cx * nx ) + cz * nz >= tolerance ) )
+            return;
+    }
+    {
+        const float cx = p2y * p0z - p2z * p0y;
+        const float cy = p2z * p0x - p2x * p0z;
+        const float cz = p2x * p0y - p2y * p0x;
+        if ( !( ( cy * ny + cx * nx ) + cz * nz >= tolerance ) )
+            return;
+    }
+    const float r = 1.0f / std::sqrt( len2 );
+    float n[ 4 ] = { nx * r, ny * r, nz * r, 0.0f };
+    if ( ( c.flags & 2u ) != 0 || 0.0f >= dist_a )
+    {
+        n[ 0 ] = support_negate( n[ 0 ] );
+        n[ 1 ] = support_negate( n[ 1 ] );
+        n[ 2 ] = support_negate( n[ 2 ] );
+    }
+    c.hit_fraction = ray_triangle_report( c, n, d, part, index );
+}
+
+// The quantized ray walk 0x587E60 (thiscall bvh; nodeCallback, raySource*,
+// rayTarget*, aabbMin*, aabbMax*, startNodeIndex (unread: the walk starts at
+// node 0), endNodeIndex; retn 1Ch), from its disassembly: d = to - from, len2
+// = (dy^2 + dx^2) + dz^2, r = 1 / sqrtss, n = d r, lambda_max = (dy n.y + dx
+// n.x) + dz n.z; inverses / signs as ray_inverse (`ucomiss; lahf; test ah,
+// 44h`); the ray's box = min / max of from and to (`comiss; jbe` picks, all
+// four lanes) + aabbMin / aabbMax, quantized as reportAabbOverlappingNodex
+// (clamp, cvttss2si, & 0xFFFE / + 1.0 | 1); per node (one iteration each)
+// the six 16-bit overlap compares, and only when they overlap the node's
+// box unquantized (min x 1 / quantization + bvh min, the reciprocals by
+// divss), minus aabbMax / aabbMin, through btRayAabb2 (ray_aabb: its
+// `ja` rejects, `jbe` updates, lambda_max > tmin, tmax > 0.0 0x6F7570). A
+// leaf that hits is processNode(index >> 21, index & 0x1FFFFF); a hit or a
+// leaf steps on, any other node skips by its escape index; max iterations
+// as the AABB walk.
+inline void bvh_ray_walk( const quantized_bvh_t& bvh, const bvh_node_callback_t& callback, const float* from, const float* to,
+                          const float* aabb_min, const float* aabb_max, int end )
+{
+    const float dx = to[ 0 ] - from[ 0 ], dy = to[ 1 ] - from[ 1 ], dz = to[ 2 ] - from[ 2 ];
+    const float r = 1.0f / std::sqrt( ( dy * dy + dx * dx ) + dz * dz );
+    const float nx = dx * r, ny = dy * r, nz = dz * r;
+    ray_dir_t rd;
+    rd.lambda_max = ( dy * ny + dx * nx ) + dz * nz;
+    rd.inv[ 0 ] = ray_inverse( nx );
+    rd.inv[ 1 ] = ray_inverse( ny );
+    rd.inv[ 2 ] = ray_inverse( nz );
+    for ( int k = 0; k < 3; ++k )
+        rd.signs[ k ] = 0.0f > rd.inv[ k ] ? 1u : 0u;
+    float lo[ 4 ], hi[ 4 ];
+    for ( int k = 0; k < 4; ++k )
+    {
+        lo[ k ] = from[ k ] > to[ k ] ? to[ k ] : from[ k ];
+        hi[ k ] = to[ k ] > from[ k ] ? to[ k ] : from[ k ];
+    }
+    for ( int k = 0; k < 3; ++k )
+    {
+        lo[ k ] = lo[ k ] + aabb_min[ k ];
+        hi[ k ] = hi[ k ] + aabb_max[ k ];
+    }
+    uint16_t qmin[ 3 ], qmax[ 3 ];
+    for ( int k = 0; k < 3; ++k )
+    {
+        const float v = bvh_clamp( lo[ k ], bvh.aabb_min[ k ], bvh.aabb_max[ k ] );
+        qmin[ k ] = static_cast< uint16_t >( _mm_cvtt_ss2si( _mm_set_ss( ( v - bvh.aabb_min[ k ] ) * bvh.quantization[ k ] ) ) & 0xFFFE );
+    }
+    for ( int k = 0; k < 3; ++k )
+    {
+        const float v = bvh_clamp( hi[ k ], bvh.aabb_min[ k ], bvh.aabb_max[ k ] );
+        qmax[ k ] = static_cast< uint16_t >( _mm_cvtt_ss2si( _mm_set_ss( ( v - bvh.aabb_min[ k ] ) * bvh.quantization[ k ] + 1.0f ) ) | 1 );
+    }
+    int index = 0, iterations = 0;
+    const bvh_node_t* node = bvh.nodes;
+    while ( index < end )
+    {
+        ++iterations;
+        const int overlap = ( node->max[ 0 ] >= qmin[ 0 ] ) & ( qmax[ 0 ] >= node->min[ 0 ] ) & ( qmax[ 1 ] >= node->min[ 1 ] ) &
+                            ( qmax[ 2 ] >= node->min[ 2 ] ) & ( node->max[ 1 ] >= qmin[ 1 ] ) & ( node->max[ 2 ] >= qmin[ 2 ] );
+        const int32_t value = node->escape_or_triangle;
+        const bool leaf = value >= 0;
+        bool hit = false;
+        if ( overlap )
+        {
+            const float ix = 1.0f / bvh.quantization[ 0 ], iy = 1.0f / bvh.quantization[ 1 ], iz = 1.0f / bvh.quantization[ 2 ];
+            float b0[ 4 ], b1[ 4 ];
+            b0[ 0 ] = static_cast< float >( node->min[ 0 ] ) * ix + bvh.aabb_min[ 0 ];
+            b0[ 1 ] = bvh.aabb_min[ 1 ] + static_cast< float >( node->min[ 1 ] ) * iy;
+            b0[ 2 ] = bvh.aabb_min[ 2 ] + static_cast< float >( node->min[ 2 ] ) * iz;
+            b1[ 0 ] = static_cast< float >( node->max[ 0 ] ) * ix + bvh.aabb_min[ 0 ];
+            b1[ 1 ] = bvh.aabb_min[ 1 ] + static_cast< float >( node->max[ 1 ] ) * iy;
+            b1[ 2 ] = bvh.aabb_min[ 2 ] + static_cast< float >( node->max[ 2 ] ) * iz;
+            for ( int k = 0; k < 3; ++k )
+            {
+                b0[ k ] = b0[ k ] - aabb_max[ k ];
+                b1[ k ] = b1[ k ] - aabb_min[ k ];
+            }
+            b0[ 3 ] = b1[ 3 ] = 0.0f;
+            hit = ray_aabb( from, rd.inv, rd.signs, b0, b1, rd.lambda_max );
+        }
+        if ( leaf && hit )
+            callback.process_node( callback.user, value >> 21, value & 0x1FFFFF );
+        if ( hit || leaf )
+        {
+            ++node;
+            ++index;
+        }
+        else
+        {
+            const int escape = static_cast< int >( 0u - static_cast< uint32_t >( value ) );
+            node += escape;
+            index += escape;
+        }
+    }
+    if ( g_bvh_max_iterations < iterations )
+        g_bvh_max_iterations = iterations;
+}
+
+// btBvhTriangleMeshShape::performRaycast 0x5AECB0 (thiscall shape; callback,
+// raySource*, rayTarget*): MyNodeOverlapCallback (vt 0x751760: +4 the mesh
+// interface +0x30, +8 the callback), a zero aabbMin / aabbMax, then by the
+// BVH's useQuantization (+0x48) the quantized walk 0x587E60 (0, +0x44) or
+// walkStacklessTreeAgainstRay 0x587930 - NOT recreated (-1): the census of
+// the 236 collision-mesh assets found every tree quantized (bvh.hxx).
+inline int bvh_mesh_perform_raycast( const bvh_mesh_shape_t& s, const bvh_triangle_callback_t& callback, const float* from, const float* to )
+{
+    if ( !s.bvh || !s.mesh )
+        return -1;
+    if ( !s.bvh->use_quantization )
+        return -1;
+    mesh_node_callback_t node{ s.mesh, callback, {} };
+    const bvh_node_callback_t walk{ &node, mesh_process_node };
+    const float zero[ 4 ] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    bvh_ray_walk( *s.bvh, walk, from, to, zero, zero, s.bvh->cur_node_index );
+    return 1;
+}
+
+// The ray in the mesh's frame as 0x54CCC0 computes it (T the object's world
+// transform, i = basis^T (-origin)): i[c] = ((T[c] n0) + (T[4+c] n1)) +
+// T[8+c] n2; local[c] = (((T[4+c] p.y + T[c] p.x) + T[8+c] p.z) + i[c]) for
+// z, and ((T[c] p.x + T[4+c] p.y) + T[8+c] p.z) + i[c] for x / y; w 0.
+inline void ray_bvh_local( const float* t, const float* p, float* out )
+{
+    const float n0 = support_negate( t[ 12 ] ), n1 = support_negate( t[ 13 ] ), n2 = support_negate( t[ 14 ] );
+    float i[ 3 ];
+    for ( int c = 0; c < 3; ++c )
+        i[ c ] = ( t[ c ] * n0 + t[ 4 + c ] * n1 ) + t[ 8 + c ] * n2;
+    out[ 0 ] = ( ( t[ 0 ] * p[ 0 ] + t[ 4 ] * p[ 1 ] ) + t[ 8 ] * p[ 2 ] ) + i[ 0 ];
+    out[ 1 ] = ( ( t[ 1 ] * p[ 0 ] + t[ 5 ] * p[ 1 ] ) + t[ 9 ] * p[ 2 ] ) + i[ 1 ];
+    out[ 2 ] = ( ( t[ 6 ] * p[ 1 ] + t[ 2 ] * p[ 0 ] ) + t[ 10 ] * p[ 2 ] ) + i[ 2 ];
+    out[ 3 ] = 0.0f;
+}
+
 struct ray_test_t;
 inline int ray_test_single( ray_test_t& t, const float* from, const float* to, collision_object_t& o, const ray_shape_t& shape,
                             const float* world, ray_callback_t& cb );
@@ -484,8 +733,24 @@ inline int ray_test_single( ray_test_t& t, const float* from, const float* to, c
             return 1;
         return ray_compound_child( t, from, to, o, c, world, cb, c.root_data );
     }
+    if ( type == 21 && shape.mesh )
+    {
+        // The BVH mesh (0x54CCC0): the local ray, the Bridge callback (ctor
+        // 0x54D410: flags = the result's +0x10, hitFraction 1.0 then the
+        // result's +4), performRaycast.
+        ray_triangle_t c;
+        ray_bvh_local( world, from + 12, c.from );
+        ray_bvh_local( world, to + 12, c.to );
+        c.flags = cb.flags;
+        c.hit_fraction = cb.closest_hit_fraction;
+        c.result = &cb;
+        c.object = &o;
+        c.world = world;
+        const bvh_triangle_callback_t tri{ &c, ray_triangle_process };
+        return bvh_mesh_perform_raycast( *shape.mesh, tri, c.from, c.to );
+    }
     if ( type >= 21 && type <= 29 )
-        return -1;   // the BVH mesh's performRaycast 0x5AECB0 / the generic concave processAllTriangles: not recreated here yet
+        return -1;   // the generic concave path (0x54D5D0 + the shape's vt+0x38 processAllTriangles): no such shape is modelled
     return 1;        // any other type: nothing
 }
 

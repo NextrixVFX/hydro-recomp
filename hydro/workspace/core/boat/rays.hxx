@@ -20,8 +20,10 @@
 // every path recreated (convex, compound): there the value addSingleResult
 // returns is discarded (the convex path's `fstp st0`, LocalInfoAdder2) and
 // needsCollision only skips the object it is asked about. The BVH mesh's
-// triangle path feeds the returned value back (m_hitFraction) - it is not
-// recreated: the test returns -1 there and `unknown` is set.
+// triangle path (boat batch 16) feeds the returned value back
+// (m_hitFraction): the answer below is retail's. A path still not recreated
+// (the non-quantized BVH walk, a concave type other than 21) returns -1 and
+// sets `unknown`.
 struct boat_ray_world_t
 {
     collision_world_t* world = nullptr;
@@ -56,7 +58,13 @@ inline int boat_ray_hits( void* user, const float* from, const float* to, const 
         std::memcpy( h.normal, res.normal, 16 );
         h.world = normal_in_world;
         w.hits.push_back( h );
-        return 1.0f;
+        // 0x50CE20's answer: the Vu result's slot 1 (0x404B20 in both the
+        // camera's 0x737B14 and the AI's 0x736F7C vtables) always returns 1
+        // (`mov al, 1`), so the wrapper sets hit and returns `fld [r+0x20]` -
+        // the hit's own fraction. The BVH path feeds it back as the triangle
+        // callback's hitFraction (per object: an object the consumer's
+        // needsCollision would skip only feeds its own, skipped, hits).
+        return res.fraction;
     };
     const float f[ 4 ] = { from[ 0 ], from[ 1 ], from[ 2 ], 0.0f };
     const float t[ 4 ] = { to[ 0 ], to[ 1 ], to[ 2 ], 0.0f };
