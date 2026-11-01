@@ -62,7 +62,8 @@ struct water_wave_kernel_t
     bump_t bump{};
     banked_turn_t banked{};
     point_wave_t point{};
-    ocean_patch_t ocean{};   // patches[] point into the build's field (b.oceans): null = not built
+    ocean_patch_t ocean{};
+    wake_wave_t wake{};   // the wakes (world/wake.hxx): +0x4C .. +0xBF   // patches[] point into the build's field (b.oceans): null = not built
 };
 
 // The rectangular / circular ocean kernels' members (wave.hxx's ocean_patch_t
@@ -151,6 +152,8 @@ inline water_wave_kernel_t water_wave_kernel( water_kind_t kind, const water_wor
         k.banked.direction_y = w.f( 120 );
         k.banked.extent = w.f( 124 );
         break;
+    case water_kind_wake:
+    case water_kind_flat_wake: k.wake = water_wake_of( w ); break;
     case water_kind_point:   // 0x5A36A0
         k.point.centre_x = w.f( 76 );
         k.point.centre_y = w.f( 80 );
@@ -260,9 +263,12 @@ inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
         case water_kind_ramp:
         case water_kind_bump:
         case water_kind_banked:
+        case water_kind_wake:
+        case water_kind_flat_wake:
         case water_kind_point: break;
         case water_kind_rectangular:
         case water_kind_circular:
+        case water_kind_infinite:
             if ( !k.ocean.patches[ 0 ] )
                 return false;   // no field (complexity 0)
             break;
@@ -272,6 +278,23 @@ inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
         {
             if ( ctx.flag100 && ctx.tags[ i ] != ctx.tag )
                 continue;
+            if ( k.kind == water_kind_wake || k.kind == water_kind_flat_wake )
+            {
+                // 0x52D1D0 / 0x52DCC0, flat 0x52E7D0 / 0x52EAE0
+                if ( k.kind == water_kind_wake )
+                    wake_vertex96( k.wake, *water_record( ctx, i, 0 ), *water_record( ctx, i, 4 ), *water_record( ctx, i, 8 ),
+                        water_record( ctx, i, 0xC ), *water_record( ctx, i, 0x14 ) );
+                else
+                    flat_wake_vertex96( k.wake, *water_record( ctx, i, 0 ), *water_record( ctx, i, 4 ), *water_record( ctx, i, 0x14 ) );
+                continue;
+            }
+            if ( k.kind == water_kind_infinite )
+            {
+                // SampleHeight 0x59E9E0 / SampleHeight2 0x59EB80
+                ocean_infinite_vertex96( k.ocean, *water_record( ctx, i, 0 ), *water_record( ctx, i, 4 ), *water_record( ctx, i, 8 ),
+                    water_record( ctx, i, 0xC ) );
+                continue;
+            }
             if ( k.kind == water_kind_rectangular || k.kind == water_kind_circular )
             {
                 // 0x59F840 / 0x59FB80, 0x5A0920 / 0x5A0C40: height and flow only
@@ -303,7 +326,9 @@ inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
     case water_kind_ramp:
     case water_kind_bump:
     case water_kind_banked:
+    case water_kind_wake:
     case water_kind_point: break;
+    case water_kind_flat_wake: return true;   // slot 3 0x52CA30 does nothing without ctx+0x60
     case water_kind_rectangular:
     case water_kind_circular:
     case water_kind_infinite:
@@ -319,6 +344,9 @@ inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
         water_vertex_t& x = ctx.vertices[ i ];
         switch ( k.kind )
         {
+        case water_kind_wake:   // 0x52CA60 / 0x52CE20
+            wake_vertex( k.wake, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height );
+            break;
         case water_kind_infinite:   // 0x59E070 / 0x59E520
             ocean_infinite_vertex( k.ocean, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height );
             break;

@@ -3199,6 +3199,7 @@ inline bool verify_race_all( )
     ok = verify_fleet_small( ) && ok;
     ok = verify_boat_small( ) && ok;
     ok = verify_bt_leaves( ) && ok;
+    ok = verify_thunk_build( ) && ok;
     ok = verify_contact_added( ) && ok;
     ok = verify_boat_rtti( ) && ok;
     ok = verify_human_explosion( ) && ok;

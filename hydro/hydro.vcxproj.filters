@@ -156,6 +156,9 @@
     <ClInclude Include="workspace\core\boat\surface.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\boat\thunk.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\boat\tick.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
@@ -306,6 +309,9 @@
     <ClInclude Include="workspace\core\world\pfxsim.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\world\pfxstatic.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\world\query.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
@@ -333,6 +339,9 @@
     <ClInclude Include="workspace\core\world\tree.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\world\wake.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\world\water.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
@@ -355,6 +364,9 @@
       <Filter>workspace\utility\checks</Filter>
     </ClInclude>
     <ClInclude Include="workspace\utility\checks\ui.hxx">
+      <Filter>workspace\utility\checks</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\checks\wake.hxx">
       <Filter>workspace\utility\checks</Filter>
     </ClInclude>
     <ClInclude Include="workspace\utility\checks\water.hxx">
