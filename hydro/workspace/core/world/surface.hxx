@@ -146,7 +146,10 @@ enum water_kind_t
     water_kind_point,   // made at run time (VuWater_createPointWave 0x528E10), not by an entity's slot 6
     // VuInfiniteOceanWaveEntity (vtable 0x753B34; the front end's Screens/Background authors one): the ocean ctor
     // 0x5D8380's eight properties (+0x68 .. +0x84, k_water_ocean_props' names and defaults), slot 6 0x5D8970.
-    water_kind_infinite
+    water_kind_infinite,
+    // made at run time by a hull's wake update 0x417D80 (world/wake.hxx): VuWaterWakeWave (0x5287D0, vtable 0x74D148) and
+    // VuWaterFlatWakeWave (0x528850, vtable 0x74D164); slot 2 both 0x52C210, slot 0 0x52BE40 / 0x52BE80
+    water_kind_wake, water_kind_flat_wake
 };
 
 inline water_kind_t water_kind_of( const std::string& cls )
@@ -716,6 +719,9 @@ struct water_built_t
     std::vector< int > surface_list;
     // Per surface: destroyed (its slot 0 0x535B80 ran); the words stay.
     std::vector< std::uint8_t > surface_gone;
+    // VuWater +0x40: 1.0 from its ctor 0x528050 (the wake update 0x417D80's segment rate: a new segment once the
+    // fixed end's age reaches 1 / (4 x this)).
+    float wake_rate = 1.0f;
 };
 
 // The field of ocean wave `wave`, or null (not an ocean wave / not built).
@@ -750,6 +756,8 @@ inline std::uint32_t water_wave_vtable( water_kind_t k )
     case water_kind_bump: return 0x7509B4u;
     case water_kind_point: return 0x750978u;
     case water_kind_infinite: return 0x7508C0u;
+    case water_kind_wake: return 0x74D148u;
+    case water_kind_flat_wake: return 0x74D164u;
     default: return 0u;
     }
 }
@@ -1014,7 +1022,8 @@ inline void water_built_destroy( water_built_t& b, int wave )
 // wave at +0x74), VuBumpWaveEntity 0x5D3F10 (+0x68), VuWhirlpoolWaveEntity and
 // VuDirectionalFlowWaveEntity 0x5D6710 (+0x78), VuDirectionalWaveEntity and
 // VuStaticWakeWaveEntity 0x5D5E90 (+0x80), the ocean entities' 0x5D8D30
-// (+0x94; 0x5D81A0 is its getter): the entity's reference (+4) dropped - slot
+// (+0x94; 0x5D81A0 is its getter), VuInfiniteOceanWaveEntity 0x5D8A00 (+0x88;
+// measured, case water_release_menu): the entity's reference (+4) dropped - slot
 // 0 with 1 at zero -, then VuWater's removal 0x529800 of the same pointer (a
 // no-op when the dtor already unlinked it), then the entity's word = 0 (the
 // caller's). VuWaterRampEntity's 0x5D7030 releases its surface (+0x128) first
@@ -1450,6 +1459,20 @@ inline int water_built_tick( water_built_t& b, float dt, const water_built_hooks
             o.word[ 0x90 / 4 ] = ( o.word[ 0x90 / 4 ] & ~0xFFu ) | ( life.expired ? 1u : 0u );
             break;
         }
+        case water_kind_wake:
+        case water_kind_flat_wake:   // 0x52C210: both records' ages (+0x88, +0xBC), the held copy kept in step
+        {
+            wake_wave_t k{};
+            std::memcpy( &k.a, &v.word[ 0x58 / 4 ], sizeof( k.a ) );
+            std::memcpy( &k.b, &v.word[ 0x8C / 4 ], sizeof( k.b ) );
+            alive = wake_tick( k, static_cast< int >( v.word[ 1 ] ), scaled );
+            water_words_t& o = b.waves[ static_cast< std::size_t >( wave ) ];
+            o.setf( 0x88, k.a.age );
+            o.setf( 0xBC, k.b.age );
+            b.hold.waves[ static_cast< std::size_t >( wave ) ].wake_data.a.age = k.a.age;
+            b.hold.waves[ static_cast< std::size_t >( wave ) ].wake_data.b.age = k.b.age;
+            break;
+        }
         default: ++missing; break;   // no class built here reaches this
         }
         if ( !alive )
@@ -1583,3 +1606,5 @@ inline const water_type_t g_water_types[] = {
     { 0x5D96E0u, 0x736C48u, "VuDirectionalWaveEntity|VuEntity" },
     { 0x5DA450u, 0x736C50u, "VuWaterSurfaceEntity|VuEntity" },
 };
+
+#include <workspace/core/world/wake.hxx>
