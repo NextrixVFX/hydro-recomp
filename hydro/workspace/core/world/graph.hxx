@@ -326,6 +326,8 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
     //
     // A delay already counting down IGNORES a second In - the retrigger
     // is dropped, not restarted, and that is not what the name suggests.
+    // rand01 is VuRandom_draw 0x50FD20 on THE global 0x736810 (ecx at
+    // 0x5DFBF3) - c_world's m_vurandom, shared with the pfx and the AI.
     const auto wait = m_delays.find( entity );
     if ( wait != m_delays.end( ) )
     {
@@ -334,7 +336,7 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
             if ( !wait->second.pending )
             {
                 wait->second.pending = true;
-                wait->second.remaining = m_random.draw( ) * wait->second.window
+                wait->second.remaining = m_vurandom.draw( ) * wait->second.window
                     + wait->second.delay;
             }
             return retval_t{};

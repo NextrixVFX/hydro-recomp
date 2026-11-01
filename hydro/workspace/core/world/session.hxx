@@ -33,8 +33,9 @@
 //   per frame, VuTickManagerImpl's tick 0x4F72F0 (tick_run) over its phases.
 //
 // STOPPED / UNKNOWN (logged, never stood in for):
-// - VuRandom 0x736810 is seeded from the host clock as retail's 0x566230 does
-//   (fleet_random_seed): "Race" builds its AI roster from it - per run.
+// - VuRandom 0x736810 is the one global c_world seeds at its engine init as
+//   retail's 0x566230 does (fleet_random_seed on the platform clock; a --bench
+//   run's clock answers a fixed 0): "Race" builds its AI roster from it.
 // - 0x420A70 loads the collision / fluids meshes (the boat agent's meshes.hxx)
 //   and stops at the surface-type table (g_vudynamicsimpl +0x38 slot 2): not
 //   recreated - and with it everything that reads what it loads after: the
@@ -80,9 +81,10 @@ struct race_session_t
     fleet_manager_t fleet;
     std::vector< fleet_pilot_t > pilots;
     std::vector< fleet_boat_t > fleet_boats;
-    // VuRandom's global 0x736810 for the AI manager's plans: its state is NOT
-    // ESTABLISHED, so a fleet with entries stops (never reached: "Race" stops first).
-    fleet_random_t random;
+    // THE global VuRandom 0x736810 (c_world's, seeded once by the engine init
+    // 0x566230; the pfx emitters draw from the same one): the roster picks and
+    // the AI manager's plans.
+    fleet_random_t* random = nullptr;
     // Counts of the stopped paths reached (UNKNOWN), logged once each.
     int stopped_decision = 0, stopped_build = 0, stopped_transform = 0, stopped_viewports = 0, stopped_fleet = 0;
 };
@@ -251,7 +253,7 @@ inline void race_session_build( void* user, float )
 inline void race_session_fleet( void* user, float dt )
 {
     race_session_t& s = *static_cast< race_session_t* >( user );
-    fleet_tick( s.fleet, *s.track, s.pilots, s.fleet_boats, s.random, dt );
+    fleet_tick( s.fleet, *s.track, s.pilots, s.fleet_boats, *s.random, dt );
 }
 
 // The Viewports phase's boat manager tick 0x4AB0A0 (boat_manager_viewport_tick)
@@ -296,9 +298,10 @@ struct race_session_dbs_t
 // that cannot be made.
 inline bool race_session_start( race_session_t& s, const std::string& mode, const std::string& track_name, const std::string& course,
                                 const std::string& boat, const std::string& skin, const race_session_dbs_t& db, const c_archive& archive,
-                                entity_t& tree, const track_manager_t* track )
+                                entity_t& tree, const track_manager_t* track, fleet_random_t& random )
 {
     s = race_session_t{ };
+    s.random = &random;
     if ( mode.empty( ) || boat.empty( ) || skin.empty( ) || track_name.empty( ) )
     {
         LOG_WARNING( "race: boats UNKNOWN - --mode, --race, --boat and --skin are all required (no defaults); no race" );
@@ -309,24 +312,12 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         LOG_ERROR( "race: BoatDB / TrackDB / ConstantDB not readable from the pack; no race" );
         return false;
     }
-    // VuRandom 0x736810's game seed: the engine init 0x566230 reseeds it from the clock (fleet_random_seed with seed
-    // 0: QueryPerformanceCounter's low + high words | 0x80000000, 40 steps). The clock is the platform's (VuMetroSys
-    // slot 12 0x4EC7C0, a HOOK): the host's performance counter, as retail - so the Race builder's AI roster and the
-    // AI plans differ per run, as in retail.
-    fleet_random_seed( s.random, 0, [ ]( ) -> std::int64_t {
-#if defined( _WIN32 )
-        LARGE_INTEGER c;
-        return QueryPerformanceCounter( &c ) ? static_cast< std::int64_t >( c.QuadPart ) : 0;
-#else
-        return 0;
-#endif
-    } );
-    LOG_INFO( "race: VuRandom 0x736810 seeded from the host clock (0x566230): seed 0x%08X - the AI roster and plans differ per run, as in retail",
-              static_cast< unsigned >( s.random.seed ) );
+    // The roster picks draw from the shared VuRandom 0x736810 in whatever state the run has left it (seeded once at
+    // the engine init, drawn by the pfx since).
     ui_game_env_t env;
     env.boat_db = db.boat_db;
     env.track_db = db.track_db;
-    env.random = &s.random;
+    env.random = s.random;
     ui_game_config_t built;
     s.game_data = ui_front_end_game_data( mode, track_name, course, boat, skin, env, &built );
     if ( !built.built )
@@ -481,7 +472,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     };
     sh.fleet_start = [ &s ]
     {
-        fleet_start( s.fleet, *s.track, s.pilots, s.fleet_boats, s.random );
+        fleet_start( s.fleet, *s.track, s.pilots, s.fleet_boats, *s.random );
     };
     sh.fleet_run = [ &s ] { fleet_run( s.fleet ); };
     race_begin( s.start, s.start_boats, s.manager, *track, *db.track_db, *db.constant_db, sh );

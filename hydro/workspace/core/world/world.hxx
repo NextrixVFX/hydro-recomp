@@ -592,7 +592,6 @@ private:
         m_attaches.clear( );
         m_refs.clear( );
         m_booleans.clear( );
-        m_random = random_t{};
         m_graph.clear( );
         m_point_waves.clear( );
         m_unhandled_events = 0;
@@ -676,6 +675,31 @@ private:
         if ( path.empty( ) || !m_archive.open( path.c_str( ) ) )
             return;
         m_opened = true;
+        seed_random( );
+    }
+
+    // THE global VuRandom 0x736810 (m_vurandom): statically seed -1 with a zeroed table, warmed by the CRT initializer
+    // 0x64B620 - then the engine init 0x566230 (from 0x4D9900) reseeds it ONCE from the platform clock:
+    // fleet_random_seed(0, clock) = the clock's low + high words | 0x80000000, 40 steps. The clock is VuMetroSys slot
+    // 12 0x4EC7C0 (a HOOK: QueryPerformanceCounter, 0 when it fails). Every draw after - the pfx emitters (c_effects),
+    // the front end's roster picks, the AI plans (the race session) - comes from this one state, so a run's
+    // sequence differs per run, as in retail. A --bench run's clock answers a FIXED 0 (retail's own failure answer)
+    // so the gate stills stay reproducible.
+    void seed_random( )
+    {
+        fleet_random_seed( m_vurandom, 0, [ ]( ) -> std::int64_t {
+            if ( c_engine::option( "bench" ) != nullptr )
+                return 0;
+#if defined( _WIN32 )
+            LARGE_INTEGER c;
+            return QueryPerformanceCounter( &c ) ? static_cast< std::int64_t >( c.QuadPart ) : 0;
+#else
+            return 0;
+#endif
+        } );
+        m_pfx.bind_random( &m_vurandom );
+        LOG_INFO( "VuRandom 0x736810 seeded by the engine init 0x566230 from the %s clock: seed 0x%08X",
+                  c_engine::option( "bench" ) != nullptr ? "fixed bench (0)" : "host", static_cast< unsigned >( m_vurandom.seed ) );
     }
 
     // SCAFFOLD - ours, no retail counterpart.
@@ -912,7 +936,7 @@ public:
             return;
         }
         if ( !race_session_start( m_race, text( "mode" ), text( "race" ), text( "course" ), text( "boat" ), text( "skin" ), dbs, m_archive,
-                                  *m_tree, track( ) ) )
+                                  *m_tree, track( ), m_vurandom ) )
             return;
         // The hulls: each boat's three model instances (+0x2A4 / +0x2A8 / +0x2AC from BoatDB's Model Asset / LOD 1 /
         // LOD 2 Model Asset - the instance loads 0x5322C0 / 0x520080 are the rendering layer: our model path) placed
@@ -1156,6 +1180,7 @@ private:
     c_archive m_archive{};
     // The world's VuPfx (world/effects.hxx: the verified runtime; the old c_pfx simulation is gone).
     c_effects m_pfx{};
+    fleet_random_t m_vurandom{};   // VuRandom 0x736810 (seed_random)
     c_corona_entity m_coronas{};
     std::map< std::string, std::vector< cached_part_t > > m_models;
     std::map< std::string, std::vector< pfx_part_t > > m_pfx_models;
@@ -1356,38 +1381,6 @@ private:
         float remaining = 0.0f;
     };
 
-    // The engine's shared random source, transliterated from sub_50FD20:
-    // Park-Miller 16807 * s - 2147483647 * (s / 127773) behind a 32 entry
-    // Bays-Durham shuffle, the draw being (float)last * 2^-31 clamped by
-    // fminf against 0x3F7FFFFE. The state is NOT seeded by any initialiser -
-    // dword_736810 is statically -1 with a zeroed table and zeroed `last` -
-    // so the first draws legitimately return 0.0 until the table fills, and
-    // reproducing that is the point of copying it exactly.
-    //
-    // DEVIATION, FLAGGED: retail has ONE of these, shared with the particle
-    // spawner and everything else that draws, so the sequence a delay sees
-    // depends on a global draw order we do not reproduce. The generator is
-    // identical; the stream is ours.
-    struct random_t
-    {
-        std::int32_t seed = -1;
-        std::int32_t last = 0;
-        std::int32_t table[ 32 ]{};
-
-        float draw( )
-        {
-            const std::int32_t k = seed / 127773;
-            seed = 16807 * seed - 2147483647 * k;
-            if ( seed < 0 )
-                seed += 2147483647;
-            const std::int32_t slot = last / 0x4000000;
-            last = table[ slot & 31 ];
-            table[ slot & 31 ] = seed;
-            const float value = static_cast< float >( last ) * 4.65661287e-10f;
-            return value < 0.99999988f ? value : 0.99999988f;
-        }
-    };
-
     std::vector< animated_t > m_animated;
     std::vector< static_draw_item_t > m_static_draws;
     // Each VuStaticModelAsset's scene aabb (model_for, from load_model_scene), by asset name.
@@ -1407,7 +1400,6 @@ private:
     // (entity, refName) -> the full path the ref points at.
     std::map< std::pair< std::string, std::string >, std::string > m_refs;
     std::map< std::string, bool > m_booleans;
-    random_t m_random;
     // The crossing sphere's radius. Retail's comes from
     // VuInstigatorComponent+36 via _register @0x531e10 and is written by boat
     // code at 0x41da90 / 0x421670 that has not been read; see gate_distance.

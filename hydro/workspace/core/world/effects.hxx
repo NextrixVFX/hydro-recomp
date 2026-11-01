@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/assets/archive.hxx>
+#include <workspace/core/boat/fleet.hxx>
 #include <workspace/core/world/pfxload.hxx>
 #include <workspace/core/world/pfxmgr.hxx>
 #include <workspace/core/world/pfxsim.hxx>
@@ -41,8 +42,10 @@
 // Texture (+0x3C / +0x54), Near Fade Min / Max (+0x78 / +0x7C), Tile Scroll U / V (+0x80 / +0x84), Tile Scale
 // (+0x8C). A GEOM particle as its model (+0x3C) at pfx_geom_draw_matrix with pfx_geom_draw_colour (0x5906A0 /
 // 0x5903A0, verified). TRAIL patterns are not drawn (no renderer for 0x58D030's ribbons yet): counted, logged once.
-// VuRand's state (0x736810): its writer is NOT ESTABLISHED (random.hxx). INHERITED STAND-IN, flagged, until the
-// boat agent's VuRandom seed lands: the warm start the old c_pfx drew from (seed -1, 40 steps, the last 32 the table).
+// VuRand: retail's emitters draw from THE global VuRandom 0x736810, the one the AI plans and the front end's roster
+// picks draw from (core/boat fleet.hxx) - the engine init 0x566230 seeds it from the platform clock (c_world owns it,
+// bind_random). The runtime keeps its own copy of the 34 words (pfx_runtime_t::rand, the verified emitters' operand),
+// so every runtime call here loads the shared state in and stores it back out: one sequence, as retail's one global.
 
 class c_effects
 {
@@ -62,20 +65,13 @@ public:
         m_trails_logged = false;
         m_frames = 0;
         m_unrecreated = 0;
-        // The inherited VuRand stand-in (see the top).
-        std::int32_t s = -1;
-        for ( int index = 39; index >= 0; --index )
-        {
-            std::int32_t v = static_cast< std::int32_t >( 16807u * static_cast< std::uint32_t >( s ) - 0x7FFFFFFFu * static_cast< std::uint32_t >( s / 127773 ) );
-            if ( v < 0 )
-                v += 0x7FFFFFFF;
-            s = v;
-            if ( index < 32 )
-                m_rt.rand.table[ index ] = s;
-        }
-        m_rt.rand.seed = s;
-        m_rt.rand.previous = m_rt.rand.table[ 0 ];
         m_ready = true;
+    }
+
+    // The shared VuRandom 0x736810 (see the top); null -> the runtime's draws are UNKNOWN and nothing runs.
+    void bind_random( fleet_random_t* random )
+    {
+        m_random = random;
     }
 
     // VuStaticPfxEntity's onGameInitialize 0x5EB060. Returns the system instance (0: none).
@@ -84,6 +80,12 @@ public:
     {
         if ( !m_ready )
             clear( );
+        if ( m_random == nullptr )
+        {
+            LOG_WARNING( "pfx %s: no VuRandom 0x736810 bound - not created", effect.c_str( ) );
+            return 0u;
+        }
+        shared_t shared( *this );
         const std::size_t slash = effect.find( '/' );
         const std::string asset = effect.substr( 0, slash );
         if ( m_assets.insert( asset ).second )
@@ -123,8 +125,9 @@ public:
     // One frame: every static pfx's Build tick 0x5EB290, then the "Final" phase.
     void frame( float dt, const float* eye )
     {
-        if ( !m_ready )
+        if ( !m_ready || m_random == nullptr )
             return;
+        shared_t shared( *this );
         std::memcpy( m_camera, eye, sizeof( m_camera ) );
         for ( static_t& s : m_statics )
         {
@@ -190,6 +193,24 @@ public:
     }
 
 private:
+    // The shared VuRandom in for one runtime call, back out after it (see the top).
+    struct shared_t
+    {
+        c_effects& e;
+        explicit shared_t( c_effects& owner ) : e( owner )
+        {
+            e.m_rt.rand.seed = e.m_random->seed;
+            e.m_rt.rand.previous = e.m_random->last;
+            std::memcpy( e.m_rt.rand.table, e.m_random->table, sizeof( e.m_rt.rand.table ) );
+        }
+        ~shared_t( )
+        {
+            e.m_random->seed = e.m_rt.rand.seed;
+            e.m_random->last = e.m_rt.rand.previous;
+            std::memcpy( e.m_random->table, e.m_rt.rand.table, sizeof( e.m_random->table ) );
+        }
+    };
+
     struct static_t
     {
         std::uint32_t instance = 0;
@@ -338,6 +359,7 @@ private:
     }
 
     bool m_ready = false;
+    fleet_random_t* m_random = nullptr;   // VuRandom 0x736810 (c_world's)
     int m_card = -1;
     bool m_trails_logged = false;
     pfx_runtime_t m_rt;
