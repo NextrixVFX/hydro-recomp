@@ -7371,11 +7371,11 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5D4E10,73,sub_5D4E10,,,water (by address),callee,,False,False,race
 0x5D4E60,158,VuPointWaveEntity_initEmitPlug,,,water (by address),verified,hydro/workspace/core/world/graph.hxx,False,False,race
 0x5D4F00,6,sub_5D4F00,VuWakeWaveEntity,VuWakeWaveEntity+1,water,callee,,False,False,game
-0x5D4F10,115,VuWakeWaveEntity_create,,,water (by address),absent,,False,False,game
-0x5D4F90,111,sub_5D4F90,,,water (by address),absent,,False,False,game
-0x5D5000,1618,VuWakeWaveEntity_ctor,,,water (by address),absent,,False,False,game
-0x5D5660,515,sub_5D5660,VuWakeWaveEntity,VuWakeWaveEntity+0,water,cited,hydro/workspace/core/world/wake.hxx; hydro/workspace/utility/checks/watchers.hxx,False,False,game
-0x5D5870,30,sub_5D5870,VuWakeWaveEntity,VuWakeWaveEntity+2,water,cited,hydro/workspace/core/world/wake.hxx; hydro/workspace/utility/checks/watchers.hxx,False,False,game
+0x5D4F10,115,VuWakeWaveEntity_create,,,water (by address),callee,,False,False,game
+0x5D4F90,111,sub_5D4F90,,,water (by address),callee,,False,False,game
+0x5D5000,1618,VuWakeWaveEntity_ctor,,,water (by address),callee,,False,False,game
+0x5D5660,515,sub_5D5660,VuWakeWaveEntity,VuWakeWaveEntity+0,water,verified,hydro/workspace/core/world/wake.hxx; hydro/workspace/utility/checks/watchers.hxx,False,False,game
+0x5D5870,30,sub_5D5870,VuWakeWaveEntity,VuWakeWaveEntity+2,water,verified,hydro/workspace/core/world/wake.hxx; hydro/workspace/utility/checks/watchers.hxx,False,False,game
 0x5D5890,6,sub_5D5890,VuStaticWakeWaveEntity,VuStaticWakeWaveEntity+1,water,callee,,False,False,game
 0x5D58A0,117,VuStaticWakeWaveEntity_create,,,water (by address),callee,,False,False,game
 0x5D5920,104,sub_5D5920,,,water (by address),callee,,False,False,game

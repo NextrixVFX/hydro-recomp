@@ -18,10 +18,10 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 1544 | 674609 |
-| callee | 969 | 219366 |
-| cited | 351 | 125369 |
-| absent | 5774 | 1206916 |
+| verified | 1546 | 675154 |
+| callee | 972 | 221210 |
+| cited | 349 | 124824 |
+| absent | 5771 | 1205072 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -36,7 +36,7 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 | HUD / UI / fonts | 648 | 69 | 142 | 7 | 430 | 42589 of 184315 |
 | game modes / race | 766 | 73 | 57 | 21 | 615 | 35156 of 179957 |
 | rendering / gfx | 552 | 74 | 43 | 32 | 403 | 25796 of 126915 |
-| water | 325 | 157 | 73 | 35 | 60 | 53770 of 96416 |
+| water | 325 | 159 | 76 | 33 | 57 | 54315 of 96416 |
 | boat | 264 | 162 | 40 | 18 | 44 | 66146 of 87400 |
 | engine core / math / containers | 391 | 33 | 15 | 21 | 322 | 5958 of 76072 |
 | other classes | 731 | 12 | 3 | 3 | 713 | 6660 of 67698 |
@@ -59,7 +59,7 @@ Over-approximate (a referenced vtable brings every slot) and under-approximate (
 | tier | functions | verified | callee | cited | absent | runtime / STL / thunk | platform layer | game + engine logic not verified |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | race | 4905 | 1354 | 665 | 329 | 2557 | 68 | 610 | 2962 |
-| game | 2431 | 188 | 303 | 20 | 1920 | 77 | 313 | 1855 |
+| game | 2431 | 190 | 306 | 18 | 1917 | 77 | 313 | 1853 |
 | service | 452 | 0 | 0 | 0 | 452 | 45 | 98 | 309 |
 | dead | 850 | 2 | 1 | 2 | 845 | 61 | 126 | 661 |
 
