@@ -834,9 +834,70 @@ inline bool verify_ui_hud_element( )
     return failed == 0;
 }
 
+// c_ui_hud_speedometer::on_tick (hydro core/ui/hud.hxx) against retail's
+// VuHUDSpeedometerEntity OnUITick 0x42B860 (oracle case hud_speedometer_tick):
+// the ctor's +224 / +228 / +232, then every scripted step's three fields.
+inline bool verify_ui_hud_speedometer( )
+{
+    c_ui_hud_speedometer s;
+    ui_hud_boat_t boat;
+    ui_hud_world_t world;
+    int failed = 0;
+    const auto fields = [ &s ]( std::uint32_t out[ 3 ] )
+    {
+        out[ 0 ] = s.m_metric;
+        std::memcpy( &out[ 1 ], &s.m_v_offset, 4 );
+        std::memcpy( &out[ 2 ], &s.m_countdown, 4 );
+    };
+    std::uint32_t have[ 3 ];
+    fields( have );
+    if ( have[ 0 ] != g_golden_spd_initial[ 0 ] || have[ 1 ] != g_golden_spd_initial[ 1 ] || have[ 2 ] != g_golden_spd_initial[ 2 ] )
+    {
+        LOG_ERROR( "ui speedometer: the ctor's fields differ from retail" );
+        ++failed;
+    }
+    for ( std::size_t k = 0; k < g_golden_spd_steps_count; ++k )
+    {
+        const golden_spd_step_t& st = g_golden_spd_steps[ k ];
+        const std::string op = st.m_op;
+        if ( op == "world" )
+        {
+            boat.m_byte_812 = static_cast< std::uint8_t >( st.m_word );
+            world = ui_hud_world_t( );
+            world.m_manager = true;
+            world.m_settings = true;
+            world.m_units = st.m_text;
+            world.m_boats.push_back( st.m_mode == 2 ? nullptr : &boat );
+            world.m_local = st.m_mode == 1 ? 1 : 0;
+        }
+        else if ( op == "write" )
+            std::memcpy( st.m_offset == 228 ? static_cast< void* >( &s.m_v_offset ) : static_cast< void* >( &s.m_countdown ), &st.m_word, 4 );
+        else
+        {
+            std::uint8_t bytes[ 128 ] = { };
+            int size = 0;
+            for ( std::size_t c = 0; st.m_text[ c ] && st.m_text[ c + 1 ] && size < 128; c += 2 )
+                bytes[ size++ ] = static_cast< std::uint8_t >( std::stoul( std::string( st.m_text + c, 2 ), nullptr, 16 ) );
+            s.on_tick( bytes, size, world );
+        }
+        fields( have );
+        if ( ( have[ 0 ] != st.m_fields[ 0 ] || have[ 1 ] != st.m_fields[ 1 ] || have[ 2 ] != st.m_fields[ 2 ] || s.m_unknown ) && ++failed <= 8 )
+            LOG_ERROR( "ui speedometer: step %d (%s) gave %08X %08X %08X, retail %08X %08X %08X", static_cast< int >( k ), st.m_op, have[ 0 ], have[ 1 ],
+                have[ 2 ], st.m_fields[ 0 ], st.m_fields[ 1 ], st.m_fields[ 2 ] );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_hud_speedometer matches retail's VuHUDSpeedometerEntity OnUITick 0x42B860 on %d steps: the metric flag, "
+                     "the boost texture's V offset (x87 round-to-even wrap), the countdown",
+            static_cast< int >( g_golden_spd_steps_count ) );
+    else
+        LOG_ERROR( "the speedometer's tick FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_hud_speedometer( ) && ok;
     ok = verify_ui_hud_element( ) && ok;
     ok = verify_ui_actions( ) && ok;
     ok = verify_ui_front_end_enter( ) && ok;

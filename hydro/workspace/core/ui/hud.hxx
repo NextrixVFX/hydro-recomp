@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cfloat>
+#include <cmath>
+#include <cstring>
 #include <cstdint>
 #include <cstdio>
 #include <functional>
@@ -37,6 +39,7 @@ struct ui_hud_boat_t
     std::int32_t m_place = 1;         // +1228 (shown + 1)
     std::int32_t m_laps = 3;          // +1236
     float m_wrong_way = 1.0f;         // +1308
+    std::uint8_t m_byte_812 = 0;      // +812 (the speedometer's boost-meter rate)
 };
 
 struct ui_hud_world_t
@@ -161,4 +164,56 @@ private:
     std::string string( const char* key ) const { return m_hooks.m_string ? m_hooks.m_string( key ) : std::string( ); }
 
     ui_hud_hooks_t& m_hooks;
+};
+
+// x87 fld / fsub / fistp under the default control word (round to nearest,
+// ties to even); out of range or NaN -> 0x80000000 (the integer indefinite).
+inline std::int32_t ui_fistp( double x )
+{
+    if ( !( x >= -2147483648.5 && x < 2147483647.5 ) )
+        return static_cast< std::int32_t >( 0x80000000u );
+    return static_cast< std::int32_t >( std::nearbyint( x ) );
+}
+
+// VuHUDSpeedometerEntity (ctor 0x42AB60, vtable 0x739250): its "OnUITick"
+// (registered through the VuMethod1 thunk 0x4077E3, so slot 12 0x42B860).
+// The draw (0x42C1E0 -> 0x42BA00: the speed |boat +540 -> +320 xy| x
+// 2.2369363, the boost count +796, +800, +784 x 0.0625) is NOT recreated.
+class c_ui_hud_speedometer
+{
+public:
+    // 0x42B860: dt = the first record when it is a float (else 0); the units;
+    // the boost texture's V offset and the countdown. The boat manager and
+    // the settings manager are read without a null test - retail needs both;
+    // without them m_unknown is set and nothing changes.
+    void on_tick( const std::uint8_t* params, int size, const ui_hud_world_t& world )
+    {
+        float dt = 0.0f;
+        std::uint32_t type = 0xFFFFFFFFu;
+        if ( size > 0 )
+        {
+            std::memcpy( &type, params, 4 );
+            if ( type == 2 )
+                std::memcpy( &dt, params + 4, 4 );
+        }
+        if ( !world.m_manager || !world.m_settings )
+        {
+            m_unknown = true;
+            return;
+        }
+        m_metric = world.m_units == "Metric" ? 1 : 0;  // 0x404AC0 over min(size, 6) bytes, then size == 6
+        const bool fast = world.m_local < static_cast< std::int32_t >( world.m_boats.size( ) ) && world.m_local >= 0 &&
+                          world.m_boats[ world.m_local ] && world.m_boats[ world.m_local ]->m_byte_812;
+        const float rate = fast ? 0.7f : 0.06f;  // 0x6F7670 / 0x6F75FC
+        m_v_offset = dt * rate + m_v_offset;
+        if ( m_v_offset > 1.0f )
+            m_v_offset = m_v_offset - static_cast< float >( ui_fistp( static_cast< double >( m_v_offset ) - 0.5 ) );
+        const float left = m_countdown - dt;
+        m_countdown = left < 0.0f || std::isnan( left ) ? 0.5f : left;  // comiss / jb: below or unordered
+    }
+
+    std::uint32_t m_metric = 0;   // +224
+    float m_v_offset = 0.0f;      // +228 (gBoostTextureVOffset)
+    float m_countdown = 0.0f;     // +232
+    bool m_unknown = false;
 };
