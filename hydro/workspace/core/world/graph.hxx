@@ -407,6 +407,7 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
             retval_t answer{};
             answer.type = 3;
             answer.value = boolean->second;
+            answer.word = boolean->second ? 1u : 0u;
             return answer;
         }
         if ( plug == "SetTrue" )
@@ -429,6 +430,64 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
     // The race HUD projects' (world/huds.hxx): VuMultiDelayEntity's "In" 0x5E0660 and VuStartLightsOutAction's "Trigger"
     // (VuGameActionEntity's input 0x406F40 -> 0x4077E3, vt+0x30 = 0x405470: the "OnStartLightsOut" broadcast, an empty
     // VuParams; VuRetVal 0).
+    // The engine's logic entities (world/logic.hxx, verified against retail by
+    // case logic_plugs): the input plug's VuMethod1 by (vtable, plug), on the
+    // entity's tree state. Its outputs go back through fire() (0x5023A0) with
+    // the handler's VuParams; VuRandomTriggerEntity draws THE global VuRandom
+    // 0x736810 (m_vurandom - handed in and back around every fire, so nested
+    // draws keep one sequence).
+    const auto logic = m_logic.find( entity );
+    if ( logic != m_logic.end( ) )
+    {
+        logic_state_t* ls = logic_state_of( *logic->second );
+        struct context_t
+        {
+            c_world* world;
+            const std::string* path;
+            int depth;
+            pfx_rand_t rand;
+        } ctx{ this, &logic->first, depth, { } };
+        static_assert( sizeof( pfx_rand_t ) == sizeof( fleet_random_t ), "one VuRandom image" );
+        static_assert( sizeof( ui_params_t ) == 0x84, "a VuParams image" );
+        std::memcpy( &ctx.rand, &m_vurandom, sizeof( ctx.rand ) );
+        logic_hooks_t hooks;
+        hooks.user = &ctx;
+        hooks.rand = &ctx.rand;
+        hooks.fire = []( void* user, logic_entity_t&, const char* out_plug, const ui_params_t& p ) -> logic_retval_t {
+            context_t& c = *static_cast< context_t* >( user );
+            std::memcpy( &c.world->m_vurandom, &c.rand, sizeof( c.rand ) );
+            std::uint8_t bytes[ 0x84 ];
+            std::memcpy( bytes, &p, sizeof( bytes ) );
+            const retval_t r = c.world->fire( *c.path, out_plug, c.depth, bytes );
+            std::memcpy( &c.rand, &c.world->m_vurandom, sizeof( c.rand ) );
+            logic_retval_t out;
+            out.type = static_cast< std::uint32_t >( r.type );
+            out.value = r.word;
+            out.text = r.text;
+            return out;
+        };
+        ui_params_t in{ };
+        if ( params )
+            std::memcpy( &in, params, sizeof( in ) );
+        logic_retval_t out{ };
+        const bool ran = ls && logic_dispatch( ls->value, plug.c_str( ), out, in, hooks );
+        std::memcpy( &m_vurandom, &ctx.rand, sizeof( ctx.rand ) );
+        if ( !ran )
+        {
+            count_unhandled( entity, plug );
+            return retval_t{};
+        }
+        ++m_fired;
+        ++m_logic_fired;
+        LOG_VERBOSE( "event: %s . %s ran (logic %s)", entity.c_str( ), plug.c_str( ), logic->second->m_type.c_str( ) );
+        retval_t answer{};
+        answer.type = static_cast< int >( out.type );
+        answer.word = out.value;
+        answer.value = ( out.value & 0xFFu ) != 0u;
+        answer.text = out.text;
+        return answer;
+    }
+
     const auto clock = m_multi_delays.find( entity );
     if ( clock != m_multi_delays.end( ) )
     {
@@ -570,6 +629,8 @@ inline void c_world::race_triggers( )
 
 inline void c_world::count_unhandled( const std::string& entity, const std::string& plug )
 {
+    const auto type = m_entity_type.find( entity );
+    ++m_unhandled_by[ ( type == m_entity_type.end( ) ? std::string( "?" ) : type->second ) + " . " + plug ];
     if ( ++m_unhandled_events == 1 )
     {
         LOG_WARNING( "event %s . %s has no handler yet; further unhandled events are counted only",

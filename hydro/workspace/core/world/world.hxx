@@ -526,6 +526,11 @@ private:
     {
         int type = 0;
         bool value = false;
+        // The whole value word (type 1 an int, 3 a bool in its low byte) and,
+        // for type 4, the char* - what the logic entities (world/logic.hxx)
+        // answer and read back.
+        std::uint32_t word = 0;
+        const char* text = nullptr;
     };
 
 
@@ -618,6 +623,9 @@ private:
         m_graph.clear( );
         m_point_waves.clear( );
         m_unhandled_events = 0;
+        m_unhandled_by.clear( );
+        m_logic.clear( );
+        m_logic_fired = 0;
         m_fired = 0;
         // The light rig and the asset substitutions are per scene, so they
         // must be dropped with it or a second level would inherit the first's.
@@ -1199,6 +1207,16 @@ public:
         // consumed - SUBSTITUTION, the renderer's. The far plane stays the gfx settings' (the camera's +0x17C is
         // boat +0x408, which the Build tick 0x41F330 fills). No race: dev_vantage's orbit / freecam (scaffold).
         race_session_frame( m_race, dt );
+        // Dev trace (--verbose, ours): the event census at the session's milestone frames - the logic handlers run
+        // and every plug fire that reached no handler, by class . plug.
+        if ( g_verbose && m_race.active && ( m_race.frames == 960 || m_race.frames == 1920 || m_race.frames == 3840 || m_race.frames == 7680 ) )
+        {
+            std::string by;
+            for ( const auto& u : m_unhandled_by )
+                by += ( by.empty( ) ? "" : ", " ) + u.first + " x" + std::to_string( u.second );
+            LOG_VERBOSE( "event census: frame %d: %d delivered (%d logic handlers), %d unhandled: %s", m_race.frames, m_fired, m_logic_fired,
+                         m_unhandled_events, by.c_str( ) );
+        }
         if ( m_race.active && m_race.viewport_set )
         {
             std::memcpy( m_eye, m_race.viewport_camera + 0x00, sizeof( m_eye ) );
@@ -1565,6 +1583,12 @@ private:
     // Events delivered to node kinds that are not built yet. Counted rather
     // than guessed at, so the size of the remaining graph stays visible.
     int m_unhandled_events = 0;
+    // The same, per "class . plug" (the census a run logs at the end of the race).
+    std::map< std::string, int > m_unhandled_by;
+    // The engine's logic entities (world/logic.hxx) by path: their tree state (race.hxx logic_state_t), dispatched
+    // by graph.hxx; m_logic_fired counts their handlers run.
+    std::map< std::string, entity_t* > m_logic;
+    int m_logic_fired = 0;
     // UpdateBranchProbabilities events reached without their VuParams (UNKNOWN, graph.hxx).
     int m_waypoint_params_unknown = 0;
     // Assets already scored by the extent test, so it reports once each.

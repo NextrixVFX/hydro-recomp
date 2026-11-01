@@ -536,6 +536,10 @@ inline void c_world::project_initialized( )
         fire( path, "Trigger" );
     LOG_INFO( "project initialized: %u entities fired, %d props playing, %d events delivered to a handler, %d not",
         static_cast< unsigned >( m_initialized.size( ) ), playing( ), m_fired, m_unhandled_events );
+    std::string by;
+    for ( const auto& u : m_unhandled_by )
+        by += ( by.empty( ) ? "" : ", " ) + u.first + " x" + std::to_string( u.second );
+    LOG_VERBOSE( "event census at project initialized: %d logic handlers run; unhandled by class . plug: %s", m_logic_fired, by.c_str( ) );
 }
 
 inline int c_world::playing( ) const

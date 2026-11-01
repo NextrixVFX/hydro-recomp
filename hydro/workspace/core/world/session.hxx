@@ -727,6 +727,14 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
                 ++dynamic;
             return;
         }
+        // The logic entities' slot 6 (world/logic.hxx): VuSwitchEntity's 0x5E24E0 (state = Initial State); every other
+        // logic class's slot 6 is 0x401560 (a bare ret - read from each vtable's +0x18).
+        if ( logic_state_t* ls = logic_state_of( e ) )
+        {
+            if ( e.m_type == "VuSwitchEntity" )
+                logic_switch_init( ls->value );
+            return;
+        }
         if ( e.m_type != "VuPropEntity" )
         {
             ++unknown[ e.m_type.empty( ) ? std::string( "(UNKNOWN node)" ) : e.m_type ];
