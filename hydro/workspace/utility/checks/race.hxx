@@ -1671,6 +1671,36 @@ inline bool verify_powerup_world( )
     return false;
 }
 
+// VuPowerUpTriggerEntity slot 15 0x43E240 against retail (oracle case trigger_apply): the return and whether the
+// OnTrigger plug fired, per driver class (vt+0x30 = boat_driver_kind's human; vt+0x38 0x404BD0 = true).
+inline bool verify_trigger_apply( )
+{
+    const unsigned* g = g_golden_trigger_apply_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned kind = *g++, ret = *g++, nl = *g++;
+        boat_driver_kind_t k;
+        const bool human = boat_driver_kind( kind, k ) && k.human;
+        unsigned fired = 0;
+        const unsigned mine = powerup_trigger_apply( human, true, [ & ]( ) { ++fired; } ) ? 1u : 0u;
+        // Retail's log for a firing: 1 VuParams(boat), 2 findPlug "OnTrigger", 3 the plug's vt+8 with them.
+        bool same = mine == ret && nl == ( fired ? 3u : 0u );
+        for ( unsigned j = 0; j < nl; ++j, g += 2 )
+            same = same && g[ 0 ] == j + 1 && g[ 1 ] == 1;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "trigger_apply vector %u (vtable 0x%X): %u, retail %u; %u calls", v, kind, mine, ret, nl );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuPowerUpTriggerEntity slot 15 0x43E240 matches retail: %u vectors (every driver class)", nv );
+        return true;
+    }
+    LOG_ERROR( "trigger_apply FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -1691,5 +1721,6 @@ inline bool verify_race_all( )
     ok = verify_random_seed( ) && ok;
     ok = verify_powerup_contact( ) && ok;
     ok = verify_powerup_world( ) && ok;
+    ok = verify_trigger_apply( ) && ok;
     return ok;
 }

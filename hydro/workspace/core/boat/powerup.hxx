@@ -394,3 +394,19 @@ inline void powerup_boost_load_energy( float& energy, const value_t& entry )
 {
     powerup_db_number( member( entry, "BoostEnergy" ), energy );
 }
+// ---- VuPowerUpTriggerEntity (ctor 0x43E160, vtable 0x73AFE4) --------------
+//
+// The base power-up plus an "OnTrigger" output plug (0x505400(2)). Slot 15
+// 0x43E240 (thiscall boat; retn 4): the boat's driver (+0x220) vt+0x30 (the
+// human answer) false -> returns it (0); else when vt+0x38 (true in all five
+// driver vtables) the plug is fired with VuParams(boat) (0x505150,
+// VuScriptComponent_findPlug 0x504770 on +0x6C "OnTrigger", the plug's vt+8 -
+// the script system: the `fire` hook); returns 1.
+inline bool powerup_trigger_apply( bool driver_30, bool driver_38, const std::function< void( ) >& fire )
+{
+    if ( !driver_30 )
+        return false;
+    if ( driver_38 && fire )
+        fire( );
+    return true;
+}
