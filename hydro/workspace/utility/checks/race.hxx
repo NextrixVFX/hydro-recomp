@@ -2421,6 +2421,42 @@ inline bool verify_boat_events( )
     LOG_ERROR( "boat_events FAILED %d of %u vectors", failed, nv );
     return false;
 }
+// btRigidBody's applyTorqueImpulse 0x4220C0 / applyImpulse 0x4221C0 against retail (oracle case body_impulse): the
+// body's linear and angular velocity words, bit for bit.
+inline bool verify_body_impulse( )
+{
+    const unsigned* g = g_golden_body_impulse_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++;
+        std::uint8_t b[ 0x280 ] = {};
+        std::memcpy( b + 0x110, g, 0x70 ); g += 0x1C;
+        std::memcpy( b + 0x260, g, 12 ); g += 3;
+        float a[ 3 ], r[ 3 ];
+        std::memcpy( a, g, 12 ); g += 3;
+        std::memcpy( r, g, 12 ); g += 3;
+        const unsigned* after = g;
+        g += 9;
+        if ( fn == 1 )
+            body_apply_torque_impulse( b, a );
+        else
+            body_apply_impulse( b, a, r );
+        unsigned mine[ 8 ];
+        std::memcpy( mine, b + 0x140, 32 );
+        if ( !( std::equal( mine, mine + 8, after ) && after[ 8 ] == 1 ) && ++failed <= 8 )
+            LOG_ERROR( "body_impulse vector %u (function %u): +0x140 0x%08X (retail 0x%08X), +0x150 0x%08X (0x%08X), +0x154 0x%08X (0x%08X)", v, fn,
+                       mine[ 0 ], after[ 0 ], mine[ 4 ], after[ 4 ], mine[ 5 ], after[ 5 ] );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "btRigidBody applyTorqueImpulse 0x4220C0 / applyImpulse 0x4221C0 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "body_impulse FAILED %d of %u vectors", failed, nv );
+    return false;
+}
 // The contact-added callback 0x574E90 -> 0x5751F0 -> 0x519720 against retail (oracle case contact_added): the manifold
 // point after (every word, bit for bit), the return, and each listener / callback call's record (but its stale-stack
 // words) with the case's scripted write-backs replayed.
@@ -2786,6 +2822,7 @@ inline bool verify_race_all( )
     ok = verify_nuisance_start( ) && ok;
     ok = verify_nuisance_start_ctor( ) && ok;
     ok = verify_boat_events( ) && ok;
+    ok = verify_body_impulse( ) && ok;
     ok = verify_contact_added( ) && ok;
     ok = verify_boat_rtti( ) && ok;
     ok = verify_human_explosion( ) && ok;
