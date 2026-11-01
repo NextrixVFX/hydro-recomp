@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/boat/fleet.hxx>
+#include <workspace/core/assets/tree.hxx>
 
 #include <cmath>
 #include <cstdint>
@@ -8,6 +9,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <vector>
 
 // The power-ups (VuPowerUpEntity, ctor 0x43B180, vtable 0x73AE54; with the
 // VuRigidBodyContactCallback part at +0x5C (vtable 0x73AE4C) and the
@@ -213,4 +215,182 @@ inline bool powerup_decision_tick( powerup_t& p, float* position, float dt, cons
     if ( hooks.pfx_scale )
         hooks.pfx_scale( p.pfx, p.scale );
     return true;
+}
+
+// ---- The contact callback and the per-boat cooldown ----------------------
+//
+// VuRigidBodyContactCallback slot 0 0x43C8C0 (thiscall on the +0x5C part;
+// the contact; retn 4): the other body (contact +8)'s owner (+0x2C0) - none,
+// or one whose vt+4 RTTI chain lacks VuBoatEntity off_73628C: nothing. Else
+// id = its entity id (0x500D50: FNV-1a of the long name), t = map[id]
+// (operator[] 0x43C980: absent -> inserted as 0.0), and when (time - t) >
+// (double)RecoverTime (comisd / jbe: strict, false for NaN) +0x12C = id; then
+// map[id] = time. The Decision tick applies +0x12C on its next run.
+inline void powerup_contact( powerup_t& p, bool owner_is_boat, std::uint32_t id )
+{
+    if ( !owner_is_boat )
+        return;
+    const double last = p.last_pickup[ id ];
+    if ( p.time - last > static_cast< double >( p.recover_time ) )
+        p.pickup = id;
+    p.last_pickup[ id ] = p.time;
+}
+
+// ---- gameInitialize (slot 6 0x43B9D0) ------------------------------------
+//
+// The game mode's name (0x4D31D0 on g_vugameutil 0x758FF8) against every
+// element of the PowerUpDB entry's "DisabledInGames" list (std::string
+// equality: same length, same bytes; an element that is not text compares
+// as the empty string 0x819950 - pass it as ""): a match -> +0x129 = 0 and
+// nothing else (no body, no tick, no seeding). Otherwise the body 0x43C700
+// (a btSphereShape of Radius, the contact callback +0x5C, body +0xD8 |= 4 -
+// the dynamics: a hook), the Decision tick registered (tick manager vt+0x20,
+// "Decision": a hook), slot 13 (vt+0x34) when Initially Enabled, then every
+// racer's (the boat manager's +0x18 list, count +0x1C) entity id seeded into
+// the map at -FLT_MAX as a double (0xC7EFFFFFE0000000).
+struct powerup_init_hooks_t
+{
+    std::function< void( ) > create_body;
+    std::function< void( ) > register_tick;
+    std::function< void( ) > enable;   // vt+0x34: powerup_add_to_world, or the boost's 0x43D960
+};
+
+inline void powerup_game_initialize( powerup_t& p, const std::string& game_mode, const std::vector< std::string >& disabled_in_games,
+    const std::vector< std::uint32_t >& racer_ids, const powerup_init_hooks_t& hooks )
+{
+    for ( const std::string& g : disabled_in_games )
+        if ( g == game_mode )
+        {
+            p.active = 0;
+            return;
+        }
+    if ( hooks.create_body )
+        hooks.create_body( );
+    if ( hooks.register_tick )
+        hooks.register_tick( );
+    if ( p.initially_enabled && hooks.enable )
+        hooks.enable( );
+    std::uint64_t bits = 0xC7EFFFFFE0000000ull;
+    double lowest;
+    std::memcpy( &lowest, &bits, 8 );
+    for ( std::uint32_t id : racer_ids )
+        p.last_pickup[ id ] = lowest;
+}
+
+// ---- Into / out of the world (slots 13 / 12 / 7) --------------------------
+//
+// What these call that is not the power-up's: the StaticPfx 0x43C5E0 (the pfx
+// manager's create 0x52BCD0 by name -> the handle +0x110; on a live handle the
+// effect placed at the transform, given the scale +0x134 (vt+0x10), started
+// (vt+0x2C) and its +0x64 object's +0x1C = Reflect - the pfx system's), its
+// release 0x43C6A0 (with a handle: effect vt+0x30(1) when live, 0x52BD50;
+// then +0x110 = 0), the dynamics world's add / remove of the body (g
+// 0x75900C vt+0x3C / vt+0x40), and the body's destruction / the tick's
+// unregistration (gameRelease).
+struct powerup_world_hooks_t
+{
+    std::function< std::uint32_t( const std::string& static_pfx, std::uint8_t reflect, float scale ) > create_pfx;
+    std::function< void( std::uint32_t handle ) > release_pfx;
+    std::function< void( ) > add_body;
+    std::function< void( ) > remove_body;
+    std::function< void( ) > destroy_body;    // slot 7: the body's +0xCC shape deleted, then the body (vt+4(1)), +0x114 = 0
+    std::function< void( ) > unregister_tick; // slot 7: tick manager vt+0x28(this)
+};
+
+// Slot 13 0x43BD40 (the "Enable" plug): when active and not in the world:
+// +0x134 = +0x130 = 0, the StaticPfx, the body added, +0x128 = 1.
+inline void powerup_add_to_world( powerup_t& p, const powerup_world_hooks_t& hooks )
+{
+    if ( !p.active || p.in_world )
+        return;
+    p.scale = 0.0f;
+    p.scale_velocity = 0.0f;
+    p.pfx = hooks.create_pfx ? hooks.create_pfx( p.static_pfx, p.reflect, p.scale ) : 0;
+    if ( hooks.add_body )
+        hooks.add_body( );
+    p.in_world = 1;
+}
+
+// Slot 12 0x43BD00 (the "Disable" plug, and a pickup's end): when active and
+// in the world: the pfx released (+0x110 = 0 when it was set), the body
+// removed, +0x128 = 0.
+inline void powerup_remove_from_world( powerup_t& p, const powerup_world_hooks_t& hooks )
+{
+    if ( !p.active || !p.in_world )
+        return;
+    if ( p.pfx )
+    {
+        if ( hooks.release_pfx )
+            hooks.release_pfx( p.pfx );
+        p.pfx = 0;
+    }
+    if ( hooks.remove_body )
+        hooks.remove_body( );
+    p.in_world = 0;
+}
+
+// Slot 7 0x43BCA0 (gameRelease): when active: slot 12 (virtual - every type's
+// is 0x43BD00), the body destroyed when there is one, the tick unregistered.
+inline void powerup_game_release( powerup_t& p, bool has_body, const powerup_world_hooks_t& hooks )
+{
+    if ( !p.active )
+        return;
+    powerup_remove_from_world( p, hooks );
+    if ( has_body && hooks.destroy_body )
+        hooks.destroy_body( );
+    if ( hooks.unregister_tick )
+        hooks.unregister_tick( );
+}
+
+// ---- The PowerUpDB entry (slot 2 0x43B9C0 -> 0x43C1F0) --------------------
+//
+// The entry = PowerUpDB["VuDBAsset"][Type] (the Type property +0xAC: its
+// asset +0x48, 0x4FBDF0 then std::map find 0x4F22B0; absent -> the null
+// container). StaticPfx / ApplyPfx / AudioEvent assigned when text (tag 4);
+// Radius, RecoverTime, ScaleSpringCoeff, ScaleDampingCoeff, ScaleInitial,
+// ScaleInitialVelocity read as an int (1, converted), a float's bits (2) or
+// an int64 (7, converted); anything else leaves the field. Then (hooks): the
+// 3d layout component +0x64's bounds +0x18..+0x34 = (-r, -r, -r, r, r, r)
+// pairs, and - with the entity's +0x14 bit 2 (in a game) - slot 12, the body
+// destroyed and rebuilt (0x43C700), slot 13 again when it was in the world;
+// finally slot 14 (vt+0x38: the boost's BoostEnergy read; nothing in the base).
+inline void powerup_db_number( const value_t& v, float& out )
+{
+    if ( v.tag == 1 )
+        out = static_cast< float >( v.integer );
+    else if ( v.tag == 2 )
+        std::memcpy( &out, &v.real, 4 );
+    else if ( v.tag == 7 )
+        out = static_cast< float >( v.int64 );
+}
+
+inline const value_t& powerup_db_entry( const value_t& powerup_db, const std::string& type )
+{
+    return member( member( powerup_db, "VuDBAsset" ), type.c_str( ) );
+}
+
+inline void powerup_load_db( powerup_t& p, const value_t& entry )
+{
+    const value_t& static_pfx = member( entry, "StaticPfx" );
+    if ( static_pfx.tag == 4 )
+        p.static_pfx = static_pfx.text;
+    const value_t& apply_pfx = member( entry, "ApplyPfx" );
+    if ( apply_pfx.tag == 4 )
+        p.apply_pfx = apply_pfx.text;
+    powerup_db_number( member( entry, "Radius" ), p.radius );
+    powerup_db_number( member( entry, "RecoverTime" ), p.recover_time );
+    const value_t& audio = member( entry, "AudioEvent" );
+    if ( audio.tag == 4 )
+        p.audio_event = audio.text;
+    powerup_db_number( member( entry, "ScaleSpringCoeff" ), p.spring );
+    powerup_db_number( member( entry, "ScaleDampingCoeff" ), p.damping );
+    powerup_db_number( member( entry, "ScaleInitial" ), p.scale_initial );
+    powerup_db_number( member( entry, "ScaleInitialVelocity" ), p.scale_initial_velocity );
+}
+
+// VuPowerUpBoostEntity slot 14 0x43DA90: the same entry's "BoostEnergy" into
+// +0x13C (1 / 2 / 7 as above).
+inline void powerup_boost_load_energy( float& energy, const value_t& entry )
+{
+    powerup_db_number( member( entry, "BoostEnergy" ), energy );
 }

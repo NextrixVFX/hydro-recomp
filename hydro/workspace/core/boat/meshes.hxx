@@ -1,10 +1,13 @@
 #pragma once
 
+#include <workspace/core/boat/load.hxx>
 #include <workspace/core/collision/concave.hxx>
 
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -207,4 +210,138 @@ inline bool fluids_mesh_load( mesh_stream_t& s, fluids_mesh_asset_t& a )
 {
     return mesh_read_vu_array( s, a.vertices, 16 ) && mesh_read_vu_array( s, a.edges, 8 ) && mesh_read_vu_array( s, a.records, 60 )
         && s.read( a.aabb, 32 ) && s.read( &a.w9c, 4 ) && s.read( &a.wa0, 4 );
+}
+
+// ---- The boat load's asset hooks, answered from the pack ------------------
+//
+// What boat_load_sections asks the asset factory (g 0x759004: doesAssetExist,
+// createAsset, releaseAsset) for its two mesh types, answered by loading the
+// real payloads with the loads above. SUBSTITUTION: the factory itself (its
+// name list, the refcounted cache 0x526250 / 0x5261A0) is NOT retail's code -
+// exists = the payload is in the pack, create = load once and count a
+// reference, release = drop one; a handle is an id here, not the asset's
+// address. `read` fetches a payload ("VuCollisionMeshAsset/<name>"); the
+// world's other load hooks (call, surface) pass through `user` / `call` /
+// `surface` unchanged. The meshes stay owned by the library.
+struct boat_mesh_library_t
+{
+    void* read_user = nullptr;
+    bool ( *read )( void* user, const std::string& asset, std::vector< std::uint8_t >& blob ) = nullptr;
+    // The world's own hooks, forwarded.
+    void* user = nullptr;
+    void ( *call )( void* user, std::uint32_t address, const char* self, const std::string& arg ) = nullptr;
+    std::uint8_t ( *surface )( void* user, const std::string& name ) = nullptr;
+
+    struct entry_t
+    {
+        std::string key;
+        int references = 0;
+        std::unique_ptr< collision_mesh_asset_t > collision;
+        std::unique_ptr< fluids_mesh_asset_t > fluids;
+    };
+    std::vector< entry_t > entries;   // handle = index + 1
+
+    entry_t* find( std::uint32_t handle )
+    {
+        return handle >= 1 && handle <= entries.size( ) ? &entries[ handle - 1 ] : nullptr;
+    }
+    const collision_mesh_asset_t* collision_of( std::uint32_t handle ) { entry_t* e = find( handle ); return e ? e->collision.get( ) : nullptr; }
+    const fluids_mesh_asset_t* fluids_of( std::uint32_t handle ) { entry_t* e = find( handle ); return e ? e->fluids.get( ) : nullptr; }
+};
+
+inline bool boat_mesh_exists( void* user, const char* type, const std::string& name )
+{
+    boat_mesh_library_t& lib = *static_cast< boat_mesh_library_t* >( user );
+    std::vector< std::uint8_t > blob;
+    return lib.read && lib.read( lib.read_user, std::string( type ) + "/" + name, blob );
+}
+
+inline std::uint32_t boat_mesh_create( void* user, const char* type, const std::string& name )
+{
+    boat_mesh_library_t& lib = *static_cast< boat_mesh_library_t* >( user );
+    const std::string key = std::string( type ) + "/" + name;
+    for ( std::size_t k = 0; k < lib.entries.size( ); ++k )
+        if ( lib.entries[ k ].key == key && lib.entries[ k ].references > 0 )
+        {
+            ++lib.entries[ k ].references;
+            return static_cast< std::uint32_t >( k + 1 );
+        }
+    std::vector< std::uint8_t > blob;
+    if ( !lib.read || !lib.read( lib.read_user, key, blob ) )
+        return 0;
+    boat_mesh_library_t::entry_t e;
+    e.key = key;
+    e.references = 1;
+    mesh_stream_t s{ blob.data( ), blob.size( ), 0 };
+    if ( std::strcmp( type, "VuCollisionMeshAsset" ) == 0 )
+    {
+        e.collision = std::make_unique< collision_mesh_asset_t >( );
+        const auto surface = [ &lib ]( const std::string& n ) -> std::uint8_t { return lib.surface ? lib.surface( lib.user, n ) : 0; };
+        if ( !collision_mesh_load( s, *e.collision, surface ) )
+            return 0;
+    }
+    else if ( std::strcmp( type, "VuFluidsMeshAsset" ) == 0 )
+    {
+        e.fluids = std::make_unique< fluids_mesh_asset_t >( );
+        if ( !fluids_mesh_load( s, *e.fluids ) )
+            return 0;
+    }
+    else
+        return 0;
+    lib.entries.push_back( std::move( e ) );
+    return static_cast< std::uint32_t >( lib.entries.size( ) );
+}
+
+inline bool boat_mesh_release( void* user, std::uint32_t handle )
+{
+    boat_mesh_library_t::entry_t* e = static_cast< boat_mesh_library_t* >( user )->find( handle );
+    if ( !e || e->references <= 0 )
+        return false;
+    if ( --e->references == 0 )
+    {
+        e->collision.reset( );
+        e->fluids.reset( );
+    }
+    return true;
+}
+
+// The boat_load_hooks_t that loads from the pack: exists / create / release /
+// mesh / fluid_counts / fluid_aabb from the library, call / surface forwarded.
+inline void boat_mesh_hooks( boat_mesh_library_t& lib, boat_load_hooks_t& hooks )
+{
+    hooks.user = &lib;
+    hooks.exists = boat_mesh_exists;
+    hooks.create = boat_mesh_create;
+    hooks.release = boat_mesh_release;
+    hooks.call = []( void* u, std::uint32_t address, const char* self, const std::string& arg ) {
+        boat_mesh_library_t& lib = *static_cast< boat_mesh_library_t* >( u );
+        if ( lib.call )
+            lib.call( lib.user, address, self, arg );
+    };
+    hooks.surface = []( void* u, const std::string& name ) -> std::uint8_t {
+        boat_mesh_library_t& lib = *static_cast< boat_mesh_library_t* >( u );
+        return lib.surface ? lib.surface( lib.user, name ) : 0;
+    };
+    hooks.mesh = []( void* u, std::uint32_t handle, striding_mesh_t& out ) {
+        const collision_mesh_asset_t* a = static_cast< boat_mesh_library_t* >( u )->collision_of( handle );
+        if ( !a )
+            return false;
+        collision_mesh_striding( *a, out );
+        return true;
+    };
+    hooks.fluid_counts = []( void* u, std::uint32_t handle, int& vertices, int& edges ) {
+        const fluids_mesh_asset_t* a = static_cast< boat_mesh_library_t* >( u )->fluids_of( handle );
+        if ( !a )
+            return false;
+        vertices = a->vertices.size;
+        edges = a->edges.size;
+        return true;
+    };
+    hooks.fluid_aabb = []( void* u, std::uint32_t handle, float* aabb ) {
+        const fluids_mesh_asset_t* a = static_cast< boat_mesh_library_t* >( u )->fluids_of( handle );
+        if ( !a )
+            return false;
+        std::memcpy( aabb, a->aabb, 32 );
+        return true;
+    };
 }

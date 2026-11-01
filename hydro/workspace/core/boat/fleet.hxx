@@ -52,6 +52,41 @@ struct fleet_random_t
     }
 };
 
+// What seeds the global VuRandom 0x736810 in the running game: the engine
+// init 0x566230 (called from 0x4D9900), on success, constructs a VuRandom(0)
+// on its stack (0x50FC70: +0 = +4 = +0x88 = 0, then 0x50FCA0(0)) and copies
+// its 0x24 words over 0x736810 (rep movsd; the last word, +0x8C, is a stack
+// word the ctor never writes - UNKNOWN, not held here). Before that only the
+// CRT initializer 0x64B620 has warmed the static image (seed -1, no OR).
+// 0x50FCA0 (thiscall seed; retn 4): s = seed, or - for 0 - the clock's low +
+// high words (g_vumetrosys 0x759000 slot 12 0x4EC7C0 = QueryPerformanceCounter,
+// 0 when it fails: the platform clock, a HOOK); s |= 0x80000000; then 40 steps
+// (the draw's Park-Miller step; step k, counting 39 down to 0, writes
+// table[k] when k < 32); last = table[0]. So the
+// game's AI plans, front-end picks and pfx draws start from a clock-seeded
+// state: nondeterministic in retail.
+inline void fleet_random_seed( fleet_random_t& r, std::int32_t seed, std::int64_t ( *clock )( ) )
+{
+    std::uint32_t s = static_cast< std::uint32_t >( seed );
+    if ( s == 0 )
+    {
+        const std::uint64_t c = clock ? static_cast< std::uint64_t >( clock( ) ) : 0u;
+        s = static_cast< std::uint32_t >( c ) + static_cast< std::uint32_t >( c >> 32 );
+    }
+    r.seed = static_cast< std::int32_t >( s | 0x80000000u );
+    for ( int k = 39; k >= 0; --k )
+    {
+        const std::int32_t q = r.seed / 127773;
+        std::int32_t n = static_cast< std::int32_t >( static_cast< std::uint32_t >( r.seed ) * 16807u - static_cast< std::uint32_t >( q ) * 0x7FFFFFFFu );
+        if ( n < 0 )
+            n = static_cast< std::int32_t >( static_cast< std::uint32_t >( n ) + 0x7FFFFFFFu );
+        r.seed = n;
+        if ( k < 32 )
+            r.table[ k ] = n;
+    }
+    r.last = r.table[ 0 ];
+}
+
 // VuTrackPlan / VuRandomTrackPlan (vtables 0x746CDC / 0x746CC8; ctor
 // 0x4D0CC0): +4 the depth (8), +8 / +0xC / +0x10 the sectors (data, count,
 // capacity) - sector indices here.

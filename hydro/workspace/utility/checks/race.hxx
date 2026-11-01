@@ -1479,6 +1479,108 @@ inline bool verify_mesh_assets( )
     return false;
 }
 
+// VuRandom's ctor 0x50FC70 / seed 0x50FCA0 against retail (oracle case random_seed): seed, last, the table, +0x88
+// = 0 and +0x8C untouched, and whether the clock (VuMetroSys slot 12) was asked.
+inline bool verify_random_seed( )
+{
+    const unsigned* g = g_golden_random_seed_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    static std::uint64_t clock_value = 0;
+    static int asked = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const std::int32_t seed = static_cast< std::int32_t >( *g++ );
+        clock_value = static_cast< std::uint64_t >( g[ 0 ] ) | ( static_cast< std::uint64_t >( g[ 1 ] ) << 32 );
+        g += 2;
+        const unsigned want_asked = *g++;
+        asked = 0;
+        fleet_random_t r;
+        r.seed = static_cast< std::int32_t >( 0xCDCDCDCDu );
+        r.last = r.seed;
+        for ( auto& t : r.table )
+            t = r.seed;
+        fleet_random_seed( r, seed, [ ]( ) -> std::int64_t { ++asked; return static_cast< std::int64_t >( clock_value ); } );
+        unsigned mine[ 36 ];
+        mine[ 0 ] = static_cast< unsigned >( r.seed );
+        mine[ 1 ] = static_cast< unsigned >( r.last );
+        for ( int k = 0; k < 32; ++k )
+            mine[ 2 + k ] = static_cast< unsigned >( r.table[ k ] );
+        mine[ 34 ] = 0;             // the ctor's +0x88
+        mine[ 35 ] = 0xCDCDCDCDu;   // +0x8C: neither writes it
+        if ( static_cast< unsigned >( asked ) != want_asked && ++failed <= 8 )
+            LOG_ERROR( "random_seed vector %u: the clock asked %d times, retail %u", v, asked, want_asked );
+        for ( int k = 0; k < 36; ++k, ++g )
+            if ( mine[ k ] != *g && ++failed <= 8 )
+                LOG_ERROR( "random_seed vector %u word %d: 0x%08X, retail 0x%08X", v, k, mine[ k ], *g );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuRandom's seed 0x50FC70 / 0x50FCA0 (the engine init's reseed of 0x736810) matches retail: %u vectors x 37 values", nv );
+        return true;
+    }
+    LOG_ERROR( "random_seed FAILED %d of %u values", failed, nv * 37 );
+    return false;
+}
+
+// VuPowerUpEntity's contact callback 0x43C8C0 with its map 0x43C980 against retail (oracle case powerup_contact):
+// +0x12C and the whole per-boat map after every contact; the seeding is powerup_game_initialize's (no disabled
+// games, no hooks).
+inline bool verify_powerup_contact( )
+{
+    const unsigned* g = g_golden_powerup_contact_words;
+    const unsigned ns = *g++;
+    int failed = 0, contacts = 0;
+    for ( unsigned s = 0; s < ns; ++s )
+    {
+        powerup_t p;
+        std::memcpy( &p.recover_time, g++, 4 );
+        std::uint32_t ids[ 6 ];
+        std::memcpy( ids, g, 24 );
+        g += 6;
+        std::vector< std::uint32_t > seeded( *g++ );
+        for ( auto& i : seeded )
+            i = *g++;
+        p.initially_enabled = 0;
+        powerup_game_initialize( p, "", { }, seeded, { } );
+        const unsigned nc = *g++;
+        for ( unsigned c = 0; c < nc; ++c, ++contacts )
+        {
+            std::memcpy( &p.time, g, 8 );
+            g += 2;
+            const unsigned owner = *g++, rtti = *g++, before = *g++, after = *g++;
+            p.pickup = before;
+            if ( owner != 6 )
+                powerup_contact( p, rtti == 1 || rtti == 2, ids[ owner ] );
+            const unsigned nm = *g++;
+            bool same = p.pickup == after && p.last_pickup.size( ) == nm;
+            auto it = p.last_pickup.begin( );
+            for ( unsigned m = 0; m < nm; ++m, g += 3 )
+            {
+                if ( !same || it == p.last_pickup.end( ) )
+                {
+                    same = false;
+                    continue;
+                }
+                std::uint32_t v[ 2 ];
+                std::memcpy( v, &it->second, 8 );
+                same = it->first == g[ 0 ] && v[ 0 ] == g[ 1 ] && v[ 1 ] == g[ 2 ];
+                ++it;
+            }
+            if ( !same && ++failed <= 8 )
+                LOG_ERROR( "powerup_contact sequence %u contact %u: +0x12C 0x%X (retail 0x%X), %zu map entries (retail %u)", s, c,
+                           p.pickup, after, p.last_pickup.size( ), nm );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuPowerUpEntity's contact callback 0x43C8C0 + its per-boat map 0x43C980 match retail: %u sequences, %d contacts", ns, contacts );
+        return true;
+    }
+    LOG_ERROR( "powerup_contact FAILED %d of %d contacts", failed, contacts );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -1496,5 +1598,7 @@ inline bool verify_race_all( )
     ok = verify_boost_apply( ) && ok;
     ok = verify_powerup_tick( ) && ok;
     ok = verify_mesh_assets( ) && ok;
+    ok = verify_random_seed( ) && ok;
+    ok = verify_powerup_contact( ) && ok;
     return ok;
 }
