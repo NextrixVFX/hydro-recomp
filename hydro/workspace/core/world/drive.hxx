@@ -616,8 +616,24 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         // so it changes nothing; VuAiDriver / VuAiUiDriver / VuAiNuisanceDriver's slot 20 is the nullsub 0x401560.
         r->respawn_hooks.driver_50 = []( void* ) { };
         // "OnBoatRecovered" (0x41D790's broadcast): its only subscriber is VuSlalomGame (ctor 0x48BEC0 - the string's other
-        // reference); no asset names it. In a Race nothing answers: nothing to run.
-        r->respawn_hooks.recovered = []( void*, std::uint32_t ) { };
+        // reference); no asset names it. In a Race nothing answers: nothing to run. In a Slalom its 0x48DB70 (world/slalom.hxx
+        // slalom_recovered) on the broadcasting boat - the params' entity, a VuBoatEntity: its +0x4DC, the gate to pass, +0x310.
+        r->respawn_hooks.recovered = []( void* u, std::uint32_t ) {
+            race_drive_t& d = race_drive_of( u );
+            race_session_t& s = *d.session;
+            if ( !s.start.slalom )
+                return;
+            race_session_boat_t& b = race_drive_boat( d );
+            const std::uint8_t* t = race_session_image( b, 0, 0x50 );
+            if ( !t )
+            {
+                race_unwired( s, "OnBoatRecovered 0x48DB70: the boat's transform image is missing - not run (UNKNOWN)" );
+                return;
+            }
+            slalom_recovered( s.slalom, b.graph.objects[ 0 ].image.data( ), reinterpret_cast< const float* >( t + 0x50 ) );
+            LOG_INFO( "race: OnBoatRecovered (VuSlalomGame 0x48DB70) - %s, next gate %d", b.name.c_str( ),
+                      s.slalom.current ? static_cast< int >( s.slalom.current - s.slalom_gates.data( ) ) : -1 );
+        };
         // The Decision tick's hooks.
         boat_decision_hooks_t& h = r->hooks;
         h.user = r.get( );
@@ -1438,7 +1454,9 @@ inline void race_session_game_mode( void* user, float dt )
                   s.dynamics ? s.dynamics->syncs : -1 );
         // VuRaceGame slot 15 0x48B180 (core/ui split.hxx ui_race_checkpoint): the boat's driver slot 12 (human), lap +0x4AC,
         // race time +0x4B4; the checkpoint's +0x8A finish byte; the game's +0x4C laps; the +0x67C machine (rules.hxx).
-        // VuTimeTrialGame's slot 15 0x490D70 is the same code (its split vector at +0x720; case timetrial_split).
+        // VuTimeTrialGame's slot 15 0x490D70 is the same code (its split vector at +0x720; case timetrial_split), and so is
+        // VuSlalomGame's 0x48E500 (its split vector at +0x750: byte-compared with 0x490D70 - 16 bytes differ, all offsets /
+        // string addresses; not oracle-run).
         const race_rules_boat_t& rb = s.rules_boats[ static_cast< std::size_t >( boat ) ];
         ui_race_split_boat_t sb;
         sb.m_human = rb.human;

@@ -1025,7 +1025,8 @@ public:
         m_logic_game.game_data = &m_game_util;
         m_logic_game.unrecreated = &m_logic_unrecreated;
         const race_game_kind_t game_kind = race_game_kind( race_game_data_text( util, nullptr, "GameType" ) );
-        m_defer_project_initialized = race && front_end && ( game_kind == race_game_kind_t::race || game_kind == race_game_kind_t::time_trial );
+        m_defer_project_initialized = race && front_end && ( game_kind == race_game_kind_t::race || game_kind == race_game_kind_t::time_trial ||
+                                                              game_kind == race_game_kind_t::slalom );
         m_project_initialized = false;
         load_project( path.c_str( ) );
         m_loaded = true;
@@ -1035,6 +1036,7 @@ public:
         {
         case race_game_kind_t::race:
         case race_game_kind_t::time_trial:   // VuTimeTrialGame 0x48ED30: its machine (rules.hxx), slots 13 / 5 (start.hxx)
+        case race_game_kind_t::slalom:       // VuSlalomGame 0x48BEC0: its machine (rules.hxx), its course (slalom.hxx), slots 13 / 5
             if ( front_end )
                 race_switch_on( game_data, dbs, type );
             break;
@@ -1094,7 +1096,7 @@ public:
         m_race.world.prop_moved = [ this ]( const entity_t& owner ) { prop_moved( owner ); };
         // VuRaceGame's ctor 0x489030 loads its three HUD projects (0x4B4360) - before the boat load; VuTimeTrialGame's 0x48ED30
         // its own three (game_mode_defs: HUDs/TimeTrial*).
-        load_huds( mode == "TimeTrial" ? game_mode_defs( )[ 1 ].huds : k_race_hud_projects );
+        load_huds( mode == "TimeTrial" ? game_mode_defs( )[ 1 ].huds : mode == "Slalom" ? game_mode_defs( )[ 0 ].huds : k_race_hud_projects );
         m_race.world.hud = [ this ]( int project, race_hud_verb_t verb, float step ) { hud( project, verb, step ); };
         m_race.world.broadcast = [ this ]( const char* name, const ui_params_t* params ) { race_broadcast( name, params ); };
         vo_ready( );
