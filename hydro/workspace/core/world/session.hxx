@@ -976,6 +976,34 @@ inline void race_session_key_motion( race_session_t& s, entity_t& e )
         k->target.update = []( void* u, const float* m, const float* linear, const float* angular ) {
             auto& x = *static_cast< race_session_t::key_live_t* >( u );
             race_session_t& rs = *x.session;
+            const std::string& cls = x.target_entity->m_type;
+            // The target's motion IF slot 0 by its class: VuAudioEmitterEntity's is 0x5F3D80 (world/sound.hxx
+            // audio_emitter_motion: setWorldTransform, then set3DAttributes on a held event with the translation and the
+            // record's +0x58 velocity); the props' 0x546BD0 (VuPropEntity / VuBreakablePropEntity, IF 0x73A13C) and
+            // VuAnimatedPropEntity's 0x5ED4F0 below; any other class's IF is not read (UNKNOWN, not run).
+            if ( cls == "VuAudioEmitterEntity" && x.target_entity->m_state )
+            {
+                if ( !entity_set_world( *x.target_entity, m, true, { } ) )
+                {
+                    race_unwired( rs, "an audio emitter motion target whose world is not modelled - setWorldTransform UNKNOWN, not written" );
+                    return;
+                }
+                if ( rs.world.sound )
+                {
+                    sound_hooks_t h = *rs.world.sound;
+                    h.set_world = nullptr;   // done above (the same call, first)
+                    float record[ 20 ];
+                    std::memcpy( record, m, 64 );
+                    std::memcpy( record + 16, linear, 16 );
+                    audio_emitter_motion( static_cast< audio_emitter_state_t* >( x.target_entity->m_state.get( ) )->value, record, h );
+                }
+                return;
+            }
+            if ( cls != "VuPropEntity" && cls != "VuBreakablePropEntity" && cls != "VuAnimatedPropEntity" )
+            {
+                race_unwired( rs, "a keyframe motion target of class " + cls + " - its motion IF slot 0 is not read (UNKNOWN, not run)" );
+                return;
+            }
             if ( !entity_set_world( *x.target_entity, m, true, { } ) )
             {
                 race_unwired( rs, "a keyframe motion's target whose world is not modelled - setWorldTransform UNKNOWN, not written" );
