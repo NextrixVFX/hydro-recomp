@@ -110,6 +110,7 @@
     <ClInclude Include="workspace\core\assets\animation.hxx" />
     <ClInclude Include="workspace\core\assets\font.hxx" />
     <ClInclude Include="workspace\core\assets\model.hxx" />
+    <ClInclude Include="workspace\core\assets\scene.hxx" />
     <ClInclude Include="workspace\core\assets\skin.hxx" />
     <ClInclude Include="workspace\core\assets\texture.hxx" />
     <ClInclude Include="workspace\core\boat\construct.hxx" />

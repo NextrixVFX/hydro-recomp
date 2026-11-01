@@ -66,6 +66,9 @@
     <ClInclude Include="workspace\core\assets\model.hxx">
       <Filter>workspace\core\assets</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\assets\scene.hxx">
+      <Filter>workspace\core\assets</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\assets\skin.hxx">
       <Filter>workspace\core\assets</Filter>
     </ClInclude>
