@@ -881,9 +881,44 @@ inline bool verify_rigid_body_dtor( )
     return failed == 0;
 }
 
+// VuSubstituteAssetEntity's state (world/emitters.hxx: Asset Type, and the postLoad's two names) against retail's
+// VuEntity::load 0x5009D0 (ctor 0x5F48A0, postLoad 0x5F4B70 -> 0x5F4C10) on the levels' / projects' entities and three
+// hand-built (oracle case substitute_asset_properties; the factory's createAsset answered null - the names are compared).
+inline bool verify_substitute_asset_properties( )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_substitute_asset_document );
+    static std::vector< value_t > documents;
+    documents.push_back( c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_substitute_asset_document_bytes ) ).parse( ) );
+    static const entity_registry_t registry = build_entity_registry( { } );
+    entity_world_t world = race_entity_world( registry, nullptr );
+    const std::unique_ptr< entity_t > tree = entity_load_project( member( documents.back( ), "VuProject" ), "Data/Projects/Check.vuprj", world );
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_substitute_asset_count; ++k )
+    {
+        const golden_substitute_asset_t& want = g_golden_substitute_asset[ k ];
+        const entity_t* e = nullptr;
+        if ( tree )
+            for ( auto& child : tree->m_children )
+                if ( child->m_name == want.child )
+                    e = child.get( );
+        const substitute_asset_state_t* s = e && e->m_state && e->m_type == "VuSubstituteAssetEntity"
+                                                ? static_cast< const substitute_asset_state_t* >( e->m_state.get( ) ) : nullptr;
+        if ( ( !s || s->type != want.names[ 0 ] || s->name != want.names[ 1 ] || s->subst != want.names[ 2 ] ) && ++failed <= 6 )
+            LOG_ERROR( "substitute asset %s (%s): '%s' / '%s' / '%s', retail '%s' / '%s' / '%s'", want.child, want.source, s ? s->type.c_str( ) : "-",
+                       s ? s->name.c_str( ) : "-", s ? s->subst.c_str( ) : "-", want.names[ 0 ], want.names[ 1 ], want.names[ 2 ] );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the VuSubstituteAssetEntity state matches retail's loads (0x5F48A0 / 0x5F4B70) on %d entities: its three names",
+                     static_cast< int >( g_golden_substitute_asset_count ) );
+    else
+        LOG_ERROR( "the substitute asset properties FAILED on %d of %d entities", failed, static_cast< int >( g_golden_substitute_asset_count ) );
+    return failed == 0;
+}
+
 inline bool verify_session_all( )
 {
     bool ok = true;
+    ok = verify_substitute_asset_properties( ) && ok;
     ok = verify_rigid_body_dtor( ) && ok;
     ok = verify_vugame_release( ) && ok;
     ok = verify_breakable_dynamic_properties( ) && ok;
