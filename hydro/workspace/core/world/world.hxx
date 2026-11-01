@@ -25,6 +25,7 @@
 #include <workspace/core/world/build.hxx>
 #include <workspace/core/world/drive.hxx>
 #include <workspace/core/world/water.hxx>
+#include <workspace/core/world/watchers.hxx>
 #include <workspace/core/assets/texture.hxx>
 #include <workspace/utility/logger.hxx>
 #include <workspace/utility/trace.hxx>
