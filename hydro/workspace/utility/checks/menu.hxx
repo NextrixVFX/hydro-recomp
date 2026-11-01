@@ -368,9 +368,91 @@ inline bool verify_ui_config_next( )
     return failed == 0;
 }
 
+// ui_screen_draw (core/ui compose.hxx) against retail's VuUIScreenEntity draw
+// slot 13 0x629D60 (oracle case screen_draw) on every Screens/* root under three
+// environments (alpha, 0x81A184, the sort's +0x74, the screen's +0x5C): every
+// draw reached in order (the screen's own component = child -1, then the
+// direct children: component, alpha bits, both stacks' tops and sizes, the sort
+// key), then the sizes and the key after. OUR trees decide which entities have
+// a UI draw component; the ctor's +0x5C (4) is compared with retail's.
+inline bool verify_ui_screen_draw( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0, calls = 0;
+    for ( std::size_t r = 0; r < g_golden_scr_runs_count; ++r )
+    {
+        const golden_scr_run_t& run = g_golden_scr_runs[ r ];
+        const golden_scr_env_t& se = g_golden_scr_envs[ run.m_env ];
+        const golden_txt_env_t& e = g_golden_txt_envs[ se.m_txt ];
+        const entity_t* root = nullptr;
+        for ( std::size_t p = 0; p < g_golden_ui_projects_count && !root; ++p )
+            if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, run.m_project ) == 0 )
+                root = loaded.roots[ p ].get( );
+        if ( !root || root->m_type != "VuUIScreenEntity" || root->m_children.size( ) != static_cast< std::size_t >( run.m_children ) ||
+             run.m_layer0 != 4u )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "ui screen draw: %s has no loaded screen root, a different child count or +0x5C", run.m_project );
+            continue;
+        }
+        ui_gfx_sort_t sort;
+        sort.m_index = e.m_index;
+        sort.m_key_lo = e.m_key_lo;
+        sort.m_key_hi = se.m_key_hi;
+        ui_gfx_stacks_t stacks;
+        stacks.m_matrices.resize( static_cast< std::size_t >( run.m_matrices_before ) );
+        stacks.m_floats.resize( static_cast< std::size_t >( run.m_floats_before ) );
+        ui_impl_t impl;
+        const std::vector< std::uint8_t > crop = ui_unhex( run.m_crop );
+        std::memcpy( impl.m_crop.m_matrix, crop.data( ), 64 );
+        std::memcpy( &impl.m_float, &se.m_float, 4 );
+        float alpha;
+        std::memcpy( &alpha, &se.m_alpha, 4 );
+        bool same = true;
+        int at = 0;
+        ui_screen_draw( sort, stacks, impl, *root, se.m_layer, alpha, [ & ]( const entity_t& child, int component, float a )
+        {
+            if ( at >= run.m_calls )
+            {
+                same = false;
+                return;
+            }
+            const golden_hud_call_t& want = g_golden_scr_calls[ run.m_first + at++ ];
+            int index = -2;
+            if ( &child == root )
+                index = -1;
+            for ( std::size_t k = 0; k < root->m_children.size( ); ++k )
+                if ( root->m_children[ k ].get( ) == &child )
+                    index = static_cast< int >( k );
+            std::uint32_t bits, top;
+            std::memcpy( &bits, &a, 4 );
+            std::memcpy( &top, &stacks.m_floats.back( ), 4 );
+            const std::vector< std::uint8_t > matrix = ui_unhex( want.m_matrix );
+            same = same && index == want.m_child && component == want.m_component && bits == want.m_alpha &&
+                   stacks.m_matrices.size( ) == static_cast< std::size_t >( want.m_matrices ) &&
+                   std::memcmp( stacks.m_matrices.back( ).data( ), matrix.data( ), 64 ) == 0 &&
+                   stacks.m_floats.size( ) == static_cast< std::size_t >( want.m_floats ) && top == want.m_float &&
+                   sort.m_key_lo == want.m_key[ 0 ] && sort.m_key_hi == want.m_key[ 1 ];
+            ++calls;
+        } );
+        same = same && at == run.m_calls && stacks.m_matrices.size( ) == static_cast< std::size_t >( run.m_matrices_after ) &&
+               stacks.m_floats.size( ) == static_cast< std::size_t >( run.m_floats_after ) && sort.m_key_lo == run.m_key[ 0 ] && sort.m_key_hi == run.m_key[ 1 ];
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui screen draw: %s env %d reached %d draws, retail %d - or a call / stack / key differs", run.m_project, run.m_env, at, run.m_calls );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_screen_draw matches retail's VuUIScreenEntity draw slot 13 0x629D60 (0x50B4B0, 0x50B530, 0x628070) on %d runs over the "
+                     "loaded Screens/* roots: %d draws - entity, component, alpha, both stacks' tops and sizes, the sort key - and the state after",
+            static_cast< int >( g_golden_scr_runs_count ), calls );
+    else
+        LOG_ERROR( "the screen draw FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_menu_all( )
 {
     bool ok = true;
+    ok = verify_ui_screen_draw( ) && ok;
     ok = verify_ui_config_next( ) && ok;
     ok = verify_ui_config_nav( ) && ok;
     return ok;
