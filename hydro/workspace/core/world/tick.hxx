@@ -129,7 +129,13 @@ inline void tick_unregister_all( tick_manager_t& tm, const void* owner )
 // x 0.1 (0x6F7610). A pause count: both 0. Then every enabled phase in order,
 // each handler in order, with the previous dt when the phase's flag is set,
 // else this frame's. Last, +0x30 = +0x28 (the capped dt, before the pause /
-// slow-motion terms).
+// slow-motion terms). Both loops read the next node AFTER the call and compare
+// it with the list head re-read (0x4F7415 / 0x4F741D, 0x4F7431 / 0x4F7433):
+// a handler registered during a call lands on the back of its phase and runs
+// in the SAME pass when that phase is the running one or a later one, on the
+// next tick when it is earlier (std::list's range-for has the same order;
+// oracle case tick_same_pass). A handler unregistering ITSELF during its call
+// leaves retail reading a freed node - not modelled (std::list: undefined).
 inline void tick_run( tick_manager_t& tm, double now )
 {
     const float raw = static_cast< float >( now - tm.clock );

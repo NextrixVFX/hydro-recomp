@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <workspace/core/collision/compound.hxx>
+#include <workspace/core/dynamics/wrapper.hxx>
 
 // The collision dispatch layer of performDiscreteCollisionDetection 0x54C710
 // (Bullet 2.79), recreated from retail's disassembly (memory/audit.md "Batch
@@ -28,6 +29,11 @@ struct collision_object_t
     int internal_type = 2;
     unsigned proxy = 0;
     bool proxied = false;   // +200 non-null: addCollisionObject made a proxy
+    // +0x1FC / +0x204: the body's constraint references (count, array) as
+    // checkCollideWithOverride 0x50E7B0 reads them - caller-resolved, each
+    // constraint's rbA / rbB (+0x18 / +0x1C) as the bodies' `body.object`.
+    const rigid_constraint_ref_t* constraint_refs = nullptr;
+    std::int32_t constraint_ref_count = 0;
 };
 
 // The world members updateSingleAabb reads: +44 the continuous flag
@@ -161,8 +167,11 @@ struct dispatch_info_t
 
 // needsCollision @0x56D710 (dispatcher vt+20, stdcall body0, body1; retn 8):
 // false when BOTH activation states are 2 or 5; else the object's vt+0 when
-// +264 is set (`test al, al; cmove` -> its bool); else true. The override is
-// Vu's: -1.
+// +264 is set (`test al, al; cmove` -> its bool; body0's only); else true.
+// Every collision object here is a VuRigidBody (vtable 0x74CFF0), whose vt+0
+// is btRigidBody::checkCollideWithOverride 0x50E7B0 = dynamics/wrapper.hxx
+// rigid_check_collide_with( body1's +0xF4, body1, body0's references ).
+// Verified: case needs_collision (0x56D710 run whole on the real vtable).
 inline int dispatcher_needs_collision( const collision_object_t& a, const collision_object_t& b )
 {
     const int s0 = a.activation_state;
@@ -173,7 +182,7 @@ inline int dispatcher_needs_collision( const collision_object_t& a, const collis
             return 0;
     }
     if ( a.check_collide )
-        return -1;   // checkCollideWithOverride (vt+0): a Vu hook, not recreated
+        return rigid_check_collide_with( static_cast< std::uint32_t >( b.internal_type ), b.body.object, a.constraint_refs, a.constraint_ref_count ) ? 1 : 0;
     return 1;
 }
 

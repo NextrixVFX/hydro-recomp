@@ -1,10 +1,12 @@
 #pragma once
 
+#include <workspace/core/boat/manager.hxx>
 #include <workspace/core/boat/track.hxx>
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/entity/property.hxx>
 #include <workspace/core/ui/fsm.hxx>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -398,6 +400,26 @@ struct race_rules_hooks_t
     std::function< void( const std::string& call ) > platform;
 };
 
+// VuGame's Results / Awards handlers past their enters (0x484250 .. 0x484580):
+// what they call that is the UI's, the platform's or a game slot's. `screen`
+// is the screen object's (0 the results VuCommonScreen at +0x84, 1 the award
+// screen at +0x88): verb 0 its exit (results vt+8; the award screen's
+// 0x47F4C0), 1 its deletion (vt+0(1)), 2 its tick vt+0xC(dt), 3 its draw
+// vt+0x10. `json_type` answers gameutil g 0x758FF8 +0x50's 0x4FBDF0 lookup -
+// the value's type word (-1: not known here). `paused` is g 0x758FD4 +0x34 !=
+// 0. `game_results_tick` the game's vt+0x30(dt) (not read). `award_done` the
+// award screen's 0x47F720.
+struct vugame_screen_hooks_t
+{
+    std::function< void( int screen, int verb, float dt ) > screen;
+    std::function< int( const char* name ) > json_type;
+    std::function< bool( ) > paused;
+    std::function< void( float dt ) > game_results_tick;
+    std::function< bool( ) > award_done;
+    std::function< bool( ) > personal_best;                       // the game's vt+0x38(&+0x6C4, &+0x6C8) (saves: a platform hook)
+    std::function< std::string( const char* key ) > string_db;     // g 0x759078 vt+0x18 (the localised text)
+};
+
 struct race_rules_t
 {
     // VuGame's own two machines (its ctor 0x480BA0; begun by 0x4829A0 - the first state, its enter; ticked by
@@ -405,6 +427,12 @@ struct race_rules_t
     c_fsm event;                     // +0x0C
     c_fsm split;                     // +0x67C
     std::function< void( std::uint32_t address, const char* what ) > unrecreated;   // a VuGame state handler reached
+    vugame_screen_hooks_t screen_hooks;   // what the Results / Awards handlers call that is not theirs
+    bool results_screen = false;     // +0x84 non-null (Results' enter 0x484110 - not recreated: never set here)
+    bool award_screen = false;       // +0x88 non-null (Awards' enter 0x484320 - not recreated: never set here)
+    float split_duration = 0.0f;     // +0x674: ConstantDB VuDBAsset / HUD / ChallengeTextDuration (the ctor 0x481630)
+    std::int32_t split_kind = 0;     // +0x6A4
+    std::string opponent;            // +0x6AC
     c_fsm fsm;                       // +0x6F8
     std::uint32_t buoys = 0;         // +0x744
     std::string track;               // the game's +0x68 (VuGame's track name)
@@ -533,12 +561,154 @@ inline void vugame_fsm_handlers( race_rules_t& r, fsm_state_t& s, std::uint32_t 
         s.m_draw = hook( draw, s.m_name, "draw" );
 }
 
+// ---- VuGame's Results / Awards handlers (world batch 21; case vugame_handlers)
+//
+// Results exit 0x484250: with a screen (+0x84) its vt+8, its deletion, +0x84
+// = 0. Results tick 0x484280(dt): the game's vt+0x30(dt); the screen's
+// vt+0xC(dt) when there is one and g 0x758FD4 +0x34 is 0; then gameutil +0x50's
+// "GameResults" value - type 0 (null) PULSES "NoResults" (+0x1D; 0x555C60
+// finds it - an absent name would write before the array: UNKNOWN). Results
+// draw 0x4842F0: "GameResults" of type 6 and a screen -> its vt+0x10 (the
+// lookup first, whatever the screen). Awards exit 0x4844F0: with an award
+// screen (+0x88) its 0x47F4C0, its deletion, +0x88 = 0. Awards tick
+// 0x484520(dt): no award screen -> "AwardsDone"'s VALUE (+0x1C) = 1; else,
+// unless +0x34 is set (then nothing), its vt+0xC(dt) and, when 0x47F720
+// answers true, "AwardsDone" = 1. Awards draw 0x484580: the award screen's
+// vt+0x10. A hook not given is UNKNOWN (`unrecreated`) and stops the handler.
+inline bool vugame_screen_need( race_rules_t& r, bool have, std::uint32_t address, const char* what )
+{
+    if ( !have && r.unrecreated )
+        r.unrecreated( address, what );
+    return have;
+}
+
+inline void vugame_condition_byte( c_fsm& f, const char* name, bool pulse )
+{
+    const int i = f.condition_index( name );
+    if ( i < 0 )
+        return;   // 0x555C60's -1: retail writes before the array (UNKNOWN) - not reproduced
+    if ( pulse )
+        f.m_conditions[ static_cast< std::size_t >( i ) ].m_pulse = 1;
+    else
+        f.m_conditions[ static_cast< std::size_t >( i ) ].m_value = 1;
+}
+
+inline void vugame_results_exit( race_rules_t& r )
+{
+    if ( !r.results_screen )
+        return;
+    if ( !vugame_screen_need( r, static_cast< bool >( r.screen_hooks.screen ), 0x484250u, "VuGame Results exit: the screen's vt+8 / deletion (UI)" ) )
+        return;
+    r.screen_hooks.screen( 0, 0, 0.0f );
+    r.screen_hooks.screen( 0, 1, 0.0f );
+    r.results_screen = false;
+}
+
+inline void vugame_results_tick( race_rules_t& r, float dt )
+{
+    if ( !vugame_screen_need( r, static_cast< bool >( r.screen_hooks.game_results_tick ), 0x484280u, "VuGame Results tick: the game's vt+0x30 (not read)" ) )
+        return;
+    r.screen_hooks.game_results_tick( dt );
+    if ( r.results_screen )
+    {
+        if ( !vugame_screen_need( r, r.screen_hooks.paused && r.screen_hooks.screen, 0x484280u, "VuGame Results tick: g 0x758FD4 +0x34 / the screen (UI)" ) )
+            return;
+        if ( !r.screen_hooks.paused( ) )
+            r.screen_hooks.screen( 0, 2, dt );
+    }
+    const int type = r.screen_hooks.json_type ? r.screen_hooks.json_type( "GameResults" ) : -1;
+    if ( !vugame_screen_need( r, type >= 0, 0x484280u, "VuGame Results tick: gameutil +0x50 \"GameResults\" (not known here)" ) )
+        return;
+    if ( type == 0 )
+        vugame_condition_byte( r.event, "NoResults", true );
+}
+
+inline void vugame_results_draw( race_rules_t& r )
+{
+    const int type = r.screen_hooks.json_type ? r.screen_hooks.json_type( "GameResults" ) : -1;
+    if ( !vugame_screen_need( r, type >= 0, 0x4842F0u, "VuGame Results draw: gameutil +0x50 \"GameResults\" (not known here)" ) )
+        return;
+    if ( type == 6 && r.results_screen && vugame_screen_need( r, static_cast< bool >( r.screen_hooks.screen ), 0x4842F0u, "VuGame Results draw: the screen (UI)" ) )
+        r.screen_hooks.screen( 0, 3, 0.0f );
+}
+
+inline void vugame_awards_exit( race_rules_t& r )
+{
+    if ( !r.award_screen )
+        return;
+    if ( !vugame_screen_need( r, static_cast< bool >( r.screen_hooks.screen ), 0x4844F0u, "VuGame Awards exit: the award screen's 0x47F4C0 / deletion (UI)" ) )
+        return;
+    r.screen_hooks.screen( 1, 0, 0.0f );
+    r.screen_hooks.screen( 1, 1, 0.0f );
+    r.award_screen = false;
+}
+
+inline void vugame_awards_tick( race_rules_t& r, float dt )
+{
+    if ( !r.award_screen )
+    {
+        vugame_condition_byte( r.event, "AwardsDone", false );
+        return;
+    }
+    if ( !vugame_screen_need( r, r.screen_hooks.paused && r.screen_hooks.screen && r.screen_hooks.award_done, 0x484520u,
+                              "VuGame Awards tick: g 0x758FD4 +0x34 / the award screen (UI)" ) )
+        return;
+    if ( r.screen_hooks.paused( ) )
+        return;
+    r.screen_hooks.screen( 1, 2, dt );
+    if ( r.screen_hooks.award_done( ) )
+        vugame_condition_byte( r.event, "AwardsDone", false );
+}
+
+inline void vugame_awards_draw( race_rules_t& r )
+{
+    if ( r.award_screen && vugame_screen_need( r, static_cast< bool >( r.screen_hooks.screen ), 0x484580u, "VuGame Awards draw: the award screen (UI)" ) )
+        r.screen_hooks.screen( 1, 3, 0.0f );
+}
+
+// The +0x67C machine's Intro / Split / Result ticks 0x483CB0 / 0x483D00 /
+// 0x483E00: comiss +0x6A0 (the machine's time), +0x674 / jb - unless the time
+// is below the duration (or either is NaN) "Expired" is PULSED. Their draws
+// (0x483CF0 / 0x483D40 -> 0x484590, the split display) are the HUD's - hooks.
+inline void vugame_split_expire( race_rules_t& r )
+{
+    const float t = r.split.m_time, d = r.split_duration;
+    if ( _mm_comilt_ss( _mm_set_ss( t ), _mm_set_ss( d ) ) || t != t || d != d )
+        return;
+    vugame_condition_byte( r.split, "Expired", true );
+}
+
+// PersonalBestConfig's enter 0x483C40: the game's vt+0x38(&+0x6C4, &+0x6C8)
+// true -> +0x6A4 = 0 and +0x6AC = the string DB's "HUD_PersonalBestOpponentName"
+// (0x401DB0's assign); false -> "NoPersonalBestTime"'s VALUE = 1.
+inline void vugame_personal_best_enter( race_rules_t& r )
+{
+    if ( !vugame_screen_need( r, r.screen_hooks.personal_best && r.screen_hooks.string_db, 0x483C40u,
+                              "VuGame PersonalBestConfig enter: the game's vt+0x38 / the string DB (platform)" ) )
+        return;
+    if ( r.screen_hooks.personal_best( ) )
+    {
+        r.split_kind = 0;
+        r.opponent = r.screen_hooks.string_db( "HUD_PersonalBestOpponentName" );
+    }
+    else
+        vugame_condition_byte( r.split, "NoPersonalBestTime", false );
+}
+
 inline void vugame_fsms_construct( race_rules_t& r )
 {
     r.event = c_fsm{ };
     r.event.add_state( "Event" );
-    vugame_fsm_handlers( r, r.event.add_state( "Results" ), 0x484110u, 0x484250u, 0x484280u, 0x4842F0u );
-    vugame_fsm_handlers( r, r.event.add_state( "Awards" ), 0x484320u, 0x4844F0u, 0x484520u, 0x484580u );
+    fsm_state_t& results = r.event.add_state( "Results" );
+    vugame_fsm_handlers( r, results, 0x484110u, 0x484250u, 0x484280u, 0x4842F0u );
+    results.m_exit = [ &r ] { vugame_results_exit( r ); };
+    results.m_tick = [ &r ]( float dt ) { vugame_results_tick( r, dt ); };
+    results.m_draw = [ &r ] { vugame_results_draw( r ); };
+    fsm_state_t& awards = r.event.add_state( "Awards" );
+    vugame_fsm_handlers( r, awards, 0x484320u, 0x4844F0u, 0x484520u, 0x484580u );
+    awards.m_exit = [ &r ] { vugame_awards_exit( r ); };
+    awards.m_tick = [ &r ]( float dt ) { vugame_awards_tick( r, dt ); };
+    awards.m_draw = [ &r ] { vugame_awards_draw( r ); };
     r.event.add_state( "Exit" );
     r.event.add_transition( "Event", "Results", "EventFinished" );
     r.event.add_transition( "Results", "Awards", "OnUserNext" );
@@ -547,11 +717,19 @@ inline void vugame_fsms_construct( race_rules_t& r )
     r.split = c_fsm{ };
     vugame_fsm_handlers( r, r.split.add_state( "GetFriendScores" ), 0x483B90u, 0, 0x483BE0u, 0 );
     vugame_fsm_handlers( r, r.split.add_state( "DownloadBlob" ), 0x401560u, 0, 0x483C10u, 0 );
-    vugame_fsm_handlers( r, r.split.add_state( "PersonalBestConfig" ), 0x483C40u, 0, 0, 0 );
-    vugame_fsm_handlers( r, r.split.add_state( "Intro" ), 0, 0, 0x483CB0u, 0x483CF0u );
+    fsm_state_t& pb = r.split.add_state( "PersonalBestConfig" );
+    vugame_fsm_handlers( r, pb, 0x483C40u, 0, 0, 0 );
+    pb.m_enter = [ &r ] { vugame_personal_best_enter( r ); };
+    fsm_state_t& intro = r.split.add_state( "Intro" );
+    vugame_fsm_handlers( r, intro, 0, 0, 0x483CB0u, 0x483CF0u );
+    intro.m_tick = [ &r ]( float ) { vugame_split_expire( r ); };
     r.split.add_state( "Racing" );
-    vugame_fsm_handlers( r, r.split.add_state( "Split" ), 0, 0, 0x483D00u, 0x483D40u );
-    vugame_fsm_handlers( r, r.split.add_state( "Result" ), 0x483D50u, 0, 0x483E00u, 0x483E40u );
+    fsm_state_t& split = r.split.add_state( "Split" );
+    vugame_fsm_handlers( r, split, 0, 0, 0x483D00u, 0x483D40u );
+    split.m_tick = [ &r ]( float ) { vugame_split_expire( r ); };
+    fsm_state_t& result = r.split.add_state( "Result" );
+    vugame_fsm_handlers( r, result, 0x483D50u, 0, 0x483E00u, 0x483E40u );
+    result.m_tick = [ &r ]( float ) { vugame_split_expire( r ); };
     r.split.add_state( "Done" );
     static const char* const k_split_transitions[ 15 ][ 3 ] = {
         { "GetFriendScores", "Done", "NoHumansPlaying" },          { "GetFriendScores", "PersonalBestConfig", "UserNotLoggedIn" },
@@ -649,6 +827,106 @@ inline void race_rules_construct( race_rules_t& r )
     r.fsm.add_transition( "", "Exit", "Exit" );
 }
 
+// ---- The other game modes' ctors: VuSlalomGame 0x48BEC0, VuTimeTrialGame
+//      0x48ED30, VuGhostGame 0x484A20 (world batch 21) ---------------------
+//
+// Created by 0x4BA060 by the mode's name (operator new 0x770 / 0x740 /
+// 0x778; VuRaceGame's 0x748), each thiscall(game, project) retn 4 and built
+// as VuRaceGame's 0x489030 is: VuGame's base 0x480BA0 first (its +0x0C /
+// +0x67C machines and its events OnUserNext 0x483170 / OnCheatFinish 0x483190,
+// VuMethod1 vtable 0x73F65C), the game's own events (0x5156E0), its FSM's
+// states (addState 0x555850) and transitions (addTransition 0x555920, "" =
+// every state), then its three HUD projects (0x4B4360) into three words.
+// VuGhostGame's FSM is at +0x700 (its +0x6F8 / +0x6FC hold two more vtables,
+// 0x73F7D0 / 0x73F7C8). VuSlalomGame also makes a Vu3dDrawComponent (0x531A40)
+// into +0x744 (its +0x24 .. +0x40 = (-1e9 x3, 1e9 x3) as an aabb; the draw
+// manager's add only when its +0x1E is set - not after the ctor). The tables
+// are verified against the three ctors run whole (case game_ctors). The
+// STATE HANDLERS ARE NOT READ: each is a hook (`unrecreated`, UNKNOWN) - the
+// rules of these modes are not recreated yet.
+struct game_mode_state_def_t
+{
+    const char* name;
+    std::uint32_t address[ 4 ];   // enter / exit / tick / draw (0: none)
+};
+
+struct game_mode_def_t
+{
+    const char* ctor;
+    const char* rtti;
+    std::uint32_t vtable, size, fsm_at;
+    std::uint32_t method0_vtable, method1_vtable, event_vtable;   // VuMethod0 / VuMethod1<float> / VuMethod1<VuParams const&>
+    const char* huds[ 3 ];
+    std::uint32_t hud_at[ 3 ];
+    std::vector< game_mode_state_def_t > states;
+    std::vector< std::array< const char*, 3 > > transitions;     // from ("" = every state), to, condition
+    std::vector< race_rules_event_t > events;                    // the game's own, after VuGame's two
+};
+
+inline constexpr race_rules_event_t k_vugame_events[ 2 ] = { { "OnUserNext", 0x483170u }, { "OnCheatFinish", 0x483190u } };
+inline constexpr std::uint32_t k_vugame_event_vtable = 0x73F65Cu;
+
+inline const std::vector< game_mode_def_t >& game_mode_defs( )
+{
+    static const std::vector< game_mode_def_t > defs = {
+        { "0x48BEC0", ".?AVVuSlalomGame@@", 0x73FA6Cu, 0x770u, 0x6F8u, 0x73FA3Cu, 0x73FA2Cu, 0x73FA5Cu,
+          { "HUDs/SlalomPreGameHUD", "HUDs/SlalomGameHUD", "HUDs/SlalomPostGameHUD" }, { 0x75Cu, 0x760u, 0x764u },
+          { { "PreGame", { 0x48DC30u, 0x48DCA0u, 0x48DCF0u, 0x48DD50u } }, { "Game", { 0x48DDB0u, 0x48DE10u, 0x48DF90u, 0x48E030u } },
+            { "PostGame", { 0x48E090u, 0x48E300u, 0x48E330u, 0x48E3D0u } }, { "Exit", { 0, 0, 0, 0 } } },
+          { { "PreGame", "Game", "StartLightsOut" }, { "Game", "PostGame", "Finished" }, { "", "Exit", "Exit" } },
+          { { "OnStartLightsOut", 0x48DB40u }, { "OnBoatRecovered", 0x48DB70u } } },
+        { "0x48ED30", ".?AVVuTimeTrialGame@@", 0x73FB9Cu, 0x740u, 0x6F8u, 0x73FB7Cu, 0x73FB6Cu, 0x73FB8Cu,
+          { "HUDs/TimeTrialPreGameHUD", "HUDs/TimeTrialGameHUD", "HUDs/TimeTrialPostGameHUD" }, { 0x72Cu, 0x730u, 0x734u },
+          { { "PreGame", { 0x490570u, 0x4905E0u, 0x490630u, 0x490690u } }, { "Game", { 0x4906F0u, 0x490750u, 0x4908B0u, 0x490950u } },
+            { "PostGame", { 0x4909B0u, 0x490BD0u, 0x490C00u, 0x486720u } }, { "Exit", { 0, 0, 0, 0 } } },
+          { { "PreGame", "Game", "StartLightsOut" }, { "Game", "PostGame", "Finished" }, { "", "Exit", "Exit" } },
+          { { "OnStartLightsOut", 0x490540u } } },
+        { "0x484A20", ".?AVVuGhostGame@@", 0x73F7DCu, 0x778u, 0x700u, 0x73F7A0u, 0x73F790u, 0x73F7B0u,
+          { "HUDs/GhostPreGameHUD", "HUDs/GhostGameHUD", "HUDs/GhostPostGameHUD" }, { 0x734u, 0x738u, 0x73Cu },
+          { { "GetLeaderboard", { 0x485890u, 0x485AA0u, 0x485AF0u, 0 } }, { "LoadGhosts", { 0x485B50u, 0x485AA0u, 0, 0 } },
+            { "PreGame", { 0x486060u, 0x486660u, 0x4866C0u, 0x486720u } }, { "Game", { 0x486780u, 0x486880u, 0x486A70u, 0x486C00u } },
+            { "PostGame", { 0x486EC0u, 0x4872A0u, 0x4872D0u, 0x487370u } }, { "ShowError", { 0x4873D0u, 0x487560u, 0, 0 } },
+            { "Exit", { 0, 0, 0, 0 } } },
+          { { "GetLeaderboard", "LoadGhosts", "Success" }, { "GetLeaderboard", "ShowError", "Failure" }, { "LoadGhosts", "PreGame", "Success" },
+            { "LoadGhosts", "ShowError", "Failure" }, { "PreGame", "Game", "StartLightsOut" }, { "Game", "PostGame", "Finished" },
+            { "ShowError", "Exit", "MessageBoxClosed" }, { "", "Exit", "Exit" } },
+          { { "OnStartLightsOut", 0x485860u } } } };
+    return defs;
+}
+
+// The ctor's FSM: the states in order (each handler a hook calling
+// `unrecreated` - not read), then the transitions in the ctor's order.
+inline void game_mode_construct( c_fsm& f, const game_mode_def_t& d, const std::function< void( std::uint32_t, const char* ) >& unrecreated )
+{
+    f = c_fsm{ };
+    for ( const game_mode_state_def_t& s : d.states )
+    {
+        fsm_state_t& st = f.add_state( s.name );
+        for ( int k = 0; k < 4; ++k )
+            st.m_address[ k ] = s.address[ k ];
+        const std::string what = std::string( d.rtti ) + " " + s.name;
+        const auto hook = [ unrecreated, what ]( std::uint32_t a, const char* verb ) {
+            return [ unrecreated, what, a, verb ] {
+                if ( unrecreated )
+                    unrecreated( a, ( what + " " + verb ).c_str( ) );
+            };
+        };
+        if ( s.address[ 0 ] )
+            st.m_enter = hook( s.address[ 0 ], "enter" );
+        if ( s.address[ 1 ] )
+            st.m_exit = hook( s.address[ 1 ], "exit" );
+        if ( s.address[ 2 ] )
+        {
+            auto h = hook( s.address[ 2 ], "tick" );
+            st.m_tick = [ h ]( float ) { h( ); };
+        }
+        if ( s.address[ 3 ] )
+            st.m_draw = hook( s.address[ 3 ], "draw" );
+    }
+    for ( const auto& t : d.transitions )
+        f.add_transition( t[ 0 ], t[ 1 ], t[ 2 ] );
+}
+
 // VuRaceGame slot 5 0x4896A0's "the state machine enters its first state":
 // the current state's (+0x6F8 -> PreGame) enter.
 inline void race_rules_start( race_rules_t& r )
@@ -677,6 +955,55 @@ inline void race_rules_on_buoy_hit( race_rules_t& r, const std::uint8_t* params,
             std::memcpy( &value, params + 4, 4 );
     }
     r.buoys |= 1u << ( static_cast< std::uint32_t >( value ) & 31u );
+}
+
+// ---- VuCheckpointBuoyEntity's contact callback 0x4350B0 (the broadcaster) ---
+//
+// VuRigidBodyContactCallback slot 0 (vtable 0x73A24C; thiscall on the
+// entity's +0xB4 part - the pointer VuDynamicGamePropEntity's gameInitialize
+// 0x437580 stores in its body's +0x2C4; the contact; retn 4). First the base
+// callback 0x437F40 (VuDynamicGamePropEntity's own contact response - NOT
+// recreated: the caller's `base` hook). Then the contact's other body (+8):
+// its word +0x2CA must EQUAL 0x10 (cmp word / jne - not a bit test), its
+// owner +0x2C0 non-null and its vt+4 RTTI chain must reach VuBoatEntity
+// 0x73628C; the owner's driver (+0x220) vt+0x38 (0x404BD0, true in every
+// driver vtable) and vt+0x30 (boat_driver_kind's human) must both answer
+// true. Then a VuParams on the stack (size +0x80 = 0) gets 0x434E50's int:
+// a 4-byte tag 0 and the entity's +0x184 (the part's +0xD0: the buoy's
+// index), size 8; and VuEventManager g 0x759028's 0x505650 broadcasts it as
+// "OnCheckPointBuoyHit" (its FNV-1a hash -> 0x505690). The handler is
+// VuRaceGame's 0x48A7B0 (race_rules_on_buoy_hit).
+// Answers 1 (the broadcast: `params` filled, `size` 8), 0 (none), -1 for a
+// driver vtable that is not one of the five (UNKNOWN - no answer made up).
+inline constexpr const char* k_buoy_hit_event = "OnCheckPointBuoyHit";
+
+struct buoy_contact_t
+{
+    std::uint16_t group = 0;         // the other body's +0x2CA
+    bool owner = false;              // its +0x2C0 non-null
+    bool owner_is_boat = false;      // the owner's vt+4 RTTI chain reaches 0x73628C
+    std::uint32_t driver_vtable = 0; // the owner's +0x220 driver's vtable
+    std::int32_t index = 0;          // the buoy entity's +0x184
+};
+
+inline int checkpoint_buoy_contact( const buoy_contact_t& c, const std::function< void( ) >& base, std::uint8_t ( &params )[ 0x84 ], std::int32_t& size )
+{
+    if ( base )
+        base( );
+    size = 0;
+    if ( c.group != 0x10 || !c.owner || !c.owner_is_boat )
+        return 0;
+    boat_driver_kind_t kind;
+    if ( !boat_driver_kind( c.driver_vtable, kind ) )
+        return -1;
+    if ( !kind.human )   // vt+0x38 is true for all five
+        return 0;
+    const std::int32_t tag = 0;
+    std::memcpy( params, &tag, 4 );
+    std::memcpy( params + 4, &c.index, 4 );
+    size = 8;
+    std::memcpy( params + 0x80, &size, 4 );
+    return 1;
 }
 
 // Slot 7 0x489A40(dt): evaluate 0x555AD0, the current state's tick, +0x71C +=

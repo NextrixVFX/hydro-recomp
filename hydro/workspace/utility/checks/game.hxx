@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/world/rules.hxx>
+#include <workspace/core/world/tick.hxx>
 
 #include <cstdio>
 #include <cstring>
@@ -237,5 +238,347 @@ inline bool verify_race_game_fsm( )
                      static_cast< int >( g_golden_rgf_vectors_count ), frames, calls );
     else
         LOG_ERROR( "race game fsm FAILED %d checks", failed );
+    return failed == 0;
+}
+
+// checkpoint_buoy_contact (core/world rules.hxx) against VuCheckpointBuoyEntity's
+// contact callback 0x4350B0 run real (oracle case buoy_hit; the base 0x437F40
+// and the broadcast 0x505690 intercepted): per contact whether the base ran
+// first, whether a broadcast was made, on the event manager g 0x759028, its
+// hash (0x505650's FNV-1a of the name), the params' two words and the size -
+// one failure per differing contact.
+inline bool verify_buoy_hit( )
+{
+    int failed = 0, broadcasts = 0;
+    const std::uint32_t hash = boat_fnv_range( reinterpret_cast< const std::uint8_t* >( k_buoy_hit_event ),
+                                               static_cast< std::uint32_t >( std::strlen( k_buoy_hit_event ) ), 0x811C9DC5u );
+    for ( std::size_t k = 0; k < g_golden_buoy_hit_count; ++k )
+    {
+        const golden_buoy_hit_t& g = g_golden_buoy_hit[ k ];
+        buoy_contact_t c;
+        c.group = static_cast< std::uint16_t >( g.m_group );
+        c.owner = g.m_owner != 0;
+        c.owner_is_boat = g.m_rtti == 1 || g.m_rtti == 2;
+        c.driver_vtable = g.m_vtable;
+        c.index = g.m_index;
+        int base = 0;
+        std::uint8_t params[ 0x84 ] = { };
+        std::int32_t size = 0;
+        const int r = checkpoint_buoy_contact( c, [ & ]( ) { ++base; }, params, size );
+        std::uint32_t p0 = 0, p1 = 0;
+        std::memcpy( &p0, params, 4 );
+        std::memcpy( &p1, params + 4, 4 );
+        const bool same = r >= 0 && base == g.m_base && r == g.m_broadcast &&
+                          ( r == 0 || ( g.m_manager == 1 && hash == g.m_hash && p0 == g.m_p0 && p1 == g.m_p1 && size == g.m_size ) );
+        broadcasts += r == 1 ? 1 : 0;
+        if ( !same && ++failed <= 10 )
+            LOG_ERROR( "buoy hit: contact %d (group 0x%X owner %d rtti %d vtable 0x%X index %d): ours %d base %d hash 0x%X %08X %08X size %d, retail %d %d 0x%X %08X %08X %d",
+                       static_cast< int >( k ), g.m_group, g.m_owner, g.m_rtti, g.m_vtable, g.m_index, r, base, hash, p0, p1, size,
+                       g.m_broadcast, g.m_base, g.m_hash, g.m_p0, g.m_p1, g.m_size );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "checkpoint_buoy_contact matches VuCheckpointBuoyEntity's 0x4350B0: %d contacts, %d OnCheckPointBuoyHit broadcasts (hash, params, size)",
+                     static_cast< int >( g_golden_buoy_hit_count ), broadcasts );
+    else
+        LOG_ERROR( "buoy hit FAILED %d contacts", failed );
+    return failed == 0;
+}
+// tick_run / tick_register (core/world tick.hxx) when a handler registers
+// another DURING its call, against retail's tick 0x4F72F0 with slot 8
+// 0x4F7550 run from inside the handler (oracle case tick_same_pass): the
+// handler loop reads the node's next AFTER the call and re-reads the list head
+// each step (0x4F7415 / 0x4F741D), the phase loop likewise (0x4F7431 /
+// 0x4F7433) - so a handler pushed on the back of the running phase, or of a
+// later phase, runs in the SAME pass; one put in an earlier phase waits for
+// the next tick. Per scenario three ticks' call order - one failure per tick.
+struct tick_same_pass_probe_t
+{
+    tick_manager_t* tm = nullptr;
+    std::vector< int >* calls = nullptr;
+    const int* reg = nullptr;       // caller, new handler, phase
+    bool* once = nullptr;
+    int index = 0;
+    std::vector< tick_same_pass_probe_t >* all = nullptr;
+};
+
+inline const char* tick_phase_name( const tick_manager_t& tm, int index )
+{
+    int k = 0;
+    for ( const tick_phase_t& p : tm.phases )
+        if ( k++ == index )
+            return p.name.c_str( );
+    return "";
+}
+
+inline void tick_same_pass_call( void* user, float )
+{
+    tick_same_pass_probe_t& p = *static_cast< tick_same_pass_probe_t* >( user );
+    p.calls->push_back( p.index );
+    if ( p.index == p.reg[ 0 ] && !*p.once )
+    {
+        *p.once = true;
+        tick_same_pass_probe_t& n = ( *p.all )[ static_cast< std::size_t >( p.reg[ 1 ] ) ];
+        tick_register( *p.tm, { &n, tick_same_pass_call, &n }, tick_phase_name( *p.tm, p.reg[ 2 ] ) );
+    }
+}
+
+inline bool verify_tick_same_pass( )
+{
+    int failed = 0;
+    for ( std::size_t v = 0; v < g_golden_tick_same_pass_count; ++v )
+    {
+        const golden_tick_same_pass_t& g = g_golden_tick_same_pass[ v ];
+        tick_manager_t tm;
+        tick_manager_init( tm );
+        std::vector< int > calls;
+        bool once = false;
+        std::vector< tick_same_pass_probe_t > probes( 4 );
+        for ( int h = 0; h < 4; ++h )
+            probes[ static_cast< std::size_t >( h ) ] = { &tm, &calls, g.m_register, &once, h, &probes };
+        for ( int k = 0; k < 2; ++k )
+            if ( g.m_initial[ 2 * k ] >= 0 )
+            {
+                tick_same_pass_probe_t& p = probes[ static_cast< std::size_t >( g.m_initial[ 2 * k ] ) ];
+                tick_register( tm, { &p, tick_same_pass_call, &p }, tick_phase_name( tm, g.m_initial[ 2 * k + 1 ] ) );
+            }
+        for ( int t = 0; t < 3; ++t )
+        {
+            calls.clear( );
+            tick_run( tm, 1000.0 + t / 60.0 );
+            bool same = calls.size( ) == static_cast< std::size_t >( g.m_count[ t ] );
+            for ( std::size_t c = 0; same && c < calls.size( ); ++c )
+                same = calls[ c ] == g_golden_tick_same_pass_calls[ g.m_first[ t ] + static_cast< int >( c ) ];
+            if ( !same && ++failed <= 10 )
+                LOG_ERROR( "tick same pass: scenario %d tick %d: %d calls, retail %d", static_cast< int >( v ), t, static_cast< int >( calls.size( ) ), g.m_count[ t ] );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "tick_run matches retail's 0x4F72F0 with a registration made inside a handler (%d scenarios x 3 ticks: same / later phase in the same pass, "
+                     "an earlier phase on the next tick)", static_cast< int >( g_golden_tick_same_pass_count ) );
+    else
+        LOG_ERROR( "tick same pass FAILED %d ticks", failed );
+    return failed == 0;
+}
+// game_mode_defs / game_mode_construct (core/world rules.hxx) against the
+// Slalom / TimeTrial / Ghost ctors 0x48BEC0 / 0x48ED30 / 0x484A20 run whole
+// (oracle case game_ctors): per game the vtable, RTTI name, size, the FSM's
+// offset, the three HUD loads and their words; the FSM's states (name, flag,
+// FNV hash, the four methods and their VuMethod vtables), transitions,
+// conditions, current state and time; the events (VuGame's two, then the
+// game's: name, VuMethod1 vtable, method); VuGame's +0x0C / +0x67C machines'
+// state counts and current state - one failure per differing item.
+inline bool verify_game_ctors( )
+{
+    int failed = 0, states = 0, events = 0;
+    const auto fail = [ & ]( const std::string& what ) {
+        if ( ++failed <= 10 )
+            LOG_ERROR( "game ctors: %s", what.c_str( ) );
+    };
+    const std::vector< game_mode_def_t >& defs = game_mode_defs( );
+    if ( defs.size( ) != g_golden_gc_games_count )
+        fail( "game count differs" );
+    for ( std::size_t k = 0; k < g_golden_gc_games_count && k < defs.size( ); ++k )
+    {
+        const golden_gc_game_t& g = g_golden_gc_games[ k ];
+        const game_mode_def_t& d = defs[ k ];
+        const std::string who = g.m_ctor;
+        if ( who != d.ctor || std::string( g.m_rtti ) != d.rtti || g.m_vtable != d.vtable || g.m_size != d.size || g.m_fsm_at != d.fsm_at )
+            fail( who + ": the class / vtable / size / FSM offset differ" );
+        for ( int h = 0; h < 3; ++h )
+            if ( std::string( g.m_loaded[ h ] ) != d.huds[ h ] || g.m_load_at[ h ] != d.hud_at[ h ] )
+                fail( who + ": HUD load " + std::to_string( h ) + " differs" );
+        c_fsm f;
+        game_mode_construct( f, d, nullptr );
+        if ( f.m_states.size( ) != static_cast< std::size_t >( g.m_states ) )
+            fail( who + ": state count differs" );
+        for ( int s = 0; s < g.m_states && static_cast< std::size_t >( s ) < f.m_states.size( ); ++s )
+        {
+            const golden_rgf_state_t& gs = g_golden_gc_states[ g.m_state + s ];
+            const fsm_state_t& st = *f.m_states[ static_cast< std::size_t >( s ) ];
+            bool same = st.m_name == gs.m_name && static_cast< int >( st.m_flag ) == gs.m_flag && st.m_hash == gs.m_hash &&
+                        st.m_transitions.size( ) == static_cast< std::size_t >( gs.m_trs );
+            for ( int m = 0; m < 4; ++m )
+            {
+                const std::uint32_t vt = st.m_address[ m ] == 0 ? 0u : m == 2 ? d.method1_vtable : d.method0_vtable;
+                same = same && st.m_address[ m ] == gs.m_method[ m ] && gs.m_vtable[ m ] == vt;
+            }
+            for ( int t = 0; same && t < gs.m_trs; ++t )
+                same = st.m_transitions[ static_cast< std::size_t >( t ) ].first == g_golden_gc_transitions[ gs.m_tr + t ][ 0 ] &&
+                       st.m_transitions[ static_cast< std::size_t >( t ) ].second == g_golden_gc_transitions[ gs.m_tr + t ][ 1 ];
+            if ( !same )
+                fail( who + ": state " + gs.m_name + " differs" );
+            ++states;
+        }
+        if ( f.m_conditions.size( ) != static_cast< std::size_t >( g.m_conditions ) )
+            fail( who + ": condition count differs" );
+        for ( int c = 0; c < g.m_conditions && static_cast< std::size_t >( c ) < f.m_conditions.size( ); ++c )
+        {
+            const golden_rgf_condition_t& gc = g_golden_gc_conditions[ g.m_condition + c ];
+            const auto& fc = f.m_conditions[ static_cast< std::size_t >( c ) ];
+            if ( fc.m_name != gc.m_name || fc.m_hash != gc.m_hash || fc.m_value != gc.m_value || fc.m_pulse != gc.m_pulse )
+                fail( who + ": condition " + gc.m_name + " differs" );
+        }
+        unsigned time;
+        std::memcpy( &time, &f.m_time, 4 );
+        if ( f.m_current != g.m_current || time != g.m_time )
+            fail( who + ": the current state / time after the ctor differ" );
+        std::vector< std::pair< race_rules_event_t, std::uint32_t > > ev;
+        for ( const race_rules_event_t& e : k_vugame_events )
+            ev.push_back( { e, k_vugame_event_vtable } );
+        for ( const race_rules_event_t& e : d.events )
+            ev.push_back( { e, d.event_vtable } );
+        if ( ev.size( ) != static_cast< std::size_t >( g.m_events ) )
+            fail( who + ": event count differs" );
+        for ( int e = 0; e < g.m_events && static_cast< std::size_t >( e ) < ev.size( ); ++e )
+        {
+            const golden_gc_event_t& ge = g_golden_gc_events[ g.m_event + e ];
+            if ( std::strcmp( ev[ static_cast< std::size_t >( e ) ].first.name, ge.m_name ) != 0 || ev[ static_cast< std::size_t >( e ) ].first.method != ge.m_method ||
+                 ev[ static_cast< std::size_t >( e ) ].second != ge.m_vtable )
+                fail( who + ": event " + ge.m_name + " differs" );
+            ++events;
+        }
+        race_rules_t probe;
+        vugame_fsms_construct( probe );
+        vugame_fsm_begin( probe.event );
+        vugame_fsm_begin( probe.split );
+        if ( probe.event.m_states.size( ) != static_cast< std::size_t >( g.m_states_0c ) || probe.split.m_states.size( ) != static_cast< std::size_t >( g.m_states_67c ) ||
+             g.m_current_0c != 0 || g.m_current_67c != 0 )
+            fail( who + ": VuGame's +0x0C / +0x67C machines differ" );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "game_mode_defs match the Slalom / TimeTrial / Ghost ctors 0x48BEC0 / 0x48ED30 / 0x484A20 run whole: %d games, %d states, %d events, "
+                     "9 HUD loads", static_cast< int >( g_golden_gc_games_count ), states, events );
+    else
+        LOG_ERROR( "game ctors FAILED %d checks", failed );
+    return failed == 0;
+}
+// vugame_results_* / vugame_awards_* (core/world rules.hxx) against VuGame's
+// Results / Awards exit, tick and draw 0x484250 .. 0x484580 run real (oracle
+// case vugame_handlers): per call the hooks reached in order (as text), the
+// four +0x0C conditions' value / pulse after, and the screens' presence after
+// - one failure per differing call.
+inline bool verify_vugame_handlers( )
+{
+    int failed = 0;
+    static const char* const k_names[ 4 ] = { "EventFinished", "OnUserNext", "NoResults", "AwardsDone" };
+    for ( std::size_t k = 0; k < g_golden_vh_count; ++k )
+    {
+        const golden_vh_t& g = g_golden_vh[ k ];
+        race_rules_t r;
+        vugame_fsms_construct( r );
+        bool shape = r.event.m_conditions.size( ) == 4;
+        for ( std::size_t c = 0; shape && c < 4; ++c )
+        {
+            shape = r.event.m_conditions[ c ].m_name == k_names[ c ];
+            r.event.m_conditions[ c ].m_value = static_cast< std::uint8_t >( g.m_before[ 2 * c ] );
+            r.event.m_conditions[ c ].m_pulse = static_cast< std::uint8_t >( g.m_before[ 2 * c + 1 ] );
+        }
+        r.results_screen = g.m_screen != 0;
+        r.award_screen = g.m_award != 0;
+        std::vector< std::string > got;
+        char text[ 64 ];
+        r.screen_hooks.screen = [ & ]( int screen, int verb, float dt ) {
+            const char* who = screen == 0 ? "screen" : "award";
+            unsigned bits;
+            std::memcpy( &bits, &dt, 4 );
+            if ( verb == 0 )
+                std::snprintf( text, sizeof( text ), screen == 0 ? "%s 0x8" : "%s 0x47F4C0", who );
+            else if ( verb == 1 )
+                std::snprintf( text, sizeof( text ), "%s dtor", who );
+            else if ( verb == 2 )
+                std::snprintf( text, sizeof( text ), "%s 0xC %08X", who, bits );
+            else
+                std::snprintf( text, sizeof( text ), "%s 0x10", who );
+            got.push_back( text );
+        };
+        r.screen_hooks.json_type = [ & ]( const char* name ) { got.push_back( std::string( "json " ) + name ); return g.m_json; };
+        r.screen_hooks.paused = [ & ] { return g.m_paused != 0; };
+        r.screen_hooks.game_results_tick = [ & ]( float dt ) {
+            unsigned bits;
+            std::memcpy( &bits, &dt, 4 );
+            std::snprintf( text, sizeof( text ), "game 0x30 %08X", bits );
+            got.push_back( text );
+        };
+        r.screen_hooks.award_done = [ & ] { got.push_back( "award 0x47F720" ); return g.m_done != 0; };
+        float dt;
+        std::memcpy( &dt, &g.m_dt, 4 );
+        switch ( g.m_fn )
+        {
+        case 0: vugame_results_exit( r ); break;
+        case 1: vugame_results_tick( r, dt ); break;
+        case 2: vugame_results_draw( r ); break;
+        case 3: vugame_awards_exit( r ); break;
+        case 4: vugame_awards_tick( r, dt ); break;
+        default: vugame_awards_draw( r ); break;
+        }
+        bool same = shape && got.size( ) == static_cast< std::size_t >( g.m_calls ) && r.results_screen == ( g.m_screen_after != 0 ) &&
+                    r.award_screen == ( g.m_award_after != 0 );
+        for ( std::size_t c = 0; same && c < got.size( ); ++c )
+            same = got[ c ] == g_golden_vh_calls[ g.m_call + static_cast< int >( c ) ];
+        for ( std::size_t c = 0; same && c < 4; ++c )
+            same = r.event.m_conditions[ c ].m_value == g.m_after[ 2 * c ] && r.event.m_conditions[ c ].m_pulse == g.m_after[ 2 * c + 1 ];
+        if ( !same && ++failed <= 10 )
+            LOG_ERROR( "vugame handlers: call %d (fn %d screen %d award %d paused %d json %d done %d): %d calls%s, retail %d%s", static_cast< int >( k ),
+                       g.m_fn, g.m_screen, g.m_award, g.m_paused, g.m_json, g.m_done, static_cast< int >( got.size( ) ),
+                       got.empty( ) ? "" : ( " first '" + got[ 0 ] + "'" ).c_str( ), g.m_calls,
+                       g.m_calls ? ( std::string( " first '" ) + g_golden_vh_calls[ g.m_call ] + "'" ).c_str( ) : "" );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuGame's Results / Awards exit, tick and draw match retail's 0x484250 .. 0x484580: %d calls", static_cast< int >( g_golden_vh_count ) );
+    else
+        LOG_ERROR( "vugame handlers FAILED %d calls", failed );
+    return failed == 0;
+}
+// vugame_split_expire / vugame_personal_best_enter (core/world rules.hxx)
+// against the +0x67C machine's Intro / Split / Result ticks 0x483CB0 /
+// 0x483D00 / 0x483E00 and PersonalBestConfig's enter 0x483C40 run real (oracle
+// case split_handlers): per call the hooks reached, the five named conditions'
+// value / pulse after, +0x6A4 and +0x6AC after - one failure per differing call.
+inline bool verify_split_handlers( )
+{
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_split_handlers_count; ++k )
+    {
+        const golden_split_handler_t& g = g_golden_split_handlers[ k ];
+        race_rules_t r;
+        vugame_fsms_construct( r );
+        bool shape = true;
+        for ( int c = 0; c < 5; ++c )
+        {
+            const int i = r.split.condition_index( g_golden_split_handler_names[ c ] );
+            shape = shape && i >= 0;
+            if ( i >= 0 )
+            {
+                r.split.m_conditions[ static_cast< std::size_t >( i ) ].m_value = static_cast< std::uint8_t >( g.m_before[ 2 * c ] );
+                r.split.m_conditions[ static_cast< std::size_t >( i ) ].m_pulse = static_cast< std::uint8_t >( g.m_before[ 2 * c + 1 ] );
+            }
+        }
+        std::memcpy( &r.split.m_time, &g.m_time, 4 );
+        std::memcpy( &r.split_duration, &g.m_duration, 4 );
+        r.split_kind = g.m_kind_before;
+        std::vector< std::string > got;
+        r.screen_hooks.personal_best = [ & ] { got.push_back( "game 0x38" ); return g.m_pb != 0; };
+        r.screen_hooks.string_db = [ & ]( const char* key ) { got.push_back( std::string( "string " ) + key ); return std::string( g.m_text ); };
+        if ( g.m_fn == 3 )
+            vugame_personal_best_enter( r );
+        else
+            vugame_split_expire( r );
+        bool same = shape && got.size( ) == static_cast< std::size_t >( g.m_calls ) && r.split_kind == g.m_kind && r.opponent == g.m_name;
+        for ( std::size_t c = 0; same && c < got.size( ); ++c )
+            same = got[ c ] == g_golden_split_handler_calls[ g.m_call + static_cast< int >( c ) ];
+        for ( int c = 0; same && c < 5; ++c )
+        {
+            const auto& fc = r.split.m_conditions[ static_cast< std::size_t >( r.split.condition_index( g_golden_split_handler_names[ c ] ) ) ];
+            same = fc.m_value == g.m_after[ 2 * c ] && fc.m_pulse == g.m_after[ 2 * c + 1 ];
+        }
+        if ( !same && ++failed <= 10 )
+            LOG_ERROR( "split handlers: call %d (fn %d time 0x%08X duration 0x%08X pb %d): %d calls, kind %d '%s'; retail %d, %d '%s'", static_cast< int >( k ), g.m_fn,
+                       g.m_time, g.m_duration, g.m_pb, static_cast< int >( got.size( ) ), r.split_kind, r.opponent.c_str( ), g.m_calls, g.m_kind, g.m_name );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuGame's +0x67C Intro / Split / Result ticks and PersonalBestConfig enter match retail's 0x483CB0 / 0x483D00 / 0x483E00 / 0x483C40: %d calls",
+                     static_cast< int >( g_golden_split_handlers_count ) );
+    else
+        LOG_ERROR( "split handlers FAILED %d calls", failed );
     return failed == 0;
 }

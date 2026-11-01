@@ -118,7 +118,9 @@ public:
             if ( name && m_on_input )
                 m_on_input( *link.m_entity, name, params, false );
             ++m_unknown;
-            if ( m_answer && name )
+            if ( m_answer_params && name )
+                out = m_answer_params( *link.m_entity, name, params );
+            else if ( m_answer && name )
                 out = m_answer( *link.m_entity, name );
             out.m_known = false;
             return out;
@@ -157,4 +159,6 @@ public:
     std::function< bool( const entity_t&, const char* ) > m_bound_known;
     std::function< ui_ret_t( entity_t&, const char*, const ui_params_t& ) > m_bound_run;
     std::function< ui_ret_t( const entity_t&, const char* ) > m_answer;
+    // Optional, preferred over m_answer: the same with the params (the race HUD's world-owned inputs).
+    std::function< ui_ret_t( entity_t&, const char*, const ui_params_t& ) > m_answer_params;
 };

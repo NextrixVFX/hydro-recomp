@@ -4,6 +4,7 @@
 #include <workspace/core/boat/rays.hxx>
 #include <workspace/core/boat/effects.hxx>
 #include <workspace/core/collision/leaves.hxx>
+#include <workspace/core/collision/teardown.hxx>
 
 #include <array>
 #include <cstring>
@@ -1351,5 +1352,407 @@ inline bool verify_bt_dtors( )
         return true;
     }
     LOG_ERROR( "bt_dtors FAILED %d of %u", failed, n );
+    return false;
+}
+// verify_needs_collision (boat batch 18): engine collision/dispatch.hxx
+// dispatcher_needs_collision (now calling dynamics/wrapper.hxx
+// rigid_check_collide_with for the +0x108 override) against cases/boat.py
+// needs_collision - 0x56D710 run whole on the real VuRigidBody vtable.
+inline bool verify_needs_collision( )
+{
+    const unsigned* g = g_golden_needs_collision_words;
+    const unsigned n = *g++;
+    int failed = 0, overrides = 0, refused = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        collision_object_t o[ 3 ];
+        o[ 0 ].activation_state = static_cast< int >( *g++ );
+        o[ 1 ].activation_state = static_cast< int >( *g++ );
+        o[ 0 ].check_collide = *g++ != 0;
+        o[ 1 ].internal_type = static_cast< int >( *g++ );
+        o[ 0 ].constraint_ref_count = static_cast< std::int32_t >( *g++ );
+        solver_rigid_t bodies[ 3 ];
+        for ( int k = 0; k < 3; ++k )
+            o[ k ].body.object = &bodies[ k ];
+        std::vector< rigid_constraint_ref_t > refs( *g++ );
+        for ( rigid_constraint_ref_t& r : refs )
+        {
+            r.a = &bodies[ *g++ ];
+            r.b = &bodies[ *g++ ];
+        }
+        o[ 0 ].constraint_refs = refs.data( );
+        const int want = static_cast< int >( *g++ );
+        const int got = dispatcher_needs_collision( o[ 0 ], o[ 1 ] );
+        overrides += o[ 0 ].check_collide ? 1 : 0;
+        refused += want == 0 ? 1 : 0;
+        if ( got != want && ++failed <= 4 )
+            LOG_ERROR( "needs_collision %u: %d (retail %d)", v, got, want );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "needsCollision 0x56D710 + VuRigidBody slot 0 0x50E7B0 (dispatcher_needs_collision) match retail: %u vectors, %d through "
+                     "the override, %d refused", n, overrides, refused );
+        return true;
+    }
+    LOG_ERROR( "needs_collision FAILED %d of %u", failed, n );
+    return false;
+}
+// verify_debris_follow (boat batch 18): boat/effects.hxx boat_debris_follow
+// behind state.hxx boat_decision_tick's gate (+0x46B, then a signed piece
+// count > 0 - reproduced here, not called) against cases/boat.py
+// debris_follow: retail's segment 0x41F103 .. 0x41F1A3 run on its own.
+inline bool verify_debris_follow( )
+{
+    const unsigned* g = g_golden_debris_follow_words;
+    const unsigned n = *g++;
+    int failed = 0, follows = 0;
+    struct log_t { std::vector< unsigned > words; };
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const bool destroyed = *g++ != 0;
+        const std::int32_t count = static_cast< std::int32_t >( *g++ );
+        float matrix[ 16 ];
+        std::memcpy( matrix, g, 64 );
+        g += 16;
+        vu_rigid_body_t body, piece;
+        std::memcpy( &body, g, 0x2D4 );
+        g += 0x2D4 / 4;
+        std::memcpy( &piece, g, 0x2D4 );
+        g += 0x2D4 / 4;
+        const unsigned exit = *g++, nlog = *g++;
+        const std::vector< unsigned > want( g, g + 18 * nlog );
+        g += 18 * nlog;
+        log_t log;
+        unsigned got_exit = 2;
+        if ( destroyed )
+        {
+            got_exit = 1;
+            if ( count > 0 )
+            {
+                ++follows;
+                boat_debris_follow( body.body, piece.body, matrix, []( void* u, const float* m ) {
+                    std::vector< unsigned >& w = static_cast< log_t* >( u )->words;
+                    w.push_back( 0 );
+                    w.push_back( 1 );
+                    const unsigned* x = reinterpret_cast< const unsigned* >( m );
+                    w.insert( w.end( ), x, x + 16 );
+                }, &log );
+            }
+        }
+        const bool same = got_exit == exit && log.words == want && std::memcmp( &body, g, 0x2D4 ) == 0 &&
+                          std::memcmp( &piece, g + 0x2D4 / 4, 0x2D4 ) == 0;
+        g += 2 * ( 0x2D4 / 4 );
+        if ( !same && ++failed <= 4 )
+            LOG_ERROR( "debris_follow %u: exit %u (retail %u), %u calls (retail %u)", v, got_exit, exit,
+                       static_cast< unsigned >( log.words.size( ) / 18 ), nlog );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the destroyed branch 0x41F103 .. 0x41F1A3 (boat_debris_follow behind boat_decision_tick's gate) matches retail: %u vectors, "
+                     "%d follows (setWorldTransform's matrix, both bodies)", n, follows );
+        return true;
+    }
+    LOG_ERROR( "debris_follow FAILED %d of %u", failed, n );
+    return false;
+}
+// verify_destroyed_event (boat batch 18): boat/effects.hxx boat_destroyed_event
+// against cases/boat.py destroyed_event - 0x41E240 run whole, FMOD logged. The
+// hooks stand for the platform's FMOD; what retail hands them beyond the name
+// (g_vuaudio +8 the system, mode 1, null velocity / orientation) is checked
+// as constants of the golden calls. The get hook answers as the case did
+// (false for a name holding "bad", the handle the case wrote either way).
+inline bool verify_destroyed_event( )
+{
+    const unsigned* g = g_golden_destroyed_event_words;
+    const unsigned n = *g++;
+    int failed = 0, started = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned length = *g++;
+        const std::string name( reinterpret_cast< const char* >( g ), length );
+        g += ( length + 3 ) / 4;
+        float position[ 3 ];
+        std::memcpy( position, g, 12 );
+        g += 3;
+        const unsigned ncalls = *g++;
+        std::vector< unsigned > want;
+        bool constants = true;
+        for ( unsigned c = 0; c < ncalls; ++c )
+        {
+            const unsigned kind = *g++;
+            want.push_back( kind );
+            if ( kind == 1 )
+            {
+                constants = constants && g[ 0 ] == 0x5150u && g[ 1 ] == 1u;
+                want.push_back( g[ 2 ] );
+                g += 3;
+            }
+            else if ( kind == 2 )
+            {
+                want.insert( want.end( ), g, g + 4 );
+                constants = constants && g[ 4 ] == 0u && g[ 5 ] == 0u;
+                g += 6;
+            }
+            else
+                want.push_back( *g++ );
+        }
+        struct ctx_t
+        {
+            std::vector< unsigned > got;
+            unsigned handle;
+        } c{ { }, 0xE001u + v };
+        boat_event_hooks_t h;
+        h.user = &c;
+        h.get = []( void* u, const std::string& s, std::uint32_t& ev ) {
+            ctx_t& x = *static_cast< ctx_t* >( u );
+            x.got.push_back( 1 );
+            x.got.push_back( x.handle );
+            ev = x.handle;
+            return s.find( "bad" ) == std::string::npos;
+        };
+        h.attributes = []( void* u, std::uint32_t ev, const float* p ) {
+            ctx_t& x = *static_cast< ctx_t* >( u );
+            x.got.push_back( 2 );
+            x.got.push_back( ev );
+            const unsigned* w = reinterpret_cast< const unsigned* >( p );
+            x.got.insert( x.got.end( ), w, w + 3 );
+        };
+        h.start = []( void* u, std::uint32_t ev ) {
+            ctx_t& x = *static_cast< ctx_t* >( u );
+            x.got.push_back( 3 );
+            x.got.push_back( ev );
+        };
+        boat_destroyed_event( name, position, h );
+        started += ncalls == 3 ? 1 : 0;
+        if ( ( c.got != want || !constants ) && ++failed <= 4 )
+            LOG_ERROR( "destroyed_event %u (%s): %u words (retail %u)%s", v, name.c_str( ), static_cast< unsigned >( c.got.size( ) ),
+                       static_cast< unsigned >( want.size( ) ), constants ? "" : ", a constant differs" );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "0x41E240 (boat_destroyed_event) matches retail: %u events, %d started", n, started );
+        return true;
+    }
+    LOG_ERROR( "destroyed_event FAILED %d of %u", failed, n );
+    return false;
+}
+// verify_bt_teardown (boat batch 18): engine collision/teardown.hxx against
+// cases/boat.py bt_teardown - the twelve scalar deleting dtors 0x56D290 /
+// 0x5B53E0 / 0x54C0C0 / 0x56DD30 / 0x56FB80 / 0x624580 / 0x6000F0 / 0x56CCD0 /
+// 0x586320 / 0x43D5E0 / 0x5471A0 / 0x6060A0 run whole on fake objects in one arena: the
+// arena after, gNumAlignedFree, the frees, the deletes, the virtual calls.
+inline bool verify_bt_teardown( )
+{
+    struct arena_t
+    {
+        std::uint32_t base = 0;
+        std::vector< std::uint8_t > bytes;
+        bool outside = false;
+        std::vector< unsigned > frees, deletes;
+        const unsigned* vcalls = nullptr;
+        unsigned nv = 0, at = 0;
+        bool vbad = false;
+        std::uint8_t* p( std::uint32_t a, unsigned n )
+        {
+            if ( a < base || a + n > base + bytes.size( ) )
+            {
+                outside = true;
+                return nullptr;
+            }
+            return bytes.data( ) + ( a - base );
+        }
+    };
+    const unsigned* g = g_golden_bt_teardown_words;
+    const unsigned n = *g++;
+    int failed = 0, frees = 0, calls = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = *g++, address = *g++, flags = *g++, self = *g++, base = *g++, eax = *g++, c0 = *g++, c1 = *g++;
+        arena_t x;
+        x.base = base;
+        const unsigned nf = *g++;
+        const std::vector< unsigned > want_frees( g, g + nf );
+        g += nf;
+        const unsigned nd = *g++;
+        const std::vector< unsigned > want_deletes( g, g + nd );
+        g += nd;
+        x.nv = *g++;
+        x.vcalls = g;
+        for ( unsigned k = 0; k < x.nv; ++k )
+            g += 4 + g[ 2 ];
+        const unsigned nch = *g++;
+        const unsigned* changed = g;
+        g += 2 * nch;
+        const unsigned nw = *g++;
+        x.bytes.assign( reinterpret_cast< const std::uint8_t* >( g ), reinterpret_cast< const std::uint8_t* >( g + nw ) );
+        g += nw;
+        std::vector< std::uint8_t > want( x.bytes );
+        for ( unsigned k = 0; k < nch; ++k )
+            std::memcpy( want.data( ) + 4 * changed[ 2 * k ], &changed[ 2 * k + 1 ], 4 );
+        std::uint32_t counter = c0;
+        bt_mem_t m;
+        m.user = &x;
+        m.num_aligned_free = &counter;
+        m.rd = []( void* u, std::uint32_t a ) -> std::uint32_t {
+            std::uint32_t w = 0;
+            if ( std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 4 ) )
+                std::memcpy( &w, q, 4 );
+            return w;
+        };
+        m.rd8 = []( void* u, std::uint32_t a ) -> std::uint8_t {
+            std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 1 );
+            return q ? *q : 0;
+        };
+        m.wr = []( void* u, std::uint32_t a, std::uint32_t w ) {
+            if ( std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 4 ) )
+                std::memcpy( q, &w, 4 );
+        };
+        m.wr8 = []( void* u, std::uint32_t a, std::uint8_t b ) {
+            if ( std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 1 ) )
+                *q = b;
+        };
+        m.aligned_free = []( void* u, std::uint32_t p ) { static_cast< arena_t* >( u )->frees.push_back( p ); };
+        m.release = []( void* u, std::uint32_t p ) { static_cast< arena_t* >( u )->deletes.push_back( p ); };
+        m.vcall = []( void* u, std::uint32_t s, std::uint32_t off, const std::uint32_t* args, int count ) -> std::uint32_t {
+            arena_t& a = *static_cast< arena_t* >( u );
+            if ( a.at >= a.nv )
+            {
+                a.vbad = true;
+                return 0;
+            }
+            const unsigned* c = a.vcalls;
+            for ( unsigned k = 0; k < a.at; ++k )
+                c += 4 + c[ 2 ];
+            ++a.at;
+            if ( c[ 0 ] != s || c[ 1 ] != off || c[ 2 ] != static_cast< unsigned >( count ) )
+                a.vbad = true;
+            for ( int k = 0; k < count && !a.vbad; ++k )
+                a.vbad = c[ 3 + k ] != args[ k ];
+            return c[ 3 + c[ 2 ] ];
+        };
+        void ( *const inners[ 8 ] )( const bt_mem_t&, std::uint32_t ) = { bt_dispatcher_destroy, bt_convex_polyhedron_destroy, bt_collision_world_destroy,
+            bt_dbvt_broadphase_destroy, bt_sequential_solver_destroy, bt_island_manager_destroy, bt_dynamics_world_destroy,
+            bt_collision_configuration_destroy };
+        std::uint32_t r;
+        if ( kind == 9 )
+            r = bt_quantized_bvh_delete( m, self, flags );
+        else if ( kind == 10 || kind == 11 )
+            r = bt_aligned_base_delete( m, self, flags, kind == 10 ? 0x74CF98u : 0x74DEBCu );
+        else if ( kind == 12 )
+            r = bt_dynamics_world_base_delete( m, self, flags );
+        else
+            r = bt_deleting( m, self, flags, inners[ ( kind - 1 ) & 7 ] );
+        frees += static_cast< int >( nf );
+        calls += static_cast< int >( x.nv );
+        const bool same = !x.outside && !x.vbad && x.at == x.nv && r == eax && counter == c1 && x.frees == want_frees &&
+                          x.deletes == want_deletes && x.bytes == want;
+        if ( !same && ++failed <= 4 )
+            LOG_ERROR( "bt_teardown %u (0x%06X flags %u): %d frees (retail %u), arena %s, calls %s", v, address, flags,
+                       static_cast< int >( x.frees.size( ) ), nf, x.bytes == want ? "same" : "differs", x.vbad || x.at != x.nv ? "differ" : "same" );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the twelve Bullet teardown dtors (0x56D290 .. 0x6060A0, collision/teardown.hxx) match retail: %u calls, "
+                     "%d frees, %d virtual calls", n, frees, calls );
+        return true;
+    }
+    LOG_ERROR( "bt_teardown FAILED %d of %u", failed, n );
+    return false;
+}
+// verify_bt_misc (boat batch 18): the small rows of engine
+// collision/teardown.hxx (0x56C270, 0x552540, 0x5B80E0, 0x5AF690, 0x43D5B0,
+// 0x54FE50) against cases/boat.py bt_misc: eax, the arena after, the virtual
+// calls in order (each answered with retail's logged eax).
+inline bool verify_bt_misc( )
+{
+    struct arena_t
+    {
+        std::uint32_t base = 0;
+        std::vector< std::uint8_t > bytes;
+        bool bad = false;
+        const unsigned* vcalls = nullptr;
+        unsigned nv = 0, at = 0;
+        std::uint8_t* p( std::uint32_t a, unsigned n )
+        {
+            if ( a < base || a + n > base + bytes.size( ) )
+            {
+                bad = true;
+                return nullptr;
+            }
+            return bytes.data( ) + ( a - base );
+        }
+    };
+    const unsigned* g = g_golden_bt_misc_words;
+    const unsigned n = *g++;
+    int failed = 0, calls = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = *g++, address = *g++, self = *g++, base = *g++, eax = *g++, na = *g++;
+        const unsigned* args = g;
+        g += na;
+        arena_t x;
+        x.base = base;
+        x.nv = *g++;
+        x.vcalls = g;
+        for ( unsigned k = 0; k < x.nv; ++k )
+            g += 4 + g[ 2 ];
+        const unsigned nch = *g++;
+        const unsigned* changed = g;
+        g += 2 * nch;
+        const unsigned nw = *g++;
+        x.bytes.assign( reinterpret_cast< const std::uint8_t* >( g ), reinterpret_cast< const std::uint8_t* >( g + nw ) );
+        g += nw;
+        std::vector< std::uint8_t > want( x.bytes );
+        for ( unsigned k = 0; k < nch; ++k )
+            std::memcpy( want.data( ) + 4 * changed[ 2 * k ], &changed[ 2 * k + 1 ], 4 );
+        bt_mem_t m;
+        m.user = &x;
+        m.rd = []( void* u, std::uint32_t a ) -> std::uint32_t {
+            std::uint32_t w = 0;
+            if ( std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 4 ) )
+                std::memcpy( &w, q, 4 );
+            return w;
+        };
+        m.wr = []( void* u, std::uint32_t a, std::uint32_t w ) {
+            if ( std::uint8_t* q = static_cast< arena_t* >( u )->p( a, 4 ) )
+                std::memcpy( q, &w, 4 );
+        };
+        m.vcall = []( void* u, std::uint32_t s, std::uint32_t off, const std::uint32_t* a, int count ) -> std::uint32_t {
+            arena_t& y = *static_cast< arena_t* >( u );
+            if ( y.at >= y.nv )
+            {
+                y.bad = true;
+                return 0;
+            }
+            const unsigned* c = y.vcalls;
+            for ( unsigned k = 0; k < y.at; ++k )
+                c += 4 + c[ 2 ];
+            ++y.at;
+            y.bad = y.bad || c[ 0 ] != s || c[ 1 ] != off || c[ 2 ] != static_cast< unsigned >( count );
+            for ( int k = 0; k < count && !y.bad; ++k )
+                y.bad = c[ 3 + k ] != a[ k ];
+            return c[ 3 + c[ 2 ] ];
+        };
+        std::uint32_t r = 0;
+        switch ( kind )
+        {
+            case 1: r = bt_empty_algorithm_create( m, args[ 0 ] ); break;
+            case 2: r = bt_convex_result_needs_collision( m, self, args[ 0 ] ) ? 1u : 0u; break;
+            case 3: bt_zero_inertia( m, args[ 1 ] ); r = eax; break;   // void: eax is not an answer
+            case 4: r = bt_support_forward( m, self, args[ 0 ], args[ 1 ] ); break;
+            case 5: r = bt_forward_43D5B0( m, self, args, static_cast< int >( na ) ); break;
+            default: r = bt_forward_54FE50( m, self, args, static_cast< int >( na ) ); break;
+        }
+        calls += static_cast< int >( x.nv );
+        if ( ( x.bad || x.at != x.nv || r != eax || x.bytes != want ) && ++failed <= 4 )
+            LOG_ERROR( "bt_misc %u (0x%06X): eax 0x%08X (retail 0x%08X), arena %s", v, address, r, eax, x.bytes == want ? "same" : "differs" );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the small Bullet rows 0x56C270 / 0x552540 / 0x5B80E0 / 0x5AF690 / 0x43D5B0 / 0x54FE50 (collision/teardown.hxx) match "
+                     "retail: %u calls, %d virtual calls", n, calls );
+        return true;
+    }
+    LOG_ERROR( "bt_misc FAILED %d of %u", failed, n );
     return false;
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <workspace/core/ui/controls.hxx>
+#include <workspace/core/ui/hud.hxx>
 #include <workspace/core/ui/screen.hxx>
 #include <workspace/core/ui/slider.hxx>
 #include <workspace/core/ui/ticker.hxx>
@@ -98,6 +100,7 @@ enum class ui_trace_kind_t
     touches,    // the touch device's count (slot 6, the slider's hook)
     touch,      // the touch device's point (slot 7): the index
     category,   // FMOD getCategory (the volume sliders' hook): the name
+    hook,       // the HUD's gameInitialize / gameRelease hooks: the label, the entity
 };
 
 struct ui_trace_t
@@ -109,6 +112,74 @@ struct ui_trace_t
     ui_params_t m_params;
     bool m_known = true;
     std::uint32_t m_font = 0;  // measure: the font
+};
+
+// The race HUD (batch 16, census case hud_census on Race Pre / Game / PostGameHUD).
+// Bound only when ui_bind_hooks_t::m_hud is set (the HUD driver, core/ui
+// overlay.hxx): case ui_frames runs these inputs STUBBED in retail on the Screens
+// projects (VuTriggerForwarderEntity there), so the Screens binding keeps them
+// unknown. Types, handlers and inputs (all disassembled):
+// - the text base (VuUITextBaseEntity ctor 0x627070) of VuHUDElementEntity
+//   0x738C64, VuUITextEntity 0x6F7434, VuHUDHiddenPackageToastEntity 0x738BDC:
+//   inputs Show 0x446C80 (+0x64 = 1), Hide 0x446FB0 (+0x64 = 0), SetAlpha
+//   0x627AA0 (+0x108 = the first record when a float, else 0); VuUITextEntity's
+//   SetStringID 0x62F480 (+0x10C = readString 0x505260); VuRetVal +0 = 0.
+// - VuUIImageEntity 0x6F7484: Show 0x440B50 / Hide 0x6284C0 (+0x6C), SetAlpha
+//   0x629270 (+0xB4, as the text's).
+// - the toast: OnPackageFound 0x424600, OnUITick 0x4248E0 (controls.hxx);
+//   gameInitialize slot 6 0x4245F0: +0x64 = 0.
+// - VuHUDSpeedometerEntity 0x739250: OnUITick (thunk 0x4077E3) -> slot 12
+//   0x42B860 (hud.hxx); VuHUDMiniMapEntity 0x738E10: OnUITick -> slot 12
+//   0x427B60, which reads the dt record into a local and nothing else.
+// - VuOnProjectInitializedEntity 0x756828: OnProjectInitialized 0x5EFA60 fires
+//   "Trigger" with an EMPTY VuParams.
+// - VuControlMethodEntity 0x7398E4: OnControlMethodChanged 0x42EC80 fires
+//   "MethodChanged" with the event's params; input Trigger 0x42EAE0: the
+//   control-method manager g 0x758FC0 +0x18 (read without a null test) 0 / 1 / 2
+//   / 3 fires IsGamePad / IsKeyboard / IsTilt / IsTouch with the Trigger's
+//   params, any other value nothing; VuRetVal +0 = 0.
+// - VuTriggerForwarderEntity 0x754B00: Trigger 0x5E0FC0 fires "OnTrigger" with
+//   its params (findPlug; nothing when absent); VuRetVal +0 = 0.
+// - VuIsCircuitTrack 0x73994C: Get 0x42E1F0 = { 3, track manager g 0x758FF4
+//   slot 8 (built) && slot 9 (circuit) } (the byte +4 only).
+// - VuStartLightsOutAction 0x737664: Trigger -> slot 12 0x405470: the broadcast
+//   "OnStartLightsOut" with an empty VuParams; VuRetVal +0 = 0.
+// NOT recreated (registered handlers traced UNKNOWN): the on-screen controls'
+// OnUITick 0x429E10 (0x739020 / 0x739058), the pause / recover buttons' OnUITick
+// slot 12 0x4255B0 (0x738AC4 / 0x738B24). The world's / the audio layer's inputs
+// (VuMultiDelayEntity In 0x5E0660, VuAudioEventEntity Start 0x5F42D0 / Stop
+// 0x5F4310) go to the m_external hook.
+struct ui_hud_env_t
+{
+    ui_hud_world_t m_world;               // g 0x758FB8 / 0x758FE0 (hud.hxx)
+    bool m_track_built = false;           // g 0x758FF4 slot 8 0x4D0720
+    bool m_track_circuit = false;         // slot 9 0x4D0730
+    std::int32_t m_control_method = 0;    // g 0x758FC0 +0x18
+};
+
+inline constexpr std::uint32_t k_ui_hud_element_vtable = 0x738C64u;
+inline constexpr std::uint32_t k_ui_text_vtable = 0x6F7434u;
+inline constexpr std::uint32_t k_ui_hud_toast_vtable = 0x738BDCu;
+inline constexpr std::uint32_t k_ui_image_vtable = 0x6F7484u;
+inline constexpr std::uint32_t k_ui_hud_speedometer_vtable = 0x739250u;
+inline constexpr std::uint32_t k_ui_hud_minimap_vtable = 0x738E10u;
+inline constexpr std::uint32_t k_ui_project_initialized_vtable = 0x756828u;
+inline constexpr std::uint32_t k_ui_control_method_vtable = 0x7398E4u;
+inline constexpr std::uint32_t k_ui_trigger_forwarder_vtable = 0x754B00u;
+inline constexpr std::uint32_t k_ui_is_circuit_vtable = 0x73994Cu;
+inline constexpr std::uint32_t k_ui_start_lights_vtable = 0x737664u;
+inline constexpr std::uint32_t k_ui_hud_pause_vtable = 0x738AC4u;
+inline constexpr std::uint32_t k_ui_hud_recover_vtable = 0x738B24u;
+inline constexpr std::uint32_t k_ui_onscreen_axis_vtable = 0x739020u;
+inline constexpr std::uint32_t k_ui_onscreen_button_vtable = 0x739058u;
+inline constexpr std::uint32_t k_ui_multi_delay_vtable = 0x754B68u;
+
+// A text base's / an image's runtime fields the HUD's inputs drive.
+struct ui_hud_shown_t
+{
+    bool m_visible = true;     // +0x64 (image +0x6C) "Visible"
+    float m_alpha = 1.0f;      // +0x108 (image +0xB4)
+    std::string m_string_id;   // VuUITextEntity +0x10C "String ID"
 };
 
 struct ui_bound_t
@@ -124,6 +195,11 @@ struct ui_bound_t
     std::unique_ptr< ui_info_ticker_t > m_ticker;
     ui_slider_hooks_t m_slider_hooks;
     std::unique_ptr< c_ui_slider > m_slider;
+    // the race HUD's (m_hud set)
+    std::unique_ptr< ui_hud_shown_t > m_shown;              // text base / image
+    std::unique_ptr< c_ui_hud_element > m_element;          // VuHUDElementEntity's Type / text
+    std::unique_ptr< ui_hud_toast_t > m_toast;
+    std::unique_ptr< c_ui_hud_speedometer > m_speedometer;
 };
 
 struct ui_bind_hooks_t
@@ -146,6 +222,16 @@ struct ui_bind_hooks_t
     std::function< void( int, float[ 2 ] ) > m_touch_point;
     const float* m_inverse = nullptr;
     ui_settings_t* m_settings = nullptr;
+    // The race HUD's (null: not bound - see ui_hud_env_t): the game it reads,
+    // VuStringDB slot 6 (the toast's template - a HOOK), the inputs owned by the
+    // world / the audio layer (multi delay In, audio Start / Stop: entity, plug,
+    // params -> VuRetVal; unset = { 0, 0 }) and the broadcasts' other
+    // subscribers (the race's: VuRaceGame / the drivers registered theirs before
+    // the HUD loaded, so they run first).
+    const ui_hud_env_t* m_hud = nullptr;
+    std::function< std::string( const char* ) > m_string_db;
+    std::function< ui_ret_t( entity_t&, const char*, const ui_params_t& ) > m_external;
+    std::function< void( std::uint32_t, const ui_params_t& ) > m_broadcast_out;
 };
 
 // An entity's own property slot (its loaded ui_state_t), or null.
@@ -183,6 +269,7 @@ public:
                 self( self, *child );
         };
         walk( walk, root );
+        m_hud_hooks.m_string = m_hooks.m_string_db;
         for ( auto& b : m_bound )
             bind( *b );
         m_wiring.m_root = m_hooks.m_root;
@@ -198,6 +285,8 @@ public:
         m_wiring.m_bound_known = [ this ]( const entity_t& owner, const char* plug ) { return bound_input( owner, plug ); };
         m_wiring.m_bound_run = [ this ]( entity_t& owner, const char* plug, const ui_params_t& p ) { return run_input( owner, plug, p ); };
         m_wiring.m_answer = m_hooks.m_answer;
+        if ( m_hooks.m_external )
+            m_wiring.m_answer_params = m_hooks.m_external;
         m_screen.m_input = m_hooks.m_input;
         m_info.m_string = [ this ]( const std::string& id )
         {
@@ -274,9 +363,115 @@ private:
         b.m_methods.push_back( { fsm_hash( event ), method } );
     }
 
+    // The race HUD's types (see ui_hud_env_t); true when `b` is one of them.
+    bool bind_hud( ui_bound_t& b )
+    {
+        entity_t& e = *b.m_entity;
+        const std::uint32_t vt = b.m_vtable;
+        if ( vt == k_ui_hud_element_vtable || vt == k_ui_text_vtable || vt == k_ui_hud_toast_vtable || vt == k_ui_image_vtable )
+        {
+            b.m_shown = std::make_unique< ui_hud_shown_t >( );
+            if ( const ui_slot_t* s = ui_bind_slot( e, "Visible" ) )
+                b.m_shown->m_visible = ( s->m_bits[ 0 ] & 0xFFu ) != 0;
+            if ( const ui_slot_t* s = ui_bind_slot( e, "String ID" ) )
+                b.m_shown->m_string_id = s->m_text;
+        }
+        if ( vt == k_ui_hud_element_vtable )
+        {
+            b.m_element = std::make_unique< c_ui_hud_element >( m_hud_hooks );
+            if ( const ui_slot_t* s = ui_bind_slot( e, "Type" ) )
+                std::memcpy( &b.m_element->m_type, s->m_bits, 4 );
+            return true;
+        }
+        if ( vt == k_ui_text_vtable || vt == k_ui_image_vtable )
+            return true;
+        if ( vt == k_ui_hud_toast_vtable )
+        {
+            b.m_toast = std::make_unique< ui_hud_toast_t >( );
+            ui_hud_toast_t& t = *b.m_toast;
+            if ( const ui_slot_t* s = ui_bind_slot( e, "Total Time" ) )
+                std::memcpy( &t.m_total, s->m_bits, 4 );
+            if ( const ui_slot_t* s = ui_bind_slot( e, "Fade Time" ) )
+                std::memcpy( &t.m_fade, s->m_bits, 4 );
+            ui_bound_t* self = &b;
+            // its ctor 0x424360: OnPackageFound 0x424600, OnUITick 0x4248E0 (the base's +0x64 / +0x108 are m_shown's)
+            add( b, "OnPackageFound", 0x424600u, [ this, self ]( const ui_params_t& p )
+            {
+                sync_toast( *self, true );
+                ui_hud_toast_found( *self->m_toast, p, [ this ]( const char* key )
+                {
+                    trace( ui_trace_kind_t::string, -1, key, 0u, ui_params_t( ), true );
+                    return m_hooks.m_string_db ? m_hooks.m_string_db( key ) : std::string( );
+                } );
+                sync_toast( *self, false );
+            } );
+            add( b, "OnUITick", 0x4248E0u, [ this, self ]( const ui_params_t& p )
+            {
+                sync_toast( *self, true );
+                ui_hud_toast_tick( *self->m_toast, p );
+                sync_toast( *self, false );
+            } );
+            return true;
+        }
+        if ( vt == k_ui_hud_speedometer_vtable )
+        {
+            b.m_speedometer = std::make_unique< c_ui_hud_speedometer >( );
+            c_ui_hud_speedometer& s = *b.m_speedometer;
+            add( b, "OnUITick", 0x4077E3u, [ this, &s ]( const ui_params_t& p ) { s.on_tick( p.m_bytes, p.m_size, m_hooks.m_hud->m_world ); } );
+            return true;
+        }
+        if ( vt == k_ui_hud_minimap_vtable )
+        {
+            add( b, "OnUITick", 0x4077E3u, []( const ui_params_t& ) { } );   // slot 12 0x427B60: the dt read into a local only
+            return true;
+        }
+        if ( vt == k_ui_project_initialized_vtable )
+        {
+            add( b, "OnProjectInitialized", 0x5EFA60u, [ this, &e ]( const ui_params_t& ) { fire_named( e, "Trigger", ui_params_t( ) ); } );
+            return true;
+        }
+        if ( vt == k_ui_control_method_vtable )
+        {
+            add( b, "OnControlMethodChanged", 0x42EC80u, [ this, &e ]( const ui_params_t& p ) { fire_named( e, "MethodChanged", p ); } );
+            return true;
+        }
+        if ( vt == k_ui_hud_pause_vtable || vt == k_ui_hud_recover_vtable || vt == k_ui_onscreen_axis_vtable || vt == k_ui_onscreen_button_vtable )
+        {
+            // NOT recreated: OnUITick -> the buttons' slot 12 0x4255B0 (through the thunk 0x4077E3) / the on-screen controls' 0x429E10.
+            const bool button = vt == k_ui_hud_pause_vtable || vt == k_ui_hud_recover_vtable;
+            const std::uint32_t method = button ? 0x4255B0u : 0x429E10u;
+            const int index = b.m_index;
+            b.m_methods.push_back( { fsm_hash( "OnUITick" ), button ? 0x4077E3u : 0x429E10u } );
+            b.m_map.m_handlers.push_back( { fsm_hash( "OnUITick" ), [ this, index, method ]( const ui_params_t& p )
+            {
+                ++m_unknown_events;
+                trace( ui_trace_kind_t::event, index, std::string( ), method, p, false );
+            } } );
+            return true;
+        }
+        return false;
+    }
+
+    // The toast's text-base fields live in m_shown (the inputs') and its own struct (the handlers').
+    static void sync_toast( ui_bound_t& b, bool in )
+    {
+        if ( in )
+        {
+            b.m_toast->m_visible = b.m_shown->m_visible;
+            b.m_toast->m_alpha = b.m_shown->m_alpha;
+        }
+        else
+        {
+            b.m_shown->m_visible = b.m_toast->m_visible;
+            b.m_shown->m_alpha = b.m_toast->m_alpha;
+        }
+    }
+
     void bind( ui_bound_t& b )
     {
         entity_t& e = *b.m_entity;
+        if ( m_hooks.m_hud && bind_hud( b ) )
+            return;
         if ( b.m_vtable == k_ui_container_vtable )
         {
             // 0x62F880 registers OnUITick (0x62F7A0) then OnUIEvent (0x62F7C0).
@@ -401,6 +596,8 @@ private:
     void broadcast( std::uint32_t hash, const ui_params_t& p )
     {
         trace( ui_trace_kind_t::broadcast, -1, std::string( ), hash, p, true );
+        if ( m_hooks.m_broadcast_out )
+            m_hooks.m_broadcast_out( hash, p );
         for ( auto& b : m_bound )
             b->m_map.handle( hash, p );
     }
@@ -408,6 +605,20 @@ private:
     bool bound_input( const entity_t& owner, const char* plug ) const
     {
         const std::uint32_t vt = owner.m_ctor ? owner.m_ctor->m_vtable : 0u;
+        if ( m_hooks.m_hud )
+        {
+            if ( vt == k_ui_hud_element_vtable || vt == k_ui_text_vtable || vt == k_ui_hud_toast_vtable || vt == k_ui_image_vtable )
+                for ( const char* name : { "Show", "Hide", "SetAlpha" } )
+                    if ( std::strcmp( plug, name ) == 0 )
+                        return true;
+            if ( vt == k_ui_text_vtable && std::strcmp( plug, "SetStringID" ) == 0 )
+                return true;
+            if ( ( vt == k_ui_trigger_forwarder_vtable || vt == k_ui_control_method_vtable || vt == k_ui_start_lights_vtable ) &&
+                 std::strcmp( plug, "Trigger" ) == 0 )
+                return true;
+            if ( vt == k_ui_is_circuit_vtable && std::strcmp( plug, "Get" ) == 0 )
+                return true;
+        }
         if ( vt == k_ui_button_vtable )
             for ( const char* name : { "SetFocus", "SetStringID", "Enable", "Disable", "IsEnabled" } )
                 if ( std::strcmp( plug, name ) == 0 )
@@ -475,11 +686,131 @@ public:
     }
 
 private:
+    // The race HUD's inputs (see ui_hud_env_t). VuRetVal +0 = 0 and +4 the
+    // caller's (m_known false) unless written.
+    ui_ret_t run_hud_input( entity_t& owner, std::uint32_t vt, const char* plug, const ui_params_t& p )
+    {
+        ui_ret_t out;
+        out.m_known = false;
+        ui_bound_t& b = *m_bound[ static_cast< std::size_t >( index_of( owner ) ) ];
+        if ( b.m_shown && std::strcmp( plug, "Show" ) == 0 )
+            b.m_shown->m_visible = true;
+        else if ( b.m_shown && std::strcmp( plug, "Hide" ) == 0 )
+            b.m_shown->m_visible = false;
+        else if ( b.m_shown && std::strcmp( plug, "SetAlpha" ) == 0 )
+        {
+            // 0x627AA0 / 0x629270: 0 unless the first record is a float
+            float a = 0.0f;
+            std::uint32_t type = 0xFFFFFFFFu;
+            if ( p.m_size > 0 )
+            {
+                std::memcpy( &type, p.m_bytes, 4 );
+                if ( type == 2 )
+                    std::memcpy( &a, p.m_bytes + 4, 4 );
+            }
+            b.m_shown->m_alpha = a;
+        }
+        else if ( b.m_shown && std::strcmp( plug, "SetStringID" ) == 0 )
+        {
+            ui_params_reader_t r( p );
+            b.m_shown->m_string_id = r.read_string( );
+        }
+        else if ( vt == k_ui_trigger_forwarder_vtable )
+        {
+            if ( plug_index( owner, "OnTrigger" ) >= 0 )
+                fire_named( owner, "OnTrigger", p );
+        }
+        else if ( vt == k_ui_control_method_vtable )
+        {
+            static const char* const k_names[ 4 ] = { "IsGamePad", "IsKeyboard", "IsTilt", "IsTouch" };
+            const std::int32_t method = m_hooks.m_hud->m_control_method;
+            if ( method >= 0 && method < 4 )
+                fire_named( owner, k_names[ method ], p );
+        }
+        else if ( vt == k_ui_is_circuit_vtable )
+        {
+            out.m_words[ 0 ] = 3u;
+            out.m_words[ 1 ] = m_hooks.m_hud->m_track_built && m_hooks.m_hud->m_track_circuit ? 1u : 0u;   // the byte +4 only
+        }
+        else if ( vt == k_ui_start_lights_vtable )
+            broadcast( fsm_hash( "OnStartLightsOut" ), ui_params_t( ) );
+        return out;
+    }
 
+    // 0x500B10 (gameInitialize) / 0x500B80 (gameRelease) over the tree. The
+    // components' slots 9 / 10 are nullsubs for every component type the race
+    // HUDs hold (VuScriptComponent, VuUIDrawComponent, Vu2dLayoutComponent).
+    void game_initialize( entity_t& e )
+    {
+        if ( e.m_flags & 4u )
+            return;
+        if ( !( e.m_flags & 8u ) )
+            trace( ui_trace_kind_t::hook, index_of( e ), "repository_add", 0u, ui_params_t( ), true );
+        for ( auto& child : e.m_children )
+            game_initialize( *child );
+        const std::uint32_t vt = e.m_ctor ? e.m_ctor->m_vtable : 0u;
+        if ( vt == k_ui_hud_pause_vtable || vt == k_ui_hud_recover_vtable )
+            trace( ui_trace_kind_t::hook, index_of( e ), "touch_add", 0u, ui_params_t( ), true );        // 0x425390 -> 0x53FB90
+        else if ( vt == k_ui_hud_toast_vtable && m_hooks.m_hud )
+            m_bound[ static_cast< std::size_t >( index_of( e ) ) ]->m_shown->m_visible = false;            // 0x4245F0
+        else if ( vt == k_ui_multi_delay_vtable )
+            trace( ui_trace_kind_t::hook, index_of( e ), "multi_delay_init", 0u, ui_params_t( ), true ); // 0x5E0610 (the world's)
+        e.m_flags |= 4u;
+    }
+
+    void game_release( entity_t& e )
+    {
+        if ( !( e.m_flags & 4u ) )
+            return;
+        for ( auto& child : e.m_children )
+            game_release( *child );
+        const std::uint32_t vt = e.m_ctor ? e.m_ctor->m_vtable : 0u;
+        if ( vt == k_ui_hud_pause_vtable || vt == k_ui_hud_recover_vtable )
+            trace( ui_trace_kind_t::hook, index_of( e ), "touch_remove", 0u, ui_params_t( ), true );        // 0x4253D0 -> 0x53FA60
+        else if ( vt == k_ui_multi_delay_vtable )
+            trace( ui_trace_kind_t::hook, index_of( e ), "multi_delay_release", 0u, ui_params_t( ), true ); // 0x43A420 (the world's)
+        if ( !( e.m_flags & 8u ) )
+            trace( ui_trace_kind_t::hook, index_of( e ), "repository_remove", 0u, ui_params_t( ), true );
+        e.m_flags &= ~4u;
+    }
+
+public:
+    // The race HUD driver's entry points (core/ui overlay.hxx).
+    // gameInitialize 0x500B10 then 0x501260 "OnProjectInitialized" (each
+    // entity's own map, pre-order; an empty VuParams).
+    void hud_initialize( )
+    {
+        game_initialize( *m_bound.front( )->m_entity );
+        const std::uint32_t h = fsm_hash( "OnProjectInitialized" );
+        for ( auto& b : m_bound )
+            b->m_map.handle( h, ui_params_t( ) );
+    }
+    void hud_release( ) { game_release( *m_bound.front( )->m_entity ); }
+    // VuHUDEntity slot 12 0x423A20: VuParams { float dt } -> "OnUITick" to the
+    // DIRECT children (0x5011A0).
+    void hud_tick( float dt )
+    {
+        ui_params_t p;
+        std::uint32_t bits;
+        std::memcpy( &bits, &dt, 4 );
+        ui_params_add( p, 2, bits );
+        const std::uint32_t h = fsm_hash( "OnUITick" );
+        for ( auto& child : m_bound.front( )->m_entity->m_children )
+            m_bound[ static_cast< std::size_t >( m_index[ child.get( ) ] ) ]->m_map.handle( h, p );
+    }
+    // VuEventManager_broadcast 0x505690 from outside (the race's events).
+    void post( std::uint32_t hash, const ui_params_t& p ) { broadcast( hash, p ); }
+    // An output plug fired from outside (the world's VuMultiDelayEntity outputs).
+    ui_ret_t fire_plug( entity_t& owner, const char* plug, const ui_params_t& p ) { return fire_named( owner, plug, p ); }
+    int bound_index( const entity_t& e ) const { return index_of( e ); }
+
+private:
     ui_ret_t run_input( entity_t& owner, const char* plug, const ui_params_t& p )
     {
         ui_ret_t out;
         const std::uint32_t vt = owner.m_ctor ? owner.m_ctor->m_vtable : 0u;
+        if ( m_hooks.m_hud && vt != k_ui_if_vtable && vt != k_ui_set_info_vtable && !ui_is_slider_vtable( vt ) && vt != k_ui_button_vtable )
+            return run_hud_input( owner, vt, plug, p );
         if ( vt == k_ui_if_vtable )
         {
             // 0x5DDE60.
@@ -532,5 +863,6 @@ private:
 
     ui_bind_hooks_t m_hooks;
     ui_info_hooks_t m_info;  // m_hooks.m_info with the trace
+    ui_hud_hooks_t m_hud_hooks;  // the HUD elements' VuStringDB (m_hooks.m_string_db)
     std::map< const entity_t*, int > m_index;
 };
