@@ -2,6 +2,7 @@
 
 #include <workspace/core/boat/state.hxx>
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <xmmintrin.h>
@@ -76,4 +77,102 @@ inline void ai_controls( std::uint8_t* driver, std::uint8_t* boat, const std::ui
     }
     boat[ 0x304 ] = boost;
     boat[ 0x306 ] = boat[ 0x46B ];
+}
+
+// Retail's `fld dword; fsincos; fstp dword (cos); fstp dword (sin)` on this
+// machine's FPU (engine/x87.asm).
+extern "C" void x87_sincos( float x, float* c, float* s );
+
+inline float ai_bits( std::uint32_t u )
+{
+    float f;
+    std::memcpy( &f, &u, 4 );
+    return f;
+}
+
+// __libm_sse2_asinf 0x631CCA. SUBSTITUTION: the CRT DLL's asinf is served by
+// the host's DOUBLE asin rounded once to float (what boat_transform_changed
+// measured to match retail; the float std::asin did not).
+inline float ai_asinf( float x )
+{
+    return static_cast< float >( std::asin( static_cast< double >( x ) ) );
+}
+
+// 0x40D110 (thiscall, the driver; pos*, heading*, target*, speed, wanted,
+// dt, steer*, throttle*; retn 20h), VuAiDriver's steering and throttle.
+// Nothing at all unless dt > 0 (ordered; dt is not read again). d = the xy
+// direction to the target (normalised by VuMath_sqrt(dy^2 + dx^2)); the
+// heading's xy, normalised only when fy^2 + fx^2 > 2^-23 (0x6F7584; its z
+// then 1/len x 0, else 0); a0 = asinf(maxss(-1, minss(1, fx dy - fy dx))) x
+// 57.29578 (0x6F77CC). With the body's (boat +0x21C) planar speed^2 (+0x140:
+// vx^2 + vy^2) > 5 (0x6F7768) and the solver (hull +0x1CC) +0x54 > 0 the
+// heading becomes the velocity's direction (z = 1/len x 0). The heading is
+// turned by 0x40B5F0's rotation about z by the angular velocity's z (+0x158)
+// x 0.25 (0x6F762C): r = (M4 fy + M0 fx) + M8 fz, (M5 fy + M1 fx) + M9 fz;
+// c = maxss(-1, minss(1, dy rx - ry dx)), a1 = asinf(c) x 57.29578. Unless
+// a1 a0 >= 1 (or NaN) c is faded by |a0| (VuVector_abs 0x4089C0): 1 up to 5,
+// 1 - (|a0| - 5) x 0.2 below 10 (a NaN too), 0 from 10. steer =
+// maxss(-1, minss(1, c x -4)); throttle = 1 when wanted > speed, else -1
+// when speed x 0.75 > wanted, else 0.
+inline void ai_steer( const std::uint8_t* body, const std::uint8_t* solver, const float* pos, const float* heading, const float* target,
+    float speed, float wanted, float dt, float* steer, float* throttle )
+{
+    if ( !_mm_comigt_ss( _mm_set_ss( dt ), _mm_set_ss( 0.0f ) ) )
+        return;
+    float dy = target[ 1 ] - pos[ 1 ];
+    float dx = target[ 0 ] - pos[ 0 ];
+    const float id = 1.0f / hull_sqrt( dy * dy + dx * dx );
+    dx = dx * id;
+    dy = dy * id;
+    float fx = heading[ 0 ], fy = heading[ 1 ], fz = 0.0f;
+    const float q = fy * fy + fx * fx;
+    if ( q > ai_bits( 0x34000000u ) )
+    {
+        const float iq = 1.0f / hull_sqrt( q );
+        fx = fx * iq;
+        fy = fy * iq;
+        fz = iq * 0.0f;
+    }
+    const float deg = ai_bits( 0x42652EE1u );
+    const float a0 = ai_asinf( ai_maxss( -1.0f, ai_minss( 1.0f, fx * dy - fy * dx ) ) ) * deg;
+    const float vx = state_f( body, 0x140 ), vy = state_f( body, 0x144 );
+    const float v2 = vx * vx + vy * vy;
+    if ( v2 > 5.0f && state_f( solver, 0x54 ) > 0.0f )
+    {
+        const float iv = 1.0f / hull_sqrt( v2 );
+        fx = iv * vx;
+        fy = iv * vy;
+        fz = iv * 0.0f;
+    }
+    float m[ 16 ];
+    {
+        float c, s;
+        x87_sincos( state_f( body, 0x158 ) * 0.25f, &c, &s );
+        const float r[ 16 ] = { c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };   // 0x40B5F0
+        std::memcpy( m, r, 64 );
+    }
+    const float rx = ( m[ 4 ] * fy + m[ 0 ] * fx ) + m[ 8 ] * fz;
+    const float ry = ( m[ 5 ] * fy + m[ 1 ] * fx ) + m[ 9 ] * fz;
+    const float c = ai_maxss( -1.0f, ai_minss( 1.0f, dy * rx - ry * dx ) );
+    const float a1 = ai_asinf( c ) * deg;
+    float r = c;
+    if ( 1.0f > a1 * a0 )
+    {
+        const float a = std::fabs( a0 );
+        float fade;
+        if ( 5.0f >= a )
+            fade = 0.0f;
+        else if ( !( a >= 10.0f ) )
+            fade = ( a - 5.0f ) * 0.2f;
+        else
+            fade = 1.0f;   // retail: 1.0 - 1.0 computed, x c
+        r = c * ( 1.0f - fade );
+    }
+    *steer = ai_maxss( -1.0f, ai_minss( 1.0f, r * -4.0f ) );
+    if ( wanted > speed )
+        *throttle = 1.0f;
+    else if ( speed * 0.75f > wanted )
+        *throttle = -1.0f;
+    else
+        *throttle = 0.0f;
 }

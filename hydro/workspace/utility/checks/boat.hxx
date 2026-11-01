@@ -1445,6 +1445,37 @@ inline bool verify_ai_controls( )
     return failed == 0;
 }
 
+// ai_steer (boat/ai.hxx) against retail's 0x40D110 (oracle case ai_steer):
+// both outputs' bits (left 0xCDCDCDCD when dt <= 0).
+inline bool verify_ai_steer( )
+{
+    int failed = 0;
+    for ( std::size_t index = 0; index < g_golden_ai_steer_count; ++index )
+    {
+        const unsigned* s = g_golden_ai_steer_words + g_golden_ai_steer_offsets[ index ];
+        float v[ 12 ], speed, wanted, dt;
+        std::memcpy( v, s, 48 );
+        s += 12;
+        std::memcpy( &speed, s++, 4 );
+        std::memcpy( &wanted, s++, 4 );
+        std::memcpy( &dt, s++, 4 );
+        std::uint8_t body[ 0x300 ] = { }, solver[ 0x104 ] = { };
+        std::memcpy( body + 0x140, s, 0x20 );
+        s += 8;
+        std::memcpy( solver + 0x54, s++, 4 );
+        unsigned out[ 2 ] = { 0xCDCDCDCDu, 0xCDCDCDCDu };
+        ai_steer( body, solver, v, v + 4, v + 8, speed, wanted, dt, reinterpret_cast< float* >( &out[ 0 ] ), reinterpret_cast< float* >( &out[ 1 ] ) );
+        if ( ( out[ 0 ] != s[ 0 ] || out[ 1 ] != s[ 1 ] ) && ++failed <= 4 )
+            LOG_ERROR( "ai steer vector %d: steer 0x%08X throttle 0x%08X, retail 0x%08X 0x%08X", static_cast< int >( index ), out[ 0 ], out[ 1 ], s[ 0 ], s[ 1 ] );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuAiDriver's steering / throttle 0x40D110 matches retail (CRT asinf as the double asin): %d vectors",
+                     static_cast< int >( g_golden_ai_steer_count ) );
+    else
+        LOG_ERROR( "ai steer FAILED %d of %d vectors", failed, static_cast< int >( g_golden_ai_steer_count ) );
+    return failed == 0;
+}
+
 inline bool verify_boat_all( )
 {
     bool ok = true;
@@ -1466,5 +1497,6 @@ inline bool verify_boat_all( )
     ok = verify_boat_hull_tick( ) && ok;
     ok = verify_boat_decision( ) && ok;
     ok = verify_ai_controls( ) && ok;
+    ok = verify_ai_steer( ) && ok;
     return ok;
 }
