@@ -4,6 +4,7 @@
 #include <workspace/core/world/query.hxx>
 #include <workspace/core/world/surface.hxx>
 #include <workspace/core/world/wave.hxx>
+#include <workspace/core/world/keyframe.hxx>   // vc_qsort
 
 #include <algorithm>
 #include <cmath>
@@ -43,9 +44,11 @@
 //     0x597260 asks the clip test 0x5C7E80 only while it is set and the
 //     surface has a VuWaterMapAsset (+0x100, surface.hxx water_build_maps).
 //     The three byte-map terms of 0x597D70 depend on the map alone.
-//   - qsort is the CRT DLL's: SUBSTITUTION std::stable_sort with the same
-//     comparator (descending +0xC). Ties order differently from MSVC's qsort;
-//     that changes only where a patch's vertices sit in the buffer.
+//   - qsort is the CRT DLL's: SUBSTITUTION keyframe.hxx's vc_qsort (the VC11
+//     CRT algorithm from its published source - the one qsort recreation every
+//     call site shares) with 0x594D90's answers (comiss: -1 when a's +0xC is
+//     larger, 1 when smaller, 0 else - NaN too). Batch 28: was std::stable_sort,
+//     which ordered ties differently.
 //   - VuWater +0x40 is 1.0 from its ctor 0x528050; other writers not searched.
 
 // ---------------------------------------------------------------------------
@@ -706,7 +709,9 @@ inline void water_grid_build( water_grid_t& g, const water_frustum_t& cam, const
     water_grid_stitch( g.patches );
     // qsort( patches, n, 0x14, 0x594D90 ): descending +0xC (SUBSTITUTION, see the top).
     if ( sort )
-        std::stable_sort( g.patches.begin( ), g.patches.end( ), []( const water_patch_t& a, const water_patch_t& b ) { return a.distance > b.distance; } );
+        vc_qsort( static_cast< int >( g.patches.size( ) ),
+                  [ & ]( int i, int j ) { const float a = g.patches[ i ].distance, b = g.patches[ j ].distance; return a > b ? -1 : ( b > a ? 1 : 0 ); },
+                  [ & ]( int i, int j ) { if ( i != j ) std::swap( g.patches[ i ], g.patches[ j ] ); } );
     water_grid_draw_t d{};
     d.surface = surface;
     for ( int k = 0; k < 4; ++k )
