@@ -983,7 +983,9 @@ inline void water_built_destroy( water_built_t& b, int wave )
 // caller's). VuWaterRampEntity's 0x5D7030 releases its surface (+0x128) first
 // (the surface's dtor 0x535BB0 - VuWater's removeSurface 0x529770 - is NOT
 // recreated) and then its wave (+0x140) the same way: only the wave half is
-// this function.
+// this function. VuPointWaveEntity's slot 7 0x5D4AF0 (read, not measured):
+// its tick unregistered (g 0x759008 vt+0x28: the caller's), then, when +0xA0
+// is set, this same body on it.
 inline void water_entity_release( water_built_t& b, int wave )
 {
     if ( --b.waves[ static_cast< std::size_t >( wave ) ].word[ 1 ] == 0u )
