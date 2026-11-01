@@ -2,6 +2,7 @@
 
 #include <workspace/core/world/pfxclass.hxx>
 #include <workspace/core/world/pfxsim.hxx>
+#include <workspace/core/world/pfxload.hxx>
 
 #include <cstring>
 #include <map>
@@ -534,9 +535,151 @@ inline bool verify_water_types( )
     return bad == 0;
 }
 
+// The effect-asset load (world/pfxload.hxx) against retail's own (case pfx_load): the race's VuPfxAsset documents
+// (Hydroelectric, Generic) read from Base.apf and loaded - every node depth first in map order (path, node vtable,
+// refcount +4, +8, child count +0x10, the words +0x30 .. size with the std::string members and the VuAssetProperty
+// object pointers - quad +0x98 / +0x9C, trail +0x8C, retail heap addresses - zeroed on both sides; the strings
+// compared as text), the texture / model hook calls in order, and 0x51DBD0 on every node path plus misses.
+inline void pfx_load_rows( const pfx_runtime_t& rt, const pfx_library_t& lib, std::uint32_t node, const std::string& path,
+    std::vector< std::pair< std::string, std::uint32_t > >& out )
+{
+    out.emplace_back( path, node );
+    auto k = lib.kids.find( node );
+    if ( k != lib.kids.end( ) )
+        for ( const auto& c : k->second )
+            pfx_load_rows( rt, lib, c.second, path + "/" + c.first, out );
+}
+
+inline bool verify_pfx_load( )
+{
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) )
+    {
+        LOG_ERROR( "pfx_load: Base.apf did not open" );
+        return false;
+    }
+    static pfx_runtime_t rt;
+    pfx_runtime_init( rt );
+    pfx_library_t lib;
+    struct hook_t
+    {
+        int project, kind;
+        std::uint32_t node, offset;
+        std::string text;
+    };
+    struct log_t
+    {
+        int project = 0;
+        std::vector< hook_t > calls;
+    } log;
+    pfx_load_hooks_t hooks;
+    hooks.user = &log;
+    hooks.texture = []( void* u, std::uint32_t node, std::uint32_t offset, const std::string& name ) {
+        log_t& l = *static_cast< log_t* >( u );
+        l.calls.push_back( { l.project, 0, node, offset, name } );
+    };
+    hooks.model = []( void* u, std::uint32_t node, const std::string& name ) {
+        log_t& l = *static_cast< log_t* >( u );
+        l.calls.push_back( { l.project, 1, node, 0u, name } );
+    };
+    int failed = 0, words = 0;
+    for ( std::size_t p = 0; p < g_golden_pld_project_count; ++p )
+    {
+        std::vector< std::uint8_t > blob;
+        log.project = static_cast< int >( p );
+        if ( !archive.read( g_golden_pld_projects[ p ].asset, blob ) ||
+             pfx_load_asset( rt, lib, g_golden_pld_projects[ p ].name, blob, hooks ) == 0u )
+        {
+            LOG_ERROR( "pfx_load: %s did not load", g_golden_pld_projects[ p ].asset );
+            return false;
+        }
+    }
+    std::vector< std::pair< std::string, std::uint32_t > > rows;
+    for ( const auto& pr : lib.projects )
+        pfx_load_rows( rt, lib, pr.second, pr.first, rows );
+    std::map< std::uint32_t, std::string > path_of;
+    for ( const auto& r : rows )
+        path_of[ r.second ] = r.first;
+    if ( rows.size( ) != g_golden_pld_node_count )
+    {
+        LOG_ERROR( "pfx_load: %d nodes, retail %d", static_cast< int >( rows.size( ) ), static_cast< int >( g_golden_pld_node_count ) );
+        return false;
+    }
+    std::map< int, std::map< std::uint32_t, std::string > > texts;
+    for ( std::size_t i = 0; i < g_golden_pld_text_count; ++i )
+        texts[ g_golden_pld_texts[ i ].row ][ g_golden_pld_texts[ i ].offset ] = g_golden_pld_texts[ i ].text;
+    for ( std::size_t i = 0; i < rows.size( ); ++i )
+    {
+        const golden_pfx_node_t& g = g_golden_pld_nodes[ i ];
+        const std::uint32_t a = rows[ i ].second;
+        pfx_heap_t& h = rt.heap;
+        int bad = rows[ i ].first != g.path || h[ a ] != g.vtable || h[ a + 4 ] != g.w4 || h[ a + 8 ] != g.w8 || h[ a + 0x10 ] != g.count;
+        const pfx_node_type_t* t = pfx_node_type_of( h[ a ] );
+        std::vector< std::uint32_t > masked, unknown;
+        if ( t != nullptr )
+            for ( int k = 0; k < t->prop_count; ++k )
+            {
+                if ( t->props[ k ].kind == pfx_prop_name || t->props[ k ].kind == pfx_prop_texture )
+                    for ( std::uint32_t w = 0; w < 6; ++w )
+                        masked.push_back( t->props[ k ].offset + 4u * w );
+                if ( t->props[ k ].kind == pfx_prop_vec3 || t->props[ k ].kind == pfx_prop_rot3 )
+                    unknown.push_back( t->props[ k ].offset + 12u );   // UNKNOWN: the stored w lane (pfxload.hxx)
+            }
+        if ( h[ a ] == 0x7505ACu )
+            masked.insert( masked.end( ), { 0x98u, 0x9Cu } );
+        if ( h[ a ] == 0x750294u )
+            masked.push_back( 0x8Cu );
+        for ( unsigned w = 0; w < g.nwords; ++w )
+        {
+            const std::uint32_t off = 0x30u + 4u * w;
+            if ( std::find( unknown.begin( ), unknown.end( ), off ) != unknown.end( ) )
+                continue;
+            const std::uint32_t ours = std::find( masked.begin( ), masked.end( ), off ) != masked.end( ) ? 0u : h[ a + off ];
+            bad += ours != g_golden_pld_words[ g.first + w ];
+            ++words;
+        }
+        const auto& want = texts[ static_cast< int >( i ) ];
+        for ( const auto& tx : want )
+        {
+            auto s = lib.strings.find( { a, tx.first } );
+            bad += s == lib.strings.end( ) || s->second != tx.second;
+        }
+        if ( bad )
+        {
+            if ( failed < 6 )
+                LOG_ERROR( "pfx_load: node %s differs from retail's load (%d)", g.path, bad );
+            ++failed;
+        }
+    }
+    int hook_bad = log.calls.size( ) != g_golden_pld_hook_count;
+    for ( std::size_t i = 0; i < g_golden_pld_hook_count && i < log.calls.size( ); ++i )
+    {
+        const golden_pfx_hook_t& g = g_golden_pld_hooks[ i ];
+        const hook_t& c = log.calls[ i ];
+        hook_bad += c.project != g.project || c.kind != g.kind || path_of[ c.node ] != g.path || c.offset != g.offset || c.text != g.text;
+    }
+    int lookup_bad = 0;
+    for ( std::size_t i = 0; i < g_golden_pld_lookup_count; ++i )
+    {
+        const std::uint32_t n = pfx_find( lib, g_golden_pld_lookups[ i ].query );
+        lookup_bad += ( n == 0u ? std::string( ) : path_of[ n ] ) != g_golden_pld_lookups[ i ].found;
+    }
+    if ( failed == 0 && hook_bad == 0 && lookup_bad == 0 )
+        LOG_SUCCESS( "pfx_load builds retail's node trees from %d VuPfxAsset documents: %d nodes, %d words, %d strings, %d hook calls, "
+                     "%d path lookups exact",
+            static_cast< int >( g_golden_pld_project_count ), static_cast< int >( rows.size( ) ), words,
+            static_cast< int >( g_golden_pld_text_count ), static_cast< int >( g_golden_pld_hook_count ),
+            static_cast< int >( g_golden_pld_lookup_count ) );
+    else
+        LOG_ERROR( "pfx_load FAILED: %d nodes, %d hook calls, %d lookups differ", failed, hook_bad, lookup_bad );
+    return failed == 0 && hook_bad == 0 && lookup_bad == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_pfx_load( ) && ok;
     ok = verify_water_types( ) && ok;
     ok = verify_pfx_run( ) && ok;
     ok = verify_pfx_lifecycle( ) && ok;
