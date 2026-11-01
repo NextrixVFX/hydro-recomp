@@ -795,12 +795,14 @@ inline bool verify_ui_difficulty( )
 
 #include <workspace/utility/checks/update.hxx>
 #include <workspace/utility/checks/widgets.hxx>
+#include <workspace/utility/checks/results.hxx>
 
 inline bool verify_ui_leaves_all( )
 {
     bool ok = true;
     ok = verify_ui_update_all( ) && ok;
     ok = verify_ui_widgets_all( ) && ok;
+    ok = verify_ui_results_all( ) && ok;
     ok = verify_ui_difficulty( ) && ok;
     ok = verify_ui_screen_frame_leaves( ) && ok;
     ok = verify_ui_stat_bar( ) && ok;
