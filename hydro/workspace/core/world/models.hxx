@@ -121,7 +121,38 @@ inline const std::vector< c_world::cached_part_t >& c_world::model_for( const st
     const std::string static_name = "VuStaticModelAsset/" + asset;
     const std::string animated_name = "VuAnimatedModelAsset/" + asset;
     bool loaded_ok = m_archive.read( static_name.c_str( ), bytes ) && load_model( bytes, loaded );
-    if ( !loaded_ok )
+    // --scene-compare (diagnostic, the evidence for the switch to load_model_scene): the heuristic load_model and the
+    // retail scene load side by side, per part. Measured on Hydroelectric (2026-10-31): geometry, textures, cubes,
+    // constants and node matrices identical on 74 of 77 models; the detail / alpha differences are load_model taking
+    // the NEXT shader's name (it reads the text after table 2's "gAlphaTestEnabled"), predicted 14 / 2 / 1 / 7 / 1 /
+    // 66 / 1 / 7 by tools tmp\blendproof.py and measured the same; z09a (41 of 259 parts) and effects_7 / _11 (its
+    // invented duplicate filter) differ in their part lists.
+    if ( c_engine::option( "scene-compare" ) != nullptr && loaded_ok )
+    {
+        model_t scened{};
+        const bool sok = load_model_scene( bytes, scened );
+        int geo = 0, tex = 0, det = 0, cube = 0, con = 0, alpha = 0, node = 0;
+        const std::size_t n = scened.parts.size( ) < loaded.parts.size( ) ? scened.parts.size( ) : loaded.parts.size( );
+        for ( std::size_t k = 0; k < n; ++k )
+        {
+            const model_part_t& a = loaded.parts[ k ];
+            const model_part_t& b = scened.parts[ k ];
+            geo += a.buffer != b.buffer || a.index_start != b.index_start || a.index_count != b.index_count;
+            tex += a.texture != b.texture;
+            det += a.detail != b.detail;
+            cube += a.cube != b.cube;
+            con += std::memcmp( a.diffuse, b.diffuse, 12 ) != 0 || std::memcmp( a.specular, b.specular, 12 ) != 0
+                || a.specular_amount != b.specular_amount || a.environment_amount != b.environment_amount;
+            alpha += a.alpha_test != b.alpha_test;
+            node += std::memcmp( a.node, b.node, 64 ) != 0;
+            if ( a.texture != b.texture || a.alpha_test != b.alpha_test || std::memcmp( a.diffuse, b.diffuse, 12 ) != 0 )
+                LOG_INFO( "scene-compare %s part %d: tex '%s' / '%s' alpha %d / %d diffuse %.3f %.3f %.3f / %.3f %.3f %.3f", asset.c_str( ), static_cast< int >( k ),
+                    a.texture.c_str( ), b.texture.c_str( ), a.alpha_test, b.alpha_test, a.diffuse[ 0 ], a.diffuse[ 1 ], a.diffuse[ 2 ], b.diffuse[ 0 ], b.diffuse[ 1 ], b.diffuse[ 2 ] );
+        }
+        LOG_INFO( "scene-compare %s ok %d parts %d / %d buffers %d / %d: geo %d tex %d detail %d cube %d constants %d alpha %d node %d", asset.c_str( ), sok ? 1 : 0,
+            static_cast< int >( loaded.parts.size( ) ), static_cast< int >( scened.parts.size( ) ), static_cast< int >( loaded.buffers.size( ) ),
+            static_cast< int >( scened.buffers.size( ) ), geo, tex, det, cube, con, alpha, node );
+    }    if ( !loaded_ok )
     {
         bytes.clear( );
         loaded = {};

@@ -16,6 +16,7 @@
 #include <workspace/core/entity/light.hxx>
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/game/types.hxx>
+#include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/water.hxx>
 #include <workspace/core/assets/texture.hxx>
 #include <workspace/utility/logger.hxx>
@@ -429,27 +430,7 @@ private:
                     bind.real( "Decay Ratio Y %" )
                 );
             }
-            // VuPointWaveEntity. Recorded, not emitted: retail only creates a
-            // wave when the "Emit" INPUT plug fires (VuPointWaveEntity_tick
-            // @0x5d4c50 gates on the flag that onEmitPlug @0x5d4b40 sets), so
-            // the parameters wait here until the event graph reaches them.
-            // Defaults are VuPointWaveEntity_ctor @0x5d43b0.
-            if ( type->text == "VuPointWaveEntity" && properties != nullptr && !here.empty( ) )
-            {
-                c_ocean::ripple_t source{};
-                source.x = world[ 12 ];
-                source.y = world[ 13 ];
-                // All seven from VuPointWaveEntity_ctor @0x5d43b0, emulated.
-                const c_entity_binder bind( type->text, overlay, properties );
-                source.falloff = bind.real( "Falloff Time" );
-                source.magnitude = bind.real( "Magnitude" );
-                source.range_start = bind.real( "Range Start" );
-                source.range_end = bind.real( "Range End" );
-                source.speed = bind.real( "Speed" );
-                source.frequency = bind.real( "Frequency" );
-                source.foaminess = bind.real( "Foaminess" );
-                m_ripple_sources.emplace( here, source );
-            }
+            // VuPointWaveEntity comes from the retail tree (load_entity_tree: m_point_waves).
             // VuGlobalGfxSettingsEntity feeds the fog and the far plane from the
             // retail entity tree (load_entity_tree).
             // VuFoliageEntity drew a hand-built billboard quad from an invented
@@ -618,7 +599,7 @@ private:
         m_booleans.clear( );
         m_random = random_t{};
         m_graph.clear( );
-        m_ripple_sources.clear( );
+        m_point_waves.clear( );
         m_unhandled_events = 0;
         m_fired = 0;
         // The light rig and the asset substitutions are per scene, so they
@@ -1002,6 +983,10 @@ private:
     // VuWater as the level builds it from the tree (water agent's surface.hxx
     // water_build_world); hold is what water_best_wake takes. Not rendered yet.
     water_built_t m_water;
+    // The query's view of m_water (kernel.hxx water_view_build) - water_view_kernel with &m_water_view as its user
+    // is the water kernel the boat's tick takes (boat tick.hxx / fluid.hxx). Not consumed yet: the boat tick is
+    // not wired into c_world.
+    water_view_t m_water_view;
     // Loaded VuTimedEventAssets, keyed by asset name. A control points into
     // this, so entries are only ever added.
     std::map< std::string, std::vector< timed_event_t > > m_timed;
@@ -1162,7 +1147,14 @@ private:
     // Every plug's resolved links: (entity, plug) -> its +0x50 list in link order,
     // each end by path - from the retail tree (load_entity_tree), walked by fire().
     std::map< std::pair< std::string, std::string >, std::vector< edge_t > > m_graph;
-    std::map< std::string, c_ocean::ripple_t > m_ripple_sources;
+    // Every VuPointWaveEntity by path, from the tree: the transform's +0x80 .. +0x8F (world position, 4 words) and
+    // the entity's +0x80 .. +0x9B (point_wave_properties_t, 7 words) - VuPointWaveEntity_tick 0x5D4C50's descriptor.
+    struct point_wave_source_t
+    {
+        std::uint32_t position[ 4 ];
+        std::uint32_t properties[ 7 ];
+    };
+    std::map< std::string, point_wave_source_t > m_point_waves;
     // Events delivered to node kinds that are not built yet. Counted rather
     // than guessed at, so the size of the remaining graph stays visible.
     int m_unhandled_events = 0;

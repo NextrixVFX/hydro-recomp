@@ -238,18 +238,17 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
     // VuPointWaveEntity. "Emit" is the INPUT plug, named inside
     // VuPointWaveEntity_initEmitPlug @0x5d4e60; "OnEmit" and "OnExpired"
     // are outputs the entity fires, so only "Emit" may start a ripple.
-    const auto ripple = m_ripple_sources.find( entity );
-    if ( ripple != m_ripple_sources.end( ) )
+    const auto ripple = m_point_waves.find( entity );
+    if ( ripple != m_point_waves.end( ) )
     {
         if ( plug == "Emit" )
         {
-            const c_ocean::ripple_t& source = ripple->second;
-            m_ocean.emit( source.x, source.y, source.falloff, source.magnitude,
-                source.range_start, source.range_end, source.speed, source.frequency,
-                source.foaminess );
+            // VuPointWaveEntity_tick 0x5D4C50 -> VuWater_createPointWave 0x528E10 (surface.hxx), in place of
+            // c_ocean::emit: the wave goes into m_water's hold.
+            const point_wave_source_t& source = ripple->second;
+            const int wave = water_point_wave_emit( m_water, source.position, source.properties );
             ++m_fired;
-            LOG_SUCCESS( "event: %s emitted a point wave at %.0f %.0f  range %.0f speed %.0f",
-                entity.c_str( ), source.x, source.y, source.range_end, source.speed );
+            LOG_SUCCESS( "event: %s emitted point wave %d into the water", entity.c_str( ), wave );
             return retval_t{};
         }
         count_unhandled( entity, plug );
@@ -587,7 +586,7 @@ inline void c_world::audit_graph( ) const
         {
             const bool known = m_actions.count( edge.entity ) != 0
                 || m_filters.count( edge.entity ) != 0
-                || m_ripple_sources.count( edge.entity ) != 0
+                || m_point_waves.count( edge.entity ) != 0
                 || m_delays.count( edge.entity ) != 0
                 || m_events.count( edge.entity ) != 0
                 || m_ifs.count( edge.entity ) != 0
@@ -605,7 +604,7 @@ inline void c_world::audit_graph( ) const
     // the only check available without playing the course, and it is the
     // one that exercises the new node kinds end to end.
     int reachable = 0;
-    for ( const auto& source : m_ripple_sources )
+    for ( const auto& source : m_point_waves )
     {
         std::string via;
         for ( const trigger_t& gate : m_triggers.all( ) )
@@ -662,7 +661,7 @@ inline void c_world::audit_graph( ) const
         }
     }
     LOG_INFO( "point waves: %d of %u reachable through the built node kinds",
-        reachable, static_cast< unsigned >( m_ripple_sources.size( ) ) );
+        reachable, static_cast< unsigned >( m_point_waves.size( ) ) );
     // The refs, grouped by the owning class and ref name, so the census
     // says which constructors have to be read to consume them.
     std::map< std::string, int > by_ref;
