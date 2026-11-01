@@ -189,6 +189,13 @@ inline const std::vector< c_world::cached_part_t >& c_world::model_for( const st
             static_cast< int >( heuristic.parts.size( ) ), static_cast< int >( scened.parts.size( ) ), static_cast< int >( heuristic.buffers.size( ) ),
             static_cast< int >( scened.buffers.size( ) ), geo, tex, det, cube, con, alpha, node, content );
     }
+    // The scene's aabb, for the static model component's world aabb (static_aabb_for).
+    if ( loaded_ok && loaded.scened )
+    {
+        std::array< float, 8 > box{};
+        std::memcpy( box.data( ), loaded.aabb, sizeof( loaded.aabb ) );
+        m_scene_aabbs[ asset ] = box;
+    }
     if ( !loaded_ok )
     {
         bytes.clear( );
@@ -343,4 +350,45 @@ inline void c_world::place_model( const std::string& asset, const float* world, 
             out_placements->push_back( handle );
         ++m_draws;
     }
+}
+
+// Each static model component's draw selection, per frame: Vu3dDrawStaticModelComponent's draw 0x5B0730
+// (static_model_select) against the camera eye on the normal pass (reflection pass byte +0x18 clear, skip +0x2D
+// clear; fade +0x17C 1.0 - the ctor's, its other writer unread), then only the chosen instance's placements shown.
+// SCAFFOLD: retail runs this inside the draw traversal per pass; our renderer's mirror pass reuses the normal pass's
+// choice (retail's reflection pass would pick the reflection model, instance 3 - not placed). The colour scaled by
+// fade and the rejection modifier the selection returns are not consumed (fade is 1.0; the reject test is the
+// renderer's 0x520130 - unread).
+inline void c_world::update_static_draws( )
+{
+    int changed = 0;
+    int shown[ 4 ]{};   // none, LOD 0, LOD 1, LOD 2
+    for ( static_draw_item_t& item : m_static_draws )
+    {
+        const static_draw_t pick = static_model_select( item.draw, item.aabb, item.aabb + 4, m_eye, false, false, 1.0f );
+        if ( pick.instance == item.shown )
+            continue;
+        if ( item.shown >= 0 && item.shown < 3 )
+            for ( int handle : item.placements[ item.shown ] )
+                c_engine::show( handle, false );
+        if ( pick.instance >= 0 && pick.instance < 3 )
+            for ( int handle : item.placements[ pick.instance ] )
+                c_engine::show( handle, true );
+        item.shown = pick.instance;
+        ++changed;
+    }
+    if ( changed == 0 )
+        return;
+    for ( const static_draw_item_t& item : m_static_draws )
+    {
+        ++shown[ item.shown + 1 ];
+        // --static-draw-trace (diagnostic): every component's choice, distances, aabb and placements.
+        if ( c_engine::option( "static-draw-trace" ) != nullptr )
+            LOG_INFO( "static draw %s: shown %d draw %g lod0 %g lod1 %g aabb %g %g %g / %g %g %g placements %d %d %d", item.draw.model_asset.c_str( ), item.shown,
+                item.draw.draw_distance, item.draw.lod0_draw_distance, item.draw.lod1_draw_distance, item.aabb[ 0 ], item.aabb[ 1 ], item.aabb[ 2 ], item.aabb[ 4 ],
+                item.aabb[ 5 ], item.aabb[ 6 ], static_cast< int >( item.placements[ 0 ].size( ) ), static_cast< int >( item.placements[ 1 ].size( ) ),
+                static_cast< int >( item.placements[ 2 ].size( ) ) );
+    }
+    LOG_INFO( "static draws: %d changed; of %d components none %d, LOD 0 %d, LOD 1 %d, LOD 2 %d (eye %.1f %.1f %.1f)", changed,
+        static_cast< int >( m_static_draws.size( ) ), shown[ 0 ], shown[ 1 ], shown[ 2 ], shown[ 3 ], m_eye[ 0 ], m_eye[ 1 ], m_eye[ 2 ] );
 }

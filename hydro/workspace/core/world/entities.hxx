@@ -372,7 +372,8 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
             if ( ( c.m_vtable != k_static_model_component_vtable && c.m_vtable != k_animated_model_component_vtable ) || !c.m_state )
                 continue;
             const model_draw_t& m = static_cast< const model_draw_state_t* >( c.m_state.get( ) )->value;
-            if ( m.model_asset.empty( ) )
+            // A static component naming only LOD 1 / LOD 2 still places those (its LOD 0 holds no scene).
+            if ( m.model_asset.empty( ) && ( m.animated || ( m.lod1_model_asset.empty( ) && m.lod2_model_asset.empty( ) ) ) )
                 continue;
             const transform_component_t* t = entity_transform( e );
             if ( !t || e.m_world_unknown )
@@ -388,10 +389,29 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
                 static_cast< float >( ( m.color >> 8 ) & 0xFF ) / 255.0f, static_cast< float >( ( m.color >> 16 ) & 0xFF ) / 255.0f };
             if ( !m.animated )
             {
+                // The Model Asset watcher's rebuild 0x5B09E0: the LOD 0 instance (+0xBC) takes the Model Asset - or
+                // the LOD 1 asset when g_vumetrod3d11gfx's vt+0x1C (0x5135E0: its +4 byte) is set and LOD 1 is
+                // named; +4 is 0 from the ctor 0x5AC8C0 and its setter vt+0x18 (0x5135D0) has no caller found, so
+                // the Model Asset - then LOD 1 (+0xDC) and LOD 2 (+0xFC). Every instance shares the draw matrix,
+                // so each is collected for the rotators. An instance naming nothing holds no scene and draws
+                // nothing (0x520130: +0x10 null -> return).
+                static_draw_item_t item{};
+                item.draw = m;
+                const std::string* names[ 3 ] = { &m.model_asset, &m.lod1_model_asset, &m.lod2_model_asset };
                 m_collect = &collected;
                 m_place_owner = trail;
-                place_model( m.model_asset, matrix, 0, -1, tint );
+                for ( int instance = 0; instance < 3; ++instance )
+                    if ( !names[ instance ]->empty( ) )
+                        place_model( *names[ instance ], matrix, 0, -1, tint, nullptr, -1, &item.placements[ instance ] );
                 m_collect = nullptr;
+                // 0x531D10 with the LOD 0 instance's scene aabb (its +0x10 scene's +0x5C), or the zero aabb
+                // 0x7593F0 when it holds no scene; +0x1E's draw-manager hand-off is the renderer's (a hook).
+                const auto box = m_scene_aabbs.find( m.model_asset );
+                scene_component_aabb( item.aabb, box != m_scene_aabbs.end( ) ? box->second.data( ) : scene_zero_aabb( ), matrix, false );
+                for ( int instance = 0; instance < 3; ++instance )
+                    for ( int handle : item.placements[ instance ] )
+                        c_engine::show( handle, false );
+                m_static_draws.push_back( std::move( item ) );
                 continue;
             }
             // The clip arrives from a VuPlayAnimationEntity; bind_animations

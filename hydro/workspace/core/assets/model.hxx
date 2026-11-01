@@ -67,6 +67,10 @@ struct model_t
     std::vector< model_buffer_t > buffers;
     std::vector< model_part_t > parts;
     std::vector< model_bone_t > bones;
+    // load_model_scene only: the VuGfxStaticScene's aabb (+0x5C, 0x560930's block) - what the static model
+    // component's world aabb (0x531D10) measures.
+    bool scened = false;
+    float aabb[ 8 ]{};
 };
 
 namespace
@@ -1286,6 +1290,8 @@ inline bool load_model_scene( const std::vector< std::uint8_t >& blob, model_t& 
     scene_t scene;
     if ( !scene_load_static( blob.data( ), blob.size( ), scene ) )
         return false;
+    model.scened = true;
+    std::memcpy( model.aabb, scene.aabb, sizeof( model.aabb ) );
     model.buffers.resize( scene.chunks.size( ) );
     for ( std::size_t k = 0; k < scene.chunks.size( ); ++k )
     {
