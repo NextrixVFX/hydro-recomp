@@ -315,9 +315,18 @@ inline bool verify_logic_game( )
             LOG_ERROR( "logic_game: %s vector %u: bad %d (fires %u want %u)", cls.c_str( ), i, bad - bad_before,
                        static_cast< unsigned >( L.fired.size( ) ), nf );
     }
+    // the text classes' ctor images (VuIsEventTypeEntity's "AttractEvent", VuIsSkuEntity's empty SKU)
+    const unsigned nc = c.next( );
+    for ( unsigned k = 0; k < nc; ++k )
+    {
+        const std::string cls = c.str( );
+        const std::string want = c.next( ) ? c.str( ) : std::string( );
+        bad += logic_construct( logic_vtable_of( cls.c_str( ) ) ).text != want;
+    }
     bad += unrecreated;
     if ( bad == 0 )
-        LOG_SUCCESS( "world/logic.hxx matches VuIsTegraEntity 0x42DAA0 / VuIsSkuEntity 0x42CFF0 / VuHumanFilterEntity 0x42D370 on %u fired "
+        LOG_SUCCESS( "world/logic.hxx matches VuIsTegraEntity 0x42DAA0 / VuIsSkuEntity 0x42CFF0 / VuHumanFilterEntity 0x42D370 / "
+                     "VuIsEventTypeEntity 0x42CB00 on %u fired "
                      "plugs (%d output fires; documents, SKUs, repository tables and driver kinds as retail had them)", n, fires );
     else
         LOG_ERROR( "logic_game FAILED %d (%d unrecreated paths reached)", bad, unrecreated );

@@ -466,6 +466,27 @@ inline void logic_is_sku( logic_entity_t& e, logic_retval_t& out, const ui_param
     logic_fire( e, h, *h.game->sku == e.text ? "True" : "False", in );
 }
 
+// VuIsEventTypeEntity "Trigger" 0x42CB00: c = gameutil +0x50 ["GameData"];
+// not an object -> the dev config g 0x75901C's getParam( "ActionGameData" )
+// (vt+0x18 = 0x4FDB70: the static null 0x7593A0) or, without one, the null
+// itself; c["EventType"] as a string (else the function-static empty string
+// 0x819950) against Type (+0x60 VuString, ctor default "AttractEvent") ->
+// "True", else "False", with the params.
+inline void logic_is_event_type( logic_entity_t& e, logic_retval_t& out, const ui_params_t& in, const logic_hooks_t& h )
+{
+    out.type = 0u;
+    if ( !h.game || !h.game->game_data )
+    {
+        logic_unrecreated( h );
+        return;
+    }
+    static const value_t null{ };
+    const value_t& data = member( *h.game->game_data, "GameData" );
+    const value_t& t = member( data.tag == 6u ? data : null, "EventType" );
+    const std::string type = t.tag == 4u ? t.text : std::string( );
+    logic_fire( e, h, type == e.text ? "True" : "False", in );
+}
+
 // VuHumanFilterEntity "In" 0x42D370: with params size > 0 (signed) and a
 // first record of type 11 (an entity), its hash (0x505370 = boat/nuisance.hxx
 // vu_params_entity) -> the repository's entity; when its type chain holds
@@ -559,6 +580,7 @@ static const logic_plug_t g_logic_plugs[] = {
     { 0x7399E8u, "VuIsTegraEntity", "Trigger", 0x42DAA0u, logic_is_tegra },
     { 0x739A84u, "VuIsSkuEntity", "Trigger", 0x42CFF0u, logic_is_sku },
     { 0x739A50u, "VuHumanFilterEntity", "In", 0x42D370u, logic_human_filter },
+    { 0x739AD0u, "VuIsEventTypeEntity", "Trigger", 0x42CB00u, logic_is_event_type },
 };
 
 struct logic_output_t
@@ -592,6 +614,7 @@ static const logic_output_t g_logic_outputs[] = {
     { 0x7399E8u, "True", 0u }, { 0x7399E8u, "False", 0u },
     { 0x739A84u, "True", 0u }, { 0x739A84u, "False", 0u },
     { 0x739A50u, "Out", 0u },
+    { 0x739AD0u, "True", 0u }, { 0x739AD0u, "False", 0u },
 };
 
 inline const logic_output_t* logic_output( std::uint32_t vtable, const char* plug )
@@ -638,6 +661,9 @@ inline logic_entity_t logic_construct( std::uint32_t vtable )
 {
     logic_entity_t e{ };
     e.vtable = vtable;
+    // VuIsEventTypeEntity's ctor 0x42C850: Type = "AttractEvent" (0x67803C).
+    if ( vtable == 0x739AD0u )
+        e.text = "AttractEvent";
     return e;
 }
 
