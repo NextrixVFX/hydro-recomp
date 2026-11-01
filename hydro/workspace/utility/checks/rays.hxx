@@ -47,11 +47,42 @@ inline void ray_check_read_shape( const unsigned*& g, ray_check_shape_t& s )
 // and closestHitFraction) and compares every call (which, in order, and the
 // LocalRayResult's object, shape info, normal and fraction words, the
 // normalInWorld flag) and the closest at the end.
+// verify_ray_bvh (boat batch 16): the same, on worlds holding the level's
+// btBvhTriangleMeshShape (kind 21: Env_Hydroelectric_z09b_col, the BVH and
+// mesh g_golden_bvh_assets[ 1 ]) - the type-21 branch, performRaycast and the
+// triangle callback, with retail's addSingleResult answers fed back; the
+// adapter is compared in mode 3 (the RayTestWrapper's answer).
+inline bool verify_ray_table( const unsigned* g, const char* name, bool with_bvh );
 inline bool verify_ray_test( )
 {
-    const unsigned* g = g_golden_ray_test_words;
+    return verify_ray_table( g_golden_ray_test_words, "ray_test", false );
+}
+
+inline bool verify_ray_bvh( )
+{
+    return verify_ray_table( g_golden_ray_bvh_words, "ray_bvh", true );
+}
+
+inline bool verify_ray_table( const unsigned* g, const char* name, bool with_bvh )
+{
     const unsigned nv = *g++;
-    int failed = 0, calls = 0, hits = 0, adapter_rays = 0, adapter_hits = 0, adapter_failed = 0;
+    int failed = 0, calls = 0, hits = 0, adapter_rays = 0, adapter_hits = 0, adapter_failed = 0, mesh_hits = 0;
+    const golden_bvh_asset_t& a = g_golden_bvh_assets[ 1 ];
+    quantized_bvh_t level_bvh{};
+    std::memcpy( level_bvh.aabb_min, a.m_header + 0, 16 );
+    std::memcpy( level_bvh.aabb_max, a.m_header + 4, 16 );
+    std::memcpy( level_bvh.quantization, a.m_header + 8, 16 );
+    level_bvh.cur_node_index = static_cast< int >( a.m_header[ 13 ] );
+    level_bvh.use_quantization = static_cast< uint8_t >( a.m_quantized );
+    level_bvh.nodes = reinterpret_cast< const bvh_node_t* >( a.m_nodes );
+    level_bvh.traversal_mode = a.m_traversal;
+    striding_mesh_t level{};
+    level.scaling[ 0 ] = level.scaling[ 1 ] = level.scaling[ 2 ] = 1.0f;
+    level.vertices = reinterpret_cast< const float( * )[ 4 ] >( a.m_verts );
+    level.num_vertices = a.m_nverts;
+    level.indices = a.m_indices;
+    level.index_count = a.m_nindices;
+    const bvh_mesh_shape_t level_shape{ 21, 0.0f, &level, &level_bvh };
     for ( unsigned v = 0; v < nv; ++v )
     {
         const unsigned n = *g++;
@@ -69,6 +100,12 @@ inline bool verify_ray_test( )
             proxies[ k ]->client = &objects[ k ];
             proxies[ k ]->group = static_cast< short >( *g++ );
             proxies[ k ]->mask = static_cast< short >( *g++ );
+            if ( kind == 21 )
+            {
+                objects[ k ].body.transform = transforms[ k ].data( );
+                objects[ k ].body.concave = &level_shape;
+                continue;
+            }
             ray_check_read_shape( g, shapes[ k ] );
             ray_check_shape_t& s = shapes[ k ];
             s.mesh.scaling[ 0 ] = s.shape.local_scaling[ 0 ];
@@ -206,7 +243,7 @@ inline bool verify_ray_test( )
         // addSingleResult calls on the objects needsCollision accepted.
         unsigned start_closest;
         std::memcpy( &start_closest, &cb.closest_hit_fraction, 4 );
-        if ( mode == 1 && start_closest == 0x3F800000u )
+        if ( start_closest == 0x3F800000u && ( with_bvh ? mode == 3 && cb.flags == 0 : mode == 1 ) )
         {
             boat_ray_world_t rw;
             rw.world = &w;
@@ -248,14 +285,17 @@ inline bool verify_ray_test( )
         std::memcpy( &mine_closest, &cb.closest_hit_fraction, 4 );
         calls += static_cast< int >( glog.size( ) );
         for ( const auto& e : glog )
+        {
             hits += e[ 0 ] == 2 ? 1 : 0;
+            mesh_hits += e[ 0 ] == 2 && objects[ e[ 1 ] ].body.concave ? 1 : 0;
+        }
         const bool same = status == 1 && rp.log == glog && mine_closest == closest_after;
         if ( !same && ++failed <= 8 )
         {
             std::size_t at = 0;
             while ( at < rp.log.size( ) && at < glog.size( ) && rp.log[ at ] == glog[ at ] )
                 ++at;
-            LOG_ERROR( "ray_test %u: st %d calls %d/%d at %d closest %08X/%08X", v, status, static_cast< int >( rp.log.size( ) ),
+            LOG_ERROR( "%s %u: st %d calls %d/%d at %d closest %08X/%08X", name, v, status, static_cast< int >( rp.log.size( ) ),
                        static_cast< int >( glog.size( ) ), static_cast< int >( at ), mine_closest, closest_after );
             if ( at < rp.log.size( ) && at < glog.size( ) && rp.log[ at ].size( ) == 13 && glog[ at ].size( ) == 13 )
                 LOG_ERROR( "n %08X %08X %08X f %08X / %08X %08X %08X f %08X", rp.log[ at ][ 5 ], rp.log[ at ][ 6 ], rp.log[ at ][ 7 ],
@@ -264,10 +304,18 @@ inline bool verify_ray_test( )
     }
     bool adapter_ok = adapter_failed == 0;
     if ( adapter_ok )
-        LOG_SUCCESS( "boat_ray_hits (VuDynamicsRayTest 0x50CFB0's ray on the race world, boat/rays.hxx) gives retail's hits: %d rays, %d hits", adapter_rays,
-                     adapter_hits );
+        LOG_SUCCESS( "boat_ray_hits (VuDynamicsRayTest 0x50CFB0's ray on the race world, boat/rays.hxx) gives retail's hits%s: %d rays, %d hits",
+                     with_bvh ? " on worlds with the level's BVH mesh" : "", adapter_rays, adapter_hits );
     else
-        LOG_ERROR( "ray_hits FAILED %d of %d rays", adapter_failed, adapter_rays );
+        LOG_ERROR( "%s ray_hits FAILED %d of %d rays", name, adapter_failed, adapter_rays );
+    if ( failed == 0 && with_bvh )
+    {
+        LOG_SUCCESS( "rayTestSingle 0x54C9B0's BVH-mesh path (the local ray 0x54CCC0, BridgeTriangleRaycastCallback 0x54D410, performRaycast "
+                     "0x5AECB0, the quantized ray walk 0x587E60, processNode 0x5AED70, processTriangle 0x5B8500, reportHit 0x54D4D0) on the "
+                     "level's Env_Hydroelectric_z09b_col matches retail: %u rays, %d callback calls, %d hits (%d on the mesh)", nv, calls, hits,
+                     mesh_hits );
+        return adapter_ok;
+    }
     if ( failed == 0 )
     {
         LOG_SUCCESS( "btCollisionWorld::rayTest 0x54F590 (btDbvtBroadphase 0x56E040 / 0x56EE90, btSingleRayCallback 0x54F330 / 0x54F4E0, "
@@ -276,7 +324,7 @@ inline bool verify_ray_test( )
                      nv, calls, hits );
         return adapter_ok;
     }
-    LOG_ERROR( "ray_test FAILED %d of %u rays", failed, nv );
+    LOG_ERROR( "%s FAILED %d of %u rays", name, failed, nv );
     return false;
 }
 
