@@ -775,9 +775,12 @@ inline bool verify_ui_difficulty( )
     return failed == 0;
 }
 
+#include <workspace/utility/checks/update.hxx>
+
 inline bool verify_ui_leaves_all( )
 {
     bool ok = true;
+    ok = verify_ui_update_all( ) && ok;
     ok = verify_ui_difficulty( ) && ok;
     ok = verify_ui_screen_frame_leaves( ) && ok;
     ok = verify_ui_stat_bar( ) && ok;

@@ -79,6 +79,8 @@ public:
             out.m_known = false;
             return out;
         }
+        if ( m_on_fire )
+            m_on_fire( owner, plug, params );
         const script_plug_t& p = sc->m_plugs[ static_cast< std::size_t >( plug ) ];
         if ( p.m_row->m_type == 0 )
         {
@@ -105,12 +107,24 @@ public:
         const char* name = sc && link.m_plug >= 0 && static_cast< std::size_t >( link.m_plug ) < sc->m_plugs.size( )
                                ? sc->m_plugs[ static_cast< std::size_t >( link.m_plug ) ].m_row->m_name
                                : nullptr;
+        if ( name && m_bound_known && m_bound_known( *link.m_entity, name ) )
+        {
+            if ( m_on_input )
+                m_on_input( *link.m_entity, name, params, true );
+            return m_bound_run( *link.m_entity, name, params );
+        }
         if ( !name || !ui_action_kind_of( link.m_entity->m_type, kind ) || std::string( name ) != "Trigger" )
         {
+            if ( name && m_on_input )
+                m_on_input( *link.m_entity, name, params, false );
             ++m_unknown;
+            if ( m_answer && name )
+                out = m_answer( *link.m_entity, name );
             out.m_known = false;
             return out;
         }
+        if ( m_on_input )
+            m_on_input( *link.m_entity, name, params, true );
         c_ui_action action( kind, ui_action_screen( *link.m_entity, kind == ui_action_kind_t::set_game_mode ? "Game Mode" : "Screen" ) );
         action.m_broadcast = m_broadcast;
         action.m_root = m_root;
@@ -135,4 +149,12 @@ public:
     std::function< void( std::uint32_t, const ui_params_t& ) > m_broadcast;
     value_t* m_root = nullptr;  // gameutil +80, the set game mode action's target
     int m_unknown = 0;  // inputs reached whose handler is not recreated
+    // Optional (core/ui bind.hxx): the trace at 0x5023A0's / 0x404BE0's entry,
+    // the inputs of bound runtime objects, and the answer of an input that is
+    // not recreated (a HOOK; { 0, 0 } without it).
+    std::function< void( const entity_t&, int, const ui_params_t& ) > m_on_fire;
+    std::function< void( const entity_t&, const char*, const ui_params_t&, bool ) > m_on_input;
+    std::function< bool( const entity_t&, const char* ) > m_bound_known;
+    std::function< ui_ret_t( entity_t&, const char*, const ui_params_t& ) > m_bound_run;
+    std::function< ui_ret_t( const entity_t&, const char* ) > m_answer;
 };
