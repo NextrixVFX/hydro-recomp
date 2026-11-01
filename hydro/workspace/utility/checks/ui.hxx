@@ -11,6 +11,7 @@
 #include <workspace/core/ui/compose.hxx>
 #include <workspace/core/ui/gauge.hxx>
 #include <workspace/core/ui/map.hxx>
+#include <workspace/core/ui/select.hxx>
 
 #include <algorithm>
 #include <array>
@@ -2074,9 +2075,65 @@ inline bool verify_ui_container_draw( )
     return failed == 0;
 }
 
+// ui_set_single_player / ui_set_boat_player_index (hydro core/ui/select.hxx)
+// against retail's VuSetBoatConfigPlayerEntity SetSinglePlayer 0x44EF10 /
+// SetIndex 0x44EEA0 fired through their own plugs (oracle case
+// ui_boat_player): the authored instance (present in our loaded tree, same
+// type and name) and a hand-made one, every plug x VuParams x root - the whole
+// root after, the VuRetVal, no broadcast.
+inline bool verify_ui_boat_player( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0, fires = 0;
+    auto bad = [ &failed ]( const char* what, int k )
+    {
+        if ( ++failed <= 8 )
+            LOG_ERROR( "ui boat player: %s differs from retail (row %d)", what, k );
+    };
+    for ( std::size_t k = 0; k < g_golden_bps_count; ++k )
+    {
+        const golden_bp_t& want = g_golden_bps[ k ];
+        const int row = static_cast< int >( k );
+        if ( want.m_project )
+        {
+            const entity_t* have = nullptr;
+            for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+                if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, want.m_project ) == 0 && want.m_index >= 0 &&
+                     static_cast< std::size_t >( want.m_index ) < loaded.trees[ p ].size( ) )
+                    have = loaded.trees[ p ][ static_cast< std::size_t >( want.m_index ) ].second;
+            if ( !have || have->m_type != "VuSetBoatConfigPlayerEntity" || have->m_name != want.m_name )
+                bad( "the authored entity", row );
+        }
+        for ( int f = 0; f < want.m_fires; ++f )
+        {
+            const golden_bp_fire_t& fire = g_golden_bp_fires[ want.m_first + f ];
+            const std::vector< std::uint8_t > doc = ui_unhex( fire.m_root );
+            const std::vector< std::uint8_t > raw = ui_unhex( fire.m_params );
+            value_t root = c_reader( doc ).parse( );
+            ui_params_t p;
+            std::memcpy( p.m_bytes, raw.data( ), std::min< std::size_t >( raw.size( ), 128 ) );
+            p.m_size = fire.m_size;
+            const std::uint32_t ret = fire.m_plug == 1 ? ui_set_boat_player_index( root, p ) : ui_set_single_player( root );
+            std::string after;
+            vujb_dump( root, after );
+            ++fires;
+            if ( ret != fire.m_ret || after != fire.m_after || fire.m_broadcasts != 0 )
+                bad( "a fire's root / VuRetVal", row );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_set_single_player / ui_set_boat_player_index match retail's VuSetBoatConfigPlayerEntity SetSinglePlayer 0x44EF10 / "
+                     "SetIndex 0x44EEA0 (VuParams int 0x4237B0) on %d entities (authored + hand-made): %d fires, the whole root after",
+            static_cast< int >( g_golden_bps_count ), fires );
+    else
+        LOG_ERROR( "the boat player selector FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_boat_player( ) && ok;
     ok = verify_ui_game_data( ) && ok;
     ok = verify_ui_set_game_mode( ) && ok;
     ok = verify_ui_front_end_game_data( ) && ok;
