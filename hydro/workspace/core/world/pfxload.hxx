@@ -603,23 +603,121 @@ inline std::uint32_t pfx_add_project( pfx_runtime_t& rt, pfx_library_t& lib, con
     return g;
 }
 
-// VuPfxAsset's load slot 5 0x5CAB30 on the asset's bytes (c_archive::read's
-// blob): the u32 size, the VUJB document (c_reader = 0x55B560), addProject.
-inline std::uint32_t pfx_load_asset( pfx_runtime_t& rt, pfx_library_t& lib, const std::string& name,
-    const std::vector< std::uint8_t >& blob, const pfx_load_hooks_t& k = pfx_load_hooks_t( ) )
+// VuPfxAsset's load slot 5 0x5CAB30's read (0x5C1270) on the asset's bytes
+// (c_archive::read's blob): the u32 size, the VUJB document (c_reader =
+// 0x55B560). False when the read fails.
+inline bool pfx_asset_document( const std::vector< std::uint8_t >& blob, value_t& root )
 {
     if ( blob.size( ) < 4 )
-        return 0u;
+        return false;
     std::uint32_t size;
     std::memcpy( &size, blob.data( ), 4 );
     if ( size > blob.size( ) - 4 )
-        return 0u;
+        return false;
     const std::vector< std::uint8_t > doc( blob.begin( ) + 4, blob.begin( ) + 4 + size );
     c_reader reader( doc );
-    const value_t root = reader.parse( );
-    if ( root.tag == 0 && size != 0 )
+    root = reader.parse( );
+    return !( root.tag == 0 && size != 0 );
+}
+
+// 0x5CAB30 whole: the read, then addProject.
+inline std::uint32_t pfx_load_asset( pfx_runtime_t& rt, pfx_library_t& lib, const std::string& name,
+    const std::vector< std::uint8_t >& blob, const pfx_load_hooks_t& k = pfx_load_hooks_t( ) )
+{
+    value_t root;
+    if ( !pfx_asset_document( blob, root ) )
         return 0u;   // the read failed (0x5C1270 false): no project
     return pfx_add_project( rt, lib, name, root, k );
+}
+
+// ---------------------------------------------------------------------------
+// THE NODE DTORS AND THE PROJECT RELOAD / REMOVE.
+//
+// A node's refcount is +4 (VuRefObj): a release (`dec [node+4]; jne`) runs the
+// node's slot 0 with 1 (delete) at 0. The slot 0s: VuPfxNode 0x4CD920, every
+// process class 0x4CD3B0 (vtable VuPfxProcess), VuPfxGroup 0x51C410, VuPfxSystem
+// 0x58A620, VuPfxQuadPattern 0x591BA0 (0x591BD0: the strings +0x54 / +0x3C),
+// VuPfxGeomPattern 0x58FD90 (0x58FDC0: its VuStaticModelInstance +0x5C reset
+// 0x520000 FIRST - the renderer's and the asset manager's: HOOK `model` - then
+// the string +0x3C), VuPfxTrailPattern 0x58F030, VuPfxPattern 0x58B000; each
+// then the base 0x563C00 and operator delete. 0x563C00: every child of the +0xC
+// map in order (in-order = name order) released, the name +0x18 freed, every
+// property of the +0x14 list (next +0x10, list order) deleted by its slot 0(1) -
+// VuAssetProperty<VuTextureAsset> 0x426950 hands a loaded asset (+0x4C, set by
+// the asset factory's load: platform) to the asset manager's vt+0x24: HOOK
+// `texture`, told every texture property, it knows what it loaded; the other
+// classes' 0x405230 / 0x407360 free only -, the map freed (0x4CDB30), then
+// VuRefObj's list +8 (each entry's slot 0 until empty: 0 on every node this
+// file builds). `destroyed` is told at 0x563C00's entry. The node's heap words
+// stay (pfx_heap_t has no allocator to return them to); its library entries go.
+struct pfx_release_hooks_t
+{
+    void* user = nullptr;
+    void ( *model )( void* user, std::uint32_t node ) = nullptr;
+    void ( *texture )( void* user, std::uint32_t node, std::uint32_t offset ) = nullptr;
+    void ( *destroyed )( void* user, std::uint32_t node ) = nullptr;
+};
+
+inline void pfx_node_release( pfx_runtime_t& rt, pfx_library_t& lib, std::uint32_t a, const pfx_release_hooks_t& k );
+
+inline void pfx_node_destroy( pfx_runtime_t& rt, pfx_library_t& lib, std::uint32_t a, const pfx_release_hooks_t& k )
+{
+    const pfx_node_type_t* t = pfx_node_type_of( rt.heap[ a ] );
+    if ( rt.heap[ a ] == 0x750328u && k.model != nullptr )
+        k.model( k.user, a );
+    if ( k.destroyed != nullptr )
+        k.destroyed( k.user, a );
+    std::vector< std::uint32_t > kids;
+    auto it = lib.kids.find( a );
+    if ( it != lib.kids.end( ) )
+        for ( const auto& c : it->second )
+            kids.push_back( c.second );
+    for ( std::uint32_t c : kids )
+        pfx_node_release( rt, lib, c, k );
+    if ( t != nullptr && k.texture != nullptr )
+        for ( int i = 0; i < t->prop_count; ++i )
+            if ( t->props[ i ].kind == pfx_prop_texture )
+                k.texture( k.user, a, t->props[ i ].offset );
+    lib.names.erase( a );
+    lib.kids.erase( a );
+    for ( auto s = lib.strings.begin( ); s != lib.strings.end( ); )
+        s = s->first.first == a ? lib.strings.erase( s ) : std::next( s );
+    rt.children.erase( a );
+}
+
+inline void pfx_node_release( pfx_runtime_t& rt, pfx_library_t& lib, std::uint32_t a, const pfx_release_hooks_t& k )
+{
+    if ( --rt.heap[ a + 4 ] == 0u )
+        pfx_node_destroy( rt, lib, a, k );
+}
+
+// VuPfxImpl slot 8 0x51D870 (name, document): the projects map's lookup
+// (0x4F22B0); none: false. Else a new VuPfxGroup (0x51D7E0) loads the
+// document (slot 2), the old group is released, the entry takes the new one:
+// true.
+inline bool pfx_reload_project( pfx_runtime_t& rt, pfx_library_t& lib, const std::string& name, const value_t& doc,
+    const pfx_load_hooks_t& k = pfx_load_hooks_t( ), const pfx_release_hooks_t& r = pfx_release_hooks_t( ) )
+{
+    auto it = lib.projects.find( name );
+    if ( it == lib.projects.end( ) )
+        return false;
+    const std::uint32_t g = pfx_node_create( rt, lib, *pfx_node_type_of( 0x74CD14u ) );
+    pfx_node_load( rt, lib, g, doc, k );
+    pfx_node_release( rt, lib, it->second, r );
+    it->second = g;
+    return true;
+}
+
+// VuPfxImpl slot 9 0x51D9C0 (name): the lookup; found: the group released and
+// the entry erased (0x4CDBF0).
+inline void pfx_remove_project( pfx_runtime_t& rt, pfx_library_t& lib, const std::string& name,
+    const pfx_release_hooks_t& r = pfx_release_hooks_t( ) )
+{
+    auto it = lib.projects.find( name );
+    if ( it == lib.projects.end( ) )
+        return;
+    pfx_node_release( rt, lib, it->second, r );
+    lib.projects.erase( it );
 }
 
 // The path lookup 0x51DBD0: strcpy_s into 0x100 bytes, strtok_s on "/" (empty

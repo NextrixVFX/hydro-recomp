@@ -1355,11 +1355,11 @@ inline bool verify_point_waves( )
 
 // The built water's tick against retail's 0x529E30 (case water_built_tick): water_build_world's water plus 20 point
 // waves (water_create_point_wave; two in three with the expiry callback, answered by water_point_wave_expired as
-// VuPointWaveEntity's OnExpired 0x5D4B60 does), then 10 ticks of water_built_tick, waves 11 / 15's refcount set to 1
-// before tick 3 as in the case. Compared per tick: the hook events in order (rebuild / render / expire / plug /
+// VuPointWaveEntity's OnExpired 0x5D4B60 does), then 10 ticks of water_built_tick, the case's refcounts set to 1 (the
+// whirlpool 11 / banked turn 15 before tick 3, one wave of every built class before tick 5 - g_golden_wbt_forced). Compared per tick: the hook events in order (rebuild / render / expire / plug /
 // destroy), which waves stay listed, their known words (not +24 / +40 / +0x40; +0x8C as set or not; +0x90's low byte),
 // the wave list, the pool, every listed wave's entry list; after the last tick every surface's wave tree node for
-// node; and the unrecreated paths water_built_tick reports (the two unread dtors at tick 3, nothing else).
+// node; and that water_built_tick reports no unrecreated path (every class's slot 0 dtor is recreated).
 inline bool verify_water_built_tick( )
 {
     const std::unique_ptr< entity_t > tree = water_build_document_tree( );
@@ -1409,14 +1409,14 @@ inline bool verify_water_built_tick( )
     for ( std::size_t t = 0; t < g_golden_wbt_count; ++t )
     {
         const int ti = static_cast< int >( t );
-        if ( t == 3 )
-            for ( int k : { 11, 15 } )
-                built.waves[ static_cast< std::size_t >( k ) ].word[ 1 ] = 1u;
+        for ( std::size_t f = 0; f < g_golden_wbt_forced_count; ++f )
+            if ( g_golden_wbt_forced[ 2 * f ] == t )
+                built.waves[ static_cast< std::size_t >( g_golden_wbt_forced[ 2 * f + 1 ] ) ].word[ 1 ] = 1u;
         const unsigned* s = g_golden_wbt_words + g_golden_wbt_offsets[ t ];
         const float dt = water_bits( *s++ );
         log.clear( );
         const int missing = water_built_tick( built, dt, hooks );
-        cmp( "unrecreated paths", ti, 0, static_cast< std::uint32_t >( missing ), t == 3 ? 2u : 0u );
+        cmp( "unrecreated paths", ti, 0, static_cast< std::uint32_t >( missing ), 0u );
         const unsigned n_events = *s++;
         cmp( "event count", ti, 0, static_cast< std::uint32_t >( log.size( ) / 2 ), n_events );
         for ( unsigned k = 0; k < 2 * n_events; ++k, ++s )
@@ -1512,7 +1512,8 @@ inline bool verify_water_built_tick( )
     {
         LOG_SUCCESS( "water_built_tick matches retail's 0x529E30 on Hydroelectric's built water + 20 point waves over %d ticks (%d hook "
                      "events, %d wave words, %d tree nodes, %d values; the slot 2s 0x59C380 / 0x59CC00 / 0x5A1680 / 0x59AAD0 / "
-                     "0x5A34B0, OnExpired 0x5D4B60's wave half, 0x529800 / 0x5A3310), bit for bit",
+                     "0x5A34B0, OnExpired 0x5D4B60's wave half, 0x529800, the slot 0 dtors 0x5A3310 / 0x5A1440 / 0x5A4D50 / "
+                     "0x5A2340 / 0x5A3FB0 / 0x59AAA0 / 0x59CAB0), bit for bit",
             static_cast< int >( g_golden_wbt_count ), events, words, nodes, compared );
         return true;
     }

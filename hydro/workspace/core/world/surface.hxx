@@ -686,8 +686,8 @@ struct water_built_t
     // Per wave: destroyed (its refcount reached 0 and slot 0 ran with 1); the
     // words stay for inspection, retail's object is freed.
     std::vector< std::uint8_t > wave_gone;
-    // Destructions whose class dtor is not recreated (every kind but the
-    // point wave's 0x5A3310), or whose +8 chain was non-empty: UNKNOWN effects.
+    // Destructions of a class not built here, or whose +8 chain was non-empty:
+    // UNKNOWN effects (every built class's dtor is recreated).
     int unread_dtors = 0;
     // Per rectangular / circular ocean wave: its field (world/field.hxx) - the
     // arrays the ctor 0x59CB10 -> 0x59CCB0 builds and the tick 0x59CC00
@@ -943,25 +943,54 @@ inline void water_built_remove( water_built_t& b, int wave )
         water_built_destroy( b, wave );
 }
 
-// Slot 0 with 1, the scalar deleting dtor. The point wave's 0x5A3310: its
-// vtable restored, VuWaterWave's dtor 0x5A6470 - 0x529800 on g_vuwater (a
-// no-op once the tick has unlinked it), then while +8 is set, slot 0 of the
-// object there (UNREAD: counted; every wave built here has +8 = 0) - then
-// freed. Every other class's dtor is unread: counted, and the wave is NOT
-// marked gone.
+// Slot 0 with 1, the scalar deleting dtor - every class's is its vtable
+// restored, VuWaterWave's dtor 0x5A6470, then operator delete: point 0x5A3310,
+// whirlpool 0x5A1440, banked turn 0x5A4D50, ramp 0x5A2340, bump 0x5A3FB0,
+// directional 0x59AAA0, wake 0x52BE40, flat wake 0x52BE80, VuWaterWave's own
+// 0x5A6440; the oceans' 0x59CAB0 (VuWaterBaseOceanWave, rectangular and
+// circular alike) first frees the field when +0x4C is set (0x59CF90: the
+// arrays +0x90 / +0x94 / +0xA0, the +0x98 / +0x9C tables, the two buffers'
+// pairs from +0xB8 - here the ocean's field is dropped). 0x5A6470: 0x529800 on
+// g_vuwater (a no-op once the tick has unlinked it), then while +8 is set,
+// slot 0 of the object there (UNREAD: counted; every wave built here has +8 =
+// 0).
 inline void water_built_destroy( water_built_t& b, int wave )
 {
     if ( b.wave_gone.size( ) < b.waves.size( ) )
         b.wave_gone.resize( b.waves.size( ), 0 );
-    if ( b.wave_kind[ static_cast< std::size_t >( wave ) ] != water_kind_point )
+    const int kind = b.wave_kind[ static_cast< std::size_t >( wave ) ];
+    if ( kind == water_kind_none )
     {
-        ++b.unread_dtors;
+        ++b.unread_dtors;   // a class this file does not build
         return;
     }
+    if ( kind == water_kind_rectangular || kind == water_kind_circular )
+        if ( water_built_t::ocean_t* o = water_ocean_of( b, wave ) )
+            o->field = decltype( o->field )( );
     water_built_remove( b, wave );
     if ( b.waves[ wave ].word[ 2 ] != 0 )
         ++b.unread_dtors;
     b.wave_gone[ static_cast< std::size_t >( wave ) ] = 1;
+}
+
+// A wave entity's slot 7 (gameRelease): VuBankedTurnWaveEntity 0x5D3690 (its
+// wave at +0x74), VuBumpWaveEntity 0x5D3F10 (+0x68), VuWhirlpoolWaveEntity and
+// VuDirectionalFlowWaveEntity 0x5D6710 (+0x78), VuDirectionalWaveEntity and
+// VuStaticWakeWaveEntity 0x5D5E90 (+0x80), the ocean entities' 0x5D8D30
+// (+0x94; 0x5D81A0 is its getter): the entity's reference (+4) dropped - slot
+// 0 with 1 at zero -, then VuWater's removal 0x529800 of the same pointer (a
+// no-op when the dtor already unlinked it), then the entity's word = 0 (the
+// caller's). VuWaterRampEntity's 0x5D7030 releases its surface (+0x128) first
+// (the surface's dtor 0x535BB0 - VuWater's removeSurface 0x529770 - is NOT
+// recreated) and then its wave (+0x140) the same way: only the wave half is
+// this function. VuPointWaveEntity's slot 7 0x5D4AF0 (read, not measured):
+// its tick unregistered (g 0x759008 vt+0x28: the caller's), then, when +0xA0
+// is set, this same body on it.
+inline void water_entity_release( water_built_t& b, int wave )
+{
+    if ( --b.waves[ static_cast< std::size_t >( wave ) ].word[ 1 ] == 0u )
+        water_built_destroy( b, wave );
+    water_built_remove( b, wave );
 }
 
 // The wave half of VuPointWaveEntity's OnExpired 0x5D4B60 (thiscall on the

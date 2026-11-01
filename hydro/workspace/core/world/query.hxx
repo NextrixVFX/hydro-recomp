@@ -590,3 +590,53 @@ inline bool water_point_query( const water_t& w, const float* point, water_kerne
     const float rect[ 4 ] = { point[ 0 ], point[ 1 ], point[ 0 ], point[ 1 ] };
     return water_waves( w, s.wave_root, ctx, rect, kernel, user );
 }
+
+// 0x529140 (thiscall water; out*, const VuVector4* point; retn 8; returns out):
+// the same one-point query in the BASE record form (water_vertex_t, the
+// solver's 40 bytes) - VuPfxEmitFountain_emit's water snap (0x55D9B7: params
+// +0x90 byte set and g 0x759058 non-null; the particle's z = out +0x20):
+//   out +0 .. +0xC = the point's 16 bytes; +0x10 / +0x14 = 0; +0x18 = 0 and
+//   +0x1C a stack word not yet written (movq of ebp-0x7C / -0x78, -0x78 is
+//   stored only later): UNKNOWN, left as it is; +0x20 = 0xFEFFFFFF; +0x24
+//   untouched. 0x52AEC0 finds the surface; none: done. Else +0x20 = its
+//   height (+0x14) - no map sample here -; then, unless water +0x18 is set,
+//   0x5292D0's ctx with 0x413500( 0 ) (+0x60 = 0: the base kernels), vertices
+//   = out, and 0x52B0E0.
+// False when a path not recreated is reached (a kernel hook answering false, a
+// stack overflow).
+inline bool water_point_height( const water_t& w, const float* point, water_kernel_fn kernel, void* user, water_vertex_t& out )
+{
+    std::memcpy( out.pos, point, 12 );
+    std::memcpy( &out.pos_w, point + 3, 4 );
+    out.disp[ 0 ] = 0.0f;
+    out.disp[ 1 ] = 0.0f;
+    out.height = water_bits( 0xFEFFFFFFu );
+    out.disp[ 2 ] = 0.0f;
+    const int found = water_point_surface( w, point );
+    if ( found == -2 )
+        return false;
+    if ( found < 0 )
+        return true;
+    const water_surface_t& s = w.surfaces[ found ];
+    out.height = s.height;
+    if ( w.skip_waves )
+        return true;
+    water_query_t ctx{};
+    ctx.count = 1;
+    for ( int k = 0; k < 4; ++k )
+    {
+        ctx.aabb[ k ] = point[ k ];
+        ctx.aabb[ 4 + k ] = point[ k ];
+        ctx.centre[ k ] = point[ k ];
+    }
+    ctx.radius = 0.0f;
+    ctx.exclude_count = 0;
+    ctx.forced = -1;
+    ctx.vertices = &out;
+    ctx.tags = nullptr;
+    ctx.tag = 0;
+    ctx.flag96 = 0;
+    ctx.flag100 = 0;
+    const float rect[ 4 ] = { point[ 0 ], point[ 1 ], point[ 0 ], point[ 1 ] };
+    return water_waves( w, s.wave_root, ctx, rect, kernel, user );
+}
