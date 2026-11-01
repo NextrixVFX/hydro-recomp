@@ -294,6 +294,7 @@ struct race_start_game_t
     std::string root_name;      // +0x34's +0xC +0x18
     std::vector< int > order;   // +0x720
     bool timetrial = false;     // the game is a VuTimeTrialGame (vtable 0x73FB9C): its slots 13 / 5 below
+    bool slalom = false;        // a VuSlalomGame (vtable 0x73FA6C): slot 13 0x48E430, slot 5 0x48C660 (the caller's row)
 };
 
 // ---- VuTimeTrialGame slot 13 0x490CA0 (world batch 27; read, not oracle-measured) -----------------------------------
@@ -303,15 +304,17 @@ struct race_start_game_t
 // +4's +0x58) ["VuDBAsset"]["TimeTrial"]["InitialBoostEnergy"] - tag 1 cvtdq2ps, 2 the float, 7 fild / fstp, else 0.
 // Slot 5 0x48F310: current = states [0] (+0x704's first), its +0x20 enter - nothing else (no +0x720 order, no +0x4CC,
 // no AI manager start).
+// VuSlalomGame's slot 13 0x48E430 is these instructions byte for byte but the ConstantDB key (0x6A1A1C "Slalom": 12 bytes of
+// string addresses differ) - `mode`.
 inline void race_place_timetrial( std::vector< race_start_boat_t >& boats, const race_boat_manager_t& m, const value_t& constantdb,
-                                  const race_start_hooks_t& hooks )
+                                  const race_start_hooks_t& hooks, const char* mode = "TimeTrial" )
 {
     if ( boats.empty( ) )
         return;
     race_start_boat_t& b = boats[ 0 ];
     if ( !m.grid.empty( ) )
         race_set_world( b, 0, m.grid[ 0 ].world, true, hooks );
-    state_put_f( b.boat, 0x310, race_number( member( member( member( constantdb, "VuDBAsset" ), "TimeTrial" ), "InitialBoostEnergy" ), 0.0f ) );
+    state_put_f( b.boat, 0x310, race_number( member( member( member( constantdb, "VuDBAsset" ), mode ), "InitialBoostEnergy" ), 0.0f ) );
 }
 
 inline void race_begin( race_start_game_t& game, std::vector< race_start_boat_t >& boats, race_boat_manager_t& m, const track_manager_t& tm,
@@ -325,8 +328,8 @@ inline void race_begin( race_start_game_t& game, std::vector< race_start_boat_t 
         game.circuit = track_is_circuit( tm ) ? 1 : 0;
         game.length = track_length( tm );
     }
-    if ( game.timetrial )
-        race_place_timetrial( boats, m, constantdb, hooks );
+    if ( game.timetrial || game.slalom )
+        race_place_timetrial( boats, m, constantdb, hooks, game.slalom ? "Slalom" : "TimeTrial" );
     else
         race_place_boats( boats, m, tm, trackdb, game.root_name, hooks );
     for ( std::size_t k = 0; k < boats.size( ); ++k )
@@ -350,6 +353,8 @@ inline void race_begin( race_start_game_t& game, std::vector< race_start_boat_t 
     call( "analytics ana LevelStart" );   // its container {Difficulty: +0x50} is the service's
     if ( game.timetrial )
         call( "state enter fsm+0x704" );   // VuTimeTrialGame's slot 5 0x48F310
+    else if ( game.slalom )
+        call( "slalom slot 5" );   // VuSlalomGame's slot 5 0x48C660: the course (world/slalom.hxx), then the first state's enter, the draw add
     else
         race_start_fleet( boats, m, tm, constantdb, game.difficulty, game.order, hooks );
 }

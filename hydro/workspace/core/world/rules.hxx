@@ -400,6 +400,8 @@ struct race_rules_hooks_t
     std::function< void( int project, race_hud_verb_t verb, float dt ) > hud;
     std::function< void( const char* name, bool value ) > broadcast;
     std::function< void( const std::string& call ) > platform;
+    // VuSlalomGame's slot 7 0x48C8C0 only: the gates tick 0x48E6E0 after +0x71C += dt (world/slalom.hxx slalom_gates_tick).
+    std::function< void( ) > gates;
 };
 
 // VuGame's Results / Awards handlers past their enters (0x484250 .. 0x484580):
@@ -453,6 +455,7 @@ struct race_rules_t
     // first human's boat name (its +0x160 VuString).
     const value_t* track_db = nullptr;
     std::string human_boat;
+    std::string course;              // VuSlalomGame +0x720 (slot 5 0x48C660: gameutil 0x4D32F0, the GameData Course)
 };
 
 // 0x48A7F0 / 0x48A860: every game boat's +0x308 += 1 / -= 1 (the drivers'
@@ -1063,21 +1066,22 @@ inline float timetrial_value_float( const value_t& v )
     return 0.0f;
 }
 
-inline void timetrial_rules_place( race_rules_t& r )
+// VuSlalomGame's Game exit 0x48DE10 is the same but for the path: ["Slalom"] -> [boat] -> ["Times"] (`leaf`).
+inline void timetrial_rules_place( race_rules_t& r, const char* mode_key = "TimeTrial", const char* leaf = nullptr, std::uint32_t at = 0x490750u )
 {
     if ( r.humans.empty( ) )
     {
         if ( r.unrecreated )
-            r.unrecreated( 0x490750u, "VuTimeTrialGame Game exit with no human (retail reads the list's [0] unchecked) - UNKNOWN" );
+            r.unrecreated( at, "the Game exit with no human (retail reads the list's [0] unchecked) - UNKNOWN" );
         return;
     }
     std::uint8_t* h = r.humans[ 0 ];
     static const value_t null{ };
     const value_t& db = r.track_db ? member( *r.track_db, "VuDBAsset" ) : null;
     const value_t* t = db.tag == 6 ? find( db, r.track.c_str( ) ) : nullptr;
-    const value_t& mode = member( t ? *t : null, "TimeTrial" );
+    const value_t& mode = member( t ? *t : null, mode_key );
     const value_t* b = mode.tag == 6 ? find( mode, r.human_boat.c_str( ) ) : nullptr;
-    const value_t& times = b ? *b : null;
+    const value_t& times = leaf ? member( b ? *b : null, leaf ) : b ? *b : null;
     rules_put_i32( h, 0x4CC, 0 );
     const std::int32_t count = times.tag == 5 ? static_cast< std::int32_t >( times.list.size( ) ) : 0;
     const float clock = rules_f( h, 0x4B4 );
@@ -1149,6 +1153,62 @@ inline void timetrial_rules_construct( race_rules_t& r )
     r.fsm.add_transition( "PreGame", "Game", "StartLightsOut" );
     r.fsm.add_transition( "Game", "PostGame", "Finished" );
     r.fsm.add_transition( "", "Exit", "Exit" );
+}
+
+// ---- VuSlalomGame's machine (ctor 0x48BEC0; world batch 29, case slalom_game_fsm) --------------------------------
+//
+// The table is the ctor's (game_mode_defs): PreGame / Game / PostGame / Exit, PreGame -> Game "StartLightsOut", Game ->
+// PostGame "Finished", "" -> Exit "Exit"; events OnStartLightsOut 0x48DB40 (as 0x490540) and OnBoatRecovered 0x48DB70
+// (world/slalom.hxx slalom_recovered - the session's). The twelve handlers are TimeTrial's shape on the Slalom HUDs
+// (+0x75C / +0x760 / +0x764), read whole:
+//   PreGame  enter 0x48DC30 / exit 0x48DCA0 / tick 0x48DCF0 / draw 0x48DD50 - as 0x490570 / 0x4905E0 / 0x490630 / 0x490690.
+//   Game     enter 0x48DDB0, tick 0x48DF90 (0x4831D0 the clocks; with a human "Finished" = its +0x32F; the HUD tick), draw
+//            0x48E030; exit 0x48DE10: the HUD release, then the place +0x4CC from TrackDB ["VuDBAsset"][track]["Slalom"]
+//            [the human's +0x160]["Times"] (timetrial_rules_place's loop: +0x4B4 read once, stop at the first time >= it).
+//   PostGame enter 0x48E090: the HUD init, "OnSetAllowPause" {false}; with a human the progress manager vt+0x3C (track +0x68,
+//            course +0x720, boat +0x160, 0, +0x4CC, +0x4B4, +0x4B8 - saves, a platform hook), unless +0x334 the
+//            leaderboard 0x4B0650 (track + "Slalom" + course, -(int)(+0x4B4 x 1000.0) - fld / fistp, neg, cdq), then
+//            the voice-over vt+0x20 "DidNotUseBoost" as TimeTrial's; exit 0x48E300 the release; tick 0x48E330 "Exit" =
+//            +0x71C >= 4.0 then the HUD tick; draw 0x48E3D0.
+// Slot 5 0x48C660 = slalom_course_start, then the first state's enter (race_rules_start), then the draw add; slot 7
+// 0x48C8C0 = race_rules_tick with the gates tick (hooks.gates) after the time; slot 6 0x48C880 the current state's exit
+// and the draw remove.
+inline void slalom_rules_post_results( race_rules_t& r )
+{
+    if ( r.humans.empty( ) )
+        return;
+    const std::uint8_t* h = r.humans[ 0 ];
+    const std::int32_t place = rules_i32( h, 0x4CC );
+    char text[ 200 ];
+    std::snprintf( text, sizeof( text ), "progress3C %s %s %d %08X %08X", r.track.c_str( ), r.course.c_str( ), place, rules_i32( h, 0x4B4 ), rules_i32( h, 0x4B8 ) );
+    race_rules_platform( r, text );
+    if ( !h[ 0x334 ] )
+    {
+        const std::int32_t ms = _mm_cvtss_si32( _mm_set_ss( rules_f( h, 0x4B4 ) * 1000.0f ) );
+        const std::int64_t value = static_cast< std::int32_t >( 0u - static_cast< std::uint32_t >( ms ) );
+        std::snprintf( text, sizeof( text ), "leaderboard %sSlalom%s %lld", r.track.c_str( ), r.course.c_str( ), static_cast< long long >( value ) );
+        race_rules_platform( r, text );
+    }
+    if ( place > 0 && _mm_comigt_ss( _mm_set_ss( rules_f( h, 0x328 ) ), _mm_set_ss( 0.0f ) ) && !h[ 0x32D ] )
+        race_rules_platform( r, "vo20 DidNotUseBoost" );
+}
+
+inline void slalom_rules_construct( race_rules_t& r )
+{
+    timetrial_rules_construct( r );
+    fsm_state_t& pre = *r.fsm.m_states[ 0 ];
+    pre.m_address[ 0 ] = 0x48DC30u, pre.m_address[ 1 ] = 0x48DCA0u, pre.m_address[ 2 ] = 0x48DCF0u, pre.m_address[ 3 ] = 0x48DD50u;
+    fsm_state_t& game = *r.fsm.m_states[ 1 ];
+    game.m_exit = [ &r ] { race_rules_hud( r, 1, race_hud_verb_t::release ); timetrial_rules_place( r, "Slalom", "Times", 0x48DE10u ); };
+    game.m_address[ 0 ] = 0x48DDB0u, game.m_address[ 1 ] = 0x48DE10u, game.m_address[ 2 ] = 0x48DF90u, game.m_address[ 3 ] = 0x48E030u;
+    fsm_state_t& post = *r.fsm.m_states[ 2 ];
+    post.m_enter = [ &r ] {
+        race_rules_hud( r, 2, race_hud_verb_t::initialize );
+        if ( r.hooks.broadcast )
+            r.hooks.broadcast( "OnSetAllowPause", false );
+        slalom_rules_post_results( r );
+    };
+    post.m_address[ 0 ] = 0x48E090u, post.m_address[ 1 ] = 0x48E300u, post.m_address[ 2 ] = 0x48E330u, post.m_address[ 3 ] = 0x48E3D0u;
 }
 
 // ---- The other game modes' ctors: VuSlalomGame 0x48BEC0, VuTimeTrialGame
@@ -1339,6 +1399,8 @@ inline bool race_rules_tick( race_rules_t& r, float dt )
     if ( s && s->m_tick )
         s->m_tick( dt );
     r.fsm.m_time = r.fsm.m_time + dt;
+    if ( r.hooks.gates )
+        r.hooks.gates( );   // VuSlalomGame's 0x48C8C0: 0x48E6E0 here
     s = r.fsm.current( );
     return !s || s->m_name != "Exit";
 }

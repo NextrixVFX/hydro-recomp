@@ -102,6 +102,10 @@ struct timetrial_results_in_t
     std::function< const value_t*( ) > current;              // HOOK: g 0x758FD8 vt+0x6C (null: the static null)
     std::function< std::string( const char* id ) > string_db; // HOOK: g 0x759078 vt+0x18
     fleet_random_t* random = nullptr;                         // THE global VuRandom 0x736810
+    // VuSlalomGame slot 12 0x48CAF0 (world batch 29, case slalom_results): the same writer but its once flag +0x768, the
+    // TrackDB path ["Slalom"][class]["Times"], a "GatesMissed" (+0x4D0, tag 1) after each human row's TotalTime (not the
+    // AI rows'), the AI lap time's draw x 5.0 (0x6F7768) for 2.5; its comparator 0x48DA90 = 0x490490's (TotalTime).
+    bool slalom = false;
 };
 
 // False when a path not recreated was reached (no StringDB / VuRandom bound, a
@@ -116,7 +120,14 @@ inline bool timetrial_write_results( value_t& util_root, std::uint8_t& once, con
     const auto text = [ ]( value_t& row, const char* key, const std::string& s ) { ui_json_set_string( ui_json_child( row, key ), s.c_str( ) ); };
     const auto flag = [ ]( value_t& row, const char* key, int b ) { race_results_set( ui_json_child( row, key ), 3, b ); };
     const value_t& tracks = modes_member( in.track_db ? *in.track_db : null, "VuDBAsset" );
-    const value_t& mode = modes_member( ui_json_find( tracks, in.track ), "TimeTrial" );
+    const value_t& mode = modes_member( ui_json_find( tracks, in.track ), in.slalom ? "Slalom" : "TimeTrial" );
+    const auto refs_of = [ & ]( const std::string& cls ) -> const value_t& {
+        return in.slalom ? modes_member( ui_json_find( mode, cls ), "Times" ) : ui_json_find( mode, cls );
+    };
+    const auto gates = [ & ]( value_t& row, const std::uint8_t* b ) {
+        if ( in.slalom )
+            race_results_set( ui_json_child( row, "GatesMissed" ), 1, rules_i32( b, 0x4D0 ) );
+    };
     if ( !in.championship )
     {
         const std::uint8_t* b = in.racer.boat;
@@ -143,6 +154,7 @@ inline bool timetrial_write_results( value_t& util_root, std::uint8_t& once, con
             race_results_set_float( ui_json_child( row, "BestLapTime" ), rules_f( b, 0x4B8 ) );
             race_results_set( ui_json_child( row, "LapsCompleted" ), 1, rules_i32( b, 0x4D4 ) );
             race_results_set_float( ui_json_child( row, "TotalTime" ), rules_f( b, 0x4B4 ) );
+            gates( row, b );
             flag( row, "IsLocal", e.local ? 1 : 0 );
             flag( row, "IsHuman", e.human ? 1 : 0 );
             text( row, "BoatClass", e.boat_class );
@@ -150,7 +162,7 @@ inline bool timetrial_write_results( value_t& util_root, std::uint8_t& once, con
             text( row, "Boat", e.boat_name );
             race_results_set( ui_json_child( row, "TierAchieved" ), 1, place );
         }
-        const value_t& refs = ui_json_find( mode, e.boat_class );
+        const value_t& refs = refs_of( e.boat_class );
         std::int32_t r = 0;
         for ( std::int32_t t = 0; t < 3; ++t )
         {
@@ -178,6 +190,7 @@ inline bool timetrial_write_results( value_t& util_root, std::uint8_t& once, con
         text( c, "DriverName", he.driver_name );
         race_results_set_float( ui_json_child( c, "BestLapTime" ), rules_f( h, 0x4B8 ) );
         race_results_set_float( ui_json_child( c, "TotalTime" ), rules_f( h, 0x4B4 ) );
+        gates( c, h );
         flag( c, "IsLocal", he.local ? 1 : 0 );
         flag( c, "IsHuman", he.human ? 1 : 0 );
         text( c, "BoatClass", he.boat_class );
@@ -195,7 +208,7 @@ inline bool timetrial_write_results( value_t& util_root, std::uint8_t& once, con
         const value_t& e = modes_element( ai, k );
         const std::string& name = ui_json_text( modes_member( modes_member( e, "Properties" ), "Boat" ) );
         const value_t& entry = ui_json_find( boats, name );
-        const value_t& refs = ui_json_find( mode, he.boat_class );
+        const value_t& refs = refs_of( he.boat_class );
         float lo = 4.0f, hi = 15.0f, x = 25.0f;
         if ( he.boat_class == "B" )
             lo = 6.0f, hi = 25.0f, x = 35.0f;
@@ -213,7 +226,7 @@ inline bool timetrial_write_results( value_t& util_root, std::uint8_t& once, con
         if ( in.circuit )
         {
             const float r2 = in.random->draw( );
-            lap = total / static_cast< float >( in.laps ) - r2 * 2.5f;
+            lap = total / static_cast< float >( in.laps ) - r2 * ( in.slalom ? 5.0f : 2.5f );
         }
         value_t c;
         text( c, "DriverName", ui_json_text( modes_member( e, "DriverName" ) ) );

@@ -616,8 +616,24 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         // so it changes nothing; VuAiDriver / VuAiUiDriver / VuAiNuisanceDriver's slot 20 is the nullsub 0x401560.
         r->respawn_hooks.driver_50 = []( void* ) { };
         // "OnBoatRecovered" (0x41D790's broadcast): its only subscriber is VuSlalomGame (ctor 0x48BEC0 - the string's other
-        // reference); no asset names it. In a Race nothing answers: nothing to run.
-        r->respawn_hooks.recovered = []( void*, std::uint32_t ) { };
+        // reference); no asset names it. In a Race nothing answers: nothing to run. In a Slalom its 0x48DB70 (world/slalom.hxx
+        // slalom_recovered) on the broadcasting boat - the params' entity, a VuBoatEntity: its +0x4DC, the gate to pass, +0x310.
+        r->respawn_hooks.recovered = []( void* u, std::uint32_t ) {
+            race_drive_t& d = race_drive_of( u );
+            race_session_t& s = *d.session;
+            if ( !s.start.slalom )
+                return;
+            race_session_boat_t& b = race_drive_boat( d );
+            const std::uint8_t* t = race_session_image( b, 0, 0x50 );
+            if ( !t )
+            {
+                race_unwired( s, "OnBoatRecovered 0x48DB70: the boat's transform image is missing - not run (UNKNOWN)" );
+                return;
+            }
+            slalom_recovered( s.slalom, b.graph.objects[ 0 ].image.data( ), reinterpret_cast< const float* >( t + 0x50 ) );
+            LOG_INFO( "race: OnBoatRecovered (VuSlalomGame 0x48DB70) - %s, next gate %d", b.name.c_str( ),
+                      s.slalom.current ? static_cast< int >( s.slalom.current - s.slalom_gates.data( ) ) : -1 );
+        };
         // The Decision tick's hooks.
         boat_decision_hooks_t& h = r->hooks;
         h.user = r.get( );
@@ -1225,6 +1241,9 @@ inline void race_drive_sync_target( race_session_t& s, int child )
 // - VuAiNuisanceDriverStartEntity's "DriverTarget" 0x42FF90 / "DriverDisable" 0x430020 (boat nuisance.hxx, on the
 //   session's words; `params` the event's VuParams - 0x80 data bytes, +0x80 the size - null: an empty one).
 // True when the plug is one of these (consumed); false: not a race-side receiver.
+inline void race_session_explode( race_session_t& s, const float* m, const float* explosion9, const std::string& pfx, const std::string& audio,
+                                  const char* who );
+
 inline bool race_event_dispatch( race_session_t& s, const std::string& entity, const std::string& plug, const std::uint8_t* params )
 {
     // VuPropEntity's inputs (ctor 0x5464C0, plug inits 0x546EE0): "Show" 0x546380 - the static model component (+0x70) onto
@@ -1295,6 +1314,34 @@ inline bool race_event_dispatch( race_session_t& s, const std::string& entity, c
             LOG_INFO( "race: event %s . %s (control; sync %d)", entity.c_str( ), plug.c_str( ), s.dynamics ? s.dynamics->syncs : -1 );
             return true;
         }
+    // VuExplosionEntity's "Trigger" (0x5E6410's plug, 0x5E63D0): the part (+0x64) 0x547BB0( transform +0x50 ) (session.hxx
+    // race_session_explode), VuRetVal 0.
+    if ( plug == "Trigger" && s.tree )
+    {
+        entity_t* e = s.tree;
+        std::size_t at = 0;
+        while ( e && at <= entity.size( ) )
+        {
+            const std::size_t slash = entity.find( '/', at );
+            const std::string part = entity.substr( at, slash == std::string::npos ? std::string::npos : slash - at );
+            e = entity_find_child( *e, part );
+            if ( slash == std::string::npos )
+                break;
+            at = slash + 1;
+        }
+        if ( const explosion_entity_state_t* x = e ? explosion_entity_state_of( *e ) : nullptr )
+        {
+            const transform_component_t* t = entity_transform( *e );
+            if ( !t || e->m_world_unknown )
+                race_unwired( s, "VuExplosionEntity . Trigger 0x5E63D0 on an entity whose world is unknown - UNKNOWN, not run" );
+            else
+            {
+                race_session_explode( s, t->world, x->value.explosion, x->value.pfx, x->value.audio, "VuExplosionEntity" );
+                LOG_INFO( "race: event %s . Trigger (VuExplosionEntity 0x5E63D0: 0x547BB0; sync %d)", entity.c_str( ), s.dynamics ? s.dynamics->syncs : -1 );
+            }
+            return true;
+        }
+    }
     // VuFloatingMineEntity's "Detonate" (0x439020's plug; thunk 0x4390BE -> vt+0x44 0x438DF0): +0x215 = 1, VuRetVal 0.
     if ( plug == "Detonate" )
         for ( const auto& dp : s.dyn_props )
@@ -1438,7 +1485,9 @@ inline void race_session_game_mode( void* user, float dt )
                   s.dynamics ? s.dynamics->syncs : -1 );
         // VuRaceGame slot 15 0x48B180 (core/ui split.hxx ui_race_checkpoint): the boat's driver slot 12 (human), lap +0x4AC,
         // race time +0x4B4; the checkpoint's +0x8A finish byte; the game's +0x4C laps; the +0x67C machine (rules.hxx).
-        // VuTimeTrialGame's slot 15 0x490D70 is the same code (its split vector at +0x720; case timetrial_split).
+        // VuTimeTrialGame's slot 15 0x490D70 is the same code (its split vector at +0x720; case timetrial_split), and so is
+        // VuSlalomGame's 0x48E500 (its split vector at +0x750: byte-compared with 0x490D70 - 16 bytes differ, all offsets /
+        // string addresses; not oracle-run).
         const race_rules_boat_t& rb = s.rules_boats[ static_cast< std::size_t >( boat ) ];
         ui_race_split_boat_t sb;
         sb.m_human = rb.human;

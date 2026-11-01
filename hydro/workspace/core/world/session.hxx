@@ -164,6 +164,13 @@ struct race_session_t
     value_t util;
     bool results_logged = false;   // ours: the first GameResults write logged
     std::uint8_t timetrial_written = 0;   // VuTimeTrialGame +0x738 (0x48F560's once flag; its ctor 0x48ED30 zeroes it)
+    // VuSlalomGame's course (world/slalom.hxx): its gates (the game project's VuSlalomGateEntity, linked by their "Next"
+    // refs), +0x738 .. +0x74C, and the boat image / transform world its human list [0] is.
+    std::vector< slalom_gate_t > slalom_gates;
+    slalom_course_t slalom;
+    std::uint8_t* slalom_human = nullptr;
+    const float* slalom_world = nullptr;
+    bool slalom_draw = false;             // +0x744's +0x1E (the draw manager's add - the renderer's, a hook)
     const value_t* boat_db = nullptr;     // BoatDB's document (gameutil +8's +0x58)
     std::uint32_t aligned_frees = 0;   // gNumAlignedFree 0x759050's increments by the session end's body dtors
     race_game_t game;
@@ -901,6 +908,43 @@ inline void race_session_mine_hide( race_session_t::dyn_prop_t& d )
     }
 }
 
+// The explosion part's trigger 0x547BB0 (thiscall part, const VuMatrix&; retn 4) - the mine's (+0x184) and VuExplosionEntity's
+// (+0x64): +0 = the matrix's row 3 (16 bytes), the explosion manager g 0x759034 vt+0x18 = 0x510180 (explosion_add over the
+// human listeners) on the part (+0x10 .. +0x30 the nine Explosion floats), the pfx 0x52BCD0 by +0x34's name (its +0x70
+// handle, slot +0x28 discarded, then by the handle's lookup slot 8 setMatrix( the matrix ), slot +0x2C start) and FMOD's
+// event by +0x4C's name at the row-3 position (getEvent / set3DAttributes / start - platform).
+inline void race_session_explode( race_session_t& s, const float* m, const float* explosion9, const std::string& pfx, const std::string& audio,
+                                  const char* who )
+{
+    std::uint8_t params[ 0x38 ] = { };
+    std::memcpy( params, m + 12, 16 );
+    std::memcpy( params + 0x10, explosion9, 36 );
+    s.explosion_hits += explosion_add( params, s.explosion_listeners, hull_sqrt );
+    if ( !pfx.empty( ) && s.world.pfx && s.world.pfx_manager && s.world.pfx_ops )
+    {
+        pfx_manager_t& pm = *s.world.pfx_manager;
+        const int e = pfx_manager_create( pm, pfx.c_str( ), *s.world.pfx_ops );
+        if ( e >= 0 )
+        {
+            const boat_pfx_ops_t o = boat_pfx_runtime_ops( *s.world.pfx );
+            const std::uint32_t hd = pfx_manager_handle( pm, e );
+            if ( o.duration )
+                o.duration( o.user, pm.entries[ static_cast< std::size_t >( e ) ].instance );
+            const int x = hd ? pfx_manager_lookup( pm, hd ) : -1;
+            if ( x >= 0 )
+            {
+                const std::uint32_t inst = pm.entries[ static_cast< std::size_t >( x ) ].instance;
+                o.set_matrix( o.user, inst, m );
+                o.start( o.user, inst );
+            }
+        }
+    }
+    else if ( !pfx.empty( ) )
+        race_unwired( s, std::string( who ) + "'s explosion pfx 0x52BCD0 with no VuPfx runtime / manager - UNKNOWN, not run" );
+    if ( !audio.empty( ) )
+        race_unwired( s, std::string( "audio: " ) + who + "'s explosion event (FMOD getEvent / set3DAttributes / start - platform)" );
+}
+
 // The mine's Decision tick 0x438EA0 (world/mine.hxx mine_tick): the hide; the explosion part 0x547BB0 - its params
 // (+0 the position: the transform's row 3, +0x10 .. +0x30 the nine Explosion floats) to the explosion manager's add
 // 0x510180 (explosion_add over the human listeners), the pfx 0x52BCD0 by "Explosion Pfx System Name" (slot 10 discarded,
@@ -919,35 +963,7 @@ inline void race_session_mine_tick( void* user, float )
     }
     mine_tick_hooks_t h;
     h.hide = [ &d ] { race_session_mine_hide( d ); };
-    h.explode = [ &s, &d ]( const float* m ) {
-        std::uint8_t params[ 0x38 ] = { };
-        std::memcpy( params, m + 12, 16 );
-        std::memcpy( params + 0x10, d.p->explosion, 36 );
-        s.explosion_hits += explosion_add( params, s.explosion_listeners, hull_sqrt );
-        if ( !d.p->explosion_pfx.empty( ) && s.world.pfx && s.world.pfx_manager && s.world.pfx_ops )
-        {
-            pfx_manager_t& pm = *s.world.pfx_manager;
-            const int e = pfx_manager_create( pm, d.p->explosion_pfx.c_str( ), *s.world.pfx_ops );
-            if ( e >= 0 )
-            {
-                const boat_pfx_ops_t o = boat_pfx_runtime_ops( *s.world.pfx );
-                const std::uint32_t hd = pfx_manager_handle( pm, e );
-                if ( o.duration )
-                    o.duration( o.user, pm.entries[ static_cast< std::size_t >( e ) ].instance );
-                const int x = hd ? pfx_manager_lookup( pm, hd ) : -1;
-                if ( x >= 0 )
-                {
-                    const std::uint32_t inst = pm.entries[ static_cast< std::size_t >( x ) ].instance;
-                    o.set_matrix( o.user, inst, m );
-                    o.start( o.user, inst );
-                }
-            }
-        }
-        else if ( !d.p->explosion_pfx.empty( ) )
-            race_unwired( s, "a mine's explosion pfx 0x52BCD0 with no VuPfx runtime / manager - UNKNOWN, not run" );
-        if ( !d.p->explosion_audio.empty( ) )
-            race_unwired( s, "audio: a mine's explosion event (FMOD getEvent / set3DAttributes / start - platform)" );
-    };
+    h.explode = [ &s, &d ]( const float* m ) { race_session_explode( s, m, d.p->explosion, d.p->explosion_pfx, d.p->explosion_audio, "a mine" ); };
     h.point_wave = [ &s ]( const std::uint32_t* desc ) {
         if ( !s.world.water )
         {
@@ -2118,6 +2134,120 @@ inline void race_session_end( race_session_t& s )
     s.active = false;
 }
 
+// GameType "Slalom": VuSlalomGame (world/rules.hxx slalom_rules_construct, case slalom_game_fsm) - its machine, TrackDB and
+// the human's +0x160 for its Game exit 0x48DE10, the course +0x720 (gameutil 0x4D32F0: the GameData "Course"), and the
+// gates its ctor 0x48BEC0 finds (0x48E610 on the game project's root: world/slalom.hxx slalom_first_gate, then each gate's
+// "Next" ref target - its script component's) with their Diameter / Allow Recovery (slalom_gate_state_t) and transform
+// worlds. Slot 7 0x48C8C0's gates tick (hooks.gates): slalom_gates_tick on the human (FMOD - a platform hook; the
+// broadcasts OnSlalomGateHit / OnSlalomGateMissed through the world's event manager, an empty VuParams).
+inline void race_session_slalom( race_session_t& s, entity_t& tree, const race_session_dbs_t& db )
+{
+    slalom_rules_construct( s.rules );
+    s.rules.track_db = db.track_db;
+    s.boat_db = db.boat_db;
+    for ( std::size_t k = 0; k < s.start_boats.size( ); ++k )
+        if ( s.start_boats[ k ].cls.slot[ 0 ] )
+        {
+            const auto it = s.boats[ k ]->io.boat_strings.find( 0x160 );
+            s.rules.human_boat = it == s.boats[ k ]->io.boat_strings.end( ) ? std::string( ) : it->second;
+            break;
+        }
+    s.rules.course = race_game_data_text( s.util, nullptr, "Course" );
+    const auto next_of = []( entity_t& e ) -> entity_t* {
+        if ( const script_component_t* sc = script_of( e ) )
+            for ( const script_ref_t& ref : sc->m_refs )
+                if ( std::string( ref.m_row->m_name ) == "Next" )
+                    return ref.m_target;
+        return nullptr;
+    };
+    std::vector< entity_t* > chain;
+    bool known = true;
+    for ( entity_t* e = const_cast< entity_t* >( slalom_first_gate( tree ) ); e; e = next_of( *e ) )
+    {
+        if ( std::find( chain.begin( ), chain.end( ), e ) != chain.end( ) )
+        {
+            race_unwired( s, "VuSlalomGame: the gates' Next refs loop (retail's slot 5 walk would not end) - the course not run (UNKNOWN)" );
+            known = false;
+            break;
+        }
+        const transform_component_t* t = entity_transform( *e );
+        if ( e->m_type != "VuSlalomGateEntity" || !t || e->m_world_unknown || !slalom_gate_state_of( *e ) )
+        {
+            race_unwired( s, "VuSlalomGame: a gate whose class / world / properties are not known here - the course not run (UNKNOWN)" );
+            known = false;
+            break;
+        }
+        chain.push_back( e );
+    }
+    s.slalom_gates.assign( known ? chain.size( ) : 0u, slalom_gate_t{ } );
+    for ( std::size_t k = 0; k < s.slalom_gates.size( ); ++k )
+    {
+        const slalom_gate_state_t& p = *slalom_gate_state_of( *chain[ k ] );
+        slalom_gate_t& g = s.slalom_gates[ k ];
+        g.world = entity_transform( *chain[ k ] )->world;
+        g.diameter = p.value.diameter;
+        g.allow_recovery = p.value.allow_recovery;
+        g.next = k + 1 < s.slalom_gates.size( ) ? &s.slalom_gates[ k + 1 ] : nullptr;
+    }
+    s.slalom = slalom_course_t{ };
+    s.slalom.first = s.slalom.current = s.slalom_gates.empty( ) ? nullptr : &s.slalom_gates[ 0 ];
+    s.rules.hooks.gates = [ &s ] {
+        if ( !s.slalom_human )
+            return;
+        slalom_hooks_t h;
+        h.user = &s;
+        h.sound = []( void* u, const char* event, const float* ) {
+            race_unwired( *static_cast< race_session_t* >( u ), std::string( "audio: FMOD " ) + event + " (getEvent / set3DAttributes / start - platform)" );
+        };
+        h.broadcast = []( void* u, const char* name ) {
+            race_session_t& rs = *static_cast< race_session_t* >( u );
+            ui_params_t p;
+            if ( rs.world.broadcast )
+                rs.world.broadcast( name, &p );
+        };
+        const slalom_gate_t* before = s.slalom.current;
+        const int r = slalom_gates_tick( s.slalom, s.slalom_human, s.slalom_world, h );
+        if ( r == 1 || r == 2 || ( r == 0 && s.slalom.current != before ) )
+            LOG_INFO( "race: slalom gate %d %s - next %d, recovery gate %d, boost %.3f, race time %.3f, missed %d",
+                      static_cast< int >( before - s.slalom_gates.data( ) ), r == 1 ? "PASSED" : "MISSED",
+                      s.slalom.current ? static_cast< int >( s.slalom.current - s.slalom_gates.data( ) ) : -1,
+                      s.slalom.recover ? static_cast< int >( s.slalom.recover - s.slalom_gates.data( ) ) : -1, rules_f( s.slalom_human, 0x310 ),
+                      rules_f( s.slalom_human, 0x4B4 ), rules_i32( s.slalom_human, 0x4D0 ) );
+    };
+    LOG_INFO( "race: VuSlalomGame - course '%s', %d gates (first '%s'), the human's +0x160 '%s' keys TrackDB [%s][Slalom]", s.rules.course.c_str( ),
+              static_cast< int >( s.slalom_gates.size( ) ), chain.empty( ) ? "" : chain[ 0 ]->m_name.c_str( ), s.rules.human_boat.c_str( ), s.game.track.c_str( ) );
+}
+
+// VuSlalomGame slot 5 0x48C660: the course start (slalom_course_start on the human = the boat manager's +0x24 list [0]),
+// the first state's enter, then the draw component's add (its draw callback is the renderer's - a hook).
+inline void race_session_slalom_start( race_session_t& s, const race_session_dbs_t& db )
+{
+    const auto& humans = s.manager.lists.humans.boats;
+    for ( std::size_t k = 0; !humans.empty( ) && k < s.boats.size( ); ++k )
+        if ( humans[ 0 ] == s.boats[ k ]->graph.objects[ 0 ].image.data( ) )
+        {
+            s.slalom_human = s.boats[ k ]->graph.objects[ 0 ].image.data( );
+            const std::uint8_t* t = race_session_image( *s.boats[ k ], 0, 0x50 );
+            s.slalom_world = t ? reinterpret_cast< const float* >( t + 0x50 ) : nullptr;
+            const auto it = s.boats[ k ]->io.boat_strings.find( 0x160 );
+            const std::string cls = it == s.boats[ k ]->io.boat_strings.end( ) ? std::string( ) : it->second;
+            if ( !s.slalom_world )
+                s.slalom_human = nullptr;
+            else
+                slalom_course_start( s.slalom, member( member( *db.constant_db, "VuDBAsset" ), "Slalom" ), cls, s.slalom_human, s.slalom_world );
+        }
+    if ( !s.slalom_human )
+        race_unwired( s, "VuSlalomGame slot 5 0x48C660: no human boat (retail reads the +0x24 list's [0] unchecked) - the course not started (UNKNOWN)" );
+    else
+        LOG_INFO( "race: VuSlalomGame slot 5 - GateMissPenalty %.3f, BoostAddAmount %.3f", s.slalom.penalty, s.slalom.boost_add );
+    race_rules_start( s.rules );
+    if ( !s.slalom_draw )
+    {
+        s.slalom_draw = true;
+        race_unwired( s, "VuSlalomGame +0x744 Vu3dDrawComponent: the draw manager's add (g 0x7590B8 vt+0x28) - its draw callback not recreated (the renderer's)" );
+    }
+}
+
 inline bool race_session_start( race_session_t& s, const std::string& mode, const value_t& game_data, const race_session_dbs_t& db,
                                 const c_archive& archive, entity_t& tree, const track_manager_t* track, fleet_random_t& random,
                                 const std::function< void( ) >& project_initialized = { } )
@@ -2368,7 +2498,10 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     // GameType "TimeTrial": VuTimeTrialGame's machine (rules.hxx timetrial_rules_construct, case timetrial_game_fsm), its
     // slots 13 / 5 in race_begin (start.hxx), its Game exit's TrackDB and the human's boat class (+0x160).
     s.start.timetrial = mode == "TimeTrial";
-    if ( s.start.timetrial )
+    s.start.slalom = mode == "Slalom";
+    if ( s.start.slalom )
+        race_session_slalom( s, tree, db );
+    else if ( s.start.timetrial )
     {
         timetrial_rules_construct( s.rules );
         s.rules.track_db = db.track_db;
@@ -2448,8 +2581,9 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
             }
             return e;
         };
-        if ( s.start.timetrial )
+        if ( s.start.timetrial || s.start.slalom )
         {
+            // VuSlalomGame slot 12 0x48CAF0 is the same writer (in.slalom: case slalom_results).
             // VuTimeTrialGame slot 12 0x48F560 (world/modes.hxx timetrial_write_results, case timetrial_results): the boat
             // manager's +0x18 / +0x24 lists' first boats (by image) as the racer / the human.
             const auto first_of = [ &s, &entry_of ]( const boat_manager_list_t& l ) {
@@ -2470,6 +2604,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
             in.boat_db = s.boat_db;
             in.string_db = s.world.string_db;
             in.random = s.random;
+            in.slalom = s.start.slalom;
             if ( !in.racer.boat || !in.human.boat )
             {
                 race_unwired( s, "0x48F560: the boat manager's +0x18 / +0x24 list has no first boat (retail reads [0] of an empty list: UNKNOWN) - not run" );
@@ -2497,7 +2632,8 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
             const value_t& results = ui_json_find( s.util, "GameResults" );
             const value_t& table = ui_json_find( results, "Table" );
             LOG_INFO( "race: GameResults written (%s) - CircuitRace %d, %d rows",
-                      s.start.timetrial ? "VuTimeTrialGame slot 12 0x48F560" : "VuRaceGame slot 12 0x489C60", ui_json_find( results, "CircuitRace" ).integer,
+                      s.start.slalom ? "VuSlalomGame slot 12 0x48CAF0" : s.start.timetrial ? "VuTimeTrialGame slot 12 0x48F560" : "VuRaceGame slot 12 0x489C60",
+                      ui_json_find( results, "CircuitRace" ).integer,
                       table.tag == 5 ? static_cast< int >( table.list.size( ) ) : -1 );
             for ( std::size_t k = 0; table.tag == 5 && k < table.list.size( ); ++k )
             {
@@ -2528,7 +2664,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     }
     s.rules.boats = &s.rules_boats;
     s.rules.game = &s.rules_game;
-    sh.call = [ &s ]( const char* row )
+    sh.call = [ &s, &db ]( const char* row )
     {
         // Slot 5 0x4896A0: "(whatever the track) the game's +0x6F8 state machine enters its first state" - PreGame's enter
         // 0x48A7F0, before the +0x4CC loop (which it does not read).
@@ -2537,6 +2673,13 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
             vugame_fsm_begin( s.rules.event );
         if ( std::strcmp( row, "state enter fsm+0x688" ) == 0 )
             vugame_fsm_begin( s.rules.split );
+        if ( std::strcmp( row, "slalom slot 5" ) == 0 )
+        {
+            s.rules_game.circuit = s.start.circuit;
+            s.rules_game.length = s.start.length;
+            s.rules_game.laps = s.start.laps;
+            race_session_slalom_start( s, db );
+        }
         if ( std::strcmp( row, "state enter fsm+0x704" ) == 0 )
         {
             s.rules_game.circuit = s.start.circuit;
