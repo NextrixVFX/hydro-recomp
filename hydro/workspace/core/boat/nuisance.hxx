@@ -23,8 +23,8 @@
 // Vu3dLayoutComponent (+0x60, 0x50B8D0); and its child +0x7C - a VuBoatEntity
 // made by operator new(0x520) + 0x41B710 + ctor 0x41B850 (not via the
 // registry). Slots 2-5 / 8-10 are nops, 11 is VuEntity::load 0x5009D0.
-// The dtor 0x42FD20 drops the child's +4 count (its vt+0(1) at 0), frees
-// +0x64 and runs VuEntity's 0x500870 - the owner's job here (no function).
+// The ctor and the (scalar-deleting) dtor 0x42FD20: nuisance_start_construct /
+// nuisance_start_destroy below.
 //
 // WHO SETS THE NUISANCE DRIVER'S +0xF0: the DriverTarget plug. Its weak
 // reference (driver +0xE4, vtable 0x737C44) is linked to the entity the
@@ -62,6 +62,55 @@ inline void nuisance_start_mark_properties( entity_t& e )
         nuisance_start_t* s = static_cast< nuisance_start_t* >( e.m_state.get( ) );
         s->boat_default = s->boat;
     }
+}
+
+// ---- The ctor 0x42FA20 (thiscall; from create 0x42F930 after 0x42F9B0 zeroes
+// +8 / +0xC / +0x34..+0x60 / +0x7C) ----
+//
+// What it builds is the entity framework's (each piece a hook, in retail's
+// order): the VuEntity ctor 0x500710(0); vtable 0x739B94; +0x64 = "Police"
+// (VuString_assign 0x401C70, 6); the word +0x80 = 1 (+0x80 = 1, +0x81 = 0);
+// new(0x4C) VuDBEntryProperty 0x506A70("Boat", &+0x64, "BoatDB") appended to
+// the +0x44 property list (next +0x10); new(0x58) VuScriptComponent 0x503A20
+// (this, 0x96, 1) at +0x5C and new(0x38) Vu3dLayoutComponent 0x50B8D0(this)
+// at +0x60, each appended to the +0x48 component list (next +0xC); new(0x64)
+// input plugs 0x4300C0 "DriverTarget" -> 0x42FF90 and "DriverDisable" ->
+// 0x430020, each with the signature 0x505400(1, 11) (one entity parameter),
+// +0x4C = the script component and pushed onto its +0x10 list (0x440990);
+// the child +0x7C = new(0x520) + 0x41B710 + the VuBoatEntity ctor 0x41B850
+// (0 when operator new fails - every new above is null-checked the same way).
+inline constexpr std::uint32_t k_nuisance_start_vtable = 0x739B94u;
+inline constexpr std::uint32_t k_nuisance_start_driver_target = 0x42FF90u;
+inline constexpr std::uint32_t k_nuisance_start_driver_disable = 0x430020u;
+
+struct nuisance_start_ctor_hooks_t
+{
+    std::function< void( std::uint32_t ) > entity;                                     // 0x500710(flags)
+    std::function< void( const char*, const char* ) > db_property;                     // 0x506A70(name, &+0x64, db) -> +0x44
+    std::function< void( std::uint32_t, std::uint32_t ) > script_component;            // 0x503A20(this, a, b) -> +0x5C, +0x48
+    std::function< void( ) > layout_component;                                         // 0x50B8D0(this) -> +0x60, +0x48
+    std::function< void( const char*, std::uint32_t, std::uint32_t, std::uint32_t ) > input_plug;   // (name, method, count, type):
+                                                                                                    // 0x4300C0 + 0x505400 + 0x440990
+    std::function< std::uint32_t( ) > make_child;                                      // new(0x520) + 0x41B710 + 0x41B850
+};
+
+// Returns the child (+0x7C).
+inline std::uint32_t nuisance_start_construct( nuisance_start_t& s, const nuisance_start_ctor_hooks_t& h )
+{
+    if ( h.entity ) h.entity( 0 );
+    s.boat = "Police";
+    s.boat_default = s.boat;
+    s.active = 1;
+    s.disabled = 0;
+    if ( h.db_property ) h.db_property( "Boat", "BoatDB" );
+    if ( h.script_component ) h.script_component( 0x96u, 1u );
+    if ( h.layout_component ) h.layout_component( );
+    if ( h.input_plug )
+    {
+        h.input_plug( "DriverTarget", k_nuisance_start_driver_target, 1u, 11u );
+        h.input_plug( "DriverDisable", k_nuisance_start_driver_disable, 1u, 11u );
+    }
+    return h.make_child ? h.make_child( ) : 0u;
 }
 
 // The document slot 6 builds (0x4FC090 makes each member, 0x4FC640 sets a
@@ -227,4 +276,44 @@ inline std::uint32_t nuisance_start_driver_disable( nuisance_start_t& s, std::ui
     vu_weak_ref_release( w, driver + 0xE4 );
     s.disabled = 1;
     return 0;
+}
+
+// ---- The dtor 0x42FD20 (thiscall(entity, flags), retn 4: the scalar-deleting
+// one, vtable slot 0) on retail's words ----
+//
+// +0 = 0x739B94; the child +0x7C's +4 count decremented (`dec`: 0 wraps, no
+// test for a null child - retail faults there: false, UNKNOWN) and, at 0, its
+// vt+0(1) (VuBoatEntity 0x41CA20); +0x64's heap text freed when its capacity
+// +0x78 is >= 16, then +0x78 = 15, +0x74 = 0, the byte +0x64 = 0; VuEntity's
+// dtor 0x500870; with flags & 1, operator delete(this). Returns this (eax).
+struct nuisance_start_dtor_hooks_t
+{
+    std::function< void( std::uint32_t ) > destroy_child;   // the child's vt+0(1)
+    std::function< void( std::uint32_t ) > free_block;      // operator delete (the import 0x64C150)
+    std::function< void( ) > entity_dtor;                   // 0x500870
+};
+
+inline bool nuisance_start_destroy( const vu_words_t& w, std::uint32_t self, std::uint32_t flags, const nuisance_start_dtor_hooks_t& h,
+                                    nuisance_start_t* s = nullptr )
+{
+    w.put( self, k_nuisance_start_vtable );
+    const std::uint32_t child = w.get( self + 0x7C );
+    if ( !child )
+        return false;
+    const std::uint32_t count = w.get( child + 4 ) - 1u;
+    w.put( child + 4, count );
+    if ( count == 0 && h.destroy_child )
+        h.destroy_child( child );
+    if ( w.get( self + 0x78 ) >= 0x10u && h.free_block )
+        h.free_block( w.get( self + 0x64 ) );
+    w.put( self + 0x78, 0xFu );
+    w.put( self + 0x74, 0u );
+    w.put( self + 0x64, w.get( self + 0x64 ) & 0xFFFFFF00u );
+    if ( s )
+        s->boat.clear( );
+    if ( h.entity_dtor )
+        h.entity_dtor( );
+    if ( ( flags & 1u ) && h.free_block )
+        h.free_block( self );
+    return true;
 }

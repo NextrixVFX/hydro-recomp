@@ -11,6 +11,9 @@
 #include <workspace/core/boat/surface.hxx>
 #include <workspace/core/boat/nuisance.hxx>
 #include <workspace/core/boat/contact.hxx>
+#include <workspace/core/boat/events.hxx>
+#include <workspace/core/boat/damage.hxx>
+#include <workspace/core/collision/leaves.hxx>
 
 #include <algorithm>
 #include <array>
@@ -2257,6 +2260,575 @@ inline bool verify_nuisance_start( )
     return false;
 }
 
+// VuAiNuisanceDriverStartEntity's ctor 0x42FA20 (create 0x42F930 run whole) and dtor 0x42FD20 against retail (oracle
+// case nuisance_start_ctor): nuisance_start_construct's fields and its framework calls (the hooks below stand for the
+// engine ctors: each makes the object retail's run left - the VuEntity ctor its transform component 0x74D324, the DB
+// property 0x74C4C0, the components 0x74C3F0 / 0x74C550, an input plug 0x737138 with the delegate 0x739B84, the boat
+// 0x7383D4 with count 1), then nuisance_start_destroy's call log and words per dtor vector.
+inline bool verify_nuisance_start_ctor( )
+{
+    const unsigned* g = g_golden_nuisance_start_ctor_words;
+    auto text = [ & ]( ) {
+        const unsigned n = *g++;
+        std::string s( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        return s;
+    };
+    auto word_text = [ ]( const std::string& s ) {
+        std::vector< unsigned > w = { static_cast< unsigned >( s.size( ) ) };
+        for ( std::size_t k = 0; k < s.size( ); k += 4 )
+        {
+            unsigned x = 0;
+            std::memcpy( &x, s.data( ) + k, std::min< std::size_t >( 4, s.size( ) - k ) );
+            w.push_back( x );
+        }
+        return w;
+    };
+    int failed = 0;
+    // ---- the ctor: ours as the same word stream ----
+    std::vector< unsigned > props, comps, plugs;
+    std::uint32_t flags = 0xFFFFFFFFu, script = 0xFFFFFFFFu;
+    unsigned nprops = 0, nplugs = 0;
+    nuisance_start_ctor_hooks_t ch;
+    ch.entity = [ & ]( std::uint32_t f ) { flags = f; comps.push_back( 0x74D324u ); };
+    ch.db_property = [ & ]( const char* name, const char* db ) {
+        ++nprops;
+        props.push_back( 0x74C4C0u );
+        for ( unsigned x : word_text( name ) ) props.push_back( x );
+        props.push_back( 1u );   // its value is +0x64
+        props.push_back( 1u );   // VuProperty 0x406B70's +8
+        for ( unsigned x : word_text( std::string( "VuDBAsset/" ) + db ) ) props.push_back( x );
+    };
+    ch.script_component = [ & ]( std::uint32_t, std::uint32_t ) { script = static_cast< std::uint32_t >( comps.size( ) ); comps.push_back( k_script_component_vtable ); };
+    ch.layout_component = [ & ]( ) { comps.push_back( 0x74C550u ); };
+    ch.input_plug = [ & ]( const char* name, std::uint32_t method, std::uint32_t count, std::uint32_t type ) {
+        ++nplugs;
+        plugs.push_back( 0x737138u );
+        for ( unsigned x : word_text( name ) ) plugs.push_back( x );
+        plugs.push_back( 0u );
+        plugs.push_back( count );
+        plugs.push_back( type );
+        plugs.push_back( 1u );
+        plugs.push_back( 0x739B84u );
+        plugs.push_back( 1u );
+        plugs.push_back( method );
+    };
+    ch.make_child = [ ]( ) { return 0x400u; };
+    nuisance_start_t s;
+    s.boat = "stale";
+    const std::uint32_t child = nuisance_start_construct( s, ch );
+    std::vector< unsigned > mine = { k_nuisance_start_vtable, flags };
+    for ( unsigned x : word_text( s.boat ) ) mine.push_back( x );
+    mine.insert( mine.end( ), { static_cast< unsigned >( s.boat.size( ) ), 15u, s.active, s.disabled, nprops } );
+    mine.insert( mine.end( ), props.begin( ), props.end( ) );
+    mine.push_back( static_cast< unsigned >( comps.size( ) ) );
+    mine.insert( mine.end( ), comps.begin( ), comps.end( ) );
+    mine.insert( mine.end( ), { script, k_script_component_vtable, 0x74C550u, nplugs } );
+    mine.insert( mine.end( ), plugs.begin( ), plugs.end( ) );
+    mine.insert( mine.end( ), { child ? 0x7383D4u : 0u, child ? 1u : 0u, 0u } );
+    const unsigned ctor_words = *g++;
+    const unsigned* start = g;
+    std::size_t at = 0;
+    for ( ; at < mine.size( ) && at < ctor_words && start[ at ] == mine[ at ]; ++at )
+        ;
+    if ( at != mine.size( ) || ctor_words != mine.size( ) || s.boat_default != "Police" )
+    {
+        ++failed;
+        LOG_ERROR( "nuisance_start_ctor: the ctor differs at word %zu of %zu (ours 0x%X, retail 0x%X; retail %u words)", at, mine.size( ),
+                   at < mine.size( ) ? mine[ at ] : 0u, at < ctor_words ? start[ at ] : 0u, ctor_words );
+    }
+    g += ctor_words;
+    // ---- the dtor vectors ----
+    const unsigned nv = *g++;
+    const std::uint32_t self = 0x100u, ch_ = 0x400u, heap_text = 0x3000u;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned count = *g++;
+        const std::string boat = text( );
+        const unsigned fl = *g++;
+        std::vector< std::vector< unsigned > > glog( *g++ );
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        unsigned after[ 6 ];
+        for ( unsigned& a : after )
+            a = *g++;
+        std::map< std::uint32_t, std::uint32_t > mem;
+        vu_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0u : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        mem[ self ] = 0xCDCDCDCDu;
+        mem[ self + 0x7C ] = ch_;
+        mem[ ch_ + 4 ] = count;
+        mem[ self + 0x64 ] = boat.size( ) < 16 ? 0x41414141u : heap_text;
+        mem[ self + 0x74 ] = static_cast< std::uint32_t >( boat.size( ) );
+        mem[ self + 0x78 ] = boat.size( ) < 16 ? 15u : static_cast< std::uint32_t >( boat.size( ) | 15u );
+        std::vector< std::vector< unsigned > > log;
+        nuisance_start_dtor_hooks_t dh;
+        dh.destroy_child = [ & ]( std::uint32_t c ) { log.push_back( { 1u, c == ch_ ? 1u : 0u, 1u } ); };
+        dh.free_block = [ & ]( std::uint32_t a ) { log.push_back( { 3u, a == self ? 1u : a == heap_text ? 2u : 0u } ); };
+        dh.entity_dtor = [ & ]( ) { log.push_back( { 2u, 1u, w.get( self ) } ); };
+        nuisance_start_t st;
+        st.boat = boat;
+        const bool ok = nuisance_start_destroy( w, self, fl, dh, &st );
+        const unsigned ours[ 6 ] = { w.get( ch_ + 4 ), w.get( self ), w.get( self + 0x64 ) & 0xFFu, w.get( self + 0x74 ), w.get( self + 0x78 ), ok ? 1u : 0u };
+        if ( !( log == glog && std::equal( ours, ours + 6, after ) && st.boat.empty( ) ) && ++failed <= 8 )
+            LOG_ERROR( "nuisance_start_ctor dtor vector %u (count %u, \"%s\", flags %u): %zu calls (%zu), count 0x%X (0x%X)", v, count, boat.c_str( ), fl,
+                       log.size( ), glog.size( ), ours[ 0 ], after[ 0 ] );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuAiNuisanceDriverStartEntity ctor 0x42FA20 / dtor 0x42FD20 match retail: the ctor's %zu words, %u dtor vectors", mine.size( ), nv );
+        return true;
+    }
+    LOG_ERROR( "nuisance_start_ctor FAILED %d checks", failed );
+    return false;
+}
+// VuBoatEntity's OnCameraShake 0x41E7B0 / OnRumble 0x41E950 (-> 0x41E2E0) against retail (oracle case boat_events):
+// the camera's shake words and the driver's rumble pair, bit for bit.
+inline bool verify_boat_events( )
+{
+    const unsigned* g = g_golden_boat_events_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++, vtable = *g++;
+        std::uint8_t drv[ 0x100 ] = {}, cam[ 0x300 ] = {}, params[ 0x84 ] = {};
+        std::memcpy( drv + 0xC8, g, 8 ); g += 2;
+        std::memcpy( cam + 0x2E4, g, 28 ); g += 7;
+        std::memcpy( params, g, 32 ); g += 8;
+        std::memcpy( params + 0x80, g, 4 ); g += 1;
+        const unsigned* after = g;
+        g += 10;
+        if ( fn == 1 )
+            boat_on_camera_shake( cam, params );
+        else
+            boat_on_rumble( drv, vtable, params );
+        unsigned mine[ 10 ];
+        std::memcpy( mine, cam + 0x2E4, 28 );
+        std::memcpy( mine + 7, drv + 0xC8, 8 );
+        mine[ 9 ] = 1;
+        if ( !std::equal( mine, mine + 10, after ) && ++failed <= 8 )
+            LOG_ERROR( "boat_events vector %u (handler %u): +0x2E4 0x%08X (retail 0x%08X), +0x2E8 0x%08X (0x%08X), +0xC8 0x%08X (0x%08X), +0xCC 0x%08X (0x%08X)",
+                       v, fn, mine[ 0 ], after[ 0 ], mine[ 1 ], after[ 1 ], mine[ 7 ], after[ 7 ], mine[ 8 ], after[ 8 ] );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuBoatEntity OnCameraShake 0x41E7B0 / OnRumble 0x41E950 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "boat_events FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+// btRigidBody's applyTorqueImpulse 0x4220C0 / applyImpulse 0x4221C0 against retail (oracle case body_impulse): the
+// body's linear and angular velocity words, bit for bit.
+inline bool verify_body_impulse( )
+{
+    const unsigned* g = g_golden_body_impulse_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++;
+        std::uint8_t b[ 0x280 ] = {};
+        std::memcpy( b + 0x110, g, 0x70 ); g += 0x1C;
+        std::memcpy( b + 0x260, g, 12 ); g += 3;
+        float a[ 3 ], r[ 3 ];
+        std::memcpy( a, g, 12 ); g += 3;
+        std::memcpy( r, g, 12 ); g += 3;
+        const unsigned* after = g;
+        g += 9;
+        if ( fn == 1 )
+            body_apply_torque_impulse( b, a );
+        else
+            body_apply_impulse( b, a, r );
+        unsigned mine[ 8 ];
+        std::memcpy( mine, b + 0x140, 32 );
+        if ( !( std::equal( mine, mine + 8, after ) && after[ 8 ] == 1 ) && ++failed <= 8 )
+            LOG_ERROR( "body_impulse vector %u (function %u): +0x140 0x%08X (retail 0x%08X), +0x150 0x%08X (0x%08X), +0x154 0x%08X (0x%08X)", v, fn,
+                       mine[ 0 ], after[ 0 ], mine[ 4 ], after[ 4 ], mine[ 5 ], after[ 5 ] );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "btRigidBody applyTorqueImpulse 0x4220C0 / applyImpulse 0x4221C0 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "body_impulse FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+// VuBoatDamageController::VuPiece's getWorldTransform 0x412CA0 / setWorldTransform 0x412D90 against retail (oracle
+// case piece_motion): the btTransform out or the piece's matrix, bit for bit.
+inline bool verify_piece_motion( )
+{
+    const unsigned* g = g_golden_piece_motion_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++;
+        std::uint8_t piece[ 0x200 ] = {};
+        std::memcpy( piece + 8, g, 64 ); g += 16;
+        std::memcpy( piece + 0x1B0, g, 12 ); g += 3;
+        float bt[ 16 ];
+        std::memcpy( bt, g, 64 ); g += 16;
+        const unsigned* after = g;
+        g += 17;
+        unsigned mine[ 16 ];
+        if ( fn == 1 )
+        {
+            float out[ 16 ];
+            piece_motion_get( piece, out );
+            std::memcpy( mine, out, 64 );
+        }
+        else
+        {
+            piece_motion_set( piece, bt );
+            std::memcpy( mine, piece + 8, 64 );
+        }
+        if ( !( std::equal( mine, mine + 16, after ) && after[ 16 ] == 1 ) && ++failed <= 8 )
+        {
+            int k = 0;
+            while ( k < 15 && mine[ k ] == after[ k ] )
+                ++k;
+            LOG_ERROR( "piece_motion vector %u (function %u): word %d 0x%08X (retail 0x%08X)", v, fn, k, mine[ k ], after[ k ] );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuPiece getWorldTransform 0x412CA0 / setWorldTransform 0x412D90 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "piece_motion FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+// VuBoatEntity's setWorldTransform 0x41E460 against retail (oracle case boat_set_world): the component's world and
+// world euler (+0xAC, a stack word, not compared) and the 0x534830 / 0x534C00(0) hook order.
+inline bool verify_boat_set_world( )
+{
+    const unsigned* g = g_golden_boat_set_world_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        float bt[ 16 ];
+        std::memcpy( bt, g, 64 ); g += 16;
+        std::uint8_t boat[ 0x520 ] = {}, tr[ 0xC8 ] = {};
+        std::memcpy( boat + 0x290, g, 12 ); g += 3;
+        const unsigned* after = g;
+        g += 19;
+        const unsigned rest = *g++;
+        std::vector< std::vector< unsigned > > glog( *g++ ), log;
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        boat_set_world_hooks_t h;
+        h.recalc = [ & ]( ) { log.push_back( { 1u, 1u } ); };
+        h.child_walk = [ & ]( bool notify ) { log.push_back( { 2u, 1u, notify ? 1u : 0u } ); };
+        boat_motion_set( boat, tr, bt, h );
+        unsigned mine[ 19 ];
+        std::memcpy( mine, tr + 0x50, 64 );
+        std::memcpy( mine + 16, tr + 0xA0, 12 );
+        if ( !( std::equal( mine, mine + 19, after ) && rest == 1 && log == glog ) && ++failed <= 8 )
+        {
+            int k = 0;
+            while ( k < 18 && mine[ k ] == after[ k ] )
+                ++k;
+            LOG_ERROR( "boat_set_world vector %u: word %d 0x%08X (retail 0x%08X), %zu hooks (%zu)", v, k, mine[ k ], after[ k ], log.size( ), glog.size( ) );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuBoatEntity setWorldTransform 0x41E460 matches retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "boat_set_world FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+// The drivers' scalar-deleting dtors 0x40EA30 / 0x40B7E0 / 0x40E530 / 0x40D920 against retail (oracle case
+// driver_dtors): the hook log and the words left (the reference's only for the nuisance driver, +0x84 not for the
+// entity class - random image words there).
+inline bool verify_driver_dtors( )
+{
+    const unsigned* g = g_golden_driver_dtors_words;
+    auto text = [ & ]( ) {
+        const unsigned n = *g++;
+        std::string s( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        return s;
+    };
+    const std::uint32_t drv = 0x100, txt = 0x800, plan = 0x880, ev = 0x900, old = 0x940, r0 = 0x980, r1 = 0x9C0, ref = drv + 0xE4;
+    auto sym = [ & ]( std::uint32_t x ) -> unsigned {
+        if ( x == 0 ) return 0;
+        if ( x == drv ) return 1;
+        if ( x == txt ) return 2;
+        if ( x == plan ) return 3;
+        if ( x == ev ) return 4;
+        if ( x == old ) return 5;
+        if ( x == r0 ) return 6;
+        if ( x == r1 ) return 7;
+        if ( x == ref ) return 8;
+        return 0x100 + ( x & 0xFF );
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned kind = *g++, flags = *g++;
+        const std::string s = text( );
+        const unsigned b8 = *g++, event = *g++, state = *g++, untouched = *g++;
+        std::vector< std::vector< unsigned > > glog( *g++ ), log;
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        const unsigned* after = g;
+        g += 16;
+        std::map< std::uint32_t, std::uint32_t > mem;
+        vu_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0u : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        mem[ drv + 0x8C ] = plan;
+        mem[ drv + 0xF8 ] = b8;
+        mem[ drv + 0xFC ] = event ? ev : 0u;
+        mem[ drv + 0x60 ] = s.size( ) < 16 ? 0x41414141u : txt;
+        mem[ drv + 0x70 ] = static_cast< std::uint32_t >( s.size( ) );
+        mem[ drv + 0x74 ] = s.size( ) < 16 ? 15u : static_cast< std::uint32_t >( s.size( ) | 15u );
+        if ( state == 1 )
+        {
+            mem[ old + 8 ] = ref;
+            mem[ ref + 8 ] = r1; mem[ ref + 0xC ] = old;
+            mem[ r1 + 4 ] = ref; mem[ r1 + 0xC ] = old;
+        }
+        else if ( state == 2 || state == 3 )
+        {
+            mem[ old + 8 ] = r0;
+            mem[ r0 + 8 ] = ref; mem[ r0 + 0xC ] = old;
+            mem[ ref + 4 ] = r0; mem[ ref + 8 ] = state == 2 ? r1 : 0; mem[ ref + 0xC ] = old;
+            if ( state == 2 )
+            {
+                mem[ r1 + 4 ] = ref; mem[ r1 + 0xC ] = old;
+            }
+        }
+        driver_dtor_hooks_t h;
+        h.free_block = [ & ]( std::uint32_t a ) { log.push_back( { 1u, sym( a ) } ); };
+        h.aligned_free = [ & ]( std::uint32_t a ) { log.push_back( { 2u, sym( a ) } ); };
+        h.entity_dtor = [ & ]( ) { log.push_back( { 3u, 1u, w.get( drv ) } ); };
+        h.event_clear_callback = [ & ]( std::uint32_t e ) { log.push_back( { 4u, sym( e ), 0u, 0u } ); };
+        h.event_stop = [ & ]( std::uint32_t e, bool immediate ) { log.push_back( { 5u, sym( e ), immediate ? 1u : 0u } ); };
+        const driver_dtor_kind_t k = kind == 1 ? driver_dtor_kind_t::entity : kind == 2 ? driver_dtor_kind_t::ai : kind == 3 ? driver_dtor_kind_t::ui
+                                                                                                                    : driver_dtor_kind_t::nuisance;
+        const std::uint32_t r = driver_destroy( k, w, drv, flags, h );
+        const unsigned mine[ 16 ] = { w.get( drv ), w.get( drv + 0x60 ) & 0xFFu, w.get( drv + 0x70 ), w.get( drv + 0x74 ), w.get( drv + 0x84 ),
+                                      sym( w.get( drv + 0xFC ) ), sym( w.get( ref ) ), sym( w.get( ref + 4 ) ), sym( w.get( ref + 8 ) ),
+                                      sym( w.get( ref + 0xC ) ), sym( w.get( old + 8 ) ), sym( w.get( r0 + 4 ) ), sym( w.get( r0 + 8 ) ),
+                                      sym( w.get( r1 + 4 ) ), sym( w.get( r1 + 8 ) ), r == drv ? 1u : 0u };
+        bool same = log == glog && untouched == 1;
+        for ( int j = 0; j < 16 && same; ++j )
+        {
+            if ( j == 4 && kind == 1 ) continue;
+            if ( j >= 6 && j <= 9 && kind != 4 ) continue;
+            same = mine[ j ] == after[ j ];
+        }
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "driver_dtors vector %u (class %u, flags %u): %zu calls (%zu), +0 0x%X (0x%X), +0xFC %u (%u)", v, kind, flags, log.size( ),
+                       glog.size( ), mine[ 0 ], after[ 0 ], mine[ 5 ], after[ 5 ] );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the drivers' dtors 0x40EA30 / 0x40B7E0 / 0x40E530 / 0x40D920 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "driver_dtors FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+// VuAiManagerImpl's slots 15 0x404210 / 3 0x404570 / 9 0x403510 against retail (oracle case fleet_small).
+inline bool verify_fleet_small( )
+{
+    const unsigned* g = g_golden_fleet_small_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    const std::uint32_t self = 0x100, arr = 0x200;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned slot = *g++, count = *g++, owned = *g++;
+        unsigned before[ 7 ];
+        for ( unsigned& b : before )
+            b = *g++;
+        std::vector< unsigned > ents( *g++ );
+        for ( unsigned& e : ents )
+            e = *g++;
+        std::vector< std::vector< unsigned > > glog( *g++ ), log;
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        const unsigned* after = g;
+        g += 7;
+        const unsigned st0 = *g++, rest = *g++;
+        std::map< std::uint32_t, std::uint32_t > mem;
+        vu_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0u : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        mem[ self + 0x1C ] = before[ 0 ];
+        mem[ self + 0x24 ] = count;
+        mem[ self + 0x28 ] = before[ 2 ];
+        mem[ self + 0x2C ] = arr;
+        mem[ self + 0x30 ] = owned;
+        mem[ self + 0x34 ] = before[ 5 ];
+        mem[ self + 0x38 ] = before[ 6 ];
+        for ( std::size_t k = 0; k < ents.size( ); ++k )
+            mem[ arr + 4 * static_cast< std::uint32_t >( k ) ] = ents[ k ] ? 0x1000u + ents[ k ] : 0u;
+        auto sym = [ & ]( std::uint32_t x ) -> unsigned { return x == 0 ? 0u : x == self ? 1u : x == arr ? 2u : x >= 0x1000u ? x - 0x1000u : 0x100u + ( x & 0xFF ); };
+        unsigned mine_st0 = 0;
+        if ( slot == 15 )
+        {
+            const float f = fleet_slot15( );
+            std::memcpy( &mine_st0, &f, 4 );
+        }
+        else if ( slot == 3 )
+        {
+            fleet_manager_t m;
+            m.state = static_cast< std::int32_t >( before[ 0 ] );
+            fleet_release( m, [ & ]( ) { log.push_back( { 3u, 1u } ); } );
+            mem[ self + 0x1C ] = static_cast< std::uint32_t >( m.state );
+        }
+        else
+        {
+            fleet_reset_hooks_t h;
+            h.free_block = [ & ]( std::uint32_t a ) { log.push_back( { 1u, sym( a ) } ); };
+            h.aligned_free = [ & ]( std::uint32_t a ) { log.push_back( { 2u, sym( a ) } ); };
+            fleet_reset_words( w, self, h );
+        }
+        const unsigned mine[ 7 ] = { w.get( self + 0x1C ), w.get( self + 0x24 ), w.get( self + 0x28 ), sym( w.get( self + 0x2C ) ), w.get( self + 0x30 ) & 0xFFu,
+                                     w.get( self + 0x34 ), w.get( self + 0x38 ) };
+        if ( !( std::equal( mine, mine + 7, after ) && log == glog && mine_st0 == st0 && rest == 1 ) && ++failed <= 8 )
+            LOG_ERROR( "fleet_small vector %u (slot %u): %zu calls (%zu), +0x1C %u (%u), +0x30 %u (%u), ST0 0x%08X (0x%08X)", v, slot, log.size( ),
+                       glog.size( ), mine[ 0 ], after[ 0 ], mine[ 4 ], after[ 4 ], mine_st0, st0 );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuAiManagerImpl slots 15 0x404210 / 3 0x404570 / 9 0x403510 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "fleet_small FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+// 0x4ABB40 / 0x4ABB10 / the atexit stubs 0x4AA960 / 0x403250 against retail (oracle case boat_small).
+inline bool verify_boat_small( )
+{
+    const unsigned* g = g_golden_boat_small_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++;
+        std::uint8_t data[ 0x100 ];
+        std::memcpy( data, g, 0x100 ); g += 0x40;
+        const unsigned off = *g++, n = *g++, seed = *g++, ret = *g++;
+        bool same = true;
+        if ( fn == 1 )
+            same = boat_fnv_range( data + off, n, seed ) == ret;
+        else if ( fn == 2 )
+        {
+            std::uint8_t dst[ 0x80 ];
+            std::memset( dst, 0xCD, sizeof( dst ) );
+            boat_stream_t st;
+            st.base = data;
+            st.position = off;
+            boat_stream_read( st, dst, n );
+            same = std::memcmp( dst, g, 0x80 ) == 0 && st.position == g[ 0x20 ];
+            g += 0x21;
+        }
+        else
+        {
+            std::uint32_t global = 0x12345678u;
+            boat_atexit_clear( global );
+            same = global == ret;
+        }
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "boat_small vector %u (function %u) differs", v, fn );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "0x4ABB40 / 0x4ABB10 / atexit 0x4AA960 / 0x403250 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "boat_small FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+// The physics (Bullet) leaf virtuals (engine collision/leaves.hxx) against retail (oracle case bt_leaves): each row's
+// eax (the bits its kind defines), ST0 for `one`, the ret's pop, the image's changed words, the name's text.
+inline bool verify_bt_leaves( )
+{
+    const unsigned* g = g_golden_bt_leaves_words;
+    auto text = [ & ]( ) {
+        const unsigned n = *g++;
+        std::string s( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        return s;
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    const std::uint32_t self = 0x30000100u;   // the case's ARG_BASE + 0x100
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned address = *g++;
+        std::uint8_t object[ 0x200 ] = {};
+        std::memcpy( object, g, 0x200 ); g += 0x80;
+        std::uint8_t before[ 0x200 ];
+        std::memcpy( before, object, 0x200 );
+        const unsigned arg0 = *g++, eax = *g++, st0 = *g++, pop = *g++;
+        std::vector< std::pair< unsigned, unsigned > > changed( *g++ );
+        for ( auto& c : changed )
+        {
+            c.first = *g++;
+            c.second = *g++;
+        }
+        const std::string t = text( );
+        const bool has_text = *g++ != 0;
+        const bt_leaf_t* l = bt_leaf_find( address );
+        bool same = l != nullptr;
+        if ( same )
+        {
+            const bt_leaf_result_t r = bt_leaf_call( *l, object, self, arg0 );
+            same = ( r.eax & r.eax_mask ) == ( eax & r.eax_mask ) && l->pop == pop;
+            if ( r.st0_set )
+            {
+                unsigned bits;
+                std::memcpy( &bits, &r.st0, 4 );
+                same = same && bits == st0;
+            }
+            std::vector< std::pair< unsigned, unsigned > > mine;
+            for ( unsigned o = 0; o < 0x200; o += 4 )
+                if ( std::memcmp( object + o, before + o, 4 ) != 0 )
+                {
+                    unsigned w;
+                    std::memcpy( &w, object + o, 4 );
+                    mine.emplace_back( o, w );
+                }
+            // A store of 0 over a word that already held 0 changes nothing - retail's list is of changed words too.
+            same = same && mine == changed;
+            if ( l->kind == bt_leaf_kind_t::text )
+                same = same && has_text && l->text && t == l->text;
+        }
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "bt_leaves vector %u (0x%X): eax 0x%08X, pop %u, text \"%s\"", v, address, eax, pop, t.c_str( ) );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the %zu physics (Bullet) leaf virtuals match retail: %u vectors", sizeof( k_bt_leaves ) / sizeof( k_bt_leaves[ 0 ] ), nv );
+        return true;
+    }
+    LOG_ERROR( "bt_leaves FAILED %d of %u vectors", failed, nv );
+    return false;
+}
 // The contact-added callback 0x574E90 -> 0x5751F0 -> 0x519720 against retail (oracle case contact_added): the manifold
 // point after (every word, bit for bit), the return, and each listener / callback call's record (but its stale-stack
 // words) with the case's scripted write-backs replayed.
@@ -2620,6 +3192,15 @@ inline bool verify_race_all( )
     ok = verify_hidden_package( ) && ok;
     ok = verify_boat_manager_game( ) && ok;
     ok = verify_nuisance_start( ) && ok;
+    ok = verify_nuisance_start_ctor( ) && ok;
+    ok = verify_boat_events( ) && ok;
+    ok = verify_body_impulse( ) && ok;
+    ok = verify_piece_motion( ) && ok;
+    ok = verify_boat_set_world( ) && ok;
+    ok = verify_driver_dtors( ) && ok;
+    ok = verify_fleet_small( ) && ok;
+    ok = verify_boat_small( ) && ok;
+    ok = verify_bt_leaves( ) && ok;
     ok = verify_contact_added( ) && ok;
     ok = verify_boat_rtti( ) && ok;
     ok = verify_human_explosion( ) && ok;
