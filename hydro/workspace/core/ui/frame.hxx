@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/ui/compose.hxx>
+#include <workspace/core/ui/image.hxx>
 
 #include <array>
 #include <cstdint>
