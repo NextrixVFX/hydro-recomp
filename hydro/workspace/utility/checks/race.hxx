@@ -3206,5 +3206,6 @@ inline bool verify_race_all( )
     ok = verify_human_explosion( ) && ok;
     ok = verify_waypoint_plugs( ) && ok;
     ok = verify_ray_test( ) && ok;
+    ok = verify_simplex_ctor( ) && ok;
     return ok;
 }

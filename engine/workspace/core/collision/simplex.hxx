@@ -53,6 +53,18 @@ static_assert( offsetof( simplex_solver_t, w ) == 16 && offsetof( simplex_solver
                    offsetof( simplex_solver_t, needs_update ) == 384,
     "retail's offsets" );
 
+// btDefaultCollisionConfiguration's ctor 0x56C880 on the 400-byte solver it
+// allocates first (0x56C8C5 .. 0x56C8EC; stored at config +0x20): the
+// equal-vertex threshold (+0x140) = 0x38D1B717 (1e-4) and the cached
+// result's used-vertex word (+0x160) &= 0xFFF0 - nothing else (oracle case
+// simplex_ctor: the block's other 98 words are the allocator's).
+inline void simplex_construct( simplex_solver_t& s )
+{
+    const uint32_t threshold = 0x38D1B717u;
+    std::memcpy( &s.equal_vertex_threshold, &threshold, 4 );
+    s.cached_bc.used &= 0xFFF0u;
+}
+
 // btSubSimplexClosestResult::reset @0x60C4C0.
 inline void simplex_result_reset( simplex_result_t& r )
 {

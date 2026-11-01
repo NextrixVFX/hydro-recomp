@@ -429,8 +429,7 @@ inline int ray_test_single( ray_test_t& t, const float* from, const float* to, c
         sphere.local_scaling[ 0 ] = sphere.local_scaling[ 1 ] = sphere.local_scaling[ 2 ] = 1.0f;
         ray_cast_result_t res;
         res.fraction = cb.closest_hit_fraction;
-        t.solver.equal_vertex_threshold = support_bits( 0x38D1B717u );
-        t.solver.cached_bc.used &= 0xFFF0u;
+        simplex_construct( t.solver );   // the stack solver's ctor: the same two stores (0x54CA80 .. 0x54CAD0)
         const int ok = ray_subsimplex_cast( t.solver, sphere, *shape.convex, from, to, world, world, res );
         if ( ok < 0 )
             return -1;

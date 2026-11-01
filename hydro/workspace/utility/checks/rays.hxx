@@ -279,3 +279,29 @@ inline bool verify_ray_test( )
     LOG_ERROR( "ray_test FAILED %d of %u rays", failed, nv );
     return false;
 }
+
+// verify_simplex_ctor: simplex_construct on the allocator's random block =
+// the block retail's btDefaultCollisionConfiguration ctor 0x56C880 left.
+inline bool verify_simplex_ctor( )
+{
+    const unsigned* g = g_golden_simplex_ctor_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        simplex_solver_t s;
+        std::memcpy( &s, g, 400 );
+        g += 100;
+        simplex_construct( s );
+        if ( std::memcmp( &s, g, 400 ) != 0 && ++failed <= 4 )
+            LOG_ERROR( "simplex_ctor vector %u differs", v );
+        g += 100;
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "btDefaultCollisionConfiguration's ctor 0x56C880 on its btVoronoiSimplexSolver (simplex_construct) matches retail: %u blocks", nv );
+        return true;
+    }
+    LOG_ERROR( "simplex_ctor FAILED %d of %u blocks", failed, nv );
+    return false;
+}
