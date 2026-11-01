@@ -223,18 +223,8 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
             shot.far_plane = p->far_plane;
             fresh_front_end.emplace( trail, shot );
         }
-        // VuWaterTextureSettingsEntity (ctor 0x5D2BD0): its loaded floats into
-        // the ocean's detail field - the consumer c_ocean is the water area's;
-        // only the property source moved. Complexity is not one of the
-        // entity's properties (the detail field is built at a fixed 6), and
-        // TimeFactor is loaded and not consumed.
-        if ( const auto* p = entity_action< water_texture_properties_t >( e ); p && e.m_type == "VuWaterTextureSettingsEntity" )
-        {
-            m_wave_height = p->height_factor;
-            m_wave_scale = p->normal_texture_scale;
-            m_wave_wind = p->wind_speed;
-            m_wave_size = p->world_size;
-        }
+        // VuWaterTextureSettingsEntity (ctor 0x5D2BD0): its words reach the water renderer through its game-start Trigger
+        // 0x5D2B00 (graph.hxx), not at load.
         if ( const auto* p = entity_action< sky_box_properties_t >( e ); p && e.m_type == "VuSkyBoxEntity" && !p->model_asset.empty( ) )
             fresh_sky = p->model_asset;
         // The three graph nodes that carry no property: their path is the state.

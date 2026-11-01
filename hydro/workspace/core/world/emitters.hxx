@@ -36,8 +36,26 @@ struct keyframe_state_t
     float time = 0.0f, time_default = 0.0f;
 };
 
+// VuSubstituteAssetEntity (create 0x5F47A0, ctor 0x5F48A0 over 0x500710(0), vtable 0x7570C4): "Asset Type" +0x60 - the
+// ctor's one property (0x4C bytes, vtable 0x7570F8: the string node, its load slot 2 0x406C20 = property_string's
+// contract; +0x48 the asset factory's vt+0x2C type list); +0x78 / +0x90 the two names. Its postLoad (slot 2 0x5F4B70)
+// first runs 0x5F4C10 - the +0xA8 / +0xAC properties unlinked from the list and deleted, +0x78 / +0x90 = "", two new
+// asset-name properties (0x53FC70: 0x68 bytes, vtable 0x74D6CC, the type = +0x60's text, "Asset Name" over +0x78 and
+// "Subst Asset Name" over +0x90, +0x64 the asset 0) appended - then each one's vt+8 (0x406C20) on data["Properties"]
+// (0x4FBDF0). Their notify (slot 11 0x53FDD0): a held asset released (factory vt+0x24), then when the factory's vt+0x28
+// (doesAssetExist(type, name)) answers true +0x64 = its vt+0x1C (createAsset(type, name)). The postLoad runs once per
+// load with the data being loaded: ours resets the two names on every property load and reads them from that load's node.
+struct substitute_asset_state_t
+{
+    std::string type, type_default;   // +0x60 "Asset Type"
+    std::string name, subst;          // +0x78 "Asset Name" / +0x90 "Subst Asset Name" (0x5F4C10 resets them: no default)
+    bool post_loaded = false;
+};
+
 inline std::shared_ptr< void > audio_emitter_state_for( const std::string& cls )
 {
+    if ( cls == "VuSubstituteAssetEntity" )
+        return std::make_shared< substitute_asset_state_t >( );
     if ( cls == "VuKeyframeMotionEntity" )
         return std::make_shared< key_motion_state_t >( );
     if ( cls == "VuKeyframeEntity" )
@@ -88,6 +106,24 @@ inline void key_motion_mark_properties( entity_t& e )
 
 inline void audio_emitter_load_properties( entity_t& e, const value_t& p )
 {
+    if ( e.m_type == "VuSubstituteAssetEntity" && e.m_state )
+    {
+        substitute_asset_state_t& s = *static_cast< substitute_asset_state_t* >( e.m_state.get( ) );
+        property_string( p, "Asset Type", s.type, s.type_default );
+        if ( !s.post_loaded )
+        {
+            // VuEntity::load 0x5009D0's postLoad (slot 2): the names reset, then read from this load's node.
+            s.post_loaded = true;
+            s.name.clear( );
+            s.subst.clear( );
+        }
+        // A template override (0x5015D0) loads every listed property (the two made by the postLoad above included) through
+        // its vt+8 and calls vt+0xC (nullsub 0x4021A0), not the postLoad: an absent key keeps the value.
+        const std::string name = s.name, subst = s.subst;
+        property_string( p, "Asset Name", s.name, name );
+        property_string( p, "Subst Asset Name", s.subst, subst );
+        return;
+    }
     if ( e.m_type != "VuAudioEmitterEntity" || !e.m_state )
         return;
     audio_emitter_state_t& s = *static_cast< audio_emitter_state_t* >( e.m_state.get( ) );
@@ -97,6 +133,8 @@ inline void audio_emitter_load_properties( entity_t& e, const value_t& p )
 
 inline void audio_emitter_mark_properties( entity_t& e )
 {
+    if ( e.m_type == "VuSubstituteAssetEntity" && e.m_state )
+        static_cast< substitute_asset_state_t* >( e.m_state.get( ) )->type_default = static_cast< substitute_asset_state_t* >( e.m_state.get( ) )->type;
     if ( e.m_type == "VuAudioEmitterEntity" && e.m_state )
     {
         audio_emitter_state_t& s = *static_cast< audio_emitter_state_t* >( e.m_state.get( ) );

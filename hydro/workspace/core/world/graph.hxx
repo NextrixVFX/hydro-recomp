@@ -193,6 +193,73 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
         return retval_t{};
     }
 
+    // VuSubstituteAssetEntity's "Trigger" 0x5F4BD0 (world/settings.hxx substitute_asset_trigger, the water agent's - case
+    // settings_triggers) on the state its postLoad left (world/emitters.hxx): each asset-name property's +0x64 is the asset
+    // factory's object for (Asset Type, name) when the pack holds it (doesAssetExist / createAsset: THE ASSET MANAGER'S, a
+    // hook - ours is the archive lookup, one object per "Type/Name"); both present and different -> the asset's vt+0x10
+    // (substitute, the asset class's - a hook: ours points the type's name at the other in m_rig's table and re-shades
+    // every placement already shaded with that cube, as retail's materials hold the asset object itself).
+    const auto sa = plug == "Trigger" ? m_entities.find( entity ) : m_entities.end( );
+    if ( sa != m_entities.end( ) && sa->second->m_type == "VuSubstituteAssetEntity" && sa->second->m_state )
+    {
+        const substitute_asset_state_t& st = *static_cast< const substitute_asset_state_t* >( sa->second->m_state.get( ) );
+        const auto object = [ this, &st ]( const std::string& name ) -> const void* {
+            const std::string key = st.type + "/" + name;
+            std::vector< std::uint8_t > bytes;
+            if ( name.empty( ) || !m_archive.read( key.c_str( ), bytes ) )
+                return nullptr;
+            return &*m_asset_objects.insert( key ).first;
+        };
+        struct subst_t { c_world* w; const substitute_asset_state_t* st; };
+        subst_t user{ this, &st };
+        const void* asset = object( st.name );
+        const void* with = object( st.subst );
+        LOG_VERBOSE( "VuSubstituteAssetEntity %s Trigger: Asset Type '%s', Asset Name '%s' (%s), Subst Asset Name '%s' (%s)", entity.c_str( ),
+                     st.type.c_str( ), st.name.c_str( ), asset ? "exists" : "no asset", st.subst.c_str( ), with ? "exists" : "no asset" );
+        substitute_asset_trigger( asset, with, &user, []( void* u, const void*, const void* ) {
+            subst_t& x = *static_cast< subst_t* >( u );
+            x.w->m_rig.add_substitution( x.st->type + "/" + x.st->name, x.st->subst );
+            int reshaded = 0;
+            if ( x.st->type == "VuCubeTextureAsset" )
+                for ( const shaded_t& sh : x.w->m_shaded )
+                    if ( sh.cube == x.st->name )
+                    {
+                        c_engine::shade( sh.handle, x.w->cube_for( sh.cube ), sh.specular, sh.specular_amount, sh.environment_amount, sh.diffuse );
+                        ++reshaded;
+                    }
+            LOG_INFO( "VuSubstituteAssetEntity Trigger: %s/%s -> %s (%d placements re-shaded)", x.st->type.c_str( ), x.st->name.c_str( ),
+                      x.st->subst.c_str( ), reshaded );
+        } );
+        ++m_fired;
+        return retval_t{};
+    }
+
+    // VuWaterTextureSettingsEntity's "Trigger" 0x5D2B00 (world/watchers.hxx water_texture_settings_apply, the water agent's -
+    // verified there): with VuWater (g 0x759058 non-null - ours: true, c_world's m_water is built with every level; the
+    // store to g 0x759058 is not read here, FLAGGED) the entity's +0x60 .. +0x7F (its
+    // eight floats, ctor 0x5D2BD0's order) into the water renderer's settings (m_water_texture: the platform's, not read).
+    const auto wt = plug == "Trigger" ? m_entities.find( entity ) : m_entities.end( );
+    if ( wt != m_entities.end( ) && wt->second->m_type == "VuWaterTextureSettingsEntity" )
+    {
+        const water_texture_properties_t* p = entity_action< water_texture_properties_t >( *wt->second );
+        if ( !p )
+        {
+            count_unhandled( entity, plug );
+            return retval_t{};
+        }
+        static_assert( sizeof( water_texture_properties_t ) == 32, "+0x60 .. +0x7F" );
+        std::uint32_t words[ 8 ];
+        std::memcpy( words, p, 32 );
+        water_texture_settings_apply( true, words, m_water_texture );
+        m_water_texture_set = true;
+        LOG_VERBOSE( "VuWaterTextureSettingsEntity %s Trigger: Gravity %.3f WorldSize %.3f WindSpeed %.3f DirectionalPower %.3f "
+                     "SuppressionWaveLength %.3f HeightFactor %.3f TimeFactor %.3f NormalTextureScale %.3f", entity.c_str( ), p->gravity,
+                     p->world_size, p->wind_speed, p->directional_power, p->suppression_wave_length, p->height_factor, p->time_factor,
+                     p->normal_texture_scale );
+        ++m_fired;
+        return retval_t{};
+    }
+
     // VuAudioEmitterEntity's inputs (world/sound.hxx, the water agent's - case audio_emitter): Start 0x5F3B80 (play at the
     // transform's world position, +0x80) and Stop 0x5F3BE0, on the entity's state (world/emitters.hxx) and the audio platform.
     const auto em = m_entities.find( entity );

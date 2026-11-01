@@ -346,6 +346,19 @@ inline void c_world::place_model( const std::string& asset, const float* world, 
             const int cube = part.environment_amount > 0.0f ? cube_for( part.cube ) : -1;
             c_engine::shade( handle, cube, part.specular, part.specular_amount,
                 part.environment_amount, part.diffuse );
+            // Kept so an asset substitution (VuSubstituteAssetEntity's Trigger, graph.hxx) reaches a placement shaded
+            // before it: retail's material holds the asset object itself, which the substitution changes in place.
+            if ( part.environment_amount > 0.0f && handle >= 0 )
+            {
+                shaded_t sh{};
+                sh.handle = handle;
+                sh.cube = part.cube;
+                std::memcpy( sh.specular, part.specular, sizeof( sh.specular ) );
+                std::memcpy( sh.diffuse, part.diffuse, sizeof( sh.diffuse ) );
+                sh.specular_amount = part.specular_amount;
+                sh.environment_amount = part.environment_amount;
+                m_shaded.push_back( std::move( sh ) );
+            }
             // Where the reflective geometry actually is. Translation is
             // at 12/13/14 because the matrices are column-major - reading
             // 3/7/11 printed 0,0,0 for everything and nearly sent the
