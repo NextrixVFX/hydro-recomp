@@ -160,6 +160,7 @@
     <ClInclude Include="workspace\core\ui\action.hxx" />
     <ClInclude Include="workspace\core\ui\bind.hxx" />
     <ClInclude Include="workspace\core\ui\button.hxx" />
+    <ClInclude Include="workspace\core\ui\chooser.hxx" />
     <ClInclude Include="workspace\core\ui\combo.hxx" />
     <ClInclude Include="workspace\core\ui\compose.hxx" />
     <ClInclude Include="workspace\core\ui\config.hxx" />
