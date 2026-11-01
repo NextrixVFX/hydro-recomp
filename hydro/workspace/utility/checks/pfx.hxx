@@ -353,9 +353,8 @@ struct pfx_check_run_t
     std::uint32_t r = 0;
 };
 
-inline bool verify_pfx_run( )
+inline bool pfx_check_run( const unsigned* s, const char* tag )
 {
-    const unsigned* s = g_golden_prn_words;
     const std::uint32_t res = s[ 0 ];
     const std::uint32_t blocks[ 4 ] = { s[ 1 ], s[ 2 ], s[ 3 ], s[ 4 ] };
     std::uint32_t authored[ 8 ], pairs[ 8 ];
@@ -429,7 +428,7 @@ inline bool verify_pfx_run( )
                 return;
             static std::map< const char*, int > logged;
             if ( logged[ what ]++ < 3 )
-                LOG_ERROR( "pfx_run step %d: %s +0x%X = 0x%08X, retail 0x%08X", step, what, o, got, w );
+                LOG_ERROR( "%s step %d: %s +0x%X = 0x%08X, retail 0x%08X", tag, step, what, o, got, w );
             ++bad;
         };
         for ( std::uint32_t k = 0; k < 25; ++k )
@@ -492,22 +491,28 @@ inline bool verify_pfx_run( )
         if ( bad )
         {
             ++failed;
-            LOG_ERROR( "pfx_run step %d (operation %u): %d differences", static_cast< int >( i ), code, bad );
+            LOG_ERROR( "%s step %d (operation %u): %d differences", tag, static_cast< int >( i ), code, bad );
         }
     }
     if ( run.frame.unrecreated != 0 )
     {
         ++failed;
-        LOG_ERROR( "pfx_run reached %d unrecreated paths", run.frame.unrecreated );
+        LOG_ERROR( "%s reached %d unrecreated paths", tag, run.frame.unrecreated );
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "VuPfx systems end to end (create, start, the real pattern / fountain / tick-process frames, stop, release) match "
-                     "retail's memory over %d operations (up to %d live particles), %d words",
-            static_cast< int >( nops ), particles, compared );
+        LOG_SUCCESS( "%s: VuPfx systems end to end (create, start, the real pattern / fountain / tick-process frames, stop, release) "
+                     "match retail's memory over %d operations (up to %d live particles), %d words",
+            tag, static_cast< int >( nops ), particles, compared );
     else
-        LOG_ERROR( "pfx_run FAILED %d of %d steps", failed, static_cast< int >( nops ) + 1 );
+        LOG_ERROR( "%s FAILED %d of %d steps", tag, failed, static_cast< int >( nops ) + 1 );
     return failed == 0;
 }
+
+inline bool verify_pfx_run( ) { return pfx_check_run( g_golden_prn_words, "pfx_run" ); }
+
+// The trail pattern's tick 0x58F0C0 (pfxsim.hxx pfx_heap_trail_tick) in the same end-to-end run (case pfx_trail: pfx_run's
+// harness with trail patterns and their generic processes among the quad / geom ones).
+inline bool verify_pfx_trail( ) { return pfx_check_run( g_golden_ptr_words, "pfx_trail" ); }
 
 // The water classes' getType slots (world/surface.hxx g_water_types) against retail (case water_types): per slot the
 // descriptor it returns and the chain of names its descriptor walks to.
@@ -821,6 +826,7 @@ inline bool verify_pfx_all( )
     ok = verify_pfx_load( ) && ok;
     ok = verify_water_types( ) && ok;
     ok = verify_pfx_run( ) && ok;
+    ok = verify_pfx_trail( ) && ok;
     ok = verify_pfx_lifecycle( ) && ok;
     ok = verify_pattern_draw( ) && ok;
     ok = verify_fountain_init( ) && ok;

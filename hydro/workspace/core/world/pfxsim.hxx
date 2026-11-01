@@ -461,6 +461,8 @@ inline void pfx_system_tick( pfx_heap_t& h, std::uint32_t s, float dt, const pfx
 // size (slot 8) exceeds the particle block size (+0x5C) or none is free, else
 // popped, the node's slot 9 init on it, +0x60 counted - and 0x58B570 puts it
 // at the first end of the pattern's list.
+inline std::uint32_t pfx_particle_obtain( pfx_heap_t& h, std::uint32_t r, std::uint32_t node );
+inline void pfx_particle_push_first( pfx_heap_t& h, std::uint32_t pattern, std::uint32_t p );
 inline std::uint32_t pfx_particle_allocate( pfx_heap_t& h, std::uint32_t r, std::uint32_t pattern )
 {
     if ( h[ h[ pattern + 0x0C ] + 0x7C ] != 1u )
@@ -469,6 +471,18 @@ inline std::uint32_t pfx_particle_allocate( pfx_heap_t& h, std::uint32_t r, std:
     const std::uint32_t max = h[ node + 0x30 ];
     if ( max != 0u && static_cast< std::int32_t >( h[ pattern + 0x28 ] ) >= static_cast< std::int32_t >( max ) )
         return 0u;
+    const std::uint32_t p = pfx_particle_obtain( h, r, node );
+    if ( p == 0u )
+        return 0u;
+    pfx_particle_push_first( h, pattern, p );
+    return p;
+}
+
+// 0x58B8E0( node ) on the resources: 0 when the node's particle size (slot 8)
+// exceeds the particle block size (+0x5C) or none is free; else popped, the
+// node's slot 9 init, +0x60 counted.
+inline std::uint32_t pfx_particle_obtain( pfx_heap_t& h, std::uint32_t r, std::uint32_t node )
+{
     const pfx_class_t* c = pfx_node_class( h, node );
     if ( c == nullptr || c->particle_size > h[ r + 0x5C ] )
         return 0u;
@@ -477,6 +491,12 @@ inline std::uint32_t pfx_particle_allocate( pfx_heap_t& h, std::uint32_t r, std:
         return 0u;
     pfx_particle_class( c->particle, h.find( p ) );
     ++h[ r + 0x60 ];
+    return p;
+}
+
+// 0x58B570: a particle onto a pattern's list at its first end.
+inline void pfx_particle_push_first( pfx_heap_t& h, std::uint32_t pattern, std::uint32_t p )
+{
     const std::uint32_t first = h[ pattern + 0x20 ];
     h[ p + 4 ] = 0u;
     if ( first != 0u )
@@ -491,7 +511,6 @@ inline std::uint32_t pfx_particle_allocate( pfx_heap_t& h, std::uint32_t r, std:
     }
     ++h[ pattern + 0x28 ];
     h[ pattern + 0x20 ] = p;
-    return p;
 }
 
 // The pattern's slots 5 / 6 0x58B530 / 0x58B550: the spawn and draw matrices -
@@ -663,6 +682,198 @@ inline void pfx_process_tick( pfx_heap_t& h, std::uint32_t r, std::uint32_t b, f
     }
 }
 
+// VuPfxTrailPatternInstance's slot 1 0x58F0C0 (instance vtable 0x7502C0; +0x4C
+// the spawn accumulator, +0x50 the trail clock, +0x54 the newest particle).
+// Node: +0x30 Max Particle Count (here the spawn rate's numerator), +0x34
+// Space, +0x38 Start Delay, +0x40 Lifespan, +0x44 Fade In Time, +0x48 Fade Out
+// Start Time, +0x4C .. +0x4F Color bytes, +0x50 Width, +0x54 .. +0x5C Linear
+// Velocity, +0x64 Spawn Distance, +0x80 Tex Coord Rate. A trail particle: +8
+// position (4 words), +0x18 velocity, +0x28 .. +0x34 colour (alpha +0x34),
+// +0x38 width, +0x3C age, +0x40 lifespan, +0x44 .. +0x50 the spawn matrix's
+// row 0, +0x54 the texture coordinate.
+// Past the system clock's Start Delay: while emitting (state 1) the
+// accumulator gains (Max Particle Count / Lifespan) x dt; when positive, +0x54
+// = 0 and, any viewport within Spawn Distance (squared, strict) of the system
+// position +0x4C, a particle by 0x58B8E0 (the pool's pop + slot 9 init) put at
+// the list's first end (0x58B570) as +0x54; then the accumulator loses 1.0
+// until it is not positive. Every particle integrates (position += velocity x
+// dt, age += dt, alpha = min(clamp01(age / Fade In), clamp01((Lifespan - age)
+// x 1 / fade)) x A, fade = max(Lifespan - Fade Out Start, 0), A = alpha byte /
+// 255), the processes tick, the newest particle (still emitting; else +0x54 =
+// 0) takes the spawn matrix's (pfx_pattern_spawn_matrix) row 3 as position,
+// the velocity through its 3x3, the colour, width, lifespan, age = max(Lifespan
+// - clock, 0), alpha as above but (Lifespan - age) / fade (a divss) and at least
+// FLT_EPSILON, row 0, -(Tex Coord Rate x clock). With two or more particles the
+// LAST one is retired when the one before it has alpha <= 0 (a NaN keeps it); with one,
+// once no longer emitting, it is. The clock gains dt (reset to 0 unless
+// emitting). The AABB: per particle its position through the draw matrix,
+// widened by width x 0.5; none - all 0.
+// UNKNOWN (stack words, never compared): particle +0x24 (velocity w), the AABB
+// pads +0x38 / +0x48.
+inline void pfx_heap_trail_tick( pfx_heap_t& h, std::uint32_t r, std::uint32_t pattern, float dt, pfx_frame_t& f )
+{
+    const std::uint32_t s = h[ pattern + 0x0C ];
+    const std::uint32_t node = h[ pattern + 0x10 ];
+    auto mn = []( float a, float b ) { return _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); };
+    auto mx = []( float a, float b ) { return _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); };
+    auto gt = []( float a, float b ) { return _mm_comigt_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) != 0; };
+    const float k255 = 0.003921568859368563f;   // 0x3B808081
+    if ( gt( h.f( s + 0xA4 ), h.f( node + 0x38 ) ) )
+    {
+        const float lifespan = h.f( node + 0x40 );
+        const float alpha = static_cast< float >( static_cast< std::int32_t >( h[ node + 0x4C ] >> 24 ) ) * k255;
+        const float fade = mx( lifespan - h.f( node + 0x48 ), 0.0f );
+        if ( h[ s + 0x7C ] == 1u )
+        {
+            float acc = ( ( static_cast< float >( static_cast< std::int32_t >( h[ node + 0x30 ] ) ) / lifespan ) * dt ) + h.f( pattern + 0x4C );
+            h.set( pattern + 0x4C, acc );
+            if ( gt( acc, 0.0f ) )
+            {
+                bool in_range = false;
+                const float d2 = h.f( node + 0x64 ) * h.f( node + 0x64 );
+                for ( int c = 0; c < f.camera_count; ++c )
+                {
+                    const float dx = f.cameras[ 3 * c ] - h.f( s + 0x4C );
+                    const float dy = f.cameras[ 3 * c + 1 ] - h.f( s + 0x50 );
+                    const float dz = f.cameras[ 3 * c + 2 ] - h.f( s + 0x54 );
+                    if ( gt( d2, ( ( dx * dx ) + ( dy * dy ) ) + ( dz * dz ) ) )
+                        in_range = true;
+                }
+                h[ pattern + 0x54 ] = 0u;
+                if ( in_range )
+                {
+                    const std::uint32_t p = pfx_particle_obtain( h, r, node );
+                    if ( p != 0u )
+                    {
+                        pfx_particle_push_first( h, pattern, p );
+                        h[ pattern + 0x54 ] = p;
+                    }
+                }
+                acc = h.f( pattern + 0x4C );
+                if ( gt( acc, 0.0f ) )
+                {
+                    do
+                        acc = acc - 1.0f;
+                    while ( gt( acc, 0.0f ) );
+                    h.set( pattern + 0x4C, acc );
+                }
+            }
+        }
+        if ( h[ pattern + 0x20 ] != 0u )
+        {
+            const float inv = 1.0f / fade;
+            for ( std::uint32_t n = h[ pattern + 0x20 ]; n != 0u; n = h[ n ] )
+            {
+                const float vy = h.f( n + 0x1C ) * dt, vz = h.f( n + 0x20 ) * dt;
+                h.set( n + 0x08, h.f( n + 0x08 ) + ( h.f( n + 0x18 ) * dt ) );
+                h.set( n + 0x0C, h.f( n + 0x0C ) + vy );
+                h.set( n + 0x10, h.f( n + 0x10 ) + vz );
+                const float age = h.f( n + 0x3C ) + dt;
+                h.set( n + 0x3C, age );
+                const float b1 = mx( 0.0f, mn( 1.0f, age / h.f( node + 0x44 ) ) );
+                const float b2 = mx( 0.0f, mn( 1.0f, ( h.f( node + 0x40 ) - age ) * inv ) );
+                h.set( n + 0x34, mn( b1, b2 ) * alpha );
+            }
+        }
+        for ( std::uint32_t b = h[ pattern + 0x14 ]; b != 0u; b = h[ b + 4 ] )
+            pfx_process_tick( h, r, b, dt, f );
+        const std::uint32_t p = h[ pattern + 0x54 ];
+        if ( p != 0u )
+        {
+            if ( h[ s + 0x7C ] == 1u )
+            {
+                static const float identity[ 16 ] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+                float m[ 16 ];
+                const std::uint32_t at = pfx_pattern_spawn_matrix( h, pattern );
+                for ( int k = 0; k < 16; ++k )
+                    m[ k ] = at != 0u ? h.f( at + 4 * k ) : identity[ k ];
+                for ( int k = 0; k < 4; ++k )
+                    h.set( p + 0x08 + 4 * k, m[ 12 + k ] );
+                const float vx = h.f( node + 0x54 ), vy = h.f( node + 0x58 ), vz = h.f( node + 0x5C );
+                h.set( p + 0x18, ( ( m[ 4 ] * vy ) + ( m[ 0 ] * vx ) ) + ( m[ 8 ] * vz ) );
+                h.set( p + 0x1C, ( ( m[ 1 ] * vx ) + ( m[ 5 ] * vy ) ) + ( m[ 9 ] * vz ) );
+                h.set( p + 0x20, ( ( m[ 2 ] * vx ) + ( m[ 6 ] * vy ) ) + ( m[ 10 ] * vz ) );
+                for ( int k = 0; k < 4; ++k )
+                    h.set( p + 0x28 + 4 * k, static_cast< float >( static_cast< std::int32_t >( ( h[ node + 0x4C ] >> ( 8 * k ) ) & 0xFFu ) ) * k255 );
+                h[ p + 0x38 ] = h[ node + 0x50 ];
+                h[ p + 0x40 ] = h[ node + 0x40 ];
+                const float age = mx( h.f( node + 0x40 ) - h.f( pattern + 0x50 ), 0.0f );
+                h.set( p + 0x3C, age );
+                const float b1 = mx( 0.0f, mn( 1.0f, age / h.f( node + 0x44 ) ) );
+                const float b2 = mx( 0.0f, mn( 1.0f, ( h.f( node + 0x40 ) - age ) / fade ) );
+                h.set( p + 0x34, mx( mn( b1, b2 ) * alpha, 1.1920928955078125e-07f ) );
+                for ( int k = 0; k < 4; ++k )
+                    h.set( p + 0x44 + 4 * k, m[ k ] );
+                const float tex = h.f( node + 0x80 ) * h.f( pattern + 0x50 );
+                std::uint32_t bits;
+                std::memcpy( &bits, &tex, 4 );
+                h[ p + 0x54 ] = bits ^ 0x80000000u;   // xorps with the sign mask 0x6F7CD0
+            }
+            else
+                h[ pattern + 0x54 ] = 0u;
+        }
+        const std::uint32_t count = h[ pattern + 0x28 ];
+        if ( static_cast< std::int32_t >( count ) >= 2 )
+        {
+            const std::uint32_t last = h[ pattern + 0x24 ];
+            const std::uint32_t prev = h[ last + 4 ];
+            if ( _mm_comige_ss( _mm_setzero_ps( ), _mm_set_ss( h.f( prev + 0x34 ) ) ) )   // comiss 0, alpha; jb keeps (NaN kept)
+            {
+                pfx_particle_unlink_last( h, pattern );
+                pfx_particle_free( h, r, last );
+            }
+        }
+        else if ( h[ s + 0x7C ] != 1u && count == 1u )
+        {
+            pfx_particle_free( h, r, h[ pattern + 0x20 ] );
+            h[ pattern + 0x20 ] = 0u;
+            h[ pattern + 0x24 ] = 0u;
+            h[ pattern + 0x28 ] = 0u;
+            h[ pattern + 0x54 ] = 0u;
+        }
+        h.set( pattern + 0x50, dt + h.f( pattern + 0x50 ) );
+        if ( h[ s + 0x7C ] != 1u )
+            h[ pattern + 0x50 ] = 0u;
+    }
+    if ( h[ pattern + 0x28 ] == 0u )
+    {
+        for ( std::uint32_t o : { 0x2Cu, 0x30u, 0x34u, 0x3Cu, 0x40u, 0x44u } )
+            h[ pattern + o ] = 0u;
+        return;
+    }
+    const float big = 3.4028235e38f;
+    float lo[ 3 ] = { big, big, big }, hi[ 3 ] = { -big, -big, -big };
+    for ( int k = 0; k < 3; ++k )
+    {
+        h.set( pattern + 0x2C + 4 * k, lo[ k ] );
+        h.set( pattern + 0x3C + 4 * k, hi[ k ] );
+    }
+    static const float identity[ 16 ] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+    float m[ 16 ];
+    const std::uint32_t at = pfx_pattern_draw_matrix( h, pattern );
+    for ( int k = 0; k < 16; ++k )
+        m[ k ] = at != 0u ? h.f( at + 4 * k ) : identity[ k ];
+    for ( std::uint32_t n = h[ pattern + 0x20 ]; n != 0u; n = h[ n ] )
+    {
+        const float px = h.f( n + 0x08 ), py = h.f( n + 0x0C ), pz = h.f( n + 0x10 );
+        const float x = ( ( ( px * m[ 0 ] ) + ( py * m[ 4 ] ) ) + ( m[ 8 ] * pz ) ) + m[ 12 ];
+        const float y = ( ( ( px * m[ 1 ] ) + ( py * m[ 5 ] ) ) + ( m[ 9 ] * pz ) ) + m[ 13 ];
+        const float z = ( ( ( m[ 2 ] * px ) + ( m[ 6 ] * py ) ) + ( m[ 10 ] * pz ) ) + m[ 14 ];
+        const float rr = h.f( n + 0x38 ) * 0.5f;
+        lo[ 0 ] = mn( lo[ 0 ], x - rr );
+        lo[ 1 ] = mn( lo[ 1 ], y - rr );
+        lo[ 2 ] = mn( lo[ 2 ], z - rr );
+        hi[ 0 ] = mx( hi[ 0 ], x + rr );
+        hi[ 1 ] = mx( hi[ 1 ], y + rr );
+        hi[ 2 ] = mx( hi[ 2 ], z + rr );
+        for ( int k = 0; k < 3; ++k )
+        {
+            h.set( pattern + 0x2C + 4 * k, lo[ k ] );
+            h.set( pattern + 0x3C + 4 * k, hi[ k ] );
+        }
+    }
+}
+
 // The quad / geom pattern instances' slot 1 (0x591C30 / 0x58FEA0; world/pfx.hxx
 // pfx_pattern_tick, the same body on the heap): past the system clock's Start
 // Delay (params +0x38) integrate every particle, run every process's slot 1
@@ -672,9 +883,14 @@ inline void pfx_heap_pattern_tick( pfx_heap_t& h, std::uint32_t r, std::uint32_t
     const std::uint32_t s = h[ pattern + 0x0C ];
     const std::uint32_t node = h[ pattern + 0x10 ];
     const std::uint32_t vt = h[ pattern ];
+    if ( vt == 0x7502C0u )
+    {
+        pfx_heap_trail_tick( h, r, pattern, dt, f );
+        return;
+    }
     if ( vt != 0x7505D8u && vt != 0x750354u )
     {
-        ++f.unrecreated;   // the trail pattern's tick 0x58F0C0
+        ++f.unrecreated;
         return;
     }
     const bool geom = vt == 0x750354u;
