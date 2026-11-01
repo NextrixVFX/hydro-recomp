@@ -2432,6 +2432,84 @@ inline bool verify_boat_rtti( )
     return false;
 }
 
+// VuHumanDriver's explosion listener (0x40F4F0 / 0x40F520 / 0x40F5A0) and slots 6 / 7 / 20 against retail (oracle case
+// human_explosion): the camera's shake words, the rumble pair, the radius and position bits, the hooks and arguments.
+inline bool verify_human_explosion( )
+{
+    const unsigned* g = g_golden_human_explosion_words;
+    const unsigned listener = *g++, nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++, null = *g++;
+        std::uint8_t drv[ 0x100 ] = { }, boat[ 0x300 ] = { }, cam[ 0x300 ] = { }, tr[ 0xA0 ] = { }, params[ 0x40 ] = { };
+        std::memcpy( drv + 0xC8, g, 8 );
+        g += 2;
+        std::memcpy( boat + 0x270, g, 12 );
+        std::memcpy( boat + 0x280, g + 4, 12 );
+        g += 7;
+        std::memcpy( cam + 0x2E4, g, 28 );
+        g += 7;
+        std::memcpy( tr + 0x80, g, 16 );
+        g += 4;
+        std::memcpy( params + 0x18, g, 28 );
+        g += 7;
+        float scale;
+        std::memcpy( &scale, g++, 4 );
+        const unsigned ret = *g++;
+        const unsigned* out = g;
+        g += 4;
+        const unsigned* drv_after = g;
+        g += 2;
+        const unsigned* cam_after = g;
+        g += 7;
+        std::vector< std::vector< unsigned > > glog( *g++ );
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        std::vector< std::vector< unsigned > > log;
+        bool same = true;
+        if ( fn == 1 )
+            human_explosion_hit( drv, cam, params, scale, [ & ]( float f ) { unsigned u; std::memcpy( &u, &f, 4 ); log.push_back( { 3u, u } ); } );
+        else if ( fn == 2 )
+        {
+            const float r = human_explosion_radius( boat );
+            unsigned u;
+            std::memcpy( &u, &r, 4 );
+            same = u == ret;
+        }
+        else if ( fn == 3 )
+        {
+            float p[ 4 ];
+            human_explosion_position( tr, p );
+            same = std::memcmp( p, out, 16 ) == 0;
+        }
+        else if ( fn == 20 )
+            human_recovered( [ & ]( std::uint32_t h, std::uint32_t size ) { log.push_back( { 4u, h, size } ); } );
+        else
+        {
+            auto rec = [ & ]( std::uint8_t* l ) { log.push_back( { fn == 6 ? 1u : 2u, l == drv + 0x80 ? listener : l ? 1u : 0u } ); };
+            if ( fn == 6 )
+                human_game_initialize( null ? nullptr : drv, rec );
+            else
+                human_game_release( null ? nullptr : drv, rec );
+        }
+        same = same && log == glog && std::memcmp( drv + 0xC8, drv_after, 8 ) == 0 && std::memcmp( cam + 0x2E4, cam_after, 28 ) == 0;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "human_explosion vector %u (function %u): %zu calls (%zu), amplitude 0x%X (retail 0x%X)", v, fn, log.size( ), glog.size( ),
+                       contact_u32( cam, 0x2E4 ), cam_after[ 0 ] );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuHumanDriver's explosion listener 0x40F4F0 / 0x40F520 / 0x40F5A0 and slots 6 / 7 / 20 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "human_explosion FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -2460,5 +2538,6 @@ inline bool verify_race_all( )
     ok = verify_nuisance_start( ) && ok;
     ok = verify_contact_added( ) && ok;
     ok = verify_boat_rtti( ) && ok;
+    ok = verify_human_explosion( ) && ok;
     return ok;
 }
