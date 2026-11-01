@@ -5,8 +5,10 @@
 #include <workspace/core/boat/load.hxx>
 #include <workspace/core/boat/meshes.hxx>
 #include <workspace/core/boat/respawn.hxx>
+#include <workspace/core/boat/thunk.hxx>
 #include <workspace/core/dynamics/contact.hxx>
 #include <workspace/core/ui/config.hxx>
+#include <workspace/core/world/bodies.hxx>
 #include <workspace/core/world/dynamics.hxx>
 #include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/start.hxx>
@@ -63,6 +65,8 @@ struct race_session_boat_t
     std::string stop;         // where it stopped (UNKNOWN), when it did
     std::string name, boat, skin;
     boat_mesh_library_t meshes;   // the collision / fluids meshes the sections load created
+    std::unique_ptr< boat_thunk_t > thunk;   // the step callback's context (boat/thunk.hxx), persistent
+    std::vector< std::uint32_t > excluded;   // the solver's +0x34 array words this step
     std::uint8_t draw_added = 0, instigator_registered = 0;
     // The hull draw (c_world): each model instance's placements, the one shown.
     std::vector< int > placements[ 3 ];
@@ -141,6 +145,9 @@ struct race_session_t
     // g_vudynamicsimpl 0x75900C: the dynamics world (world/dynamics.hxx), made before the boats as the engine
     // init 0x566230 makes it; its DynamicsSync / DynamicsKick ticks registered first in their phases.
     std::unique_ptr< race_dynamics_t > dynamics;
+    // The level's static bodies (world/bodies.hxx) and their collision mesh assets.
+    boat_mesh_library_t level_meshes;
+    std::vector< std::unique_ptr< level_body_t > > level_bodies;
 };
 
 // The Decision tick 0x41EFF0 and the Viewports tick 0x4AB0A0 composed on the
@@ -338,8 +345,46 @@ inline void race_session_enable( race_session_t& s, race_session_boat_t& b, bool
         };
         race_step_callback_t cb;
         cb.slot0 = []( float, bool ) {};   // 0x410B30: ret 8
-        cb.unwired = "the boat's step callback tickThunk 0x41E5E0 (the hull update 0x416D20, 0x414010, 0x4219C0) has no context "
-                     "composed from the race's boat images - the dynamics frame (DynamicsKick / DynamicsSync) is STOPPED (UNKNOWN)";
+        // Slot 1 tickThunk 0x41E5E0: the boat agent's builder (boat/thunk.hxx) on this boat's images, one persistent
+        // boat_thunk_t per boat (the solver's records live in it). The water is the world's query view of VuWater,
+        // refreshed per frame (none: UNKNOWN, not stepped); the gravity g_vudynamicsimpl vt+0x1C = the world's.
+        // A VuWater wave pointer in the images (hull +0x1DC / +0x1E0, the solver's excluded array) has no index
+        // here: the build refuses it (UNKNOWN, `why`).
+        b.thunk = std::make_unique< boat_thunk_t >( );
+        cb.slot1 = [ &s, &b, &d ]( float dt ) {
+            boat_thunk_in_t in;
+            std::uint8_t* boat_image = b.graph.objects[ 0 ].image.data( );
+            const int hull_k = race_session_ref( b.graph, 0, 0x228 );
+            in.boat = boat_image;
+            in.hull = race_session_image( b, 0, 0x228 );
+            in.solver = race_session_image( b, hull_k, 0x1CC );
+            in.transform = race_session_image( b, 0, 0x50 );
+            in.engine = &b.engine;
+            in.body = &b.body.body;
+            if ( !in.hull || !in.solver || !in.transform || !s.world.view )
+            {
+                race_unwired( s, "the boat's tickThunk 0x41E5E0: no hull / solver / transform image or no VuWater view - the step is UNKNOWN (not run)" );
+                return;
+            }
+            in.fluids = b.meshes.fluids_of( load_word( in.solver, 0 ) );
+            boat_thunk_water( in, *s.world.view );
+            in.gravity = []( void* u, float* out ) {
+                std::memcpy( out, static_cast< race_dynamics_t* >( u )->world.gravity, 12 );
+                return true;
+            };
+            in.gravity_user = &d;
+            in.wave_index = []( std::uint32_t ) { return -2; };
+            const std::int32_t excluded = static_cast< std::int32_t >( load_word( in.solver, 0x30 ) );
+            const int solver_k = race_session_ref( b.graph, hull_k, 0x1CC );
+            const std::uint8_t* array = race_session_image( b, solver_k, 0x34 );
+            b.excluded.clear( );
+            if ( excluded > 0 && array )
+                for ( std::int32_t k = 0; k < excluded; ++k )
+                    b.excluded.push_back( load_word( array, 4 * k ) );
+            in.solver_excluded = b.excluded.empty( ) ? nullptr : b.excluded.data( );
+            if ( !boat_thunk_step( *b.thunk, in, dt ) )
+                race_unwired( s, "the boat's tickThunk 0x41E5E0: " + b.thunk->why );
+        };
         d.callbacks[ tick ] = cb;
     }
     const bool ok = on ? boat_enable( d.impl, boat[ 0x2A0 ], b.body, tick ) : boat_disable( d.impl, boat[ 0x2A0 ], b.body, tick );
@@ -348,11 +393,104 @@ inline void race_session_enable( race_session_t& s, race_session_boat_t& b, bool
                             : "the boat's slot 18 0x421940 reached a dynamics path not modelled - UNKNOWN" );
 }
 
+// The level's gameInitialize as 0x4BA060 runs it after the boat load (0x4BA322:
+// VuEntity::gameInitialize 0x500B10 on the project root): post-order - each
+// entity's children first (+0x38 order), then its own vt slot 6, skipped when
+// +0x14 bit 2 (already initialised) is set; before that, unless +0x14 bit 3,
+// g 0x759080 vt+0x20 (the entity registration - a hook here) and each
+// component's vt+0x24 (VuRigidBodyComponent's: a nop). RECREATED: VuPropEntity's
+// slot 6 0x546910 (world/bodies.hxx) - the level's static bodies into the race's
+// dynamics world (g_vudynamicsimpl slot 15). Every other type's slot 6 is not
+// recreated: counted, logged once (UNKNOWN). The collision mesh assets come
+// from the pack (boat meshes.hxx's library - its factory substitution; retail's
+// asset property creates them at load, 0x545200, here at the build). The
+// VuRigidBody ids (the debug global 0x759030) continue from one per boat
+// (FLAGGED: the boat ctor's own count is the boat agent's, seeded 0).
+inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const c_archive& archive )
+{
+    if ( !s.dynamics )
+        return;
+    race_dynamics_t& d = *s.dynamics;
+    s.level_meshes.read_user = const_cast< c_archive* >( &archive );
+    s.level_meshes.read = []( void* u, const std::string& asset, std::vector< std::uint8_t >& blob ) {
+        return static_cast< const c_archive* >( u )->read( asset.c_str( ), blob );
+    };
+    s.level_meshes.surfaces = s.surfaces_built ? &s.surfaces : nullptr;
+    bodies_hooks_t hooks;
+    hooks.user = &s;
+    hooks.surface = []( void* u, const std::string& n ) -> std::uint8_t {
+        race_session_t& r = *static_cast< race_session_t* >( u );
+        return r.surfaces_built ? surface_id( r.surfaces, n.c_str( ) ) : 0;
+    };
+    hooks.gravity = []( void* u, float* g ) { std::memcpy( g, static_cast< race_session_t* >( u )->dynamics->world.gravity, 12 ); };
+    std::uint32_t id = static_cast< std::uint32_t >( s.boats.size( ) );
+    std::map< std::string, int > unknown;
+    int added = 0;
+    const auto walk = [ & ]( const auto& self, entity_t& e ) -> void
+    {
+        for ( auto& c : e.m_children )
+            self( self, *c );
+        if ( e.m_type != "VuPropEntity" )
+        {
+            ++unknown[ e.m_type.empty( ) ? std::string( "(UNKNOWN node)" ) : e.m_type ];
+            return;
+        }
+        rigid_component_state_t* rs = nullptr;
+        for ( entity_component_t& c : e.m_components )
+            if ( c.m_vtable == k_rigid_body_component_vtable )
+                rs = static_cast< rigid_component_state_t* >( c.m_state.get( ) );
+        const transform_component_t* t = entity_transform( e );
+        if ( !rs || !t || !e.m_state || e.m_world_unknown )
+        {
+            race_unwired( s, "a VuPropEntity without its component state / known world - its gameInitialize 0x546910 not run (UNKNOWN)" );
+            return;
+        }
+        rigid_component_t& c = rs->value;
+        const collision_mesh_asset_t* asset = nullptr;
+        if ( !c.mesh_asset.empty( ) && boat_mesh_exists( &s.level_meshes, "VuCollisionMeshAsset", c.mesh_asset ) )
+            asset = s.level_meshes.collision_of( boat_mesh_create( &s.level_meshes, "VuCollisionMeshAsset", c.mesh_asset ) );
+        auto b = std::make_unique< level_body_t >( );
+        b->name = e.m_name;
+        level_body_t* bp = b.get( );
+        std::string why;
+        const std::uint8_t visible = static_cast< prop_entity_state_t* >( e.m_state.get( ) )->visible;
+        const bool ok = bodies_prop_game_initialize( *bp, c, visible, asset, t->world, t->scale, id, hooks, [] { /* g 0x7590B8 vt+0x28: the renderer */ },
+            [ & ]( level_body_t& lb ) {
+                d.objects[ &lb.body ] = &lb.collision;
+                return vu_dynamics_add_rigid_body( d.impl, lb.body );
+            },
+            why );
+        if ( !ok )
+            race_unwired( s, "VuPropEntity '" + e.m_name + "': " + why + " (UNKNOWN, no body)" );
+        if ( bp->in_world )
+            ++added;
+        s.level_bodies.push_back( std::move( b ) );
+    };
+    walk( walk, tree );
+    LOG_INFO( "race: the level's gameInitialize: %d static bodies added to the dynamics world (VuPropEntity 0x546910)", added );
+    std::string rest;
+    for ( const auto& u : unknown )
+        rest += ( rest.empty( ) ? "" : ", " ) + u.first + " x" + std::to_string( u.second );
+    if ( !rest.empty( ) )
+        race_unwired( s, "the level's gameInitialize (0x500B10): slot 6 not recreated for " + rest + " (UNKNOWN)" );
+}
+
 // The DynamicsSync / DynamicsKick ticks 0x4F8A20 / 0x4F8A90 (world/dynamics.hxx).
 inline void race_session_dynamics_sync( void* user, float dt )
 {
     race_session_t& s = *static_cast< race_session_t* >( user );
+    const int before = s.dynamics->syncs;
     race_dynamics_sync( *s.dynamics, dt );
+    // A trace (not retail): each boat's transform world position at a few sync counts.
+    const int n = s.dynamics->syncs;
+    if ( n != before && ( n == 1 || n == 10 || n == 30 || n == 60 || n == 120 || n == 240 || n == 480 ) )
+        for ( const auto& b : s.boats )
+            if ( const std::uint8_t* t = race_session_image( *b, 0, 0x50 ) )
+            {
+                float p[ 3 ];
+                std::memcpy( p, t + 0x50 + 48, 12 );
+                LOG_INFO( "race: sync %d: %s at (%.3f, %.3f, %.3f)", n, b->name.c_str( ), p[ 0 ], p[ 1 ], p[ 2 ] );
+            }
 }
 
 inline void race_session_dynamics_kick( void* user, float dt )
@@ -565,6 +703,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     if ( s.stopped_transform )
         LOG_WARNING( "race: the transform-changed delegate 0x421670 STOPPED (UNKNOWN) on %d boat(s) - it reads the sections load's +0x290 centre",
                      s.stopped_transform );
+    race_session_level_bodies( s, tree, archive );
 
     // The tick manager (ctor 0x4F6F60, slot 5 0x4F7050) and the AI manager's tick.
     tick_manager_init( s.ticks );
@@ -619,10 +758,19 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         return false;
     }
     race_start_hooks_t sh;
+    // The placement's notify: the transform's watcher +0xC0 = the transform-changed delegate 0x421670
+    // (boat_transform_changed: the body to the new world), as the nuisance boats' place_child runs it.
     sh.transform_changed = [ &s ]( int k )
     {
-        if ( !s.boats[ static_cast< std::size_t >( k ) ]->sections )
+        race_session_boat_t& r = *s.boats[ static_cast< std::size_t >( k ) ];
+        std::uint8_t* t = race_session_image( r, 0, 0x50 );
+        if ( !r.sections || !t )
+        {
             ++s.stopped_transform;
+            return;
+        }
+        boat_transform_changed( r.graph.objects[ 0 ].image.data( ), reinterpret_cast< const float* >( t + 0x50 ), r.body, r.io.camera,
+                                r.io.instigator, boat_transform_hooks_t{ } );
     };
     sh.game_initialize = [ &s ]( int k )
     {

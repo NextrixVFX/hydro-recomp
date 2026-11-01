@@ -145,15 +145,13 @@ inline bool boat_motion_set( const std::uint8_t* boat, std::uint8_t* transform, 
 // the non-async configuration orders it. The clock and the profiler are not
 // modelled (platform / dev).
 //
-// A step callback this composition cannot run (the boat's tickThunk 0x41E5E0
-// has no context in the race yet) STOPS the frame: no step and no sync run
-// (UNKNOWN, logged by the caller) - Bullet without the hull's forces is not
-// retail's world.
+// The boat's step callback (slot 1 tickThunk 0x41E5E0) is the boat agent's
+// builder (boat/thunk.hxx), wired by session.hxx; a step it cannot run is
+// logged there (UNKNOWN) and that boat gets no forces that substep.
 struct race_step_callback_t
 {
     std::function< void( float, bool ) > slot0;
     std::function< void( float ) > slot1;
-    std::string unwired;   // non-empty: not runnable here, and why
 };
 
 struct race_dynamics_t
@@ -211,8 +209,10 @@ inline void race_dynamics_init( race_dynamics_t& d, const contact_callbacks_t* c
     d.impl.hooks.world_add = []( void* u, vu_rigid_body_t& b, std::int32_t group, std::int32_t mask ) {
         race_dynamics_t& r = *static_cast< race_dynamics_t* >( u );
         const auto it = r.objects.find( &b );
+        // has_motion: the body's +0x1F4 motion state (the boat's +0x5C; a level prop's is 0).
         return it != r.objects.end( ) &&
-               world_add_rigid_body( r.world, r.collision, *it->second, true, static_cast< short >( group ), static_cast< short >( mask ) ) == 1;
+               world_add_rigid_body( r.world, r.collision, *it->second, r.motion.count( &b.body ) != 0, static_cast< short >( group ),
+                                     static_cast< short >( mask ) ) == 1;
     };
     d.impl.hooks.manifold_count = []( void* u ) { return static_cast< int >( static_cast< race_dynamics_t* >( u )->collision.dispatcher.manifolds.size( ) ); };
     d.impl.hooks.manifold_bodies = []( void* u, int i, vu_rigid_body_t*& b0, vu_rigid_body_t*& b1 ) {
@@ -233,12 +233,6 @@ inline void race_dynamics_kick( race_dynamics_t& d, float dt )
 {
     if ( !d.stopped.empty( ) )
         return;
-    for ( void* c : d.impl.step_callbacks )
-        if ( !d.callbacks[ c ].unwired.empty( ) )
-        {
-            d.stopped = d.callbacks[ c ].unwired;
-            return;
-        }
     d.dt = dt;
     d.impl.pending = 1;
     if ( d.dt > 0.0f )

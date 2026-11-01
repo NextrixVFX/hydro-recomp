@@ -2375,9 +2375,184 @@ inline bool verify_water_surface_under( )
     return failed == 0;
 }
 
+// The level's static collision bodies (world/bodies.hxx, engine entity/rigid.hxx) against retail's VuPropEntity
+// create + VuEntity::load + gameInitialize 0x546910 (oracle case prop_rigid_bodies) on every VuPropEntity of
+// VuTemplateAsset/Levels/Hydroelectric, loaded here through hydro's tree from Base.apf, its collision meshes from
+// the pack (meshes.hxx). Compared: the component's 13 load words + Initially Active, its +0xD0 / +0xD4 / +0xD8
+// after, whether a body was built, the shape's type / margin / local aabb, the body's 0x2D4 bytes (pointer words
+// masked), whether it was drawn / added, the prop's Initially Visible. The surface hook answers as the case's
+// fake did (1 + the order a name was first asked); the VuRigidBody id seed is the body's own (the global 0x759030
+// is restored per call in the emulator).
+inline bool verify_prop_rigid_bodies( )
+{
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    std::vector< std::uint8_t > bytes;
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) || !archive.read( "VuTemplateAsset/Levels/Hydroelectric", bytes ) )
+    {
+        LOG_ERROR( "verify_prop_rigid_bodies: Base.apf / the Hydroelectric template not readable" );
+        return false;
+    }
+    static std::vector< value_t > documents;
+    documents.push_back( c_reader( bytes ).parse( ) );
+    static const entity_registry_t registry = build_entity_registry( { } );
+    entity_world_t world;
+    world.m_registry = &registry;
+    world.m_ctor_for = entity_ctor_for;
+    world.m_template = []( const std::string& ) -> const value_t* { return nullptr; };
+    world.m_components_for = entity_components_scripted;
+    world.m_component_load = entity_load_component;
+    world.m_component_post = entity_post_load_component;
+    world.m_component_mark = entity_mark_component;
+    world.m_state_for = entity_state_for;
+    world.m_properties_load = entity_load_properties;
+    world.m_properties_mark = entity_mark_properties;
+    std::unique_ptr< entity_t > tree = entity_load_project( member( documents.back( ), "VuProject" ), "Data/Projects/Check.vuprj", world );
+    boat_mesh_library_t lib;
+    lib.read_user = &archive;
+    lib.read = []( void* u, const std::string& key, std::vector< std::uint8_t >& blob ) { return static_cast< c_archive* >( u )->read( key.c_str( ), blob ); };
+    bodies_hooks_t hooks;
+    hooks.surface = []( void*, const std::string& n ) -> std::uint8_t {
+        for ( std::size_t k = 0; k < g_golden_prop_bodies_surface_count; ++k )
+            if ( n == g_golden_prop_bodies_surfaces[ k ] )
+                return static_cast< std::uint8_t >( 1 + k );
+        return 0xEE;
+    };
+    hooks.gravity = []( void*, float* g ) {
+        const std::uint32_t z = 0xC19CE560u;
+        g[ 0 ] = g[ 1 ] = 0.0f;
+        std::memcpy( &g[ 2 ], &z, 4 );
+    };
+    int failed = 0, bodies = 0, words = 0;
+    for ( std::size_t k = 0; k < g_golden_prop_bodies_count && tree; ++k )
+    {
+        const golden_prop_body_t& g = g_golden_prop_bodies[ k ];
+        const unsigned* w = g_golden_prop_bodies_words + g.m_at;
+        entity_t* e = tree.get( );
+        std::string path = g.m_path;
+        std::size_t at = 0;
+        while ( e && at <= path.size( ) )
+        {
+            const std::size_t slash = path.find( '/', at );
+            const std::string part = path.substr( at, slash == std::string::npos ? std::string::npos : slash - at );
+            entity_t* next = nullptr;
+            for ( auto& c : e->m_children )
+                if ( c->m_name == part )
+                    next = c.get( );
+            e = next;
+            if ( slash == std::string::npos )
+                break;
+            at = slash + 1;
+        }
+        rigid_component_state_t* rs = nullptr;
+        if ( e )
+            for ( entity_component_t& c : e->m_components )
+                if ( c.m_vtable == k_rigid_body_component_vtable )
+                    rs = static_cast< rigid_component_state_t* >( c.m_state.get( ) );
+        transform_component_t* t = e ? entity_transform( *e ) : nullptr;
+        if ( !e || !rs || !t || !e->m_state )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "prop bodies: '%s' not found as a VuPropEntity with its components in hydro's tree", g.m_path );
+            continue;
+        }
+        rigid_component_t& c = rs->value;
+        auto bits = []( float f ) { std::uint32_t u; std::memcpy( &u, &f, 4 ); return u; };
+        const std::uint32_t loaded[ 14 ] = { static_cast< std::uint32_t >( c.collision_type ), bits( c.radius ), bits( c.size[ 0 ] ), bits( c.size[ 1 ] ),
+            bits( c.size[ 2 ] ), bits( c.height ), bits( c.offset[ 0 ] ), bits( c.offset[ 1 ] ), bits( c.offset[ 2 ] ), bits( c.linear_damping ),
+            bits( c.angular_damping ), bits( c.linear_sleep ), bits( c.angular_sleep ), c.initially_active };
+        int bad = -1;
+        for ( int i = 0; i < 14 && bad < 0; ++i )
+            if ( loaded[ i ] != w[ i ] )
+                bad = i;
+        if ( c.surface != g.m_surface )
+            bad = 100;
+        const std::uint8_t visible = static_cast< prop_entity_state_t* >( e->m_state.get( ) )->visible;
+        level_body_t b;
+        std::string why;
+        std::uint32_t id = 0;
+        const unsigned* p = w + 18;
+        if ( w[ 17 ] )
+        {
+            const unsigned* body_words = p + 8 + 181;
+            id = body_words[ 0x210 / 4 ];
+        }
+        const collision_mesh_asset_t* asset = nullptr;
+        if ( !c.mesh_asset.empty( ) && boat_mesh_exists( &lib, "VuCollisionMeshAsset", c.mesh_asset ) )
+            asset = lib.collision_of( boat_mesh_create( &lib, "VuCollisionMeshAsset", c.mesh_asset ) );
+        if ( ( asset ? c.mesh_asset : std::string( ) ) != g.m_mesh && bad < 0 )
+            bad = 101;
+        int drawn = 0, added = 0;
+        const bool ok = bodies_prop_game_initialize( b, c, visible, asset, t->local, t->scale, id, hooks, [ & ] { ++drawn; },
+                                                     [ & ]( level_body_t& ) { ++added; return true; }, why );
+        if ( !ok && bad < 0 )
+            bad = 102;
+        const std::uint32_t after[ 3 ] = { c.flags_d0, static_cast< std::uint32_t >( c.group ) | static_cast< std::uint32_t >( c.mask ) << 16, c.flags_d8 };
+        for ( int i = 0; i < 3 && bad < 0; ++i )
+            if ( after[ i ] != w[ 14 + i ] )
+                bad = 14 + i;
+        const bool built = b.body.body.internal_type == 2;
+        if ( bad < 0 && built != ( w[ 17 ] != 0 ) )
+            bad = 17;
+        if ( w[ 17 ] && bad < 0 )
+        {
+            ++bodies;
+            std::uint32_t shape[ 8 ];
+            if ( c.collision_type == 7 )
+            {
+                shape[ 0 ] = static_cast< std::uint32_t >( b.concave.type );
+                shape[ 1 ] = bits( b.concave.margin );
+                for ( int i = 0; i < 3; ++i )
+                {
+                    shape[ 2 + i ] = bits( b.concave.local_aabb_min[ i ] );
+                    shape[ 5 + i ] = bits( b.concave.local_aabb_max[ i ] );
+                }
+            }
+            else
+            {
+                shape[ 0 ] = static_cast< std::uint32_t >( b.convex.type );
+                shape[ 1 ] = bits( b.convex.margin );
+                for ( int i = 0; i < 3; ++i )
+                {
+                    shape[ 2 + i ] = bits( b.convex.local_aabb_min[ i ] );
+                    shape[ 5 + i ] = bits( b.convex.local_aabb_max[ i ] );
+                }
+            }
+            for ( int i = 0; i < 8 && bad < 0; ++i )
+                if ( shape[ i ] != p[ i ] )
+                    bad = 200 + i;
+            const unsigned* mask = p + 8;
+            const unsigned* want = p + 8 + 181;
+            for ( int i = 0; i < 181 && bad < 0; ++i )
+            {
+                ++words;
+                if ( !mask[ i ] && body_word( b.body, 4 * i ) != want[ i ] )
+                {
+                    bad = 1000 + 4 * i;
+                    if ( failed < 8 )
+                        LOG_ERROR( "prop bodies: '%s' body +0x%X = 0x%08X, retail 0x%08X", g.m_path, 4 * i, body_word( b.body, 4 * i ), want[ i ] );
+                }
+            }
+            p += 8 + 2 * 181;
+        }
+        if ( bad < 0 && ( added != static_cast< int >( p[ 0 ] ) || drawn != static_cast< int >( p[ 1 ] ) || visible != p[ 2 ] ) )
+            bad = 300;
+        if ( bad >= 0 && ++failed <= 8 )
+            LOG_ERROR( "prop bodies: '%s' differs at item %d (%s)", g.m_path, bad, why.c_str( ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuPropEntity gameInitialize 0x546910 / createRigidBody 0x544100 match retail on all %d Hydroelectric props (%d bodies: "
+                     "the component loads, shape aabbs and %d body words bit for bit)",
+                     static_cast< int >( g_golden_prop_bodies_count ), bodies, words );
+    else
+        LOG_ERROR( "prop rigid bodies FAILED on %d of %d props", failed, static_cast< int >( g_golden_prop_bodies_count ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_prop_rigid_bodies( ) && ok;
     ok = verify_water_surface_under( ) && ok;
     ok = verify_boat_motion_set( ) && ok;
     ok = verify_sync_motion_states( ) && ok;
