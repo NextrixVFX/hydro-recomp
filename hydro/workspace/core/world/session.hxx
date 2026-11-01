@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -84,10 +85,13 @@ struct race_session_boat_t
 //   layer's answer (a PLATFORM HOOK: ours answers 0, the gamepad method, as
 //   the front end's ui flow does);
 // - display_w / _h: g_vumetrod3d11gfx vt+0x40, the display size (PLATFORM).
+// - water_tick: VuWater's "Water" tick 0x529E30 (c_world's water_built_tick +
+//   the view rebuilt), run by the race tick manager's "Water" phase.
 struct race_world_t
 {
-    const water_built_t* water = nullptr;
+    water_built_t* water = nullptr;   // written by the hulls' wake update 0x417D80 (world/drive.hxx)
     const water_view_t* view = nullptr;
+    std::function< void( float ) > water_tick;
     std::uint32_t viewports = 1;
     std::int32_t control_method = 0;
     std::int32_t display_w = 1280;
@@ -309,6 +313,28 @@ inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb
 
 inline void race_unwired( race_session_t& s, const std::string& what );
 
+// A VuWater wave POINTER in a race image (the hull's wake slots +0x1DC /
+// +0x1E0 / +0x1E4 / +0x1E8, the solver's +0x34 array words) is a model value
+// here: 0x80000000 | the wave's index in the built water (retail's heap
+// address - only its identity is ever read: the thunk's exclusion compares,
+// the wake update's dereference). 0 is null.
+constexpr std::uint32_t k_race_wave_token = 0x80000000u;
+inline std::uint32_t race_wave_token( int wave )
+{
+    return wave < 0 ? 0u : ( k_race_wave_token | static_cast< std::uint32_t >( wave ) );
+}
+// The token's wave: -1 for null, -2 when the word is not a token of a wave
+// the built water holds (UNKNOWN).
+inline int race_wave_of( const water_built_t* b, std::uint32_t word )
+{
+    if ( word == 0 )
+        return -1;
+    const std::uint32_t index = word & ~k_race_wave_token;
+    if ( !( word & k_race_wave_token ) || !b || index >= b->waves.size( ) )
+        return -2;
+    return static_cast< int >( index );
+}
+
 // VuBoatEntity slot 17 0x421980 / slot 18 0x421940 (boat entity.hxx
 // boat_enable / boat_disable: VuDynamicsImpl slots 15 / 11 and 16 / 12 -
 // manager.hxx) on the race's dynamics world. The body's collision object is
@@ -348,8 +374,9 @@ inline void race_session_enable( race_session_t& s, race_session_boat_t& b, bool
         // Slot 1 tickThunk 0x41E5E0: the boat agent's builder (boat/thunk.hxx) on this boat's images, one persistent
         // boat_thunk_t per boat (the solver's records live in it). The water is the world's query view of VuWater,
         // refreshed per frame (none: UNKNOWN, not stepped); the gravity g_vudynamicsimpl vt+0x1C = the world's.
-        // A VuWater wave pointer in the images (hull +0x1DC / +0x1E0, the solver's excluded array) has no index
-        // here: the build refuses it (UNKNOWN, `why`).
+        // A VuWater wave pointer in the images (hull +0x1DC / +0x1E0, the solver's excluded array - the wake
+        // update's, drive.hxx) is a race_wave_token: its index in the built water; any other word is refused
+        // (UNKNOWN, `why`).
         b.thunk = std::make_unique< boat_thunk_t >( );
         cb.slot1 = [ &s, &b, &d ]( float dt ) {
             boat_thunk_in_t in;
@@ -373,7 +400,7 @@ inline void race_session_enable( race_session_t& s, race_session_boat_t& b, bool
                 return true;
             };
             in.gravity_user = &d;
-            in.wave_index = []( std::uint32_t ) { return -2; };
+            in.wave_index = [ &s ]( std::uint32_t word ) { return race_wave_of( s.world.water, word ); };
             const std::int32_t excluded = static_cast< std::int32_t >( load_word( in.solver, 0x30 ) );
             const int solver_k = race_session_ref( b.graph, hull_k, 0x1CC );
             const std::uint8_t* array = race_session_image( b, solver_k, 0x34 );
@@ -475,22 +502,67 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
         race_unwired( s, "the level's gameInitialize (0x500B10): slot 6 not recreated for " + rest + " (UNKNOWN)" );
 }
 
+// DEV TRACE - NOT RETAIL (no retail function; only with --verbose, logs
+// nothing else and writes nothing): at sync counts 1 / 10 / 30 / 60 / 120 /
+// 240 / 480, each boat's transform world position (+0x50 row 3) and the water
+// under it as the recreated queries answer - the 0x52AEC0 surface that holds
+// the point (-1 none: between surfaces, e.g. the Hydroelectric spillway
+// drop) and its height (+0x14), the 0x52ACB0 surface under it (the Build
+// tick's), and 0x529140's out +0x20 (the height with its waves).
+inline void race_session_dev_trace( const race_session_t& s, int before )
+{
+    const int n = s.dynamics->syncs;
+    if ( !g_verbose || n == before || !( n == 1 || n == 10 || n == 30 || n == 60 || n == 120 || n == 240 || n == 480 ) )
+        return;
+    if ( s.world.water )
+    {
+        int wakes = 0;
+        for ( std::size_t k = 0; k < s.world.water->wave_kind.size( ); ++k )
+            wakes += s.world.water->wave_kind[ k ] == water_kind_wake || s.world.water->wave_kind[ k ] == water_kind_flat_wake ? 1 : 0;
+        LOG_VERBOSE( "race (dev trace): sync %d: VuWater holds %d wave record(s), %d of them wake / flat wake (made, live or not)", n,
+                     static_cast< int >( s.world.water->waves.size( ) ), wakes );
+    }
+    for ( const auto& b : s.boats )
+    {
+        const std::uint8_t* t = race_session_image( *b, 0, 0x50 );
+        if ( !t )
+            continue;
+        float q[ 4 ] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        std::memcpy( q, t + 0x50 + 48, 12 );
+        if ( !s.world.view )
+        {
+            LOG_VERBOSE( "race (dev trace): sync %d: %s at (%.3f, %.3f, %.3f), no VuWater", n, b->name.c_str( ), q[ 0 ], q[ 1 ], q[ 2 ] );
+            continue;
+        }
+        const water_t& w = s.world.view->water;
+        const int holds = water_point_surface( w, q );
+        const int under = water_surface_under( w, q, water_bits( 0xFEFFFFFFu ) );
+        water_vertex_t o{};
+        const bool known = water_point_height( w, q, water_view_kernel, const_cast< water_view_t* >( s.world.view ), o );
+        LOG_VERBOSE( "race (dev trace): sync %d: %s at (%.3f, %.3f, %.3f) - water: holds surface %d (height %.1f), under %d, "
+                     "0x529140 %s %.3f",
+                     n, b->name.c_str( ), q[ 0 ], q[ 1 ], q[ 2 ], holds, holds >= 0 ? w.surfaces[ holds ].height : 0.0f, under,
+                     known ? "" : "UNKNOWN", holds >= 0 ? o.height : 0.0f );
+    }
+}
+
 // The DynamicsSync / DynamicsKick ticks 0x4F8A20 / 0x4F8A90 (world/dynamics.hxx).
 inline void race_session_dynamics_sync( void* user, float dt )
 {
     race_session_t& s = *static_cast< race_session_t* >( user );
     const int before = s.dynamics->syncs;
     race_dynamics_sync( *s.dynamics, dt );
-    // A trace (not retail): each boat's transform world position at a few sync counts.
-    const int n = s.dynamics->syncs;
-    if ( n != before && ( n == 1 || n == 10 || n == 30 || n == 60 || n == 120 || n == 240 || n == 480 ) )
-        for ( const auto& b : s.boats )
-            if ( const std::uint8_t* t = race_session_image( *b, 0, 0x50 ) )
-            {
-                float p[ 3 ];
-                std::memcpy( p, t + 0x50 + 48, 12 );
-                LOG_INFO( "race: sync %d: %s at (%.3f, %.3f, %.3f)", n, b->name.c_str( ), p[ 0 ], p[ 1 ], p[ 2 ] );
-            }
+    race_session_dev_trace( s, before );
+}
+
+// The "Water" phase: VuWater's tick 0x529E30 (the world's water_tick).
+inline void race_session_water( void* user, float dt )
+{
+    race_session_t& s = *static_cast< race_session_t* >( user );
+    if ( s.world.water_tick )
+        s.world.water_tick( dt );
+    else
+        race_unwired( s, "VuWater's Water tick 0x529E30 with no VuWater (no water_tick) - not run (UNKNOWN)" );
 }
 
 inline void race_session_dynamics_kick( void* user, float dt )
@@ -711,6 +783,9 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     tick_register( s.ticks, { s.dynamics.get( ), race_session_dynamics_kick, &s }, "DynamicsKick" );
     tick_register( s.ticks, { &s.fleet, race_session_fleet, &s }, "Decision" );
     tick_register( s.ticks, { &s.manager, race_session_viewports, &s }, "Viewports" );
+    // VuWater's tick 0x529E30 in "Water" (VuWater made by the engine init, before the race: c_world's
+    // water_tick - surface.hxx water_built_tick and the queries' view).
+    tick_register( s.ticks, { &s.world, race_session_water, &s }, "Water" );
 
     // The grid: every VuGridPositionEntity's transform world, through 0x43A740,
     // in the tree's pre-order (the project's gameInitialize walk; the list is

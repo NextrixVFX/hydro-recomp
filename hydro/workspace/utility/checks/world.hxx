@@ -2549,9 +2549,93 @@ inline bool verify_prop_rigid_bodies( )
     return failed == 0;
 }
 
+// The race's hull wake composition (world/drive.hxx race_hull_wake_apply: 0x417D80 after 0x417F80 - the +0x1EC
+// dispatch, the hull's slot words, the plain wake's solver +0x30 and +0x34 array writes) against retail's own 0x417D80
+// run in the water agent's case water_wake (its golden g_golden_wwk_*: 0x417F80 handed the planned records): two hull
+// images (+0x1D0 the case's descriptors, +0x1EC 0 / 1), a solver image and its 8-byte array each, on Hydroelectric's
+// built water, the Water tick 0x529E30 between frames. Compared per frame: each hull's four slot words (as wave
+// indices) and the solver's +0x30 / array [0] / [1].
+inline std::unique_ptr< entity_t > water_build_document_tree( );   // checks/water.hxx (included after this file)
+inline bool verify_race_hull_wake( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "race hull wake: the document did not load" );
+        return false;
+    }
+    water_built_t b{};
+    water_build_world( *tree, b, []( entity_t& e ) { return entity_transform( e ); } );
+    int failed = 0, compared = 0;
+    auto cmp = [ & ]( const char* what, int a, int c, std::uint32_t ours, std::uint32_t theirs ) {
+        ++compared;
+        if ( ours != theirs && ++failed <= 12 )
+            LOG_ERROR( "race hull wake %s %d / %d: ours 0x%08X retail 0x%08X", what, a, c, ours, theirs );
+    };
+    auto ix = [ & ]( std::uint32_t word ) { return static_cast< std::uint32_t >( race_wave_of( &b, word ) ); };
+    const unsigned* s = g_golden_wwk_words;
+    const unsigned frames = *s++;
+    ++s;   // the built wave count
+    const unsigned n0 = *s++, n1 = *s++;
+    s += n0 + n1;   // the type chains
+    std::uint8_t hull[ 2 ][ 0x200 ] = { }, solver[ 2 ][ 0x80 ] = { }, array[ 2 ][ 8 ] = { };
+    const float desc[ 2 ][ 3 ] = { { 0.35f, 0.8f, 1.25f }, { 0.2f, 0.6f, 0.9f } };
+    for ( int k = 0; k < 2; ++k )
+    {
+        std::memcpy( hull[ k ] + 0x1D0, desc[ k ], 12 );
+        hull[ k ][ 0x1EC ] = static_cast< std::uint8_t >( k );
+    }
+    water_built_hooks_t hooks{};
+    hooks.render = []( void* ) {};
+    const float dt = 1.0f / 30.0f;
+    for ( unsigned f = 0; f < frames; ++f )
+    {
+        const int fi = static_cast< int >( f );
+        for ( int k = 0; k < 2; ++k )
+        {
+            std::string why;
+            if ( !race_hull_wake_apply( b, hull[ k ], solver[ k ], array[ k ], s + 13 * k, why ) )
+                cmp( why.c_str( ), fi, k, 0u, 1u );
+        }
+        s += 26;
+        water_built_tick( b, dt, hooks );
+        for ( int k = 0; k < 2; ++k )
+            for ( int j = 0; j < 4; ++j )
+                cmp( "slot", fi, 4 * k + j, ix( load_word( hull[ k ], 0x1DC + 4 * j ) ), *s++ );
+        for ( int k = 0; k < 2; ++k )
+        {
+            cmp( "solver +0x30", fi, k, load_word( solver[ k ], 0x30 ), *s++ );
+            cmp( "solver array [0]", fi, k, ix( load_word( array[ k ], 0 ) ), *s++ );
+            cmp( "solver array [1]", fi, k, ix( load_word( array[ k ], 4 ) ), *s++ );
+        }
+        // the rest of the frame (the water agent's check compares it): dtors, listed wakes and words, the list, the pool, entries
+        const unsigned nd = *s++;
+        s += nd;
+        const unsigned nl = *s++;
+        s += nl * ( 1 + 48 );
+        const unsigned n_list = *s++;
+        s += 2 * n_list;
+        s += 2;
+        for ( unsigned i = 0; i < nl; ++i )
+        {
+            const unsigned n = *s++;
+            s += 2 * n;
+        }
+    }
+    cmp( "golden consumed", 0, 0, s == g_golden_wwk_words + g_golden_wwk_size ? 1u : 0u, 1u );
+    if ( failed == 0 )
+        LOG_SUCCESS( "The race's hull wake composition (0x417D80 after 0x417F80: the +0x1EC dispatch, the hull's slot words, the "
+                     "solver +0x30 / +0x34 writes) matches retail on Hydroelectric's built water: %u frames, %d values",
+                     frames, compared );
+    else
+        LOG_ERROR( "race hull wake FAILED %d of %d values", failed, compared );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_race_hull_wake( ) && ok;
     ok = verify_prop_rigid_bodies( ) && ok;
     ok = verify_water_surface_under( ) && ok;
     ok = verify_boat_motion_set( ) && ok;

@@ -963,6 +963,9 @@ public:
         }
         if ( !race_session_start( m_race, mode, game_data, dbs, m_archive, *m_tree, track( ), m_vurandom ) )
             return;
+        // The queries' view of VuWater as the load left it: the race's first frame reads VuWater (DynamicsSync,
+        // Decision) before its first "Water" phase rebuilds the view.
+        water_view_build( m_water, m_water_view );
         // The hulls: each boat's three model instances (+0x2A4 / +0x2A8 / +0x2AC from BoatDB's Model Asset / LOD 1 /
         // LOD 2 Model Asset - the instance loads 0x5322C0 / 0x520080 are the rendering layer: our model path) placed
         // at the draw 0x41EAE0's matrix, hidden until race_draw shows the instance the draw picks. The SKIN is the
@@ -1121,11 +1124,40 @@ public:
         if ( !m_loaded )
             return;
 
+        // VuWater's tick: with a race running it is the race tick manager's "Water" phase handler (registered by
+        // race_session_start - after Decision, where the hulls' wake update 0x417D80 writes VuWater, and before
+        // DynamicsKick); without a race it runs here, once per frame, as before.
+        m_race.world.water = &m_water;
+        m_race.world.view = &m_water_view;
+        m_race.world.water_tick = [ this ]( float step ) { water_frame( step ); };
+        if ( !m_race.active )
+            water_frame( dt );
+
+        // The race's ticks see the world's VuWater (g 0x759058) and the display; then the view: with a race
+        // running (--boat / --skin) the viewport's camera (g 0x759060 +0x28, the Viewports tick 0x4AB0A0's copy
+        // of the viewport boat's VuBoatCamera): its eye +0x00 and target +0x10. The renderer takes only eye /
+        // target / far (c_engine::camera): the camera's own projection +0x30 / view +0x70 (fov, roll) are not
+        // consumed - SUBSTITUTION, the renderer's. The far plane stays the gfx settings' (the camera's +0x17C is
+        // boat +0x408, which the Build tick 0x41F330 fills). No race: dev_vantage's orbit / freecam (scaffold).
+        race_session_frame( m_race, dt );
+        if ( m_race.active && m_race.viewport_set )
+        {
+            std::memcpy( m_eye, m_race.viewport_camera + 0x00, sizeof( m_eye ) );
+            std::memcpy( m_target, m_race.viewport_camera + 0x10, sizeof( m_target ) );
+            m_far = m_authored_far;
+        }
+        else
+            dev_vantage( dt );
+        scene_frame_rest( dt );
+    }
+    // VuWater's tick 0x529E30 on the built water (surface.hxx water_built_tick), then the query's view rebuilt
+    // (the view is how the recreated queries read VuWater: rebuilt after each tick and at the race's start).
+    // The expire hook is VuPointWaveEntity's OnExpired 0x5D4B60: the wave half (water_point_wave_expired),
+    // then the entity's "OnExpired" plug through the event graph (the entity's +0xA0 = 0 is not modelled - no
+    // reader of it is recreated). The ocean field rebuild and the render kick have no hook: counted.
+    void water_frame( float dt )
+    {
         const double ocean_start = trace::now( );
-        // VuWater's tick 0x529E30 on the built water (surface.hxx water_built_tick), then the query's view rebuilt.
-        // The expire hook is VuPointWaveEntity's OnExpired 0x5D4B60: the wave half (water_point_wave_expired),
-        // then the entity's "OnExpired" plug through the event graph (the entity's +0xA0 = 0 is not modelled - no
-        // reader of it is recreated). The ocean field rebuild and the render kick have no hook: counted.
         water_built_hooks_t hooks{};
         hooks.user = this;
         hooks.expire = []( void* user, water_built_t& b, int wave )
@@ -1145,24 +1177,9 @@ public:
         m_water_missing += missing;
         water_view_build( m_water, m_water_view );
         trace::frame( ).ocean += trace::now( ) - ocean_start;
-
-        // The race's ticks see the world's VuWater (g 0x759058) and the display; then the view: with a race
-        // running (--boat / --skin) the viewport's camera (g 0x759060 +0x28, the Viewports tick 0x4AB0A0's copy
-        // of the viewport boat's VuBoatCamera): its eye +0x00 and target +0x10. The renderer takes only eye /
-        // target / far (c_engine::camera): the camera's own projection +0x30 / view +0x70 (fov, roll) are not
-        // consumed - SUBSTITUTION, the renderer's. The far plane stays the gfx settings' (the camera's +0x17C is
-        // boat +0x408, which the Build tick 0x41F330 fills). No race: dev_vantage's orbit / freecam (scaffold).
-        m_race.world.water = &m_water;
-        m_race.world.view = &m_water_view;
-        race_session_frame( m_race, dt );
-        if ( m_race.active && m_race.viewport_set )
-        {
-            std::memcpy( m_eye, m_race.viewport_camera + 0x00, sizeof( m_eye ) );
-            std::memcpy( m_target, m_race.viewport_camera + 0x10, sizeof( m_target ) );
-            m_far = m_authored_far;
-        }
-        else
-            dev_vantage( dt );
+    }
+    void scene_frame_rest( float dt )
+    {
         race_draw( );
         water_draw( );
         // The crossing test wants the position of whatever the plane's Trigger
