@@ -386,6 +386,58 @@ inline void pfx_geom_fountain_init( pfx_rand_t& rand, const std::uint8_t* params
     p.set( 0x4C, euler[ 2 ] );
 }
 
+// THE PATTERN INSTANCES' DRAW SLOTS, CPU side. VuPfxSystemInstance's slots 14 /
+// 15 run every pattern's slot 2 / 3 with the pass argument (pfx_system_draw).
+//   quad 0x5920B0 / trail 0x58F9C0 (slot 2; slot 3 nullsub 0x4021A0): when the
+//     pattern's count +0x28 is not 0, g_vupfximpl (0x75904C) +0xC (quad) / +0x10
+//     (trail) renderer's 0x58BD60 / 0x58D030 ( argument +0x10, pattern ) - the
+//     renderers build GPU batches: a hook (`pfx_pattern_submits`).
+//   geom 0x5903A0 (slot 2) / 0x5906A0 (slot 3): per particle, the list +0x20 in
+//     order (next at +0), a model matrix - pfx_geom_draw_matrix - and for slot 2
+//     its colour; the model instance at params +0x5C draws it (0x520130 / per
+//     mesh 0x520670: hooks).
+inline bool pfx_pattern_submits( std::uint32_t count )
+{
+    return count != 0u;
+}
+
+// The model matrix of one geom particle q: D = params Space (+0x34) == 1 ? the
+// system matrix (+0x1C) : the static identity 0x7593B0; T = 0x410AB0's
+// translation of q's position (+0x08); E = fromEuler( q's angles +0x44 );
+// S = diag( s, s, s, 1 ), s = q's scale (+0x38) x the instance scale (+0xA8);
+// matrix = S x ( E x ( T x D ) ) - three VuMatrix_multiply 0x4078C0, in that
+// order (boat/hull.hxx hull_multiply, a = the left).
+inline void pfx_geom_draw_matrix( const pfx_quad_particle_t& q, const float* draw_matrix, float instance_scale, float* out )
+{
+    const float position[ 3 ] = { q.f( 0x08 ), q.f( 0x0C ), q.f( 0x10 ) };
+    const float angles[ 3 ] = { q.f( 0x44 ), q.f( 0x48 ), q.f( 0x4C ) };
+    float t[ 16 ], a[ 16 ], e[ 16 ], b[ 16 ];
+    hull_translation( t, position );
+    hull_multiply( t, a, draw_matrix );
+    vu_matrix_from_euler( e, angles );
+    hull_multiply( e, b, a );
+    const float s = q.f( 0x38 ) * instance_scale;
+    const float scale[ 16 ] = { s, 0, 0, 0, 0, s, 0, 0, 0, 0, s, 0, 0, 0, 0, 1 };
+    hull_multiply( scale, out, b );
+}
+
+// Slot 2's colour: per channel c the system tint (+0xAC .. +0xB8) x the
+// particle's colour (+0x28 .. +0x34) x 255.0 (0x6F7808), fld / fistp (round to
+// nearest even; out of range -> 0x80000000) and its low byte; r g b a from the
+// low byte up. Slot 2 stores it at params +0x74 and params +0x58's byte at
+// +0x78 (the model instance's colour / flag) before each draw.
+inline std::uint32_t pfx_geom_draw_colour( const pfx_quad_particle_t& q, const float* tint )
+{
+    std::uint32_t c = 0u;
+    for ( int k = 0; k < 4; ++k )
+    {
+        const float v = ( tint[ k ] * q.f( 0x28 + 4 * k ) ) * 255.0f;
+        const std::int32_t i = _mm_cvtsd_si32( _mm_set_sd( static_cast< double >( v ) ) );
+        c |= ( static_cast< std::uint32_t >( i ) & 0xFFu ) << ( 8 * k );
+    }
+    return c;
+}
+
 inline const pfx_class_t* pfx_class_find( const char* name )
 {
     for ( const pfx_class_t& c : g_pfx_classes )
