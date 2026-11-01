@@ -19,6 +19,7 @@
 #include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/grid.hxx>
 #include <workspace/core/world/race.hxx>
+#include <workspace/core/world/session.hxx>
 #include <workspace/core/world/water.hxx>
 #include <workspace/core/assets/texture.hxx>
 #include <workspace/utility/logger.hxx>
@@ -854,6 +855,93 @@ public:
         load_project( path.c_str( ) );
         m_loaded = true;
         LOG_SUCCESS( "scene %s%s", name, suffix.c_str( ) );
+        race_switch_on( );
+    }
+
+    // The race (world/session.hxx) when --boat or --skin asks for one; the
+    // bench passes neither, so a scene-only run never reaches it.
+    void race_switch_on( )
+    {
+        m_race = race_session_t{ };
+        const char* boat = c_engine::option( "boat" );
+        const char* skin = c_engine::option( "skin" );
+        if ( boat == nullptr && skin == nullptr )
+            return;
+        const auto db = [ this ]( const char* asset, value_t& out ) -> const value_t*
+        {
+            std::vector< std::uint8_t > bytes;
+            if ( !m_archive.read( asset, bytes ) )
+                return nullptr;
+            out = c_reader( bytes ).parse( );
+            return &out;
+        };
+        race_session_dbs_t dbs;
+        dbs.boat_db = db( "VuDBAsset/BoatDB", m_boat_db );
+        dbs.track_db = db( "VuDBAsset/TrackDB", m_track_db );
+        dbs.constant_db = db( "VuDBAsset/ConstantDB", m_constant_db );
+        db( "VuDBAsset/SkinDB", m_skin_db );
+        const auto text = []( const char* key ) { const char* v = c_engine::option( key ); return std::string( v ? v : "" ); };
+        if ( !m_tree )
+        {
+            LOG_WARNING( "race: the project's entity tree did not load; no race" );
+            return;
+        }
+        if ( !race_session_start( m_race, text( "mode" ), text( "race" ), text( "course" ), text( "boat" ), text( "skin" ), dbs, m_archive,
+                                  *m_tree, track( ) ) )
+            return;
+        // The hulls: each boat's three model instances (+0x2A4 / +0x2A8 / +0x2AC from BoatDB's Model Asset / LOD 1 /
+        // LOD 2 Model Asset - the instance loads 0x5322C0 / 0x520080 are the rendering layer: our model path) placed
+        // at the draw 0x41EAE0's matrix, hidden until race_draw shows the instance the draw picks. SUBSTITUTED: the
+        // skin pass 0x421490 is not read - the Proxy part takes SkinDB's Boat.Textures.DiffuseTexture for the
+        // boat's Skin (skin_texture, ours). The matrix is placed once: it moves only through the Build tick's
+        // +0x49C and the dynamics, both stopped while the sections load stops.
+        const value_t* skins = find( m_skin_db, "VuDBAsset" );
+        for ( std::size_t k = 0; k < m_race.boats.size( ); ++k )
+        {
+            race_session_boat_t& b = *m_race.boats[ k ];
+            const std::uint8_t* transform = m_race.start_boats[ k ].transform;
+            if ( !transform )
+                continue;
+            float m[ 16 ];
+            race_boat_draw_matrix( b.graph.objects[ 0 ].image.data( ), transform, m );
+            const std::string texture = skin_texture( skins, b.skin.c_str( ) );
+            const int at[ 3 ] = { 0xC4, 0xDC, 0xF4 };
+            for ( int i = 0; i < 3; ++i )
+            {
+                const std::string& asset = b.io.boat_strings[ at[ i ] ];
+                if ( asset.empty( ) )
+                    continue;
+                place_model( asset, m, 0, -1, nullptr, texture.c_str( ), -1, &b.placements[ i ] );
+                for ( int handle : b.placements[ i ] )
+                    c_engine::show( handle, false );
+            }
+            b.shown = -1;
+            LOG_INFO( "race: %s hull at %.1f %.1f %.1f - models '%s' / '%s' / '%s', skin texture '%s'", b.name.c_str( ), m[ 12 ], m[ 13 ], m[ 14 ],
+                      b.io.boat_strings[ 0xC4 ].c_str( ), b.io.boat_strings[ 0xDC ].c_str( ), b.io.boat_strings[ 0xF4 ].c_str( ),
+                      texture.empty( ) ? "(none: the proxy)" : texture.c_str( ) );
+        }
+    }
+
+    // Per frame: the draw 0x41EAE0's instance choice against this frame's eye.
+    void race_draw( )
+    {
+        for ( std::size_t k = 0; k < m_race.boats.size( ) && m_race.active; ++k )
+        {
+            race_session_boat_t& b = *m_race.boats[ k ];
+            const std::uint8_t* transform = m_race.start_boats[ k ].transform;
+            if ( !transform )
+                continue;
+            const int pick = race_boat_draw_instance( b.graph.objects[ 0 ].image.data( ), transform, m_eye );
+            if ( pick == b.shown )
+                continue;
+            if ( b.shown >= 0 )
+                for ( int handle : b.placements[ b.shown ] )
+                    c_engine::show( handle, false );
+            if ( pick >= 0 )
+                for ( int handle : b.placements[ pick ] )
+                    c_engine::show( handle, true );
+            b.shown = pick;
+        }
     }
 
     // SCAFFOLD - ours. The per-frame order below is NOT retail's frame; retail
@@ -960,7 +1048,9 @@ public:
         water_view_build( m_water, m_water_view );
         trace::frame( ).ocean += trace::now( ) - ocean_start;
 
+        race_session_frame( m_race, dt );
         dev_vantage( dt );
+        race_draw( );
         water_draw( );
         // The crossing test wants the position of whatever the plane's Trigger
         // Type accepts. With no boat in the scene the dev vantage stands in,
@@ -1078,6 +1168,9 @@ private:
     // fleet and the boats are not composed (race.hxx: GameData's "Boats" is the front end's, not recreated).
     track_manager_t m_track{};
     bool m_track_built = false;
+    // The race (world/session.hxx) and the databases it reads, as parsed documents.
+    race_session_t m_race{};
+    value_t m_boat_db, m_track_db, m_constant_db, m_skin_db;
     // The water renderer (world/grid.hxx): its templates, this frame's records, and OUR draw of them - one
     // geometry holding the records expanded per index (a triangle list, capacity k_water_draw_vertices,
     // unused tail degenerate) drawn through the engine's class-7 blended pass. m_water_ambient / _diffuse:
