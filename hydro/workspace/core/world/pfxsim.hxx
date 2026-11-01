@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/world/pfxclass.hxx>
+#include <workspace/core/world/spray.hxx>
 
 #include <cstdint>
 #include <cstring>
@@ -541,9 +542,46 @@ inline void pfx_impl_tick( pfx_heap_t& h, std::uint32_t r )
 // (g_vuviewportmanager 0x759060: +4 count, +0x28 + 0x274 k), the global VuRand
 // 0x736810, the static box 0x7593F0 (CRT initializer 0x64B690) a geom pattern
 // without a model reads, and the count of paths reached that are not
-// recreated (the trail pattern's tick 0x58F0C0, the boat processes - thrust
-// 0x4CD5B0, hull 0x4CE760, boat spring 0x4CD980 need a boat -, the water snap
-// 0x529140 of a fountain whose params +0x90 byte is set).
+// recreated.
+//
+// THE BOATS. The three boat processes hold a boat word the boat's own effect
+// set-up writes after creating the system (a walk over the system's patterns'
+// processes by node type - pfx_system_bind): the thrust fountain's +0x28 and
+// the boat spring's +0x14 (0x41A640 / 0x43BDB0: the boat), the hull's +0x14
+// (the boat) and +0x18 (its VuFluidsObject) (0x419FF0). The frame resolves a
+// word to what the slot 1 bodies read (world/spray.hxx): 0 is retail's null
+// boat; a word with no entry here counts as unrecreated (the process is not
+// run).
+//   thrust 0x4CD5B0: `view` (0x41D570's reads) and `records` (+0x22C -> +0xF8,
+//     8-byte records), then the shared fountain emit with the quad fountain's
+//     slot 2 0x55E100;
+//   boat spring 0x4CD980: `position` (+0x50 -> +0x80 .. +0x88) and `velocity`
+//     (+0x21C -> +0x140 .. +0x148);
+//   hull 0x4CE760: `hull` (pfx_hull_boat_t) and the fluids entry's solver;
+//     `prepare` = VuFluidSolver_prepare 0x524450 (boat/fluid.hxx fluid_prepare)
+//     and `point` = VuWater's one-point query 0x5292D0 (world/query.hxx
+//     water_point_query); a missing hook counts as unrecreated.
+// THE WATER SNAP (a fountain whose params +0x90 byte is set): `water` = g
+// 0x759058 is not null (false: retail's no-VuWater path, nothing happens) and
+// `snap` = 0x529140 (world/query.hxx water_point_height) on the particle's +8
+// .. +0x14, writing out +0x20 into the particle's +0x10; no hook (with water)
+// or a false answer counts as unrecreated.
+struct pfx_frame_boat_t
+{
+    std::uint32_t address = 0;
+    boat_view_t* view = nullptr;
+    const std::uint8_t* records = nullptr;
+    float position[ 3 ]{};
+    float velocity[ 3 ]{};
+    const pfx_hull_boat_t* hull = nullptr;
+};
+
+struct pfx_frame_fluids_t
+{
+    std::uint32_t address = 0;
+    fluid_solver_t* solver = nullptr;
+};
+
 struct pfx_frame_t
 {
     const float* cameras = nullptr;   // x y z per viewport
@@ -551,7 +589,89 @@ struct pfx_frame_t
     pfx_rand_t* rand = nullptr;
     float geom_box[ 6 ]{};            // 0x7593F0: min x y z, max x y z
     int unrecreated = 0;
+    const pfx_frame_boat_t* boats = nullptr;
+    int boat_count = 0;
+    const pfx_frame_fluids_t* fluids = nullptr;
+    int fluids_count = 0;
+    void* user = nullptr;
+    void ( *prepare )( void* user, fluid_solver_t& solver, const float* matrix ) = nullptr;
+    bool ( *point )( void* user, const float* point, float* out ) = nullptr;
+    bool water = true;
+    bool ( *snap )( void* user, const float* point, water_vertex_t& out ) = nullptr;
 };
+
+// A boat word to its entry: 0 = retail's null boat (`found` true, null
+// returned); not listed = `found` false.
+inline const pfx_frame_boat_t* pfx_frame_boat( const pfx_frame_t& f, std::uint32_t word, bool& found )
+{
+    found = true;
+    if ( word == 0u )
+        return nullptr;
+    for ( int k = 0; k < f.boat_count; ++k )
+        if ( f.boats[ k ].address == word )
+            return &f.boats[ k ];
+    found = false;
+    return nullptr;
+}
+
+// The effect set-ups' bind walk (0x41A69B .. in 0x41A640, 0x41A08A .. in
+// 0x419FF0, 0x43BFE8 .. in 0x43BDB0): for every pattern instance of the system
+// (+0x10, next +4) and every process instance of it (+0x14, next +4) whose
+// node's type (slot 1, then the descriptor chain) is `type`, word +`offset` =
+// `value`. The callers: type "VuPfxEmitBoatThrustQuadFountain" +0x28 = the
+// boat; "VuPfxEmitBoatHull" +0x18 = the fluids object, then +0x14 = the boat
+// (0x419FF0 then starts the system: slot 11); "VuPfxBoatSpringConstraint"
+// +0x14 = the boat. What surrounds each walk (the effect list, the creates,
+// the matrices) is the boat's and not recreated here.
+inline int pfx_system_bind( pfx_heap_t& h, std::uint32_t system, const char* type, std::uint32_t offset, std::uint32_t value )
+{
+    int bound = 0;
+    const std::size_t n = std::strlen( type );
+    for ( std::uint32_t p = h[ system + 0x10 ]; p != 0u; p = h[ p + 4 ] )
+        for ( std::uint32_t b = h[ p + 0x14 ]; b != 0u; b = h[ b + 4 ] )
+        {
+            const pfx_class_t* c = pfx_node_class( h, h[ b + 0x10 ] );
+            bool is = false;
+            for ( const char* q = c != nullptr ? c->chain : ""; *q != '\0' && !is; )
+            {
+                const char* e = std::strchr( q, '|' );
+                const std::size_t len = e != nullptr ? static_cast< std::size_t >( e - q ) : std::strlen( q );
+                is = len == n && std::strncmp( q, type, n ) == 0;
+                q += e != nullptr ? len + 1 : len;
+            }
+            if ( is )
+            {
+                h[ b + offset ] = value;
+                ++bound;
+            }
+        }
+    return bound;
+}
+
+inline void pfx_system_start( pfx_heap_t& h, std::uint32_t s );
+
+// The three binds as their callers run them. Thrust (0x41A69B): the walk only.
+// Hull (0x41A083): slot 16 (0x401DA0, the instance itself), per hull process
+// +0x18 = the fluids and +0x14 = the boat (here two walks: nothing reads in
+// between), then slot 11 start (`jmp [eax+0x2C]`). Spring (0x43BFD6): slot 11
+// start on the entry's instance (+0x68), then the walk.
+inline void pfx_bind_thrust( pfx_heap_t& h, std::uint32_t system, std::uint32_t boat )
+{
+    pfx_system_bind( h, system, "VuPfxEmitBoatThrustQuadFountain", 0x28, boat );
+}
+
+inline void pfx_bind_hull( pfx_heap_t& h, std::uint32_t system, std::uint32_t boat, std::uint32_t fluids )
+{
+    pfx_system_bind( h, system, "VuPfxEmitBoatHull", 0x18, fluids );
+    pfx_system_bind( h, system, "VuPfxEmitBoatHull", 0x14, boat );
+    pfx_system_start( h, system );
+}
+
+inline void pfx_bind_spring( pfx_heap_t& h, std::uint32_t system, std::uint32_t boat )
+{
+    pfx_system_start( h, system );
+    pfx_system_bind( h, system, "VuPfxBoatSpringConstraint", 0x14, boat );
+}
 
 inline pfx_quad_particle_t& pfx_heap_particle( pfx_heap_t& h, std::uint32_t p )
 {
@@ -588,6 +708,7 @@ struct pfx_heap_emit_t
     std::uint32_t r, pattern, process;
     pfx_rand_t* rand;
     float matrix[ 16 ];
+    pfx_frame_t* frame;
 };
 
 // One process instance's slot 1 (dt). The fountains' 0x55D030 (world/pfx.hxx
@@ -613,20 +734,33 @@ inline void pfx_process_tick( pfx_heap_t& h, std::uint32_t r, std::uint32_t b, f
     };
     switch ( vt )
     {
+    case 0x746AF0u:   // the boat thrust quad fountain (0x4CD5B0: the rate, then the fountain)
     case 0x746AE0u:   // the quad fountain
     case 0x74EEE8u:   // the directional quad fountain
     case 0x74EF1Cu:   // the geom fountain
     {
         const std::uint8_t* bytes = reinterpret_cast< const std::uint8_t* >( h.find( node ) );
-        if ( bytes[ 0x90 ] != 0u )
-            ++f.unrecreated;   // the water snap 0x529140
+        if ( vt == 0x746AF0u )
+        {
+            bool found;
+            const pfx_frame_boat_t* boat = pfx_frame_boat( f, h[ b + 0x28 ], found );
+            if ( !found || ( boat != nullptr && ( boat->view == nullptr || boat->records == nullptr ) ) )
+            {
+                ++f.unrecreated;
+                break;
+            }
+            pfx_fountain_node_t rate;
+            rate.rate_scale = h.f( b + 0x20 );
+            pfx_boat_thrust_rate( rate, bytes, boat != nullptr ? boat->view : nullptr, boat != nullptr ? boat->records : nullptr );
+            h.set( b + 0x20, rate.rate_scale );
+        }
         pfx_fountain_node_t n;
         n.alive = static_cast< int >( h[ b + 0x14 ] );
         n.accumulator = h.f( b + 0x18 );
         n.count_scale = h.f( b + 0x1C );
         n.rate_scale = h.f( b + 0x20 );
         n.alpha_scale = h.f( b + 0x24 );
-        pfx_heap_emit_t e{ &h, r, pattern, b, f.rand, {} };
+        pfx_heap_emit_t e{ &h, r, pattern, b, f.rand, {}, &f };
         const std::uint32_t m = pfx_pattern_spawn_matrix( h, pattern );
         static const float identity[ 16 ] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
         for ( int k = 0; k < 16; ++k )
@@ -649,8 +783,21 @@ inline void pfx_process_tick( pfx_heap_t& h, std::uint32_t r, std::uint32_t b, f
             {
             case 0x74EEE8u: pfx_directional_fountain_init( *x.rand, pb, velocity, x.matrix, p ); break;
             case 0x74EF1Cu: pfx_geom_fountain_init( *x.rand, pb, x.matrix, p ); break;
-            default: pfx_quad_fountain_init( *x.rand, pb, p ); break;
+            default: pfx_quad_fountain_init( *x.rand, pb, p ); break;   // the quad and the boat thrust fountains
             }
+        };
+        hooks.snap = []( void* u, pfx_quad_particle_t& p ) {
+            pfx_frame_t& fr = *static_cast< pfx_heap_emit_t* >( u )->frame;
+            if ( !fr.water )
+                return;
+            water_vertex_t out;
+            std::memset( &out, 0, sizeof( out ) );
+            if ( fr.snap == nullptr || !fr.snap( fr.user, reinterpret_cast< const float* >( &p.w[ 2 ] ), out ) )   // +8 .. +0x14
+            {
+                ++fr.unrecreated;
+                return;
+            }
+            p.set( 0x10, out.height );
         };
         const std::uint32_t s = h[ pattern + 0x0C ];
         const float position[ 3 ] = { h.f( s + 0x4C ), h.f( s + 0x50 ), h.f( s + 0x54 ) };
@@ -678,7 +825,70 @@ inline void pfx_process_tick( pfx_heap_t& h, std::uint32_t r, std::uint32_t b, f
         }
         break;
     }
-    default: ++f.unrecreated; break;   // the boat processes
+    case 0x746AD4u:   // the boat spring constraint 0x4CD980: the boat's position and velocity, read once
+    {
+        bool found;
+        const pfx_frame_boat_t* boat = pfx_frame_boat( f, h[ b + 0x14 ], found );
+        if ( !found )
+        {
+            ++f.unrecreated;
+            break;
+        }
+        for ( std::uint32_t p = h[ pattern + 0x20 ]; p != 0u; p = h[ p ] )
+        {
+            float w[ 25 ];
+            std::memcpy( w, h.find( p ), sizeof( w ) );
+            pfx_tick_boat_spring( w, params, boat != nullptr ? boat->position : nullptr, boat != nullptr ? boat->velocity : nullptr, dt );
+            std::memcpy( h.find( p ), w, sizeof( w ) );
+        }
+        break;
+    }
+    case 0x746B90u:   // the boat hull 0x4CE760: +0x14 the boat, +0x18 the fluids, +0x1C the accumulator
+    {
+        bool found;
+        const pfx_frame_boat_t* boat = pfx_frame_boat( f, h[ b + 0x14 ], found );
+        fluid_solver_t* solver = nullptr;
+        for ( int k = 0; k < f.fluids_count; ++k )
+            if ( f.fluids[ k ].address == h[ b + 0x18 ] )
+                solver = f.fluids[ k ].solver;
+        // Retail returns before the fluids are touched without a boat or with dt
+        // at most FLT_EPSILON; past that it needs them, the hull view and both hooks.
+        const bool runs = boat != nullptr && _mm_comige_ss( _mm_set_ss( 1.1920929e-07f ), _mm_set_ss( dt ) ) == 0;
+        if ( !found || ( runs && ( boat->hull == nullptr || solver == nullptr || f.prepare == nullptr || f.point == nullptr ) ) )
+        {
+            ++f.unrecreated;
+            break;
+        }
+        struct hull_t
+        {
+            pfx_heap_t* h;
+            std::uint32_t r, pattern;
+            pfx_frame_t* f;
+            fluid_solver_t* solver;
+        } x{ &h, r, pattern, &f, solver };
+        pfx_hull_hooks_t hooks;
+        hooks.user = &x;
+        hooks.prepare = []( void* u, const float* m ) {
+            hull_t& y = *static_cast< hull_t* >( u );
+            y.f->prepare( y.f->user, *y.solver, m );
+        };
+        hooks.point = []( void* u, const float* p, float* out ) {
+            hull_t& y = *static_cast< hull_t* >( u );
+            return y.f->point( y.f->user, p, out );
+        };
+        hooks.allocate = []( void* u ) -> pfx_quad_particle_t* {   // the pattern's slot 4 0x58B4E0
+            hull_t& y = *static_cast< hull_t* >( u );
+            const std::uint32_t p = pfx_particle_allocate( *y.h, y.r, y.pattern );
+            return p != 0u ? &pfx_heap_particle( *y.h, p ) : nullptr;
+        };
+        float accumulator = h.f( b + 0x1C );
+        static fluid_solver_t none;
+        f.unrecreated += pfx_boat_hull_emit( accumulator, reinterpret_cast< const std::uint8_t* >( h.find( node ) ), runs ? boat->hull : nullptr,
+            solver != nullptr ? *solver : none, *f.rand, f.cameras, f.camera_count, dt, hooks );
+        h.set( b + 0x1C, accumulator );
+        break;
+    }
+    default: ++f.unrecreated; break;
     }
 }
 

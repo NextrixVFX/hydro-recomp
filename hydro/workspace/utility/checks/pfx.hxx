@@ -7,6 +7,7 @@
 
 #include <cstring>
 #include <map>
+#include <memory>
 #include <vector>
 
 // The water area's particle checks (included by checks/water.hxx before verify_water_all, which runs
@@ -346,14 +347,142 @@ inline bool verify_pfx_lifecycle( )
 // +0x9C, pattern +0x38 / +0x48, and a directional fountain particle's +0x24 / a geom fountain particle's +0x50 - here
 // every particle's +0x24 and +0x50 are skipped, as the case cannot tell which fountain made a particle) and the
 // VuRand's 34 words; no unrecreated path may be reached.
+//
+// With `boats` (case pfx_boats): the boat processes on the heap - the frame's boats / fluids from the table, the binds
+// (operation 8: pfx_bind_thrust / pfx_bind_hull / pfx_bind_spring) and every operation's recorded hook calls replayed in
+// order (prepare: the fluids and the matrix compared; the one-point query: the point compared, the answer handed back;
+// the snap: the point compared, the height handed back) - a call out of order or left over is a difference. Every
+// particle's +0x14 is skipped too: a hull particle from a picked sample takes retail's stale stack word there (spray.hxx).
 struct pfx_check_run_t
 {
     std::map< std::uint32_t, std::vector< std::uint32_t > > kids;
     pfx_frame_t frame;
     std::uint32_t r = 0;
+    // the boats
+    std::vector< pfx_frame_boat_t > boats;
+    std::vector< pfx_frame_fluids_t > fluids;
+    std::vector< std::unique_ptr< fluids_mesh_t > > meshes;
+    std::vector< std::unique_ptr< fluid_solver_t > > solvers;
+    std::vector< std::unique_ptr< solver_rigid_t > > bodies;
+    std::vector< std::unique_ptr< boat_view_t > > views;
+    std::vector< std::unique_ptr< pfx_hull_boat_t > > hulls;
+    std::vector< std::vector< std::uint8_t > > records;
+    const unsigned* calls = nullptr;
+    unsigned left = 0;
+    int bad = 0;
+    int made[ 4 ]{};
+    const unsigned* next( unsigned type )
+    {
+        if ( left == 0u || calls[ 1 ] != type )
+        {
+            ++bad;
+            return nullptr;
+        }
+        const unsigned* c = calls + 2;
+        ++made[ type & 3u ];
+        calls += 1 + calls[ 0 ];
+        --left;
+        return c;
+    }
 };
 
-inline bool pfx_check_run( const unsigned* s, const char* tag )
+// The boat table (g_golden_pbt_boats) into the frame's entries.
+inline void pfx_check_boats( pfx_check_run_t& run, const unsigned* b, std::size_t count )
+{
+    for ( std::size_t k = 0; k < count; ++k )
+    {
+        pfx_frame_boat_t e;
+        e.address = b[ 0 ];
+        const std::uint32_t fluids = b[ 1 ];
+        run.bodies.push_back( std::make_unique< solver_rigid_t >( ) );
+        solver_rigid_t& body = *run.bodies.back( );
+        const unsigned* m = b + 13;   // the matrix
+        const unsigned* bodies = b + 13 + 16 + 4 + 2 + 16;
+        for ( int i = 0; i < 4; ++i )
+            body.linear_velocity[ i ] = water_bits( bodies[ 4 + i ] );
+        run.views.push_back( std::make_unique< boat_view_t >( boat_view_t{ water_bits( b[ 2 ] ), b[ 3 ], static_cast< std::uint8_t >( b[ 4 ] ),
+            static_cast< std::uint8_t >( b[ 5 ] ), { }, 0, 0, 0, body } ) );
+        boat_view_t& v = *run.views.back( );
+        for ( int i = 0; i < 3; ++i )
+            v.o50_60[ i ] = water_bits( m[ 4 + i ] );
+        v.o22C_04 = water_bits( b[ 6 ] );
+        v.o22C_0C = water_bits( b[ 7 ] );
+        v.o22C0_470 = water_bits( b[ 8 ] );
+        run.records.emplace_back( 32, std::uint8_t( 0 ) );
+        for ( int i = 0; i < 4; ++i )
+            run.records.back( )[ 8 * i ] = static_cast< std::uint8_t >( b[ 9 + i ] );
+        e.view = &v;
+        e.records = run.records.back( ).data( );
+        for ( int i = 0; i < 3; ++i )
+        {
+            e.position[ i ] = water_bits( m[ 12 + i ] );
+            e.velocity[ i ] = water_bits( bodies[ 4 + i ] );
+        }
+        run.hulls.push_back( std::make_unique< pfx_hull_boat_t >( ) );
+        pfx_hull_boat_t& h = *run.hulls.back( );
+        std::memcpy( h.transform, m, 64 );
+        std::memcpy( h.offset, m + 16, 16 );
+        h.part_flag = static_cast< std::uint8_t >( m[ 20 ] );
+        h.part_count = static_cast< std::int32_t >( m[ 21 ] );
+        std::memcpy( h.part_matrix, m + 22, 64 );
+        pfx_hull_body_t* hb[ 2 ] = { &h.body, &h.part_body };
+        for ( int j = 0; j < 2; ++j )
+        {
+            std::memcpy( hb[ j ]->position, bodies + 12 * j, 12 );
+            std::memcpy( hb[ j ]->linear, bodies + 12 * j + 4, 12 );
+            std::memcpy( hb[ j ]->angular, bodies + 12 * j + 8, 12 );
+        }
+        e.hull = &h;
+        run.boats.push_back( e );
+        const unsigned* t = bodies + 24;
+        const unsigned ntri = t[ 0 ], nedge = t[ 1 ];
+        run.meshes.push_back( std::make_unique< fluids_mesh_t >( ) );
+        run.meshes.back( )->triangles.assign( t + 2, t + 2 + 15 * ntri );
+        run.solvers.push_back( std::make_unique< fluid_solver_t >( ) );
+        fluid_solver_t& sv = *run.solvers.back( );
+        sv.mesh = run.meshes.back( ).get( );
+        sv.edges.resize( nedge );
+        std::memcpy( sv.edges.data( ), t + 2 + 15 * ntri, 40u * nedge );
+        run.fluids.push_back( { fluids, &sv } );
+        b = t + 2 + 15 * ntri + 10 * nedge;
+    }
+    run.frame.boats = run.boats.data( );
+    run.frame.boat_count = static_cast< int >( run.boats.size( ) );
+    run.frame.fluids = run.fluids.data( );
+    run.frame.fluids_count = static_cast< int >( run.fluids.size( ) );
+    run.frame.user = &run;
+    run.frame.prepare = []( void* u, fluid_solver_t& solver, const float* matrix ) {
+        pfx_check_run_t& c = *static_cast< pfx_check_run_t* >( u );
+        const unsigned* r = c.next( 1u );
+        if ( r == nullptr )
+            return;
+        if ( r[ 0 ] >= c.solvers.size( ) || c.solvers[ r[ 0 ] ].get( ) != &solver || std::memcmp( r + 1, matrix, 64 ) != 0 )
+            ++c.bad;
+    };
+    run.frame.point = []( void* u, const float* point, float* out ) {
+        pfx_check_run_t& c = *static_cast< pfx_check_run_t* >( u );
+        const unsigned* r = c.next( 2u );
+        if ( r == nullptr )
+            return false;
+        if ( std::memcmp( r, point, 12 ) != 0 )
+            ++c.bad;
+        std::memcpy( out, r + 3, 32 );
+        return true;
+    };
+    run.frame.water = true;
+    run.frame.snap = []( void* u, const float* point, water_vertex_t& out ) {
+        pfx_check_run_t& c = *static_cast< pfx_check_run_t* >( u );
+        const unsigned* r = c.next( 3u );
+        if ( r == nullptr )
+            return false;
+        if ( std::memcmp( r, point, 12 ) != 0 )   // the w word is the particle's +0x14 (skipped above); the height never reads it
+            ++c.bad;
+        std::memcpy( &out.height, r + 4, 4 );
+        return true;
+    };
+}
+
+inline bool pfx_check_run( const unsigned* s, const char* tag, const unsigned* boats = nullptr, std::size_t boat_count = 0 )
 {
     const std::uint32_t res = s[ 0 ];
     const std::uint32_t blocks[ 4 ] = { s[ 1 ], s[ 2 ], s[ 3 ], s[ 4 ] };
@@ -364,6 +493,8 @@ inline bool pfx_check_run( const unsigned* s, const char* tag )
         pairs[ k ] = ( pairs[ k ] + 15u ) & 0xFFFFFFF0u;
     pfx_check_run_t run;
     run.r = res;
+    if ( boats != nullptr )
+        pfx_check_boats( run, boats, boat_count );
     const unsigned* box = s + 13;
     for ( int k = 0; k < 3; ++k )
     {
@@ -439,7 +570,7 @@ inline bool pfx_check_run( const unsigned* s, const char* tag )
             {
                 const std::uint32_t in = o % pairs[ 2 * b + 1 ];
                 if ( ( b == 0 && ( in == 0x8Cu || in == 0x9Cu ) ) || ( b == 1 && ( in == 0x38u || in == 0x48u ) ) ||
-                     ( b == 3 && ( in == 0x24u || in == 0x50u ) ) )
+                     ( b == 3 && ( in == 0x24u || in == 0x50u || ( boats != nullptr && in == 0x14u ) ) ) )
                     continue;
                 one( h[ blocks[ b ] + o ], *want, names[ b ], o );
             }
@@ -460,6 +591,13 @@ inline bool pfx_check_run( const unsigned* s, const char* tag )
     {
         const unsigned code = *s++;
         int bad = 0;
+        if ( boats != nullptr )
+        {
+            static const unsigned operands[ 9 ] = { 2, 1, 0, 2, 2, 1, 0, 7, 3 };
+            const unsigned* cl = s + operands[ code < 9u ? code : 6u ];
+            run.left = cl[ 0 ];
+            run.calls = cl + 1;
+        }
         switch ( code )
         {
         case 0: bad += pfx_system_instance_create( h, res, addr[ s[ 0 ] ], hooks ) != s[ 1 ] ? 1 : 0; s += 2; break;
@@ -482,7 +620,32 @@ inline bool pfx_check_run( const unsigned* s, const char* tag )
             }
             s += 7;
             break;
+        case 8:
+        {
+            const int bi = static_cast< int >( s[ 2 ] );
+            const std::uint32_t boat = bi >= 0 ? run.boats[ static_cast< std::size_t >( bi ) ].address : 0u;
+            const std::uint32_t fluids = bi >= 0 ? run.fluids[ static_cast< std::size_t >( bi ) ].address : 0u;
+            if ( s[ 1 ] == 0u )
+                pfx_bind_thrust( h, s[ 0 ], boat );
+            else if ( s[ 1 ] == 1u )
+                pfx_bind_hull( h, s[ 0 ], boat, fluids );
+            else
+                pfx_bind_spring( h, s[ 0 ], boat );
+            s += 3;
+            break;
+        }
         default: pfx_impl_tick( h, res ); break;
+        }
+        if ( boats != nullptr )
+        {
+            bad += run.bad + ( run.left != 0u ? 1 : 0 );   // the operation's calls all consumed, none differing
+            if ( run.bad != 0 || run.left != 0u )
+                LOG_ERROR( "%s step %d: %d hook calls differ, %u not made (next type %u)", tag, static_cast< int >( i ), run.bad, run.left,
+                    run.left != 0u ? run.calls[ 1 ] : 0u );
+            run.bad = 0;
+            const unsigned ncalls = *s++;
+            for ( unsigned c = 0; c < ncalls; ++c )
+                s += 1 + s[ 0 ];
         }
         bad += compare( s, static_cast< int >( i ) );
         const int live = static_cast< int >( pairs[ 6 ] - h[ res + 0x3C ] );
@@ -505,6 +668,9 @@ inline bool pfx_check_run( const unsigned* s, const char* tag )
             tag, static_cast< int >( nops ), particles, compared );
     else
         LOG_ERROR( "%s FAILED %d of %d steps", tag, failed, static_cast< int >( nops ) + 1 );
+    if ( failed == 0 && boats != nullptr )
+        LOG_INFO( "%s: the boat hooks replayed in order - %d VuFluidSolver_prepare, %d one-point queries, %d water snaps", tag, run.made[ 1 ],
+            run.made[ 2 ], run.made[ 3 ] );
     return failed == 0;
 }
 
@@ -513,6 +679,10 @@ inline bool verify_pfx_run( ) { return pfx_check_run( g_golden_prn_words, "pfx_r
 // The trail pattern's tick 0x58F0C0 (pfxsim.hxx pfx_heap_trail_tick) in the same end-to-end run (case pfx_trail: pfx_run's
 // harness with trail patterns and their generic processes among the quad / geom ones).
 inline bool verify_pfx_trail( ) { return pfx_check_run( g_golden_ptr_words, "pfx_trail" ); }
+
+// The boat processes on the heap (pfxsim.hxx pfx_process_tick: thrust 0x4CD5B0, hull 0x4CE760, boat spring 0x4CD980, the
+// fountains' water snap; the binds 0x41A69B / 0x41A083 / 0x43BFD6) in the same end-to-end run (case pfx_boats).
+inline bool verify_pfx_boats( ) { return pfx_check_run( g_golden_pbt_words, "pfx_boats", g_golden_pbt_boats, g_golden_pbt_boat_count ); }
 
 // The water classes' getType slots (world/surface.hxx g_water_types) against retail (case water_types): per slot the
 // descriptor it returns and the chain of names its descriptor walks to.
@@ -889,6 +1059,7 @@ inline bool verify_pfx_all( )
 {
     bool ok = true;
     ok = verify_water_snap( ) && ok;
+    ok = verify_pfx_boats( ) && ok;
     ok = verify_pfx_manager( ) && ok;
     ok = verify_pfx_load( ) && ok;
     ok = verify_water_types( ) && ok;

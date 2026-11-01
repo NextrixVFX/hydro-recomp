@@ -321,8 +321,12 @@ struct pfx_rand_t
 // +0x60 .. velocity, +0x70 .. / +0x80 .. position (each a min / max pair the
 // draw blends as (1 - r) * min + max * r), +0x90 the water snap flag, +0x94
 // Draw Distance. Allocation (the pattern's slot 4), the matrix (its slot 5),
-// the node's own slot 2 and the water snap 0x529140 are hooks; the snap is
-// NOT modelled (callers pass its flag clear).
+// the node's own slot 2 and the water snap are hooks. The snap (0x55D99B):
+// after slot 2, when the +0x90 byte is set and g 0x759058 (VuWater) is not
+// null, 0x529140 on the particle's +8 position and its +0x10 (z) = that
+// answer's +0x20 (world/query.hxx water_point_height) - `snap` is told the
+// particle only when the byte is set and decides on the VuWater (null hook:
+// nothing happens).
 struct pfx_fountain_node_t
 {
     int alive = 0;
@@ -338,6 +342,7 @@ struct pfx_fountain_hooks_t
     pfx_quad_particle_t* ( *allocate )( void* user ) = nullptr;
     const float* ( *matrix )( void* user ) = nullptr;
     void ( *init )( void* user, pfx_quad_particle_t& p ) = nullptr;
+    void ( *snap )( void* user, pfx_quad_particle_t& p ) = nullptr;
 };
 
 inline void pfx_fountain_emit( pfx_fountain_node_t& node, const std::uint8_t* params, pfx_rand_t& rand,
@@ -407,6 +412,8 @@ inline void pfx_fountain_emit( pfx_fountain_node_t& node, const std::uint8_t* pa
             p->set( 0x1C, system_velocity[ 1 ] + ( ( ( vx * m[ 1 ] ) + ( vy * m[ 5 ] ) ) + ( vz * m[ 9 ] ) ) );
             p->set( 0x20, system_velocity[ 2 ] + ( ( ( m[ 2 ] * vx ) + ( m[ 6 ] * vy ) ) + ( vz * m[ 10 ] ) ) );
             hooks.init( hooks.user, *p );
+            if ( params[ 0x90 ] != 0u && hooks.snap != nullptr )
+                hooks.snap( hooks.user, *p );
             ++node.alive;
             if ( limit > 0 && node.alive >= limit )
                 return;
