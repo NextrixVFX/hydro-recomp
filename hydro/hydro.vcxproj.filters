@@ -102,6 +102,9 @@
     <ClInclude Include="workspace\core\boat\hull.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\boat\human.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\boat\load.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
@@ -109,6 +112,9 @@
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\boat\parts.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\boat\pilots.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\boat\respawn.hxx">
