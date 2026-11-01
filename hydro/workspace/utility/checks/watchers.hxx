@@ -1084,11 +1084,66 @@ inline bool verify_water_ctors_game( )
         LOG_ERROR( "water_ctors_game FAILED %d of %u", failed, n );
     return failed == 0;
 }
+// VuWater's create 0x527E90 / ctor 0x528050 (world/surface.hxx water_create) against retail (case water_create; the heap
+// filled with 0xA5): the global, the vtable, the pool (+4 capacity, +8 free count, +0xC the first node, +0x10 the free head,
+// every node's next), +0x14, the +0x18 byte, +0x1C, the three lists empty (sentinels self-linked, sizes 0), the wave list
+// +0x30, the surface tree +0x3C null, +0x40 the wake rate, the three bytes +0x44 .. +0x46. Not compared: +0x18's other
+// three bytes and +0x47 (never written), a node's first word (never written).
+inline bool verify_water_create( )
+{
+    water_built_t b{};
+    b.surface_list.push_back( 7 );   // stale state the create must not keep
+    water_create( b );
+    const unsigned* s = g_golden_wcr_words;
+    int bad = 0, compared = 0;
+    auto eq = [ & ]( unsigned got, unsigned want ) {
+        ++compared;
+        bad += got != want;
+    };
+    float rate = b.wake_rate;
+    unsigned rate_bits;
+    std::memcpy( &rate_bits, &rate, 4 );
+    const water_hold_t& h = b.hold;
+    eq( s[ 0 ], 1u );
+    const unsigned* w = s + 1;
+    eq( w[ 0 ], k_water_vtable );
+    eq( w[ 1 ], static_cast< unsigned >( h.pool.size( ) ) );
+    eq( w[ 2 ], static_cast< unsigned >( h.pool_count ) );
+    eq( w[ 3 ], 0u );   // the block: node 0
+    eq( w[ 4 ], h.pool_free < 0 ? 0xFFFFFFFFu : static_cast< unsigned >( h.pool_free ) );
+    eq( w[ 5 ], 0u );
+    eq( w[ 6 ] & 0xFFu, 0u );   // skip_waves (the view's water_t starts false)
+    eq( w[ 7 ], 0u );
+    eq( w[ 8 ], 1u );
+    eq( w[ 9 ], static_cast< unsigned >( b.surface_list.size( ) ) );
+    eq( w[ 10 ], 1u );
+    eq( w[ 11 ], 0u );
+    eq( w[ 12 ], h.list < 0 ? 0u : 1u );
+    eq( w[ 13 ], 1u );
+    eq( w[ 14 ], 0u );
+    eq( w[ 15 ], h.surface_tree.nodes.empty( ) ? 0u : 1u );
+    eq( w[ 16 ], rate_bits );
+    eq( w[ 17 ] & 0xFFFFFFu, static_cast< unsigned >( b.render_flags[ 0 ] | b.render_flags[ 1 ] << 8 | b.render_flags[ 2 ] << 16 ) );
+    const unsigned* q = w + 18;
+    for ( int k = 0; k < 6; ++k )
+        eq( q[ k ], 1u );
+    q += 6;
+    const unsigned nodes = *q++;
+    eq( nodes, static_cast< unsigned >( h.pool.size( ) ) );
+    for ( unsigned k = 0; k < nodes && k < h.pool.size( ); ++k )
+        eq( q[ k ], h.pool[ k ].next < 0 ? 0xFFFFFFFFu : static_cast< unsigned >( h.pool[ k ].next ) );
+    if ( bad == 0 )
+        LOG_SUCCESS( "water_create matches VuWater's create 0x527E90 / ctor 0x528050 (pool 0x594B20): %d values", compared );
+    else
+        LOG_ERROR( "water_create FAILED %d of %d", bad, compared );
+    return bad == 0;
+}
 inline bool verify_watchers_all( )
 {
     bool ok = true;
     ok = verify_water_types_game( ) && ok;
     ok = verify_water_ctors_game( ) && ok;
+    ok = verify_water_create( ) && ok;
     ok = verify_flow_wave( ) && ok;
     ok = verify_static_wake( ) && ok;
     ok = verify_static_wake_watcher( ) && ok;
