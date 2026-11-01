@@ -233,3 +233,48 @@ inline bool ui_config_draw( ui_gfx_sort_t& sort, const ui_font_draw_env_t& env, 
     }
     return known;
 }
+
+// VuBaseConfigEntity slot 15 0x448B90 (the Vu2dLayoutComponent's draw; bool;
+// ret 4), disassembled. When set: per option row (ComboBoxID's record, unchecked
+// in retail: false here when outside) the block's ValueText rect at the row
+// position as a rect draw 0x507A00 in the value params' own colour (+0xDC), and
+// the block's LeftArrowTexture (+0x1C8) at its own size at the row position +
+// LeftArrowPosition (white, 0x507360); then the TouchLeft (+0x278) and
+// TouchRight (+0x288) rects at Position as white rect draws - all over the
+// Screen Scale at Depth x 0.005 + 0.5. Then always 0x448F50 (ui_config_draw).
+inline bool ui_config_layout_draw( ui_gfx_sort_t& sort, const ui_font_draw_env_t& env, const ui_config_entity_t& e, const ui_combo_block_t& b,
+                                   const float scale[ 2 ], const float position[ 2 ], float spacing, float depth_property,
+                                   const float touch_left[ 4 ], const float touch_right[ 4 ], const ui_combo_inputs_t& in, bool layout )
+{
+    if ( layout )
+    {
+        float y = position[ 1 ];
+        std::uint32_t own;
+        std::memcpy( &own, b.m_value_params + 12, 4 );
+        for ( const value_t* option : e.m_options )
+        {
+            const float depth = depth_property * 0.005f + 0.5f;   // 0x6F75C4, 0x6F765C
+            const int id = ui_json_as_int( member( *option, "ComboBoxID" ) );
+            if ( id < 0 || static_cast< std::size_t >( id ) >= e.m_combos.size( ) )
+                return false;
+            const float ix = 1.0f / scale[ 0 ];
+            const float iy = 1.0f / scale[ 1 ];
+            const float rect[ 4 ] = { ix * ( b.m_value_rect[ 0 ] + position[ 0 ] ), iy * ( b.m_value_rect[ 1 ] + y ), ix * b.m_value_rect[ 2 ],
+                                      iy * b.m_value_rect[ 3 ] };
+            ui_rect_draw( sort, env, own, rect, depth );
+            const float at[ 2 ] = { b.m_left[ 0 ] + position[ 0 ], b.m_left[ 1 ] + y };
+            ui_combo_texture_draw( sort, env, in.m_texture ? in.m_texture( ui_combo_left ) : nullptr, at, scale, 0xFFFFFFFFu, depth );
+            y = spacing + y;
+        }
+        const float depth = depth_property * 0.005f + 0.5f;
+        const float ix = 1.0f / scale[ 0 ];
+        const float iy = 1.0f / scale[ 1 ];
+        const float left[ 4 ] = { ix * ( position[ 0 ] + touch_left[ 0 ] ), iy * ( touch_left[ 1 ] + position[ 1 ] ), ix * touch_left[ 2 ],
+                                  iy * touch_left[ 3 ] };
+        ui_rect_draw( sort, env, 0xFFFFFFFFu, left, depth );
+        const float right[ 4 ] = { ix * ( touch_right[ 0 ] + position[ 0 ] ), iy * ( touch_right[ 1 ] + position[ 1 ] ), ix * touch_right[ 2 ],
+                                   iy * touch_right[ 3 ] };
+        ui_rect_draw( sort, env, 0xFFFFFFFFu, right, depth );
+    }
+    return ui_config_draw( sort, env, e, b, scale, position, spacing, depth_property, in );
+}

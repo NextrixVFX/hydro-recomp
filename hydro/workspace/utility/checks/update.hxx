@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -30,6 +31,7 @@ inline bool verify_ui_frames( )
         const auto found = templates->find( "VuTemplateAsset/" + name );
         return found == templates->end( ) ? nullptr : &found->second;
     } );
+    int sliders = 0;
     int failed = 0, steps = 0, traces = 0, buttons = 0, tickers = 0, rows = 0, entities = 0, unknown_inputs = 0, unknown_events = 0;
     auto bad = [ &failed ]( const char* what, const char* project, int step )
     {
@@ -86,7 +88,74 @@ inline bool verify_ui_frames( )
         hooks.m_delta = [ delta ] { return delta; };
         const std::uint32_t font = gp.m_font;
         hooks.m_font = [ font ]( const entity_t& ) { return font; };
+        // the sliders' environment: the settings manager's fields, the inverse crop matrix and the step's touch points (hex words)
+        const auto words = []( const char* text, std::vector< float >& out )
+        {
+            out.clear( );
+            for ( const char* at = text; at && *at; )
+            {
+                char* end = nullptr;
+                const std::uint32_t bits = static_cast< std::uint32_t >( std::strtoul( at, &end, 16 ) );
+                float f;
+                std::memcpy( &f, &bits, 4 );
+                out.push_back( f );
+                if ( !end || end == at )
+                    break;
+                at = *end ? end + 1 : end;
+            }
+        };
+        std::vector< float > settings0, inverse, points;
+        words( gp.m_settings, settings0 );
+        words( gp.m_inverse, inverse );
+        ui_settings_t settings;
+        if ( settings0.size( ) == 5 )
+        {
+            settings.m_steering = settings0[ 0 ];
+            settings.m_effect = settings0[ 1 ];
+            settings.m_music = settings0[ 2 ];
+            settings.m_display = settings0[ 3 ];
+            settings.m_display_out = settings0[ 4 ];
+        }
+        hooks.m_settings = &settings;
+        hooks.m_inverse = inverse.size( ) == 16 ? inverse.data( ) : nullptr;
+        hooks.m_touch_count = [ &points ] { return static_cast< int >( points.size( ) / 2 ); };
+        hooks.m_touch_point = [ &points ]( int i, float out[ 2 ] )
+        {
+            if ( i >= 0 && static_cast< std::size_t >( 2 * i + 1 ) < points.size( ) )
+                out[ 0 ] = points[ static_cast< std::size_t >( 2 * i ) ], out[ 1 ] = points[ static_cast< std::size_t >( 2 * i + 1 ) ];
+        };
+        const auto settings_text = [ &settings ]
+        {
+            const float f[ 5 ] = { settings.m_steering, settings.m_effect, settings.m_music, settings.m_display, settings.m_display_out };
+            std::string text;
+            for ( int k = 0; k < 5; ++k )
+            {
+                std::uint32_t bits;
+                std::memcpy( &bits, &f[ k ], 4 );
+                char word[ 16 ];
+                std::snprintf( word, sizeof( word ), k ? ".0x%08X" : "0x%08X", bits );
+                text += word;
+            }
+            return text;
+        };
         c_ui_binding bind( *root, hooks );
+        const auto same_sliders = [ &bind, &sliders ]( int first, int count )
+        {
+            std::vector< std::pair< int, std::string > > have;
+            for ( const auto& b : bind.m_bound )
+                if ( b->m_slider )
+                {
+                    char text[ 16 ];
+                    std::snprintf( text, sizeof( text ), "%02x.%02x%02x", b->m_slider->m_visible, b->m_slider->m_focused, b->m_slider->m_latched );
+                    have.push_back( { b->m_index, text } );
+                }
+            bool ok = have.size( ) == static_cast< std::size_t >( count );
+            for ( int k = 0; ok && k < count; ++k )
+                ok = have[ static_cast< std::size_t >( k ) ].first == g_golden_frm_sliders[ first + k ].m_index &&
+                     have[ static_cast< std::size_t >( k ) ].second == g_golden_frm_sliders[ first + k ].m_state;
+            sliders += count;
+            return ok;
+        };
         // the tree and the event maps
         bool same = bind.m_bound.size( ) == static_cast< std::size_t >( gp.m_entities );
         for ( int k = 0; same && k < gp.m_entities; ++k )
@@ -174,6 +243,8 @@ inline bool verify_ui_frames( )
             bad( "the buttons' loaded state", gp.m_asset, -1 );
         if ( !same_tickers( gp.m_first_ticker, gp.m_tickers ) )
             bad( "the tickers' loaded state", gp.m_asset, -1 );
+        if ( !same_sliders( gp.m_first_slider, gp.m_sliders ) )
+            bad( "the sliders' loaded state", gp.m_asset, -1 );
         for ( int s = 0; s < gp.m_steps; ++s )
         {
             const golden_frm_step_t& st = g_golden_frm_steps[ gp.m_first_step + s ];
@@ -185,6 +256,7 @@ inline bool verify_ui_frames( )
                 at = end ? end + 1 : at + std::strlen( at );
             }
             bind.m_trace.clear( );
+            words( st.m_touches, points );   // "x,y;x,y": the separators are skipped alike
             if ( std::strcmp( st.m_op, "enter" ) == 0 )
                 bind.enter( );
             else if ( std::strcmp( st.m_op, "exit" ) == 0 )
@@ -199,7 +271,9 @@ inline bool verify_ui_frames( )
                 char font[ 16 ];
                 std::snprintf( font, sizeof( font ), "0x%08X", t.m_font );
                 const bool params = t.m_kind == ui_trace_kind_t::measure ? std::strcmp( font, g.m_params ) == 0
-                                    : t.m_kind == ui_trace_kind_t::sound || t.m_kind == ui_trace_kind_t::event || t.m_kind == ui_trace_kind_t::string
+                                    : t.m_kind == ui_trace_kind_t::sound || t.m_kind == ui_trace_kind_t::event || t.m_kind == ui_trace_kind_t::string ||
+                                              t.m_kind == ui_trace_kind_t::touches || t.m_kind == ui_trace_kind_t::touch ||
+                                              t.m_kind == ui_trace_kind_t::category
                                         ? true
                                         : ui_hex( t.m_params ) == g.m_params;
                 ok = static_cast< int >( t.m_kind ) == g.m_kind && t.m_index == g.m_index && t.m_name == g.m_name && t.m_word == g.m_word && params &&
@@ -216,6 +290,10 @@ inline bool verify_ui_frames( )
                 bad( "the button states", gp.m_asset, s );
             if ( !same_tickers( st.m_first_ticker, st.m_tickers ) )
                 bad( "the ticker states", gp.m_asset, s );
+            if ( !same_sliders( st.m_first_slider, st.m_sliders ) )
+                bad( "the slider states", gp.m_asset, s );
+            if ( settings_text( ) != st.m_settings )
+                bad( "the settings manager", gp.m_asset, s );
             std::string after;
             vujb_dump( game_root, after );
             if ( after != st.m_root )
@@ -227,8 +305,10 @@ inline bool verify_ui_frames( )
         LOG_SUCCESS( "c_ui_binding matches retail's frames over %d real Screens projects (VuUIScreenEntity 0x629A70 / 0x629B90 / 0x629B00, "
                      "containers 0x62F7A0 / 0x62F7C0, buttons, VuUIEventEntity, VuIfEntity 0x5DDE60, the Info ticker, SetInfoString 0x471E30, "
                      "the actions; graph 0x5023A0 / 0x404BE0, broadcast 0x505690): %d entities and %d event-map rows, %d steps, %d trace entries "
-                     "in order (%d unrecreated inputs, %d unrecreated handlers - hooks), %d button states, %d ticker states, the game-data root",
-            static_cast< int >( g_golden_frm_projects_count ), entities, rows, steps, traces, unknown_inputs, unknown_events, buttons, tickers );
+                     "in order (%d unrecreated inputs, %d unrecreated handlers - hooks), %d button states, %d ticker states, %d slider states "
+                     "(VuSliderEntity 0x46F8F0 / 0x46F940 / 0x46FCC0, the settings manager after each step), the game-data root",
+            static_cast< int >( g_golden_frm_projects_count ), entities, rows, steps, traces, unknown_inputs, unknown_events, buttons, tickers,
+            sliders );
     else
         LOG_ERROR( "the UI per-frame binding FAILED %d checks against retail's", failed );
     return failed == 0;
