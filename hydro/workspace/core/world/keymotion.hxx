@@ -918,3 +918,39 @@ inline void key_motion_reset( key_motion_t& e )
 {
     e.latch = 0;
 }
+
+// VuMatrix_rotateAxisAngle_pre 0x55A350 / _post 0x5D0BE0 (thiscall matrix; const VuVector3* axis; the angle in xmm2;
+// retn 4) - VuRotateMotionEntity_tick 0x5D1090's pair (Local -> pre). The two bodies are the same instruction for
+// instruction but for VuMatrix_multiply 0x4078C0's operands: pre M = R x M (this = R), post M = M x R (this = M).
+// R from x87 fsincos of the angle (SUBSTITUTION: key_x87_sin / cos, the host double - as Unicorn measures it), t = 1 - c,
+// axis (x, y, z) - in retail's operand order: R0 = (t x) x + c, R1 = s z + (t x) y, R2 = (t x) z - s y, R4 = (t x) y - s z,
+// R5 = (t y) y + c, R6 = s x + (t y) z, R8 = s y + (t x) z, R9 = (t y) z - s x, R10 = (t z) z + c; R3 / R7 / R11 /
+// R12 .. R14 = 0, R15 = 1.
+inline void vu_axis_angle_rows( const float* axis, float angle, float* r )
+{
+    const float c = key_x87_cos( angle ), s = key_x87_sin( angle );
+    const float x = axis[ 0 ], y = axis[ 1 ], z = axis[ 2 ];
+    const float t = 1.0f - c;
+    const float tx = t * x, ty = t * y;
+    const float txy = tx * y, txz = tx * z, tyz = ty * z;
+    const float sx = s * x, sy = s * y, sz = s * z;
+    const float m[ 16 ] = { tx * x + c, sz + txy, txz - sy, 0.0f, txy - sz, ty * y + c, sx + tyz, 0.0f,
+                            sy + txz, tyz - sx, ( t * z ) * z + c, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f };
+    std::memcpy( r, m, 64 );
+}
+
+inline void vu_matrix_rotate_axis_angle_pre( float* m, const float* axis, float angle )   // 0x55A350
+{
+    float r[ 16 ], out[ 16 ];
+    vu_axis_angle_rows( axis, angle, r );
+    hull_multiply( r, out, m );
+    std::memcpy( m, out, 64 );
+}
+
+inline void vu_matrix_rotate_axis_angle_post( float* m, const float* axis, float angle )   // 0x5D0BE0
+{
+    float r[ 16 ], out[ 16 ];
+    vu_axis_angle_rows( axis, angle, r );
+    hull_multiply( m, out, r );
+    std::memcpy( m, out, 64 );
+}

@@ -2561,6 +2561,147 @@ inline bool verify_water_surface_distance( )
     return bad == 0;
 }
 
+// surface.hxx water_reflection_nearest against retail's VuWater 0x529470 (case water_reflection) on Hydroelectric's water
+// as water_build_world builds it: each surface's ProceduralReflection word (+0x38, loaded), then every query's height and
+// distance words, with the query's disabled surfaces' +0x38 cleared as the case poked them.
+inline bool verify_water_reflection( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "water_reflection: the document did not load" );
+        return false;
+    }
+    water_built_t built{};
+    water_build_world( *tree, built, []( entity_t& e ) { return entity_transform( e ); } );
+    const unsigned* w = g_golden_wrefl_words;
+    const unsigned ns = *w++;
+    int bad = 0;
+    if ( ns != built.surfaces.size( ) )
+    {
+        LOG_ERROR( "water_reflection: %d surfaces, retail %u", static_cast< int >( built.surfaces.size( ) ), ns );
+        return false;
+    }
+    for ( unsigned k = 0; k < ns; ++k )
+        if ( built.surfaces[ k ].word[ 0x38 / 4 ] != w[ k ] && bad++ < 4 )
+            LOG_ERROR( "water_reflection surface %u +0x38: 0x%08X, retail 0x%08X", k, built.surfaces[ k ].word[ 0x38 / 4 ], w[ k ] );
+    w += ns;
+    const unsigned n = *w++;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        float p[ 3 ];
+        std::memcpy( p, w, 12 );
+        w += 3;
+        const unsigned nd = *w++;
+        std::vector< std::uint32_t > saved( ns );
+        for ( unsigned k = 0; k < ns; ++k )
+            saved[ k ] = built.surfaces[ k ].word[ 0x38 / 4 ];
+        for ( unsigned k = 0; k < nd; ++k )
+            built.surfaces[ w[ k ] ].word[ 0x38 / 4 ] &= ~0xFFu;
+        w += nd;
+        float height = 0.0f, distance = 0.0f;
+        water_reflection_nearest( built, p, height, distance );
+        for ( unsigned k = 0; k < ns; ++k )
+            built.surfaces[ k ].word[ 0x38 / 4 ] = saved[ k ];
+        unsigned hw, dw;
+        std::memcpy( &hw, &height, 4 );
+        std::memcpy( &dw, &distance, 4 );
+        if ( ( hw != w[ 0 ] || dw != w[ 1 ] ) && bad++ < 4 )
+            LOG_ERROR( "water_reflection query %u: height 0x%08X distance 0x%08X, retail 0x%08X 0x%08X", v, hw, dw, w[ 0 ], w[ 1 ] );
+        w += 2;
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuWater's nearest reflecting surface (0x529470) matches retail on Hydroelectric's water: %u surfaces' ProceduralReflection, %u queries", ns, n );
+    else
+        LOG_ERROR( "water_reflection FAILED %d", bad );
+    return bad == 0;
+}
+
+// engine entity/values.hxx's property save side against retail's slots (case property_save): per node (every property of
+// Hydroelectric's water entities as retail loaded them, plus synthetic vector2 / int / colour nodes) slot 5 / 6 / 3 / 3 at
+// the default as JSON text, the target after slot 8, slot 1 for vector2 / int enum; the notify and string-enum rows.
+inline bool verify_property_save( )
+{
+    const unsigned* w = g_golden_psave_words;
+    const char* const* s = g_golden_psave_text;
+    const unsigned n = *w++;
+    int bad = 0;
+    auto fail = [ & ]( unsigned v, const char* what, const std::string& ours, const char* theirs ) {
+        if ( bad++ < 6 )
+            LOG_ERROR( "property_save node %u %s: ours %s, retail %s", v, what, ours.c_str( ), theirs );
+    };
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        property_node_t node;
+        node.cls = static_cast< property_class_t >( *w++ );
+        const unsigned slot1 = *w++;
+        std::memcpy( node.words, w, 32 );
+        w += 8;
+        std::memcpy( node.target, w, 16 );
+        w += 4;
+        const unsigned* reset = w;
+        w += 4;
+        const unsigned nc = *w++;
+        std::vector< property_choice_t > choices( nc );
+        node.name = *s++;
+        const char* texts[ 4 ] = { s[ 0 ], s[ 1 ], s[ 2 ], s[ 3 ] };
+        s += 4;
+        for ( unsigned k = 0; k < nc; ++k )
+            choices[ k ] = { *s++, static_cast< std::int32_t >( w[ k ] ) };
+        w += nc;
+        node.choices = choices.data( );
+        node.choice_count = static_cast< int >( nc );
+        value_t j;
+        property_write( node, j );
+        if ( property_json_text( j ) != texts[ 0 ] )
+            fail( v, "slot 5", property_json_text( j ), texts[ 0 ] );
+        j = value_t{ };
+        property_write_default( node, j );
+        if ( property_json_text( j ) != texts[ 1 ] )
+            fail( v, "slot 6", property_json_text( j ), texts[ 1 ] );
+        j = value_t{ };
+        property_save( node, j );
+        if ( property_json_text( j ) != texts[ 2 ] )
+            fail( v, "slot 3", property_json_text( j ), texts[ 2 ] );
+        property_node_t at = node;
+        const int lanes = node.cls == property_class_t::vector3 || node.cls == property_class_t::rotation3d ? 3
+                        : node.cls == property_class_t::vector2 ? 2 : 1;
+        if ( node.cls == property_class_t::boolean )
+            at.target[ 0 ] = ( at.target[ 0 ] & ~0xFFu ) | ( at.words[ 0 ] & 0xFFu );
+        else
+            std::memcpy( at.target, at.words, 4 * lanes );
+        j = value_t{ };
+        property_save( at, j );
+        if ( property_json_text( j ) != texts[ 3 ] )
+            fail( v, "slot 3 at the default", property_json_text( j ), texts[ 3 ] );
+        property_reset( node );
+        const int words = node.cls == property_class_t::vector3 || node.cls == property_class_t::rotation3d ? 4 : lanes;
+        if ( std::memcmp( node.target, reset, 4 * words ) != 0 )
+            fail( v, "slot 8", "(target words)", "(differs)" );
+        if ( node.cls == property_class_t::vector2 && slot1 != static_cast< unsigned >( property_type_vector2( ) ) )
+            fail( v, "slot 1", std::to_string( property_type_vector2( ) ), "vector2" );
+        if ( node.cls == property_class_t::int_enum && slot1 != static_cast< unsigned >( property_type_int_enum( ) ) )
+            fail( v, "slot 1", std::to_string( property_type_int_enum( ) ), "int enum" );
+    }
+    const unsigned nn = *w++;
+    for ( unsigned k = 0; k < nn; ++k, w += 4 )
+        if ( w[ 2 ] != static_cast< unsigned >( property_type_notify( ) ) || ( w[ 3 ] != 0 ) != property_notify_read( w[ 0 ] != 0, w[ 1 ] != 0 ) )
+            fail( k, "notify", "", "" );
+    const unsigned ns = *w++;
+    for ( unsigned k = 0; k < ns; ++k, w += 2 )
+    {
+        std::vector< const char* > names( w[ 0 ], "Synthetic" );
+        names.push_back( nullptr );
+        if ( static_cast< unsigned >( property_string_enum_count( names.data( ) ) ) != w[ 1 ] )
+            fail( k, "string enum", "", "" );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "The property classes' save / write / default / reset slots match retail: %u nodes (Hydroelectric's water entities as loaded + synthetic), %u notify, %u string-enum rows", n, nn, ns );
+    else
+        LOG_ERROR( "property_save FAILED %d", bad );
+    return bad == 0;
+}
+
 #include <workspace/utility/checks/pfx.hxx>
 #include <workspace/utility/checks/wake.hxx>
 #include <workspace/utility/checks/watchers.hxx>
@@ -2602,7 +2743,10 @@ inline bool verify_water_all( )
     ok = verify_settings_triggers( ) && ok;
     ok = verify_key_motion( ) && ok;
     ok = verify_key_curve( ) && ok;
+    ok = verify_rotate_axis_angle( ) && ok;
     ok = verify_water_surface_distance( ) && ok;
+    ok = verify_water_reflection( ) && ok;
+    ok = verify_property_save( ) && ok;
     ok = verify_ocean_kernels96( ) && ok;
     ok = verify_water_built_tick( ) && ok;
     ok = verify_water_query96( ) && ok;

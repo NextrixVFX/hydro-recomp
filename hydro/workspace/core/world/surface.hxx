@@ -69,9 +69,10 @@ inline const property_choice_t k_water_sizes[] = { { "1", 1 }, { "2", 2 }, { "4"
 inline const property_choice_t k_water_complexity[] = { { "4", 4 }, { "5", 5 }, { "6", 6 }, { "7", 7 }, { "8", 8 }, { nullptr, 0 } };
 
 // VuWaterSurfaceEntity's ctor 0x5DA4F0 (the ones its creation reads). Its
-// ProceduralReflection (+0xEC, a bool the descriptor copies) and WaterMap
-// (+0x8C, through the node at +0x130 whose +0x4C the descriptor copies - an
-// asset) reach only surface words nothing here reads: UNKNOWN, not loaded.
+// ProceduralReflection (+0xEC, a bool, default 1; the descriptor copies it to
+// the surface's +0x38, which VuWater 0x529470 reads) is loaded by
+// water_entity_load as a byte of k_water_reflection_word; WaterMap (+0x8C)
+// is the string below.
 inline const water_prop_row_t k_water_surface_props[] = {
     { "X Size", 0x70, water_prop_t::int_enum, 256, k_water_sizes },
     { "Y Size", 0x74, water_prop_t::int_enum, 256, k_water_sizes },
@@ -185,6 +186,7 @@ inline water_kind_t water_kind_of( const std::string& cls )
 // Words +0x60 .. +0x143 (57), the targets each loaded property fills; `known`
 // marks the ones loaded.
 constexpr int k_water_entity_words = 57;
+constexpr int k_water_reflection_word = ( 0xEC - 0x60 ) / 4;   // a surface's ProceduralReflection byte (+0xEC), its low byte
 
 struct water_entity_props_t
 {
@@ -257,6 +259,9 @@ inline std::shared_ptr< water_entity_state_t > water_entity_state_for( const std
                 s->value.known[ k + 1 ] = s->value.known[ k + 2 ] = s->value.known[ k + 3 ] = true;
             }
         }
+    // The surface / ramp's ProceduralReflection byte +0xEC: 1 from the ctor 0x5DA4F0 (its node +0x14 / +0x15 = 1).
+    if ( kind == water_kind_surface || kind == water_kind_ramp )
+        s->value.word[ k_water_reflection_word ] |= 1u;
     s->defaults = s->value;
     return s;
 }
@@ -303,6 +308,15 @@ inline void water_entity_load( water_entity_state_t& s, const value_t& propertie
                 property_float( properties, r->name, v, fb, r->kind == water_prop_t::angle );
             std::memcpy( &word, &v, 4 );
         }
+    if ( s.kind == water_kind_surface || s.kind == water_kind_ramp )
+    {
+        // "ProceduralReflection" (VuBasicProperty<bool,2> 0x737450, target +0xEC): reset to the node's default, then read
+        // (0x407220); the byte only - +0xED .. +0xEF are other properties' and stay as they are (the word not `known`).
+        std::uint32_t& word = s.value.word[ k_water_reflection_word ];
+        std::uint8_t v;
+        property_bool( properties, "ProceduralReflection", v, static_cast< std::uint8_t >( s.defaults.word[ k_water_reflection_word ] & 0xFFu ) );
+        word = ( word & ~0xFFu ) | v;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -418,8 +432,8 @@ inline void water_box_transform( const float* lo, const float* hi, const float* 
 // transform's world translation (+0x80, four words), its world euler z
 // (+0xA8), log2 of X / Y Size as (int) of logf( (float) size ) * (1 / (float)
 // log( 2.0 )) rounded by fistp (to nearest), Max Wave Depth / Height,
-// Reflection Height / Offset, ProceduralReflection's byte (UNKNOWN here), the
-// WaterMap node's +0x4C (an asset: UNKNOWN), and 1.
+// Reflection Height / Offset, ProceduralReflection's byte (+0x2C, the entity's
+// +0xEC), the WaterMap node's +0x4C (+0x30, an asset: UNKNOWN), and 1.
 // SUBSTITUTION: logf / log are the host CRT's for __libm_sse2_logf / _log.
 inline int water_log2( std::uint32_t size )
 {
@@ -436,9 +450,10 @@ inline int water_log2( std::uint32_t size )
 //   (hx, hy, height) through +80 (0x41b2a0); +240 / +244 hx / hy (each size
 //   (float) * 0.5); +248 the surface-tree leaf, +252 the wave tree (the tree
 //   itself is water_held_surface_t's), +256 = +60.
-inline void water_surface_desc( const water_input_t& in, std::uint32_t* d )   // 0x5DBA90 (d: 14 words, 11 / 12 left 0)
+inline void water_surface_desc( const water_input_t& in, std::uint32_t* d )   // 0x5DBA90 (d: 14 words, 12 left 0)
 {
     std::memset( d, 0, 56 );
+    d[ 11 ] = in.e( 0xEC ) & 0xFFu;   // mov al, [entity +0xEC]; mov [desc +0x2C], al (bytes +0x2D .. +0x2F from the memset)
     for ( int k = 0; k < 4; ++k )
         d[ k ] = in.t( 0x80 + 4 * k );
     d[ 4 ] = in.t( 0xA8 );
@@ -459,7 +474,7 @@ inline void water_surface_desc( const water_input_t& in, std::uint32_t* d )   //
 inline void water_surface_set( water_words_t& s, const std::uint32_t* d )
 {
     for ( int k = 0; k < 14; ++k )
-        if ( k != 11 && k != 12 )
+        if ( k != 12 )   // +0x3C the WaterMap asset pointer: not produced
             s.set( 12 + 4 * k, d[ k ] );
     s.set( 72, 1u << d[ 5 ] );
     s.set( 76, 1u << d[ 6 ] );
@@ -1756,5 +1771,48 @@ inline const water_type_t g_water_types[] = {
     { 0x5D96E0u, 0x736C48u, "VuDirectionalWaveEntity|VuEntity" },
     { 0x5DA450u, 0x736C50u, "VuWaterSurfaceEntity|VuEntity" },
 };
+
+// VuWater 0x529470 (thiscall water; const VuVector3* point, a word it never reads, float* height, float* distance; retn
+// 0x10): the nearest surface that reflects. Its one caller is the viewport loop 0x530F10 (per viewport +0x28 the point,
+// then its reflection plane / blend - render side, not recreated). height = 0 first; best = FLT_MAX (0x6F7864). Per surface
+// of the list +0x20 in list order (b.surface_list): only with the ProceduralReflection byte +0x38 set and the point's z
+// above the box floor +0xD8 (comiss / jbe: false on NaN); the point in the surface's space (rows +0x90, retail's operand
+// order), its z less (Reflection Height +0x30 - Max Wave Depth +0x28) x 0.5 (0x6F765C); per axis |c| (VuVector_abs) less
+// +0xF0 / +0xF4 / (+0x28 + +0x30) x 0.5, maxss'ed with 0; d = ((dy^2 + dx^2) + dz^2) - Reflection Offset (+0x34) squared,
+// maxss'ed with 0; best > d (comiss / jbe) -> height = the surface's +0x14 (its world z), best = d. distance = VuMath_sqrt(
+// best ) - sqrt( FLT_MAX ) when nothing qualifies.
+inline void water_reflection_nearest( const water_built_t& b, const float* p, float& height, float& distance )
+{
+    std::uint32_t h = 0u;
+    float best = 3.4028234663852886e+38f;
+    const __m128 zero = _mm_setzero_ps( );
+    for ( int i : b.surface_list )
+    {
+        const water_words_t& s = b.surfaces[ static_cast< std::size_t >( i ) ];
+        if ( ( s.word[ 0x38 / 4 ] & 0xFFu ) == 0u )
+            continue;
+        const float x = p[ 0 ], y = p[ 1 ], z = p[ 2 ];
+        if ( !_mm_comigt_ss( _mm_set_ss( z ), _mm_set_ss( s.f( 0xD8 ) ) ) )
+            continue;
+        const float lx = ( ( s.f( 0xA0 ) * y + x * s.f( 0x90 ) ) + s.f( 0xB0 ) * z ) + s.f( 0xC0 );
+        const float ly = ( ( s.f( 0x94 ) * x + s.f( 0xA4 ) * y ) + s.f( 0xB4 ) * z ) + s.f( 0xC4 );
+        const float lz = ( ( ( s.f( 0x98 ) * x + s.f( 0xA8 ) * y ) + s.f( 0xB8 ) * z ) + s.f( 0xC8 ) ) - ( s.f( 0x30 ) - s.f( 0x28 ) ) * 0.5f;
+        const float ax = water_abs( lx ) - s.f( 0xF0 );
+        const float ay = water_abs( ly ) - s.f( 0xF4 );
+        const float az = water_abs( lz ) - ( s.f( 0x28 ) + s.f( 0x30 ) ) * 0.5f;
+        const float dx = _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( ax ), zero ) );
+        const float dy = _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( ay ), zero ) );
+        const float dz = _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( az ), zero ) );
+        const float d2 = ( ( dy * dy + dx * dx ) + dz * dz ) - s.f( 0x34 ) * s.f( 0x34 );
+        const float d = _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( d2 ), zero ) );
+        if ( _mm_comigt_ss( _mm_set_ss( best ), _mm_set_ss( d ) ) )
+        {
+            h = s.word[ 0x14 / 4 ];
+            best = d;
+        }
+    }
+    std::memcpy( &height, &h, 4 );
+    distance = _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( best ) ) );
+}
 
 #include <workspace/core/world/wake.hxx>
