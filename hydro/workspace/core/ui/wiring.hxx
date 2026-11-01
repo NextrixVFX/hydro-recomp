@@ -94,7 +94,9 @@ public:
     // An input plug's slot 2 0x404BE0: its VuMethod1 (+0x60) slot 2 with the
     // params. Recreated: the four screen actions' "Trigger" (0x472800 -> the
     // thunk 0x4077E3 -> slot 12, core/ui action.hxx) with the "Screen" node the
-    // action's load left. Any other input: UNKNOWN (counted, result unknown).
+    // action's load left, and VuSetGameModeUIAction's (slot 12 0x472740, its
+    // "Game Mode" into m_root). Any other input: UNKNOWN (counted, result
+    // unknown).
     ui_ret_t input( const script_link_t& link, const ui_params_t& params )
     {
         ui_ret_t out;
@@ -109,25 +111,28 @@ public:
             out.m_known = false;
             return out;
         }
-        c_ui_action action( kind, ui_action_screen( *link.m_entity ) );
+        c_ui_action action( kind, ui_action_screen( *link.m_entity, kind == ui_action_kind_t::set_game_mode ? "Game Mode" : "Screen" ) );
         action.m_broadcast = m_broadcast;
+        action.m_root = m_root;
         out.m_words[ 0 ] = action.trigger( params );
         return out;
     }
 
-    // The action's +92 "Screen" as its load stored it ("" for pop / reload: no such node).
-    static std::string ui_action_screen( const entity_t& e )
+    // The action's +92 "Screen" (or "Game Mode") as its load stored it ("" for
+    // pop / reload: no such node).
+    static std::string ui_action_screen( const entity_t& e, const char* node = "Screen" )
     {
         if ( !ui_is_state( e ) )
             return std::string( );
         const ui_state_t* s = static_cast< const ui_state_t* >( e.m_state.get( ) );
         for ( int n = 0; n < s->m_count; ++n )
-            if ( std::string( s->m_rows[ n ]->m_name ) == "Screen" )
+            if ( std::string( s->m_rows[ n ]->m_name ) == node )
                 return s->m_value[ n ].m_text;
         return std::string( );
     }
 
     // HOOK: VuEventManager_broadcast 0x505690 (each subscriber runs inside the call).
     std::function< void( std::uint32_t, const ui_params_t& ) > m_broadcast;
+    value_t* m_root = nullptr;  // gameutil +80, the set game mode action's target
     int m_unknown = 0;  // inputs reached whose handler is not recreated
 };
