@@ -2257,6 +2257,132 @@ inline bool verify_nuisance_start( )
     return false;
 }
 
+// VuAiNuisanceDriverStartEntity's ctor 0x42FA20 (create 0x42F930 run whole) and dtor 0x42FD20 against retail (oracle
+// case nuisance_start_ctor): nuisance_start_construct's fields and its framework calls (the hooks below stand for the
+// engine ctors: each makes the object retail's run left - the VuEntity ctor its transform component 0x74D324, the DB
+// property 0x74C4C0, the components 0x74C3F0 / 0x74C550, an input plug 0x737138 with the delegate 0x739B84, the boat
+// 0x7383D4 with count 1), then nuisance_start_destroy's call log and words per dtor vector.
+inline bool verify_nuisance_start_ctor( )
+{
+    const unsigned* g = g_golden_nuisance_start_ctor_words;
+    auto text = [ & ]( ) {
+        const unsigned n = *g++;
+        std::string s( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        return s;
+    };
+    auto word_text = [ ]( const std::string& s ) {
+        std::vector< unsigned > w = { static_cast< unsigned >( s.size( ) ) };
+        for ( std::size_t k = 0; k < s.size( ); k += 4 )
+        {
+            unsigned x = 0;
+            std::memcpy( &x, s.data( ) + k, std::min< std::size_t >( 4, s.size( ) - k ) );
+            w.push_back( x );
+        }
+        return w;
+    };
+    int failed = 0;
+    // ---- the ctor: ours as the same word stream ----
+    std::vector< unsigned > props, comps, plugs;
+    std::uint32_t flags = 0xFFFFFFFFu, script = 0xFFFFFFFFu;
+    unsigned nprops = 0, nplugs = 0;
+    nuisance_start_ctor_hooks_t ch;
+    ch.entity = [ & ]( std::uint32_t f ) { flags = f; comps.push_back( 0x74D324u ); };
+    ch.db_property = [ & ]( const char* name, const char* db ) {
+        ++nprops;
+        props.push_back( 0x74C4C0u );
+        for ( unsigned x : word_text( name ) ) props.push_back( x );
+        props.push_back( 1u );   // its value is +0x64
+        props.push_back( 1u );   // VuProperty 0x406B70's +8
+        for ( unsigned x : word_text( std::string( "VuDBAsset/" ) + db ) ) props.push_back( x );
+    };
+    ch.script_component = [ & ]( std::uint32_t, std::uint32_t ) { script = static_cast< std::uint32_t >( comps.size( ) ); comps.push_back( k_script_component_vtable ); };
+    ch.layout_component = [ & ]( ) { comps.push_back( 0x74C550u ); };
+    ch.input_plug = [ & ]( const char* name, std::uint32_t method, std::uint32_t count, std::uint32_t type ) {
+        ++nplugs;
+        plugs.push_back( 0x737138u );
+        for ( unsigned x : word_text( name ) ) plugs.push_back( x );
+        plugs.push_back( 0u );
+        plugs.push_back( count );
+        plugs.push_back( type );
+        plugs.push_back( 1u );
+        plugs.push_back( 0x739B84u );
+        plugs.push_back( 1u );
+        plugs.push_back( method );
+    };
+    ch.make_child = [ ]( ) { return 0x400u; };
+    nuisance_start_t s;
+    s.boat = "stale";
+    const std::uint32_t child = nuisance_start_construct( s, ch );
+    std::vector< unsigned > mine = { k_nuisance_start_vtable, flags };
+    for ( unsigned x : word_text( s.boat ) ) mine.push_back( x );
+    mine.insert( mine.end( ), { static_cast< unsigned >( s.boat.size( ) ), 15u, s.active, s.disabled, nprops } );
+    mine.insert( mine.end( ), props.begin( ), props.end( ) );
+    mine.push_back( static_cast< unsigned >( comps.size( ) ) );
+    mine.insert( mine.end( ), comps.begin( ), comps.end( ) );
+    mine.insert( mine.end( ), { script, k_script_component_vtable, 0x74C550u, nplugs } );
+    mine.insert( mine.end( ), plugs.begin( ), plugs.end( ) );
+    mine.insert( mine.end( ), { child ? 0x7383D4u : 0u, child ? 1u : 0u, 0u } );
+    const unsigned ctor_words = *g++;
+    const unsigned* start = g;
+    std::size_t at = 0;
+    for ( ; at < mine.size( ) && at < ctor_words && start[ at ] == mine[ at ]; ++at )
+        ;
+    if ( at != mine.size( ) || ctor_words != mine.size( ) || s.boat_default != "Police" )
+    {
+        ++failed;
+        LOG_ERROR( "nuisance_start_ctor: the ctor differs at word %zu of %zu (ours 0x%X, retail 0x%X; retail %u words)", at, mine.size( ),
+                   at < mine.size( ) ? mine[ at ] : 0u, at < ctor_words ? start[ at ] : 0u, ctor_words );
+    }
+    g += ctor_words;
+    // ---- the dtor vectors ----
+    const unsigned nv = *g++;
+    const std::uint32_t self = 0x100u, ch_ = 0x400u, heap_text = 0x3000u;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned count = *g++;
+        const std::string boat = text( );
+        const unsigned fl = *g++;
+        std::vector< std::vector< unsigned > > glog( *g++ );
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        unsigned after[ 6 ];
+        for ( unsigned& a : after )
+            a = *g++;
+        std::map< std::uint32_t, std::uint32_t > mem;
+        vu_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0u : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        mem[ self ] = 0xCDCDCDCDu;
+        mem[ self + 0x7C ] = ch_;
+        mem[ ch_ + 4 ] = count;
+        mem[ self + 0x64 ] = boat.size( ) < 16 ? 0x41414141u : heap_text;
+        mem[ self + 0x74 ] = static_cast< std::uint32_t >( boat.size( ) );
+        mem[ self + 0x78 ] = boat.size( ) < 16 ? 15u : static_cast< std::uint32_t >( boat.size( ) | 15u );
+        std::vector< std::vector< unsigned > > log;
+        nuisance_start_dtor_hooks_t dh;
+        dh.destroy_child = [ & ]( std::uint32_t c ) { log.push_back( { 1u, c == ch_ ? 1u : 0u, 1u } ); };
+        dh.free_block = [ & ]( std::uint32_t a ) { log.push_back( { 3u, a == self ? 1u : a == heap_text ? 2u : 0u } ); };
+        dh.entity_dtor = [ & ]( ) { log.push_back( { 2u, 1u, w.get( self ) } ); };
+        nuisance_start_t st;
+        st.boat = boat;
+        const bool ok = nuisance_start_destroy( w, self, fl, dh, &st );
+        const unsigned ours[ 6 ] = { w.get( ch_ + 4 ), w.get( self ), w.get( self + 0x64 ) & 0xFFu, w.get( self + 0x74 ), w.get( self + 0x78 ), ok ? 1u : 0u };
+        if ( !( log == glog && std::equal( ours, ours + 6, after ) && st.boat.empty( ) ) && ++failed <= 8 )
+            LOG_ERROR( "nuisance_start_ctor dtor vector %u (count %u, \"%s\", flags %u): %zu calls (%zu), count 0x%X (0x%X)", v, count, boat.c_str( ), fl,
+                       log.size( ), glog.size( ), ours[ 0 ], after[ 0 ] );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuAiNuisanceDriverStartEntity ctor 0x42FA20 / dtor 0x42FD20 match retail: the ctor's %zu words, %u dtor vectors", mine.size( ), nv );
+        return true;
+    }
+    LOG_ERROR( "nuisance_start_ctor FAILED %d checks", failed );
+    return false;
+}
 // The contact-added callback 0x574E90 -> 0x5751F0 -> 0x519720 against retail (oracle case contact_added): the manifold
 // point after (every word, bit for bit), the return, and each listener / callback call's record (but its stale-stack
 // words) with the case's scripted write-backs replayed.
@@ -2620,6 +2746,7 @@ inline bool verify_race_all( )
     ok = verify_hidden_package( ) && ok;
     ok = verify_boat_manager_game( ) && ok;
     ok = verify_nuisance_start( ) && ok;
+    ok = verify_nuisance_start_ctor( ) && ok;
     ok = verify_contact_added( ) && ok;
     ok = verify_boat_rtti( ) && ok;
     ok = verify_human_explosion( ) && ok;
