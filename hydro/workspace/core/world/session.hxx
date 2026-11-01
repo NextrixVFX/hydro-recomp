@@ -5,6 +5,7 @@
 #include <workspace/core/boat/load.hxx>
 #include <workspace/core/boat/meshes.hxx>
 #include <workspace/core/boat/respawn.hxx>
+#include <workspace/core/boat/thunk.hxx>
 #include <workspace/core/dynamics/contact.hxx>
 #include <workspace/core/ui/config.hxx>
 #include <workspace/core/world/bodies.hxx>
@@ -64,6 +65,8 @@ struct race_session_boat_t
     std::string stop;         // where it stopped (UNKNOWN), when it did
     std::string name, boat, skin;
     boat_mesh_library_t meshes;   // the collision / fluids meshes the sections load created
+    std::unique_ptr< boat_thunk_t > thunk;   // the step callback's context (boat/thunk.hxx), persistent
+    std::vector< std::uint32_t > excluded;   // the solver's +0x34 array words this step
     std::uint8_t draw_added = 0, instigator_registered = 0;
     // The hull draw (c_world): each model instance's placements, the one shown.
     std::vector< int > placements[ 3 ];
@@ -342,8 +345,46 @@ inline void race_session_enable( race_session_t& s, race_session_boat_t& b, bool
         };
         race_step_callback_t cb;
         cb.slot0 = []( float, bool ) {};   // 0x410B30: ret 8
-        cb.unwired = "the boat's step callback tickThunk 0x41E5E0 (the hull update 0x416D20, 0x414010, 0x4219C0) has no context "
-                     "composed from the race's boat images - the dynamics frame (DynamicsKick / DynamicsSync) is STOPPED (UNKNOWN)";
+        // Slot 1 tickThunk 0x41E5E0: the boat agent's builder (boat/thunk.hxx) on this boat's images, one persistent
+        // boat_thunk_t per boat (the solver's records live in it). The water is the world's query view of VuWater,
+        // refreshed per frame (none: UNKNOWN, not stepped); the gravity g_vudynamicsimpl vt+0x1C = the world's.
+        // A VuWater wave pointer in the images (hull +0x1DC / +0x1E0, the solver's excluded array) has no index
+        // here: the build refuses it (UNKNOWN, `why`).
+        b.thunk = std::make_unique< boat_thunk_t >( );
+        cb.slot1 = [ &s, &b, &d ]( float dt ) {
+            boat_thunk_in_t in;
+            std::uint8_t* boat_image = b.graph.objects[ 0 ].image.data( );
+            const int hull_k = race_session_ref( b.graph, 0, 0x228 );
+            in.boat = boat_image;
+            in.hull = race_session_image( b, 0, 0x228 );
+            in.solver = race_session_image( b, hull_k, 0x1CC );
+            in.transform = race_session_image( b, 0, 0x50 );
+            in.engine = &b.engine;
+            in.body = &b.body.body;
+            if ( !in.hull || !in.solver || !in.transform || !s.world.view )
+            {
+                race_unwired( s, "the boat's tickThunk 0x41E5E0: no hull / solver / transform image or no VuWater view - the step is UNKNOWN (not run)" );
+                return;
+            }
+            in.fluids = b.meshes.fluids_of( load_word( in.solver, 0 ) );
+            boat_thunk_water( in, *s.world.view );
+            in.gravity = []( void* u, float* out ) {
+                std::memcpy( out, static_cast< race_dynamics_t* >( u )->world.gravity, 12 );
+                return true;
+            };
+            in.gravity_user = &d;
+            in.wave_index = []( std::uint32_t ) { return -2; };
+            const std::int32_t excluded = static_cast< std::int32_t >( load_word( in.solver, 0x30 ) );
+            const int solver_k = race_session_ref( b.graph, hull_k, 0x1CC );
+            const std::uint8_t* array = race_session_image( b, solver_k, 0x34 );
+            b.excluded.clear( );
+            if ( excluded > 0 && array )
+                for ( std::int32_t k = 0; k < excluded; ++k )
+                    b.excluded.push_back( load_word( array, 4 * k ) );
+            in.solver_excluded = b.excluded.empty( ) ? nullptr : b.excluded.data( );
+            if ( !boat_thunk_step( *b.thunk, in, dt ) )
+                race_unwired( s, "the boat's tickThunk 0x41E5E0: " + b.thunk->why );
+        };
         d.callbacks[ tick ] = cb;
     }
     const bool ok = on ? boat_enable( d.impl, boat[ 0x2A0 ], b.body, tick ) : boat_disable( d.impl, boat[ 0x2A0 ], b.body, tick );
@@ -438,7 +479,18 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
 inline void race_session_dynamics_sync( void* user, float dt )
 {
     race_session_t& s = *static_cast< race_session_t* >( user );
+    const int before = s.dynamics->syncs;
     race_dynamics_sync( *s.dynamics, dt );
+    // A trace (not retail): each boat's transform world position at a few sync counts.
+    const int n = s.dynamics->syncs;
+    if ( n != before && ( n == 1 || n == 10 || n == 30 || n == 60 || n == 120 || n == 240 || n == 480 ) )
+        for ( const auto& b : s.boats )
+            if ( const std::uint8_t* t = race_session_image( *b, 0, 0x50 ) )
+            {
+                float p[ 3 ];
+                std::memcpy( p, t + 0x50 + 48, 12 );
+                LOG_INFO( "race: sync %d: %s at (%.3f, %.3f, %.3f)", n, b->name.c_str( ), p[ 0 ], p[ 1 ], p[ 2 ] );
+            }
 }
 
 inline void race_session_dynamics_kick( void* user, float dt )
@@ -706,10 +758,19 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         return false;
     }
     race_start_hooks_t sh;
+    // The placement's notify: the transform's watcher +0xC0 = the transform-changed delegate 0x421670
+    // (boat_transform_changed: the body to the new world), as the nuisance boats' place_child runs it.
     sh.transform_changed = [ &s ]( int k )
     {
-        if ( !s.boats[ static_cast< std::size_t >( k ) ]->sections )
+        race_session_boat_t& r = *s.boats[ static_cast< std::size_t >( k ) ];
+        std::uint8_t* t = race_session_image( r, 0, 0x50 );
+        if ( !r.sections || !t )
+        {
             ++s.stopped_transform;
+            return;
+        }
+        boat_transform_changed( r.graph.objects[ 0 ].image.data( ), reinterpret_cast< const float* >( t + 0x50 ), r.body, r.io.camera,
+                                r.io.instigator, boat_transform_hooks_t{ } );
     };
     sh.game_initialize = [ &s ]( int k )
     {
