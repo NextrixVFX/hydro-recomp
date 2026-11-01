@@ -1,11 +1,15 @@
 #pragma once
 
 #include <workspace/core/boat/track.hxx>
+#include <workspace/core/entity/node.hxx>
+#include <workspace/core/entity/property.hxx>
+#include <workspace/core/ui/fsm.hxx>
 
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 #include <xmmintrin.h>
@@ -293,4 +297,296 @@ inline bool race_rules_places( race_rules_game_t& g, std::vector< race_rules_boa
     for ( std::size_t p = 0; p < boats.size( ) && p < o.size( ); ++p )
         rules_put_i32( boats[ static_cast< std::size_t >( o[ p ] ) ].boat, 0x4CC, static_cast< std::int32_t >( p ) );
     return true;
+}
+
+// ---- 0x483AD0: the sixth finished AI boat ----------------------------------
+//
+// Over the boat manager's AI list (g 0x758FB8 +0x30 data / +0x34 count): the
+// finished (+0x32F) and not yet hidden (+0x494) boats are counted and the one
+// with the greatest +0x330 (comiss > the running best, which starts at 0.0;
+// the index starts at 0) is remembered; with more than five such boats that
+// one is hidden - its draw component (+0x6C) taken from g_vu3ddrawmanager
+// 0x7590B8 (vt+0x2C) when its +0x1E is set (then +0x1E = 0), the boat's
+// vt+0x48 (slot 18 0x421940, the disable), +0x494 = 1. `hide` is those calls
+// on that AI boat index.
+inline void race_rules_hide_finished( const std::vector< std::uint8_t* >& ais, const std::function< void( int ai ) >& hide )
+{
+    int count = 0, best = 0;
+    float most = 0.0f;
+    for ( std::size_t k = 0; k < ais.size( ); ++k )
+    {
+        const std::uint8_t* b = ais[ k ];
+        if ( !b[ 0x32F ] || b[ 0x494 ] )
+            continue;
+        ++count;
+        const float v = rules_f( b, 0x330 );
+        if ( _mm_comigt_ss( _mm_set_ss( v ), _mm_set_ss( most ) ) )
+        {
+            best = static_cast< int >( k );
+            most = v;
+        }
+    }
+    if ( count <= 5 )
+        return;
+    if ( hide )
+        hide( best );
+    ais[ static_cast< std::size_t >( best ) ][ 0x494 ] = 1;
+}
+
+// ---- VuRaceGame's own part: the ctor 0x489030 and slot 7 0x489A40 ----------
+//
+// The ctor, past its base 0x480BA0: +0x6F8 .. +0x734 and +0x744 zeroed (the
+// +0x6F8 VuFSM's words and the checkpoint-buoy mask); two event methods
+// through 0x5156E0 (VuMethod1<VuRaceGame, void, VuParams const&>, vtable
+// 0x73F8EC): "OnStartLightsOut" -> 0x48A780, "OnCheckPointBuoyHit" ->
+// 0x48A7B0; the FSM's states (addState 0x555850; VuMethod0 vtable 0x73F8DC,
+// VuMethod1<float> 0x73F8CC): PreGame {enter 0x48A7F0, exit 0x48A860, tick
+// 0x48A8B0, draw 0x486C00}, Game {0x48A910, 0x4872A0, 0x48A970, 0x487370},
+// PostGame {0x48AB70, 0x48ADE0, 0x48AE80, 0x48AF30}, Exit {none}; transitions
+// (addTransition 0x555920): PreGame -> Game "StartLightsOut", Game -> PostGame
+// "HumanFinished", Game -> PostGame "EveryoneFinished", "" (every state) ->
+// Exit "Exit"; then the three HUD projects loaded by 0x4B4360 into +0x738
+// (HUDs/RacePreGameHUD), +0x73C (HUDs/RaceGameHUD), +0x740
+// (HUDs/RacePostGameHUD). The machine is the UI agent's verified VuFSM
+// (ui/fsm.hxx c_fsm); the time in the state is its +0x24 (game +0x71C).
+//
+// What the states reach that is not the rules' (hooks, each named):
+//   hud(project, verb): a HUD project's gameInitialize (when its root's +0x14
+//     & 4 is clear: g_vu_entity_repository vt+0x18, 0x500B10, 0x501260
+//     "OnProjectInitialized"), its release (when set: 0x500B80, repository
+//     vt+0x1C), its tick (the root, when it is a VuHUDEntity - RTTI 0x7362AC -
+//     vt+0x30(dt)) and its draw (vt+0x34(1.0)) - the HUD's update / drawing is
+//     the UI's; the project load / init / release run through the world.
+//   platform(name): PostGame's enter 0x48AB70 after its HUD - the broadcast
+//     "OnSetAllowPause" {false}, the progress manager's vt+0x34 (race results to
+//     the save), the leaderboard 0x4B0650 ("Race", -(int)(time x 1000)) when the
+//     human did not quit (+0x334 clear), the voice-over vt+0x1C ("FinishFirst" /
+//     "FinishSecond" / "FinishThird" / "FinishLast" / "FinishLessThanThird") and
+//     vt+0x20 "DidNotUseBoost"; its exit 0x48ADE0's "DingDong" achievement -
+//     saves / online / achievements / audio: platform services (BRIEF).
+enum class race_hud_verb_t { initialize, release, tick };
+
+struct race_rules_hooks_t
+{
+    std::function< void( int project, race_hud_verb_t verb, float dt ) > hud;
+    std::function< void( const char* what ) > platform;
+};
+
+struct race_rules_t
+{
+    c_fsm fsm;                       // +0x6F8
+    std::uint32_t buoys = 0;         // +0x744
+    race_rules_hooks_t hooks;
+    // The tick's inputs, refreshed by the caller before slot 7: the game's
+    // boats, the boat manager's human list.
+    std::vector< race_rules_boat_t >* boats = nullptr;
+    std::vector< std::uint8_t* > humans;
+    race_rules_game_t* game = nullptr;
+    bool sorted = true;              // false once race_rules_places refused (more than 32 boats)
+};
+
+// 0x48A7F0 / 0x48A860: every game boat's +0x308 += 1 / -= 1 (the drivers'
+// input held off), then the PreGame HUD project's gameInitialize / release.
+inline void race_rules_hold( race_rules_t& r, int by )
+{
+    if ( r.boats )
+        for ( race_rules_boat_t& b : *r.boats )
+            rules_put_i32( b.boat, 0x308, rules_i32( b.boat, 0x308 ) + by );
+}
+
+inline void race_rules_hud( race_rules_t& r, int project, race_hud_verb_t verb, float dt = 0.0f )
+{
+    if ( r.hooks.hud )
+        r.hooks.hud( project, verb, dt );
+}
+
+// 0x48A970 (Game) / 0x48AE80 (PostGame) begin with 0x4831D0(dt) and 0x48AB20.
+inline void race_rules_clock_and_place( race_rules_t& r, float dt )
+{
+    if ( !r.boats || !r.game )
+        return;
+    race_rules_clocks( *r.boats, dt );
+    if ( !race_rules_places( *r.game, *r.boats ) )
+        r.sorted = false;
+}
+
+inline void race_rules_construct( race_rules_t& r )
+{
+    r.fsm = c_fsm{ };
+    r.buoys = 0;
+    fsm_state_t& pre = r.fsm.add_state( "PreGame" );
+    pre.m_enter = [ &r ] { race_rules_hold( r, 1 ); race_rules_hud( r, 0, race_hud_verb_t::initialize ); };
+    pre.m_exit = [ &r ] { race_rules_hold( r, -1 ); race_rules_hud( r, 0, race_hud_verb_t::release ); };
+    pre.m_tick = [ &r ]( float dt ) { race_rules_hud( r, 0, race_hud_verb_t::tick, dt ); };
+    pre.m_address[ 0 ] = 0x48A7F0u, pre.m_address[ 1 ] = 0x48A860u, pre.m_address[ 2 ] = 0x48A8B0u, pre.m_address[ 3 ] = 0x486C00u;
+    fsm_state_t& game = r.fsm.add_state( "Game" );
+    game.m_enter = [ &r ] { race_rules_hud( r, 1, race_hud_verb_t::initialize ); };
+    game.m_exit = [ &r ] { race_rules_hud( r, 1, race_hud_verb_t::release ); };
+    // 0x48A970: the clocks and places; HumanFinished = the first human's +0x32F
+    // (0 with no human), EveryoneFinished = the AND of every game boat's +0x32F
+    // (1 with none) - stored into the conditions' +28; then the HUD's tick.
+    game.m_tick = [ &r ]( float dt ) {
+        race_rules_clock_and_place( r, dt );
+        const std::uint8_t human = r.humans.empty( ) ? 0 : r.humans[ 0 ][ 0x32F ];
+        std::uint8_t everyone = 1;
+        if ( r.boats )
+            for ( const race_rules_boat_t& b : *r.boats )
+                everyone &= b.boat[ 0x32F ];
+        r.fsm.set_condition( "HumanFinished", human != 0 );
+        r.fsm.set_condition( "EveryoneFinished", everyone != 0 );
+        race_rules_hud( r, 1, race_hud_verb_t::tick, dt );
+    };
+    game.m_address[ 0 ] = 0x48A910u, game.m_address[ 1 ] = 0x4872A0u, game.m_address[ 2 ] = 0x48A970u, game.m_address[ 3 ] = 0x487370u;
+    fsm_state_t& post = r.fsm.add_state( "PostGame" );
+    post.m_enter = [ &r ] {
+        race_rules_hud( r, 2, race_hud_verb_t::initialize );
+        if ( r.hooks.platform )
+            r.hooks.platform( "PostGame enter 0x48AB70: OnSetAllowPause, the progress manager, the leaderboard, the voice-over" );
+    };
+    post.m_exit = [ &r ] {
+        race_rules_hud( r, 2, race_hud_verb_t::release );
+        if ( r.hooks.platform )
+            r.hooks.platform( "PostGame exit 0x48ADE0: the DingDong achievement" );
+    };
+    // 0x48AE80: the clocks and places; "Exit" = the time in the state >= 4.0.
+    post.m_tick = [ &r ]( float dt ) {
+        race_rules_clock_and_place( r, dt );
+        r.fsm.set_condition( "Exit", r.fsm.m_time >= 4.0f );
+        race_rules_hud( r, 2, race_hud_verb_t::tick, dt );
+    };
+    post.m_address[ 0 ] = 0x48AB70u, post.m_address[ 1 ] = 0x48ADE0u, post.m_address[ 2 ] = 0x48AE80u, post.m_address[ 3 ] = 0x48AF30u;
+    r.fsm.add_state( "Exit" );
+    r.fsm.add_transition( "PreGame", "Game", "StartLightsOut" );
+    r.fsm.add_transition( "Game", "PostGame", "HumanFinished" );
+    r.fsm.add_transition( "Game", "PostGame", "EveryoneFinished" );
+    r.fsm.add_transition( "", "Exit", "Exit" );
+}
+
+// VuRaceGame slot 5 0x4896A0's "the state machine enters its first state":
+// the current state's (+0x6F8 -> PreGame) enter.
+inline void race_rules_start( race_rules_t& r )
+{
+    if ( fsm_state_t* s = r.fsm.current( ) )
+        if ( s->m_enter )
+            s->m_enter( );
+}
+
+// 0x48A780 ("OnStartLightsOut"): the condition StartLightsOut's +28 = 1.
+inline void race_rules_on_start_lights_out( race_rules_t& r ) { r.fsm.set_condition( "StartLightsOut", true ); }
+
+// 0x48A7B0 ("OnCheckPointBuoyHit"): 0x4237B0 reads the params' first entry (a
+// 4-byte tag, then when the tag is 0 the 4-byte value; else 0): +0x744 |= 1 <<
+// that value (shl: the count taken mod 32).
+inline void race_rules_on_buoy_hit( race_rules_t& r, const std::uint8_t* params, std::int32_t size )
+{
+    std::int32_t value = 0;
+    if ( size > 0 )
+    {
+        std::int32_t tag = -1;
+        std::memcpy( &tag, params, 4 );
+        if ( tag == 0 && size >= 8 )
+            std::memcpy( &value, params + 4, 4 );
+    }
+    r.buoys |= 1u << ( static_cast< std::uint32_t >( value ) & 31u );
+}
+
+// Slot 7 0x489A40(dt): evaluate 0x555AD0, the current state's tick, +0x71C +=
+// dt; false once the current state's name is "Exit".
+inline bool race_rules_tick( race_rules_t& r, float dt )
+{
+    r.fsm.evaluate( );
+    fsm_state_t* s = r.fsm.current( );
+    if ( s && s->m_tick )
+        s->m_tick( dt );
+    r.fsm.m_time = r.fsm.m_time + dt;
+    s = r.fsm.current( );
+    return !s || s->m_name != "Exit";
+}
+// ---- VuMultiDelayEntity (create 0x5DFD00, ctor 0x5DFD80) ---------------------
+//
+// The countdown's clock (the HUD template HUD/Countdown). Eight VuBasicProperty
+// <float,1> "Delay 1" .. "Delay 8" -> +0x60 .. +0x7C (default 0); the input
+// plug "In" (0x5E2AD0 -> 0x5E0660); outputs "1" .. "8" (+0x80 .. +0x9C); its
+// gameInitialize 0x5E0610 registers 0x5E06B0 in "Decision".
+struct multi_delay_state_t
+{
+    float value[ 8 ] = { };
+    float defaults[ 8 ] = { };
+};
+
+inline constexpr const char* k_multi_delay_class = "VuMultiDelayEntity";
+
+inline std::shared_ptr< void > multi_delay_state_for( const std::string& cls )
+{
+    return cls == k_multi_delay_class ? std::make_shared< multi_delay_state_t >( ) : nullptr;
+}
+
+inline void multi_delay_load_properties( entity_t& e, const value_t& properties )
+{
+    if ( e.m_type != k_multi_delay_class || !e.m_state )
+        return;
+    multi_delay_state_t& s = *static_cast< multi_delay_state_t* >( e.m_state.get( ) );
+    static const char* names[ 8 ] = { "Delay 1", "Delay 2", "Delay 3", "Delay 4", "Delay 5", "Delay 6", "Delay 7", "Delay 8" };
+    for ( int k = 0; k < 8; ++k )
+        property_float( properties, names[ k ], s.value[ k ], s.defaults[ k ], false );
+}
+
+inline void multi_delay_mark_properties( entity_t& e )
+{
+    if ( e.m_type != k_multi_delay_class || !e.m_state )
+        return;
+    multi_delay_state_t& s = *static_cast< multi_delay_state_t* >( e.m_state.get( ) );
+    std::memcpy( s.defaults, s.value, sizeof( s.defaults ) );
+}
+
+// The runtime words: +0xA0 active, +0xA4 the time, +0xA8 the In's params.
+struct multi_delay_t
+{
+    float delay[ 8 ] = { };
+    std::uint8_t active = 0;
+    float time = 0.0f;
+    std::uint8_t params[ 0x84 ] = { };
+};
+
+// "In" 0x5E0660 (thiscall; VuRetVal* out, VuParams const&; retn 8): out = 0;
+// when not active: +0xA0 = 1, +0xA4 = 0xB4000000 (-2^-23, so a Delay of 0
+// fires on the first tick) and +0xA8 = a LOCAL VuParams (rep movsd 0x21 dwords
+// from [ebp-0x84], whose size word [ebp-4] is set 0 - the incoming params are
+// NOT copied; the oracle shows +0xA8 never equals them): an empty VuParams,
+// its 0x80 data bytes stack garbage nothing reads (size 0) - zeros here.
+// Active: ignored.
+inline void multi_delay_in( multi_delay_t& m )
+{
+    if ( m.active )
+        return;
+    m.active = 1;
+    const std::uint32_t start = 0xB4000000u;
+    std::memcpy( &m.time, &start, 4 );
+    std::memset( m.params, 0, sizeof( m.params ) );
+}
+
+// The Decision tick 0x5E06B0(dt): only while active. t = dt + time; active =
+// 0; for each output k: when Delay k > the OLD time (comiss, ordered) - t >=
+// Delay k (comiss / jb: ordered) fires output k with the stored params, else
+// active = 1 again; then time = t.
+inline void multi_delay_tick( multi_delay_t& m, float dt, const std::function< void( int output, const std::uint8_t* params ) >& fire )
+{
+    if ( !m.active )
+        return;
+    const float t = dt + m.time;
+    m.active = 0;
+    for ( int k = 0; k < 8; ++k )
+    {
+        const float d = m.delay[ k ];
+        if ( !_mm_comigt_ss( _mm_set_ss( d ), _mm_set_ss( m.time ) ) )
+            continue;
+        if ( _mm_comige_ss( _mm_set_ss( t ), _mm_set_ss( d ) ) )
+        {
+            if ( fire )
+                fire( k, m.params );
+        }
+        else
+            m.active = 1;
+    }
+    m.time = t;
 }

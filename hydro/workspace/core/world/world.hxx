@@ -548,6 +548,12 @@ private:
     // update_delays: graph.hxx
     void update_delays( float dt );
 
+    // The race HUD projects and their countdown (world/huds.hxx).
+    void load_huds( );
+    void hud( int project, race_hud_verb_t verb, float dt );
+    void race_broadcast( const char* name );
+    static void multi_delay_ticked( void* user, float dt );
+
     // count_unhandled: graph.hxx
     void count_unhandled( const std::string& entity, const std::string& plug );
 
@@ -974,6 +980,10 @@ public:
             return;
         }
         m_race.world.triggers = [ this ] { race_triggers( ); };
+        // VuRaceGame's ctor 0x489030 loads its three HUD projects (0x4B4360) - before the boat load.
+        load_huds( );
+        m_race.world.hud = [ this ]( int project, race_hud_verb_t verb, float step ) { hud( project, verb, step ); };
+        m_race.world.broadcast = [ this ]( const char* name ) { race_broadcast( name ); };
         const bool started = race_session_start( m_race, mode, game_data, dbs, m_archive, *m_tree, track( ), m_vurandom,
                                                  [ this ] { project_initialized( ); } );
         if ( !m_project_initialized )
@@ -1473,6 +1483,27 @@ private:
     // Every VuGenericEventEntity's Event Name, which is the whole bus.
     std::map< std::string, std::string > m_events;
     std::vector< std::string > m_initialized;
+    // VuRaceGame's three HUD projects (+0x738 / +0x73C / +0x740; 0x4B4360 in its ctor 0x489030), loaded as data: their trees,
+    // their graph merged into m_graph under the prefix "<project>:", their OnProjectInitialized nodes, whether their
+    // gameInitialize ran (root +0x14 bit 2); the HUDs' VuMultiDelayEntity clocks (by prefixed path) and VuStartLightsOutAction nodes.
+    struct hud_project_t
+    {
+        std::string name;
+        std::unique_ptr< entity_t > tree;
+        std::vector< std::string > initialized;
+        std::vector< std::string > delays;
+        bool live = false;
+    };
+    hud_project_t m_huds[ 3 ];
+    struct multi_delay_node_t
+    {
+        multi_delay_t state;
+        c_world* world = nullptr;
+        std::string path;
+        bool registered = false;
+    };
+    std::map< std::string, multi_delay_node_t > m_multi_delays;
+    std::set< std::string > m_start_lights;
     std::set< std::string > m_ifs;
     std::vector< attach_t > m_attaches;
     // (entity, refName) -> the full path the ref points at.
@@ -1525,4 +1556,5 @@ private:
 #include <workspace/core/world/motion.hxx>
 #include <workspace/core/world/animate.hxx>
 #include <workspace/core/world/entities.hxx>
+#include <workspace/core/world/huds.hxx>
 #include <workspace/core/world/models.hxx>

@@ -568,6 +568,45 @@ inline bool verify_race_progress( )
     return failed == 0;
 }
 
+// multi_delay_in / multi_delay_tick (world/rules.hxx) against
+// VuMultiDelayEntity's In 0x5E0660 and tick 0x5E06B0 (oracle case
+// multi_delay): one failure per tick whose outputs (count and order), +0xA0 or
+// +0xA4 bits differ.
+inline bool verify_multi_delay( )
+{
+    int failed = 0, ticks = 0, fires = 0;
+    for ( std::size_t r = 0; r < g_golden_md_runs_count; ++r )
+    {
+        const golden_md_run_t& run = g_golden_md_runs[ r ];
+        multi_delay_t m;
+        std::memcpy( m.delay, run.m_delays, sizeof( m.delay ) );
+        for ( int t = 0; t < run.m_count; ++t )
+        {
+            const golden_md_tick_t& g = g_golden_md_ticks[ run.m_first + t ];
+            if ( g.m_in )
+                multi_delay_in( m );
+            float dt;
+            std::memcpy( &dt, &g.m_dt, 4 );
+            int count = 0;
+            unsigned order = 0;
+            multi_delay_tick( m, dt, [ & ]( int k, const std::uint8_t* ) { order |= static_cast< unsigned >( k ) << ( 4 * count++ ); } );
+            unsigned time;
+            std::memcpy( &time, &m.time, 4 );
+            ++ticks;
+            fires += g.m_fired;
+            if ( ( count != g.m_fired || order != g.m_order || m.active != g.m_active || time != g.m_time ) && ++failed <= 8 )
+                LOG_ERROR( "multi delay: run %d tick %d fired %d (0x%X) active %d time 0x%08X, retail %d (0x%X) %d 0x%08X", static_cast< int >( r ), t,
+                           count, order, m.active, time, g.m_fired, g.m_order, g.m_active, g.m_time );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "multi_delay_in / multi_delay_tick match VuMultiDelayEntity 0x5E0660 / 0x5E06B0 on %d runs: %d ticks, %d outputs fired in order",
+                     static_cast< int >( g_golden_md_runs_count ), ticks, fires );
+    else
+        LOG_ERROR( "multi_delay FAILED %d of %d ticks", failed, ticks );
+    return failed == 0;
+}
+
 // trigger_box_crossing (hydro trigger/volume.hxx) against
 // VuTriggerBoxEntity_testCrossings 0x5D1AB0 run on seeded boxes and
 // instigators (oracle case trigger_box_test): one failure per (box, instigator)
@@ -3046,6 +3085,7 @@ inline bool verify_world_all( )
     ok = verify_trigger_plane( ) && ok;
     ok = verify_trigger_box( ) && ok;
     ok = verify_race_progress( ) && ok;
+    ok = verify_multi_delay( ) && ok;
     ok = verify_static_model_draw( ) && ok;
     ok = verify_static_world_aabb( ) && ok;
     return ok;

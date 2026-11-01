@@ -426,6 +426,26 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
     // The race's own receivers (world/drive.hxx race_event_dispatch): the
     // gfx-settings entities' Trigger and the nuisance start's DriverTarget /
     // DriverDisable - built by the race session's gameInitialize walk.
+    // The race HUD projects' (world/huds.hxx): VuMultiDelayEntity's "In" 0x5E0660 and VuStartLightsOutAction's "Trigger"
+    // (VuGameActionEntity's input 0x406F40 -> 0x4077E3, vt+0x30 = 0x405470: the "OnStartLightsOut" broadcast, an empty
+    // VuParams; VuRetVal 0).
+    const auto clock = m_multi_delays.find( entity );
+    if ( clock != m_multi_delays.end( ) )
+    {
+        if ( plug == "In" )
+            multi_delay_in( clock->second.state );
+        else
+            count_unhandled( entity, plug );
+        return retval_t{};
+    }
+    if ( m_start_lights.count( entity ) != 0 )
+    {
+        if ( plug == "Trigger" )
+            race_broadcast( "OnStartLightsOut" );
+        else
+            count_unhandled( entity, plug );
+        return retval_t{};
+    }
     if ( race_event_dispatch( m_race, entity, plug, params ) )
     {
         ++m_fired;

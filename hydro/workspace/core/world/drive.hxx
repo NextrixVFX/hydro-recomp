@@ -830,3 +830,120 @@ inline bool race_event_dispatch( race_session_t& s, const std::string& entity, c
     }
     return false;
 }
+// ---- VuGame's tick 0x482F10 in a race (world/rules.hxx) ----------------------
+//
+// The Decision phase's game mode manager tick 0x4CBFD0 -> the action mode's
+// slot 4 0x4B99E0 (its own state machine: LoadingScreen / LoadLevel / Begin -
+// the front end's loading flow, NOT recreated: the session starts in its Run
+// state) -> Run's tick 0x4BAB50 -> 0x482F10(dt) on the game: 0x483230,
+// 0x483540, 0x483AD0, slot 7 0x489A40, VuGame's +0x0C / +0x67C machines (not
+// recreated - logged), each game boat's +0x4DC = its world. A game boat's
+// driver vt+0x5C: the human's sector (its pilot), an AI's plan's first sector
+// (+0x90 > 0 ? [+0x8C][0] : null).
+inline void race_session_game_mode( void* user, float dt )
+{
+    race_session_t& s = *static_cast< race_session_t* >( user );
+    if ( !s.rules_running || !s.track )
+        return;
+    ++s.rules_frames;
+    const track_manager_t& tm = *s.track;
+    for ( std::size_t k = 0; k < s.rules_boats.size( ); ++k )
+    {
+        race_rules_boat_t& rb = s.rules_boats[ k ];
+        rb.sector = nullptr;
+        const race_drive_t* d = k < s.drives.size( ) ? s.drives[ k ].get( ) : nullptr;
+        int sector = -1;
+        if ( d && d->human )
+            sector = d->human_pilot.sector;
+        else if ( d && d->ai && d->pilot >= 0 )
+        {
+            const fleet_plan_t& plan = s.pilots[ static_cast< std::size_t >( d->pilot ) ].plan;
+            sector = plan.sectors.empty( ) ? -1 : plan.sectors[ 0 ];
+        }
+        else
+            race_unwired( s, "a game boat's driver vt+0x5C with no human / AI drive composed - no sector (UNKNOWN)" );
+        if ( sector >= 0 && static_cast< std::size_t >( sector ) < tm.sectors.size( ) )
+            rb.sector = tm.sectors[ static_cast< std::size_t >( sector ) ].image;
+    }
+    race_rules_distances( s.rules_game, s.rules_boats );
+    race_checkpoint_hooks_t h;
+    h.view = [ & ]( int w, race_checkpoint_view_t& v )
+    {
+        if ( w < 0 || static_cast< std::size_t >( w ) >= tm.waypoints.size( ) )
+            return false;
+        const track_waypoint_t& wp = tm.waypoints[ static_cast< std::size_t >( w ) ];
+        const transform_component_t* t = wp.entity ? entity_transform( *wp.entity ) : nullptr;
+        if ( !t || wp.entity->m_world_unknown )
+            return false;
+        std::memcpy( v.normal, t->world + 4, 12 );
+        std::memcpy( v.origin, t->world + 12, 12 );
+        v.finish = wp.p.finish;
+        v.width = wp.p.width;
+        v.height = wp.p.height;
+        return true;
+    };
+    h.index = [ & ]( int w ) { return track_checkpoint_index( tm, w ); };
+    h.next = [ & ]( int w ) { return race_rules_next_checkpoint( tm, w ); };
+    h.crossed = [ & ]( int boat, int w )
+    {
+        LOG_INFO( "race: %s crossed checkpoint %d (waypoint %d) - lap %d, sync %d", s.boats[ static_cast< std::size_t >( boat ) ]->name.c_str( ),
+                  track_checkpoint_index( tm, w ), w, rules_i32( s.rules_boats[ static_cast< std::size_t >( boat ) ].boat, 0x4AC ),
+                  s.dynamics ? s.dynamics->syncs : -1 );
+        race_unwired( s, "VuRaceGame slot 15 0x48B180 on a checkpoint (the split / result display: VuGame +0x67C's ShowSplit / ShowResult, "
+                         "+0x6D8 / +0x6DC - the HUD's) - not recreated" );
+    };
+    h.finished = [ & ]( int boat )
+    {
+        fleet_remove_driver( s.fleet, boat );   // 0x483B60's g_vuaimanagerimpl slot 12 0x4036C0
+        LOG_INFO( "race: %s FINISHED - race time %.3f, place %d", s.boats[ static_cast< std::size_t >( boat ) ]->name.c_str( ),
+                  rules_f( s.rules_boats[ static_cast< std::size_t >( boat ) ].boat, 0x4B4 ),
+                  rules_i32( s.rules_boats[ static_cast< std::size_t >( boat ) ].boat, 0x4CC ) );
+    };
+    race_rules_checkpoints( s.rules_game, s.rules_boats, h );
+    if ( h.unknown )
+        race_unwired( s, "0x483540 on a checkpoint waypoint whose world is unknown - that boat skipped (UNKNOWN)" );
+    std::vector< std::uint8_t* > ais;
+    for ( const void* b : s.manager.lists.ais.boats )
+        ais.push_back( const_cast< std::uint8_t* >( static_cast< const std::uint8_t* >( b ) ) );
+    race_rules_hide_finished( ais, [ & ]( int ai )
+    {
+        for ( std::size_t k = 0; k < s.boats.size( ); ++k )
+            if ( s.boats[ k ]->graph.objects[ 0 ].image.data( ) == ais[ static_cast< std::size_t >( ai ) ] )
+            {
+                race_session_enable( s, *s.boats[ k ], false );   // slot 18 0x421940
+                LOG_INFO( "race: %s hidden (0x483AD0: the sixth finished AI boat)", s.boats[ k ]->name.c_str( ) );
+            }
+        race_unwired( s, "0x483AD0's draw removal (g_vu3ddrawmanager 0x7590B8 vt+0x2C - the renderer's)" );
+    } );
+    s.rules.humans.clear( );
+    for ( const void* b : s.manager.lists.humans.boats )
+        s.rules.humans.push_back( const_cast< std::uint8_t* >( static_cast< const std::uint8_t* >( b ) ) );
+    const std::string before = s.rules.fsm.current( ) ? s.rules.fsm.current( )->m_name : std::string( );
+    const bool running = race_rules_tick( s.rules, dt );
+    const std::string after = s.rules.fsm.current( ) ? s.rules.fsm.current( )->m_name : std::string( );
+    if ( before != after )
+        LOG_INFO( "race: VuRaceGame state %s -> %s (sync %d)", before.c_str( ), after.c_str( ), s.dynamics ? s.dynamics->syncs : -1 );
+    if ( !s.rules.sorted )
+        race_unwired( s, "0x48AB20 over more than 32 boats (MSVC's partition / heap sort paths, not recreated) - the places not sorted (UNKNOWN)" );
+    if ( !running )
+        race_unwired( s, "slot 7 answered the Exit state: VuGame's +0x0C machine's EventFinished (not recreated)" );
+    race_unwired( s, "VuGame's own state machines +0x0C / +0x67C (0x480BA0's states: the pause / split-display flow) - not recreated, their evaluate / "
+                     "tick not run (UNKNOWN)" );
+    for ( race_rules_boat_t& rb : s.rules_boats )
+        std::memcpy( rb.boat + 0x4DC, rb.transform + 0x50, 64 );
+    // Ours (dev trace): every boat's progress every 240 game ticks.
+    if ( s.rules_frames % 240 == 0 )
+        for ( std::size_t k = 0; k < s.rules_boats.size( ); ++k )
+        {
+            const race_rules_boat_t& rb = s.rules_boats[ k ];
+            int sector = -1;
+            for ( std::size_t q = 0; q < tm.sectors.size( ); ++q )
+                if ( tm.sectors[ q ].image == rb.sector )
+                    sector = static_cast< int >( q );
+            LOG_INFO( "race progress tick %d: %s sector %d lap %d place %d next checkpoint %d race done %.1f / left %.1f, time %.2f, input-off %d, "
+                      "at (%.1f %.1f %.1f)", s.rules_frames, s.boats[ k ]->name.c_str( ), sector, rules_i32( rb.boat, 0x4AC ),
+                      rules_i32( rb.boat, 0x4CC ), rb.checkpoint >= 0 ? track_checkpoint_index( tm, rb.checkpoint ) : -1, rules_f( rb.boat, 0x4C8 ),
+                      rules_f( rb.boat, 0x4C4 ), rules_f( rb.boat, 0x4B4 ), rules_i32( rb.boat, 0x308 ), rules_f( rb.transform, 0x80 ),
+                      rules_f( rb.transform, 0x84 ), rules_f( rb.transform, 0x88 ) );
+        }
+}
