@@ -160,8 +160,11 @@ struct ui_touch_device_t
     std::vector< std::pair< const void*, std::uint32_t > > m_callbacks;   // +4..+0xC
     std::uint32_t m_priority = 0;                                         // +0x1C
     // batch 24 (additive): the second callback list +0x10..+0x18 (dispatched with no
-    // priority test; its filler - 0x4C6AB0's two 0x53FC00 pushes - is NOT read: data
-    // here), the touches (+0x20 storage, +0x24 count; entries past the count keep
+    // priority test). Batch 25: its filler is VuControlMethodManager (vtable 0x745538)
+    // slot 5 0x4AE890 - 0x53FB90 { manager + 4, 0 } on device + 0x10 (slot 3 0x4AE980
+    // erases it) - not recreated: data here. (0x4C6AB0's two 0x53FC00 calls are ONE
+    // inlined push_back - the aliasing branch and the plain one - of VuTitleSequence
+    // GameMode's callback { this + 4, 0 } onto the FIRST list +4.) The touches (+0x20 storage, +0x24 count; entries past the count keep
     // their old bytes - m_touches holds every entry ever written), the handlers.
     std::vector< std::pair< const void*, std::uint32_t > > m_low_level;
     std::vector< ui_touch_entry_t > m_touches;
