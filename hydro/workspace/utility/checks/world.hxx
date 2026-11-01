@@ -904,6 +904,124 @@ inline bool verify_water_grid( )
     return failed == 0;
 }
 
+// The surface build with a water map (world/grid.hxx water_map_clip /
+// water_grid_map_terms) against retail (case water_grid_maps): Hydroelectric's
+// real VuWaterMapAssets read from Base.apf through water_map_load (verified by
+// water_point), the case's declared synthetic maps rebuilt from the golden
+// bytes, one scenario with ClipMaps off and a null-map control; per scenario
+// the record, the patches, each patch's vertex block (FNV-1a 32 of its 32-byte
+// records) and the indices. One failure per scenario.
+inline std::uint32_t world_check_fnv32( const void* data, std::size_t n )
+{
+    std::uint32_t x = 0x811C9DC5u;
+    for ( std::size_t i = 0; i < n; ++i )
+        x = ( x ^ static_cast< const std::uint8_t* >( data )[ i ] ) * 0x01000193u;
+    return x;
+}
+
+inline bool verify_water_grid_maps( )
+{
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) )
+    {
+        LOG_ERROR( "water grid maps: Base.apf did not open" );
+        return false;
+    }
+    int failed = 0, patches = 0, vertices = 0, mapped = 0;
+    water_grid_t g{};
+    water_templates( g.templates );
+    for ( std::size_t k = 0; k < g_golden_water_grid_maps_count; ++k )
+    {
+        const golden_water_grid_map_t& r = g_golden_water_grid_maps[ k ];
+        water_map_t map{};
+        bool have = false;
+        const char* what = nullptr;
+        if ( r.m_map[ 0 ] )
+        {
+            std::vector< std::uint8_t > blob;
+            have = archive.read( ( std::string( "VuWaterMapAsset/" ) + r.m_map ).c_str( ), blob ) && water_map_load( blob.data( ), blob.size( ), map );
+            if ( !have )
+                what = "the map did not load";
+        }
+        else if ( r.m_synth_at >= 0 )
+        {
+            const unsigned* w = g_golden_wgm_synth + r.m_synth_at;
+            map.width = w[ 0 ];
+            map.height = w[ 1 ];
+            const unsigned char* b = g_golden_wgm_bytes + w[ 2 ];
+            std::vector< std::uint8_t >* arrays[ 3 ] = { &map.map, &map.second, &map.third };
+            for ( int a = 0; a < 3; ++a )
+            {
+                arrays[ a ]->assign( b, b + w[ 3 + a ] );
+                b += w[ 3 + a ];
+            }
+            for ( unsigned j = 0; j < w[ 6 ]; ++j )
+            {
+                water_map_t::entry_t e{};
+                e.a = w[ 7 + 3 * j ];
+                e.b = w[ 8 + 3 * j ];
+                e.bytes.assign( b, b + w[ 9 + 3 * j ] );
+                b += w[ 9 + 3 * j ];
+                map.entries.push_back( std::move( e ) );
+            }
+            have = true;
+        }
+        mapped += have ? 1 : 0;
+        water_frustum_t fr{};
+        std::memcpy( fr.f, r.m_frustum, sizeof( fr.f ) );
+        std::memcpy( fr.position, r.m_eye, sizeof( fr.position ) );
+        water_words_t s{};
+        for ( int w = 0; w < 68; ++w )
+            s.set( 4 * w, r.m_surface[ w ] );
+        water_view_t view{};
+        water_surface_t q{};
+        q.height = s.f( 20 );
+        q.wave_root = -1;
+        q.map = have ? &map : nullptr;
+        view.water.surfaces.push_back( q );
+        g.clip_maps = r.m_clip != 0;
+        water_grid_frame_t out{};
+        water_grid_build( g, fr, s, 0, &view, out, false );
+        if ( !what && ( ( out.draws.size( ) == 1 ) != ( r.m_built != 0 ) || out.failed != 0 ) )
+            what = "built or not / a failed patch";
+        if ( !what && r.m_built )
+        {
+            const water_grid_draw_t& d = out.draws[ 0 ];
+            const unsigned n = r.m_record[ 10 ];
+            if ( static_cast< unsigned >( d.patches ) != n || static_cast< unsigned >( d.vertex_count ) != r.m_record[ 12 ] ||
+                 static_cast< unsigned >( d.index_count ) != r.m_record[ 14 ] )
+                what = "the record's counts";
+            for ( unsigned p = 0; !what && p < n; ++p )
+                if ( std::memcmp( &g.patches[ p ], g_golden_wgm_patches + r.m_patch_at + 5 * p, 20 ) != 0 )
+                    what = "a patch";
+            std::size_t at = 0;
+            for ( unsigned p = 0; !what && p < n; ++p )
+            {
+                const std::size_t c = g.templates[ g.patches[ p ].flags ].xy.size( ) / 2;
+                if ( world_check_fnv32( out.vertices.data( ) + at, 32 * c ) != g_golden_wgm_vertex_fnv[ r.m_fnv_at + p ] )
+                    what = "a patch's vertex records";
+                at += c;
+            }
+            if ( !what && world_check_fnv32( out.indices.data( ), 2 * out.indices.size( ) ) != r.m_index_fnv )
+                what = "the indices";
+            patches += static_cast< int >( n );
+            vertices += d.vertex_count;
+        }
+        if ( what && ++failed <= 6 )
+            LOG_ERROR( "water grid maps: scenario %d (%s, ClipMaps %d): %s", static_cast< int >( k ), r.m_map[ 0 ] ? r.m_map : "synthetic / none",
+                r.m_clip, what );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_grid_build with water maps matches retail's 0x597B50 (clip test 0x5C7E80 in 0x597260; 0x597D70's byte maps "
+                     "0x598590 / 0x5986E0 / 0x598810 / inline / 0x598940 / 0x598A70 / 0x598B70) on %d scenarios (%d mapped): %d patches, "
+                     "%d vertex records bit for bit",
+            static_cast< int >( g_golden_water_grid_maps_count ), mapped, patches, vertices );
+    else
+        LOG_ERROR( "water grid maps FAILED %d of %d scenarios", failed, static_cast< int >( g_golden_water_grid_maps_count ) );
+    return failed == 0;
+}
+
 // THE RACE'S TRACK AS THE RUNNING WORLD BUILDS IT (world/race.hxx +
 // entities.hxx): VuProjectAsset/Games/HydroelectricRace loaded from Base.apf
 // through race_load_tree (the callbacks c_world::load_entity_tree uses, the
@@ -1081,6 +1199,7 @@ inline bool verify_world_all( )
     ok = verify_water_templates( ) && ok;
     ok = verify_water_frustum( ) && ok;
     ok = verify_water_grid( ) && ok;
+    ok = verify_water_grid_maps( ) && ok;
     ok = verify_static_scene_load( ) && ok;
     ok = verify_animated_model_draw( ) && ok;
     ok = verify_script_graph( ) && ok;
