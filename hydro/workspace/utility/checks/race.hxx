@@ -10,6 +10,7 @@
 #include <workspace/core/boat/meshes.hxx>
 #include <workspace/core/boat/surface.hxx>
 #include <workspace/core/boat/nuisance.hxx>
+#include <workspace/core/boat/contact.hxx>
 
 #include <algorithm>
 #include <array>
@@ -2256,6 +2257,120 @@ inline bool verify_nuisance_start( )
     return false;
 }
 
+// The contact-added callback 0x574E90 -> 0x5751F0 -> 0x519720 against retail (oracle case contact_added): the manifold
+// point after (every word, bit for bit), the return, and each listener / callback call's record (but its stale-stack
+// words) with the case's scripted write-backs replayed.
+inline bool verify_contact_added( )
+{
+    const unsigned* g = g_golden_contact_added_words;
+    auto bits = []( float f ) { unsigned u; std::memcpy( &u, &f, 4 ); return u; };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        collision_mesh_asset_t mesh;
+        const unsigned nvert = *g++;
+        mesh.vertices.bytes.assign( 16u * nvert, 0 );
+        for ( unsigned k = 0; k < nvert; ++k )
+        {
+            std::memcpy( mesh.vertices.bytes.data( ) + 16 * k, g, 12 );
+            const float one = 1.0f;
+            std::memcpy( mesh.vertices.bytes.data( ) + 16 * k + 12, &one, 4 );
+            g += 3;
+        }
+        const unsigned ntri = *g++;
+        mesh.indices.bytes.assign( 6u * ntri, 0 );
+        for ( unsigned k = 0; k < 3 * ntri; ++k )
+        {
+            const std::uint16_t i = static_cast< std::uint16_t >( *g++ );
+            std::memcpy( mesh.indices.bytes.data( ) + 2 * k, &i, 2 );
+        }
+        mesh.triangles.bytes.assign( 4u * ntri, 0 );
+        std::memcpy( mesh.triangles.bytes.data( ), g, 4u * ntri );
+        g += ntri;
+        mesh.materials.bytes.assign( 44u * 32, 0xCD );
+        for ( unsigned k = 0; k < 32; ++k )
+            mesh.materials.bytes[ 44 * k + 40 ] = static_cast< std::uint8_t >( *g++ );
+        surface_table_t table;
+        table.types.resize( 12 );
+        for ( auto& t : table.types )
+        {
+            std::memcpy( &t.friction, g++, 4 );
+            t.color = 0xFFFFFFFFu;
+        }
+        const std::int32_t index = static_cast< std::int32_t >( *g++ );
+        std::uint8_t cp[ 0x80 ];
+        std::memcpy( cp, g, 0x80 );
+        g += 32;
+        const unsigned has_mesh = *g++;
+        const unsigned type0 = *g++, type1 = *g++, s0 = *g++, s1 = *g++, cb0 = *g++, cb1 = *g++, nl = *g++;
+        std::vector< std::pair< unsigned, unsigned > > muts( *g++ );
+        for ( auto& m : muts )
+        {
+            m.first = g[ 0 ];
+            m.second = g[ 1 ];
+            g += 2;
+        }
+        std::uint8_t img[ 2 ][ 0x300 ] = { };
+        std::memcpy( img[ 1 ] + 0x10, g, 48 );
+        g += 12;
+        const unsigned ret = *g++;
+        const unsigned* after = g;
+        g += 32;
+        std::vector< std::vector< unsigned > > glog( *g++ );
+        for ( auto& e : glog )
+        {
+            e.assign( g, g + 14 );
+            g += 14;
+        }
+        const unsigned types[ 2 ] = { type0, type1 }, surfs[ 2 ] = { s0, s1 }, cbs[ 2 ] = { cb0, cb1 };
+        for ( int j = 0; j < 2; ++j )
+        {
+            std::memcpy( img[ j ] + 0xF4, &types[ j ], 4 );
+            const unsigned cb = cbs[ j ] ? 0x100u + j : 0u;
+            std::memcpy( img[ j ] + 0x2C4, &cb, 4 );
+            img[ j ][ 0x2C8 ] = static_cast< std::uint8_t >( surfs[ j ] );
+        }
+        contact_body_t o0, o1;
+        o0.image = img[ 0 ];
+        o0.handle = 1;
+        o1.image = img[ 1 ];
+        o1.handle = 2;
+        o1.mesh = has_mesh ? &mesh : nullptr;
+        std::vector< std::vector< unsigned > > log;
+        std::size_t next = 0;
+        auto call = [ & ]( unsigned who ) {
+            return [ &, who ]( contact_record_t& r ) {
+                const std::pair< unsigned, unsigned > m = next < muts.size( ) ? muts[ next++ ] : std::pair< unsigned, unsigned >( 0u, 0u );
+                log.push_back( { who, r.body0, r.body1, r.other, bits( r.pos[ 0 ] ), bits( r.pos[ 1 ] ), bits( r.pos[ 2 ] ), bits( r.normal[ 0 ] ),
+                                 bits( r.normal[ 1 ] ), bits( r.normal[ 2 ] ), static_cast< unsigned >( r.surface0 | r.surface1 << 8 ),
+                                 bits( r.friction ), m.first, m.second } );
+                if ( m.first == 1 )
+                    std::memcpy( &r.friction, &m.second, 4 );
+                else if ( m.first == 2 )
+                    std::memcpy( &r.normal[ 0 ], &m.second, 4 );
+            };
+        };
+        contact_hooks_t h;
+        for ( unsigned k = 0; k < nl; ++k )
+            h.listeners.push_back( call( 1 + k ) );
+        h.callback0 = call( 5 );
+        h.callback1 = call( 6 );
+        const bool known = contact_added( table, cp, o0, o1, index, h );
+        const bool same = known && ret == 0 && std::memcmp( cp, after, 0x80 ) == 0 && log == glog;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "contact_added vector %u: %s, normal 0x%X 0x%X 0x%X (retail 0x%X 0x%X 0x%X), %zu calls (%zu)", v, known ? "ran" : "UNKNOWN",
+                       contact_u32( cp, 0x40 ), contact_u32( cp, 0x44 ), contact_u32( cp, 0x48 ), after[ 16 ], after[ 17 ], after[ 18 ], log.size( ), glog.size( ) );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "The contact-added callback 0x574E90 / 0x5751F0 / 0x519720 matches retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "contact_added FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -2282,5 +2397,6 @@ inline bool verify_race_all( )
     ok = verify_hidden_package( ) && ok;
     ok = verify_boat_manager_game( ) && ok;
     ok = verify_nuisance_start( ) && ok;
+    ok = verify_contact_added( ) && ok;
     return ok;
 }
