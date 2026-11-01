@@ -664,7 +664,31 @@ struct water_built_t
     std::vector< water_words_t > waves;
     std::vector< water_kind_t > wave_kind;
     int skipped = 0;   // water entities of a class not built here, or with no state / transform
+    // Per wave: destroyed (its refcount reached 0 and slot 0 ran with 1); the
+    // words stay for inspection, retail's object is freed.
+    std::vector< std::uint8_t > wave_gone;
+    // Destructions whose class dtor is not recreated (every kind but the
+    // point wave's 0x5A3310), or whose +8 chain was non-empty: UNKNOWN effects.
+    int unread_dtors = 0;
 };
+
+// Each wave class's vtable, read from the image (word +0 after its ctor; the
+// slot 2 each holds is in water_built_tick).
+inline std::uint32_t water_wave_vtable( water_kind_t k )
+{
+    switch ( k )
+    {
+    case water_kind_ramp: return 0x75093Cu;
+    case water_kind_rectangular: return 0x750888u;
+    case water_kind_circular: return 0x7508A4u;
+    case water_kind_banked: return 0x7509F4u;
+    case water_kind_whirlpool: return 0x750900u;
+    case water_kind_directional: return 0x750768u;
+    case water_kind_bump: return 0x7509B4u;
+    case water_kind_point: return 0x750978u;
+    default: return 0u;
+    }
+}
 
 inline void water_built_init( water_built_t& b )
 {
@@ -675,7 +699,11 @@ inline void water_built_init( water_built_t& b )
 // One entity's slot 6.
 inline void water_build_entity( water_built_t& b, water_kind_t kind, const water_input_t& in )
 {
-    auto add_wave = [ & ]( const water_words_t& w, water_kind_t k ) {
+    auto add_wave = [ & ]( water_words_t w, water_kind_t k ) {
+        // +0 the class's vtable (its ctor's store), +4 the refcount: the base
+        // ctor's 1 plus the allocator's own (the entity's) - 2.
+        w.set( 0, water_wave_vtable( k ) );
+        w.set( 4, 2 );
         water_hold_wave( b.hold, water_held_from( w.word ) );
         b.waves.push_back( w );
         b.wave_kind.push_back( k );
@@ -788,6 +816,221 @@ inline int water_point_wave_emit( water_built_t& b, const std::uint32_t* positio
     const int wave = water_create_point_wave( b, desc );
     b.waves.back( ).word[ 140 / 4 ] = 1u;   // entity + 0x5C: non-null
     return wave;
+}
+
+// ---------------------------------------------------------------------------
+// THE BUILT WATER'S TICK: VuWater's "Water" tick 0x529E30 (wave.hxx's
+// water_tick, verified on synthetic lists) on the hold's own wave list, each
+// wave's slot 2 the class's verified tick on its words.
+//
+// The hooks a caller supplies (all optional; a missing one that is reached is
+// COUNTED in the return value, never stood in for):
+struct water_built_hooks_t
+{
+    void* user = nullptr;
+    // A point wave's +0x8C callback: slot 0 of the emitting entity's
+    // VuPointWaveCallbackIF, VuPointWaveEntity's OnExpired 0x5D4B60. Its wave
+    // half is water_point_wave_expired; the entity's +0xA0 = 0 and its
+    // "OnExpired" plug (VuScriptComponent_findPlug 0x504770, the plug's slot 2)
+    // are the caller's.
+    void ( *expire )( void* user, water_built_t& b, int wave ) = nullptr;
+    // An ocean wave's field rebuild inside 0x59CC00: EvolveField 0x59D4D0,
+    // VuWaterMap_BuildBezierPatches 0x608BB0, 0x59D640, BuildBezierPatches
+    // 0x59D6C0 - NOT RECREATED (the ocean field), a hook.
+    void ( *rebuild )( void* user, int wave ) = nullptr;
+    // 0x595610 on water +0x1C: the render thread's kick, a hook.
+    void ( *render )( void* user ) = nullptr;
+    // Told after a wave is destroyed (slot 0 with 1).
+    void ( *destroyed )( void* user, int wave ) = nullptr;
+};
+
+inline void water_built_destroy( water_built_t& b, int wave );
+
+// VuWater's wave removal 0x529800 (thiscall water; wave*; retn 4) - the same
+// body the tick 0x529E30 runs on a dead wave: the FIRST list node holding the
+// wave unlinked and pushed on the pool's free list (+0x10, count +8), then
+// 0x529B90 (water_hold_remove: its tree leaves), then the manager's
+// reference (+4) dropped, destroying the wave at zero. A wave not on the
+// list: nothing at all.
+inline void water_built_remove( water_built_t& b, int wave )
+{
+    water_hold_t& w = b.hold;
+    int prev = -1;
+    int e = w.list;
+    while ( e >= 0 && w.pool[ e ].leaf != wave )
+    {
+        prev = e;
+        e = w.pool[ e ].next;
+    }
+    if ( e < 0 )
+        return;
+    if ( prev >= 0 )
+        w.pool[ prev ].next = w.pool[ e ].next;
+    else
+        w.list = w.pool[ e ].next;
+    w.pool[ e ].next = w.pool_free;
+    ++w.pool_count;
+    w.pool_free = e;
+    water_hold_remove( w, wave );
+    if ( --b.waves[ wave ].word[ 1 ] == 0 )
+        water_built_destroy( b, wave );
+}
+
+// Slot 0 with 1, the scalar deleting dtor. The point wave's 0x5A3310: its
+// vtable restored, VuWaterWave's dtor 0x5A6470 - 0x529800 on g_vuwater (a
+// no-op once the tick has unlinked it), then while +8 is set, slot 0 of the
+// object there (UNREAD: counted; every wave built here has +8 = 0) - then
+// freed. Every other class's dtor is unread: counted, and the wave is NOT
+// marked gone.
+inline void water_built_destroy( water_built_t& b, int wave )
+{
+    if ( b.wave_gone.size( ) < b.waves.size( ) )
+        b.wave_gone.resize( b.waves.size( ), 0 );
+    if ( b.wave_kind[ static_cast< std::size_t >( wave ) ] != water_kind_point )
+    {
+        ++b.unread_dtors;
+        return;
+    }
+    water_built_remove( b, wave );
+    if ( b.waves[ wave ].word[ 2 ] != 0 )
+        ++b.unread_dtors;
+    b.wave_gone[ static_cast< std::size_t >( wave ) ] = 1;
+}
+
+// The wave half of VuPointWaveEntity's OnExpired 0x5D4B60 (thiscall on the
+// entity's +0x5C): the entity's reference (+0xA0's +4) dropped, slot 0 with 1
+// at zero. (Then the entity's +0xA0 = 0 and its "OnExpired" plug fires.)
+inline void water_point_wave_expired( water_built_t& b, int wave )
+{
+    if ( --b.waves[ wave ].word[ 1 ] == 0 )
+        water_built_destroy( b, wave );
+}
+
+// 0x529E30 (thiscall water; float dt): per list node from +0x30, the next
+// node taken BEFORE the call, alive = slot 2( +0x48 * dt ); a dead wave goes
+// through 0x529800's body; then the renderer's kick. The slot 2s, read from
+// each class's vtable: ramp 0x75093C / banked 0x7509F4 / bump 0x7509B4 ->
+// 0x59C380; rectangular 0x750888 / circular 0x7508A4 -> 0x59CC00; whirlpool
+// 0x750900 -> 0x5A1680 (clock +0x74); directional 0x750768 -> 0x59AAD0
+// (clock +0x7C); point 0x750978 -> 0x5A34B0. Returns how many unrecreated
+// paths were reached with no hook to answer them (0 = none).
+inline int water_built_tick( water_built_t& b, float dt, const water_built_hooks_t& hooks )
+{
+    struct point_call_t
+    {
+        water_built_t* b;
+        const water_built_hooks_t* hooks;
+        int wave;
+        int ref;
+        int missing;
+    };
+    struct ocean_call_t
+    {
+        const water_built_hooks_t* hooks;
+        int wave;
+        int missing;
+    };
+    const int unread_before = b.unread_dtors;
+    int missing = 0;
+    for ( int at = b.hold.list; at >= 0; )
+    {
+        const int next = b.hold.pool[ at ].next;
+        const int wave = b.hold.pool[ at ].leaf;
+        const water_words_t& v = b.waves[ static_cast< std::size_t >( wave ) ];
+        const float scaled = v.f( 0x48 ) * dt;
+        bool alive = true;
+        switch ( b.wave_kind[ static_cast< std::size_t >( wave ) ] )
+        {
+        case water_kind_whirlpool:
+        case water_kind_directional:
+        {
+            const bool whirlpool = b.wave_kind[ static_cast< std::size_t >( wave ) ] == water_kind_whirlpool;
+            const int at_clock = whirlpool ? 0x74 : 0x7C;
+            float clock = v.f( at_clock );
+            alive = whirlpool ? whirlpool_tick( clock, static_cast< int >( v.word[ 1 ] ), scaled )
+                              : directional_tick( clock, static_cast< int >( v.word[ 1 ] ), scaled );
+            b.waves[ static_cast< std::size_t >( wave ) ].setf( at_clock, clock );
+            break;
+        }
+        case water_kind_ramp:
+        case water_kind_banked:
+        case water_kind_bump: alive = static_wave_tick( static_cast< int >( v.word[ 1 ] ) ); break;
+        case water_kind_rectangular:
+        case water_kind_circular:
+        {
+            ocean_clock_t c{};
+            std::memcpy( &c.time, &v.word[ 0x88 / 4 ], 8 );
+            c.current = static_cast< int >( v.word[ 0xA4 / 4 ] );
+            c.previous = static_cast< int >( v.word[ 0xA8 / 4 ] );
+            std::memcpy( &c.buffer_time[ 0 ], &v.word[ 0xB0 / 4 ], 8 );
+            std::memcpy( &c.buffer_time[ 1 ], &v.word[ 0xC0 / 4 ], 8 );
+            ocean_call_t call{ &hooks, wave, 0 };
+            alive = ocean_tick( c, static_cast< int >( v.word[ 1 ] ), scaled,
+                []( void* u ) {
+                    ocean_call_t& o = *static_cast< ocean_call_t* >( u );
+                    if ( o.hooks->rebuild )
+                        o.hooks->rebuild( o.hooks->user, o.wave );
+                    else
+                        ++o.missing;
+                },
+                &call );
+            missing += call.missing;
+            water_words_t& o = b.waves[ static_cast< std::size_t >( wave ) ];
+            std::uint32_t t[ 2 ];
+            std::memcpy( t, &c.time, 8 );
+            o.set( 0x88, t[ 0 ] );
+            o.set( 0x8C, t[ 1 ] );
+            o.set( 0xA4, static_cast< std::uint32_t >( c.current ) );
+            o.set( 0xA8, static_cast< std::uint32_t >( c.previous ) );
+            for ( int k = 0; k < 2; ++k )
+            {
+                std::memcpy( t, &c.buffer_time[ k ], 8 );
+                o.set( 0xB0 + 16 * k, t[ 0 ] );
+                o.set( 0xB4 + 16 * k, t[ 1 ] );
+            }
+            break;
+        }
+        case water_kind_point:
+        {
+            point_wave_life_t life{};
+            life.tail_width = v.f( 0x5C );
+            life.outer_radius = v.f( 0x68 );
+            life.elapsed = v.f( 0x78 );
+            life.rate = v.f( 0x7C );
+            life.has_callback = v.word[ 0x8C / 4 ] != 0;
+            life.expired = ( v.word[ 0x90 / 4 ] & 0xFFu ) != 0;
+            point_call_t call{ &b, &hooks, wave, static_cast< int >( v.word[ 1 ] ), 0 };
+            alive = point_wave_tick( life, call.ref, scaled,
+                []( void* u ) {
+                    point_call_t& p = *static_cast< point_call_t* >( u );
+                    if ( p.hooks->expire )
+                        p.hooks->expire( p.hooks->user, *p.b, p.wave );
+                    else
+                        ++p.missing;
+                    p.ref = static_cast< int >( p.b->waves[ static_cast< std::size_t >( p.wave ) ].word[ 1 ] );
+                },
+                &call );
+            missing += call.missing;
+            water_words_t& o = b.waves[ static_cast< std::size_t >( wave ) ];
+            o.setf( 0x78, life.elapsed );
+            o.word[ 0x90 / 4 ] = ( o.word[ 0x90 / 4 ] & ~0xFFu ) | ( life.expired ? 1u : 0u );
+            break;
+        }
+        default: ++missing; break;   // no class built here reaches this
+        }
+        if ( !alive )
+        {
+            water_built_remove( b, wave );
+            if ( hooks.destroyed && wave < static_cast< int >( b.wave_gone.size( ) ) && b.wave_gone[ static_cast< std::size_t >( wave ) ] )
+                hooks.destroyed( hooks.user, wave );
+        }
+        at = next;
+    }
+    if ( hooks.render )
+        hooks.render( hooks.user );
+    else
+        ++missing;
+    return missing + ( b.unread_dtors - unread_before );
 }
 
 // Is `cls` a water class (registry category "Water") this build does not

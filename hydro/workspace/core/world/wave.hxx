@@ -1226,7 +1226,9 @@ inline bool static_wave_tick( int refcount )
 // @0x5a34b0: the point wave's lifetime. Past (rate * outer) + tail width it
 // fires its callback (+0x8c, the entity's VuPointWaveCallbackIF - its slot 0
 // is the entity's OnExpired path) once, guarded by +0x90 and by the callback
-// being set, and from then on lives only while referenced.
+// being set, and from then on lives only while referenced. +4 is read AFTER
+// the callback (0x5a34f0), which matters: VuPointWaveEntity's OnExpired
+// @0x5d4b60 drops the entity's reference there - hence `const int&`.
 struct point_wave_life_t
 {
     float tail_width = 0.0f;   // +0x5c
@@ -1237,7 +1239,7 @@ struct point_wave_life_t
     bool expired = false;      // +0x90
 };
 
-inline bool point_wave_tick( point_wave_life_t& wave, int refcount, float dt, void ( *expire )( void* ), void* user )
+inline bool point_wave_tick( point_wave_life_t& wave, const int& refcount, float dt, void ( *expire )( void* ), void* user )
 {
     wave.elapsed = dt + wave.elapsed;
     const float limit = ( wave.rate * wave.outer_radius ) + wave.tail_width;
