@@ -21,8 +21,9 @@
 // makes one boat per GameData["Boats"][k]). Transliterated from the
 // disassembly:
 //   0x4BF9B0  the exit's data step (its teardown half is c_front_end::exit)
-//   0x4C0A50  the race builder ("Race"; slalom 0x4C18D0, time trial 0x4C1E30,
-//             championship 0x4C2300, ghost 0x4C2C50 are NOT recreated)
+//   0x4C0A50  the race builder ("Race"), 0x4C18D0 the slalom's ("Slalom");
+//             time trial 0x4C1E30, championship 0x4C2300, ghost 0x4C2C50 are
+//             NOT recreated
 //   0x4C3380  an AI pick by class, over the shuffle 0x50FF40
 //   0x4C31D0  an AI boat's entry (its skin drawn from BoatDB's AISkins)
 //   0x4C3120  the human player's entry
@@ -306,9 +307,43 @@ inline bool ui_race_game_data( value_t& game_data, value_t& root, const ui_game_
     return true;
 }
 
+// 0x4C18D0 (stdcall VuJsonContainer* game_data; ret 4), the slalom. Reads
+// GameConfig.Track and .Course, PlayerBoats[0].Properties.Boat / .Skin, the
+// boat's BoatDB Class and the track's TrackDB ProjectAsset (as the race); no
+// AI and no draw. Writes GameData: GameType "Slalom", Track, Course, Level,
+// Difficulty (the race's rule), Boats[0] = the player's entry (0x4C3120);
+// root.InitialScreen = "Screens/SinglePlayer".
+inline bool ui_slalom_game_data( value_t& game_data, value_t& root, const ui_game_env_t& env )
+{
+    static const value_t null{ };
+    const value_t& boats_db = env.boat_db ? member( *env.boat_db, "VuDBAsset" ) : null;
+    const value_t& tracks_db = env.track_db ? member( *env.track_db, "VuDBAsset" ) : null;
+    const std::string track = ui_json_text( member( member( root, "GameConfig" ), "Track" ) );
+    const std::string course = ui_json_text( member( member( root, "GameConfig" ), "Course" ) );
+    const value_t& players = member( member( root, "BoatConfig" ), "PlayerBoats" );
+    const value_t& player = players.tag == 5 && !players.list.empty( ) ? players.list[ 0 ] : null;
+    const std::string boat = ui_json_text( member( member( player, "Properties" ), "Boat" ) );
+    const std::string skin = ui_json_text( member( member( player, "Properties" ), "Skin" ) );
+    const std::string cls = ui_json_text( member( ui_json_find( boats_db, boat ), "Class" ) );
+    const std::string level = ui_json_text( member( ui_json_find( tracks_db, track ), "ProjectAsset" ) );
+    std::string difficulty = "Normal";
+    if ( cls == "A" )
+        difficulty = "Hard";
+    if ( cls == "C" )
+        difficulty = "Easy";
+    ui_json_set_string( ui_json_child( game_data, "GameType" ), "Slalom" );
+    ui_json_set_string( ui_json_child( game_data, "Track" ), track.c_str( ) );
+    ui_json_set_string( ui_json_child( game_data, "Course" ), course.c_str( ) );
+    ui_json_set_string( ui_json_child( game_data, "Level" ), level.c_str( ) );
+    ui_json_set_string( ui_json_child( game_data, "Difficulty" ), difficulty.c_str( ) );
+    ui_player_entry( ui_json_at( ui_json_child( game_data, "Boats" ), 0 ), boat.c_str( ), skin.c_str( ), env );
+    ui_json_set_string( ui_json_child( root, "InitialScreen" ), "Screens/SinglePlayer" );
+    return true;
+}
+
 // Which builder 0x4BF9B0 handed GameData to (0 = none ran: the next mode is
 // not "Action", or the event type is none of the five) and whether it is
-// recreated and completed (only the race is).
+// recreated and completed (the race and the slalom are).
 struct ui_game_config_t
 {
     std::uint32_t builder = 0;
@@ -319,8 +354,8 @@ struct ui_game_config_t
 // only for the next game mode exactly "Action": GameData = root["GameData"],
 // cleared; GameData.EventType = GameConfig.Mode's text; the builder by that
 // text: "Race" 0x4C0A50, "Slalom" 0x4C18D0, "TimeTrial" 0x4C1E30,
-// "Championship" 0x4C2300, "Ghost" 0x4C2C50 (each but the race UNKNOWN: not
-// recreated - reported, nothing written for them).
+// "Championship" 0x4C2300, "Ghost" 0x4C2C50 (each but the race and the
+// slalom UNKNOWN: not recreated - reported, nothing written for them).
 inline ui_game_config_t ui_game_config( const std::string& next_mode, value_t& root, const ui_game_env_t& env )
 {
     ui_game_config_t out;
@@ -337,7 +372,10 @@ inline ui_game_config_t ui_game_config( const std::string& next_mode, value_t& r
         out.built = ui_race_game_data( ui_json_child( root, "GameData" ), root, env );
     }
     else if ( mode == "Slalom" )
+    {
         out.builder = 0x4C18D0u;
+        out.built = ui_slalom_game_data( ui_json_child( root, "GameData" ), root, env );
+    }
     else if ( mode == "TimeTrial" )
         out.builder = 0x4C1E30u;
     else if ( mode == "Championship" )
@@ -350,23 +388,25 @@ inline ui_game_config_t ui_game_config( const std::string& next_mode, value_t& r
 // THE EXPORT (for the race start: VuActionGameMode's load 0x4BA060 takes
 // gameutil +80 ["GameData"], VuGame's boat load 0x481CE0 its "Boats"). The
 // GameData the front end's exit 0x4BF9B0 leaves when the next mode is
-// "Action" and the race was chosen with these values - GameConfig.Mode,
-// GameConfig.Track, BoatConfig.PlayerBoats[0].Properties.Boat / .Skin as the
-// screens leave them (VuSetGameModeUIAction writes Mode; the track and boat
-// selectors are NOT recreated yet: the caller passes their values). Exact for
-// ANY front-end state holding those four strings: 0x4BF9B0 erases Results and
-// clears GameData before building, and 0x4BF9B0 / 0x4C0A50 read nothing else
-// from gameutil +80. `env` carries BoatDB / TrackDB, VuRandom's state (drawn:
+// "Action" and the event was chosen with these values - GameConfig.Mode,
+// GameConfig.Track, GameConfig.Course (the slalom's only),
+// BoatConfig.PlayerBoats[0].Properties.Boat / .Skin as the screens leave them
+// (VuSetGameModeUIAction writes Mode; the track, course and boat selectors
+// are NOT recreated yet: the caller passes their values). Exact for ANY
+// front-end state holding those strings: 0x4BF9B0 erases Results and clears
+// GameData before building, and 0x4BF9B0 / 0x4C0A50 / 0x4C18D0 read nothing
+// else from gameutil +80. `env` carries BoatDB / TrackDB, VuRandom's state (drawn:
 // the caller's generator advances exactly as retail's global does) and the two
 // hooks (the string DB's AI names, the signed-in player's name). `result`
-// reports the builder reached; for a mode other than "Race" its builder is
-// UNKNOWN (not recreated) and the container holds only EventType.
-inline value_t ui_front_end_game_data( const std::string& mode, const std::string& track, const std::string& boat, const std::string& skin,
-                                       const ui_game_env_t& env, ui_game_config_t* result = nullptr )
+// reports the builder reached; for a mode other than "Race" / "Slalom" its
+// builder is UNKNOWN (not recreated) and the container holds only EventType.
+inline value_t ui_front_end_game_data( const std::string& mode, const std::string& track, const std::string& course, const std::string& boat,
+                                       const std::string& skin, const ui_game_env_t& env, ui_game_config_t* result = nullptr )
 {
     value_t root;
     ui_json_set_string( ui_json_child( ui_json_child( root, "GameConfig" ), "Mode" ), mode.c_str( ) );
     ui_json_set_string( ui_json_child( ui_json_child( root, "GameConfig" ), "Track" ), track.c_str( ) );
+    ui_json_set_string( ui_json_child( ui_json_child( root, "GameConfig" ), "Course" ), course.c_str( ) );
     value_t& properties = ui_json_child( ui_json_at( ui_json_child( ui_json_child( root, "BoatConfig" ), "PlayerBoats" ), 0 ), "Properties" );
     ui_json_set_string( ui_json_child( properties, "Boat" ), boat.c_str( ) );
     ui_json_set_string( ui_json_child( properties, "Skin" ), skin.c_str( ) );

@@ -1149,8 +1149,8 @@ inline bool verify_ui_game_data( )
 
 // THE EXPORT ui_front_end_game_data (hydro core/ui/config.hxx) against the
 // GameData retail's exit 0x4BF9B0 left at gameutil +80 (oracle case
-// game_data_race, every exit vector whose next mode is "Action"): only the four
-// strings 0x4BF9B0 / 0x4C0A50 read (GameConfig.Mode / .Track, PlayerBoats[0]
+// game_data_race, every exit vector whose next mode is "Action"): only the five
+// strings 0x4BF9B0 / 0x4C0A50 / 0x4C18D0 read (GameConfig.Mode / .Track / .Course, PlayerBoats[0]
 // .Properties.Boat / .Skin, each a string member's text else "") are taken
 // from the vector's root - stale GameData, Results, other members dropped - and
 // the container it returns must equal retail's root["GameData"] (vujb_dump),
@@ -1184,6 +1184,7 @@ inline bool verify_ui_front_end_game_data( )
         ui_game_config_t r;
         const value_t game_data = ui_front_end_game_data( ui_json_text( member( member( root, "GameConfig" ), "Mode" ) ),
                                                           ui_json_text( member( member( root, "GameConfig" ), "Track" ) ),
+                                                          ui_json_text( member( member( root, "GameConfig" ), "Course" ) ),
                                                           ui_json_text( member( member( player, "Properties" ), "Boat" ) ),
                                                           ui_json_text( member( member( player, "Properties" ), "Skin" ) ), env, &r );
         std::string have;
@@ -1197,7 +1198,7 @@ inline bool verify_ui_front_end_game_data( )
     }
     if ( failed == 0 )
         LOG_SUCCESS( "ui_front_end_game_data (mode, track, boat, skin) reproduces the GameData retail's exit 0x4BF9B0 leaves at gameutil +80 "
-                     "on %d front-end states (%d races built; the rest a variant not recreated or no event), VuRandom's state too",
+                     "on %d front-end states (%d races / slaloms built; the rest a variant not recreated or no event), VuRandom's state too",
             checked, races );
     else
         LOG_ERROR( "the front end game data export FAILED %d of %d states against retail's", failed, checked );
