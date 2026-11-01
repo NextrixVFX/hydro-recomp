@@ -96,6 +96,9 @@
     <ClInclude Include="workspace\core\boat\driver.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\boat\effects.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\boat\entity.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>

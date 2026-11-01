@@ -120,6 +120,7 @@
     <ClInclude Include="workspace\core\boat\contact.hxx" />
     <ClInclude Include="workspace\core\boat\damage.hxx" />
     <ClInclude Include="workspace\core\boat\driver.hxx" />
+    <ClInclude Include="workspace\core\boat\effects.hxx" />
     <ClInclude Include="workspace\core\boat\entity.hxx" />
     <ClInclude Include="workspace\core\boat\events.hxx" />
     <ClInclude Include="workspace\core\boat\fleet.hxx" />
