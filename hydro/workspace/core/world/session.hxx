@@ -2068,8 +2068,14 @@ inline void race_session_end( race_session_t& s )
             if ( st->m_exit )
                 st->m_exit( );
     };
+    // The AI manager g 0x758F8C (vtable 0x735734): vt+0x20 = slot 8 0x403500 (state 4, +0x3C 0, then 0x4046F0 - the
+    // RecordDebugEvents aidebug.json save: a dev hook) = fleet_end; vt+0x24 = slot 9 0x403510 (reset) = fleet_reset (boat
+    // fleet.hxx, the boat agent's).
     h.ai = [ &s ]( int slot ) {
-        race_unwired( s, slot == 8 ? "VuGame release: the AI manager's vt+0x20 (not read)" : "VuGame release: the AI manager's vt+0x24 (not read)" );
+        if ( slot == 8 )
+            fleet_end( s.fleet );
+        else
+            fleet_reset( s.fleet );
     };
     h.analytics = [ &s ]( const char* name, const value_t& data ) {
         LOG_INFO( "race: analytics %s (platform hook): Finished %d TotalTime %.3f", name, ui_json_find( data, "Finished" ).integer,
