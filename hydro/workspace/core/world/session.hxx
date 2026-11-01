@@ -257,6 +257,7 @@ struct race_session_t
         entity_t* target_entity = nullptr;   // the "Entity" ref's entity (its VuMotionComponent the target)
         key_motion_target_t target;
         race_session_t* session = nullptr;
+        bool stepped = false;   // ours: the first update logged
     };
     std::vector< std::unique_ptr< key_live_t > > key_motions;
     int key_unrecreated = 0;
@@ -878,6 +879,47 @@ inline key_motion_hooks_t race_session_key_hooks( race_session_t::key_live_t& k 
     return h;
 }
 
+// VuRigidBodyComponent's kinematic step 0x544C50 (thiscall component; the motion record*; retn 4), which the props' motion
+// IF slot 0 (0x546BD0, VuAnimatedPropEntity's 0x5ED4F0) calls after the transform / draw: with a body (+0x100) and a
+// record, the body's linear velocity +0x140 = the record's +0x58 .. +0x60 (w 0) and angular +0x150 = +0x68 .. +0x70 (w
+// 0); setCenterOfMassTransform 0x50E660 with the record's +0x18 matrix as a btTransform (0x410C30: the basis transposed
+// into rows, w 0; the origin row 3, w 0 - boat load.hxx's form); then, when the body is in the world (+0x104), the
+// dynamics world's (g 0x75900C vt+0x6C) updateSingleAabb 0x54C370 on it. No body: nothing (retail's test).
+inline void rigid_kinematic_step( solver_rigid_t& b, const float* matrix, const float* linear, const float* angular )
+{
+    for ( int k = 0; k < 3; ++k )
+    {
+        b.linear_velocity[ k ] = linear[ k ];
+        b.angular_velocity[ k ] = angular[ k ];
+    }
+    b.linear_velocity[ 3 ] = 0.0f;
+    b.angular_velocity[ 3 ] = 0.0f;
+    float basis[ 12 ], origin[ 4 ];
+    for ( int row = 0; row < 3; ++row )
+    {
+        for ( int k = 0; k < 3; ++k )
+            basis[ 4 * row + k ] = matrix[ 4 * k + row ];
+        basis[ 4 * row + 3 ] = 0.0f;
+    }
+    origin[ 0 ] = matrix[ 12 ];
+    origin[ 1 ] = matrix[ 13 ];
+    origin[ 2 ] = matrix[ 14 ];
+    origin[ 3 ] = 0.0f;
+    body_set_center_of_mass_transform( b, basis, origin );
+}
+
+inline void race_session_kinematic_step( race_session_t& s, level_body_t& lb, const float* matrix, const float* linear, const float* angular )
+{
+    if ( !lb.built )
+        return;
+    rigid_kinematic_step( lb.body.body, matrix, linear, angular );
+    if ( !lb.in_world || !s.dynamics )
+        return;
+    const auto it = s.dynamics->objects.find( &lb.body );
+    if ( it == s.dynamics->objects.end( ) || !it->second || update_single_aabb( s.dynamics->collision.aabb, *it->second ) < 0 )
+        race_unwired( s, "0x544C50's updateSingleAabb 0x54C370 on a moved body: its collision object / the broadphase setAabb hook UNKNOWN" );
+}
+
 // The "Motion" tick 0x61A6E0 -> slot 14 0x5CFE60 while active.
 inline void race_session_key_tick( void* user, float dt )
 {
@@ -922,7 +964,7 @@ inline void race_session_key_motion( race_session_t& s, entity_t& e )
         const transform_component_t* tt = entity_transform( *k->target_entity );
         k->target.transform = tt ? tt->world : nullptr;
         k->target.user = k.get( );
-        k->target.update = []( void* u, const float* m, const float*, const float* ) {
+        k->target.update = []( void* u, const float* m, const float* linear, const float* angular ) {
             auto& x = *static_cast< race_session_t::key_live_t* >( u );
             race_session_t& rs = *x.session;
             if ( !entity_set_world( *x.target_entity, m, true, { } ) )
@@ -932,7 +974,23 @@ inline void race_session_key_motion( race_session_t& s, entity_t& e )
             }
             if ( rs.world.prop_moved )
                 rs.world.prop_moved( *x.target_entity );
-            race_unwired( rs, "a motion target's rigid component kinematic step 0x544C50 / its +0x38 call (not recreated)" );
+            // The rigid component's kinematic step 0x544C50 on the target's body (none built: retail's +0x100 test - except
+            // a VuAnimatedPropEntity, whose rigid component no level body models here: UNKNOWN).
+            bool body = false;
+            for ( const auto& lb : rs.level_bodies )
+                if ( lb->owner == x.target_entity )
+                {
+                    race_session_kinematic_step( rs, *lb, m, linear, angular );
+                    if ( !body && !x.stepped )
+                        LOG_INFO( "race: keyframe target %s: 0x544C50 %s (in the world %d; sync %d)", x.target_entity->m_name.c_str( ),
+                                  lb->built ? "moves its body" : "finds no body (+0x100 null: bodies_create built none) - nothing",
+                                  lb->in_world ? 1 : 0, rs.dynamics ? rs.dynamics->syncs : -1 );
+                    body = true;
+                }
+            x.stepped = true;
+            if ( !body && x.target_entity->m_type == "VuAnimatedPropEntity" )
+                race_unwired( rs, "a VuAnimatedPropEntity motion target's rigid component (no level body modelled) - 0x544C50 UNKNOWN, not run" );
+            race_unwired( rs, "a motion target IF's +0x10 vt+0x38(matrix, linear, angular) (0x546D66 / 0x5ED667: the object not read) - not run" );
         };
     }
     std::vector< key_motion_child_t > kids;

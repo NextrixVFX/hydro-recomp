@@ -686,9 +686,45 @@ inline bool verify_cheat_finish( )
     return failed == 0;
 }
 
+// rigid_kinematic_step (world/session.hxx) against retail's VuRigidBodyComponent kinematic step 0x544C50 (oracle case
+// kinematic_step): 200 seeded btRigidBody images - the body's 0x2D4 bytes after (retail's size: our image is larger) and
+// whether updateSingleAabb ran (retail: +0x100 and the record non-null, +0x104 set).
+inline bool verify_kinematic_step( )
+{
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_kinematic_step_count; ++k )
+    {
+        const golden_kinematic_step_t& want = g_golden_kinematic_step[ k ];
+        static vu_rigid_body_t b;
+        std::memset( &b, 0, sizeof( b ) );
+        std::memcpy( &b, want.body, 0x2D4 );
+        float rec[ 24 ];
+        std::memcpy( rec, want.rec, sizeof( rec ) );
+        const bool run = want.has_body && want.has_rec;
+        if ( run )
+            rigid_kinematic_step( b.body, rec, rec + 16, rec + 20 );
+        const int aabb = run && want.in_world ? 1 : 0;
+        if ( ( std::memcmp( &b, want.out, 0x2D4 ) != 0 || aabb != want.aabb ) && ++failed <= 6 )
+        {
+            int first = -1;
+            for ( int i = 0; i < 0x2D4 / 4 && first < 0; ++i )
+                if ( std::memcmp( reinterpret_cast< const std::uint8_t* >( &b ) + 4 * i, &want.out[ i ], 4 ) != 0 )
+                    first = 4 * i;
+            LOG_ERROR( "kinematic step %d: first differing body word +0x%X, aabb %d (retail %d)", static_cast< int >( k ), first, aabb, want.aabb );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "rigid_kinematic_step matches VuRigidBodyComponent's kinematic step 0x544C50 on %d bodies (the 0x2D4 image, the aabb update)",
+                     static_cast< int >( g_golden_kinematic_step_count ) );
+    else
+        LOG_ERROR( "the kinematic step FAILED on %d of %d bodies", failed, static_cast< int >( g_golden_kinematic_step_count ) );
+    return failed == 0;
+}
+
 inline bool verify_session_all( )
 {
     bool ok = true;
+    ok = verify_kinematic_step( ) && ok;
     ok = verify_cheat_finish( ) && ok;
     ok = verify_race_results( ) && ok;
     ok = verify_breakable_properties( ) && ok;
