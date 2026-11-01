@@ -190,6 +190,7 @@
     <ClInclude Include="workspace\core\world\field.hxx" />
     <ClInclude Include="workspace\core\world\graph.hxx" />
     <ClInclude Include="workspace\core\world\grid.hxx" />
+    <ClInclude Include="workspace\core\world\huds.hxx" />
     <ClInclude Include="workspace\core\world\kernel.hxx" />
     <ClInclude Include="workspace\core\world\livery.hxx" />
     <ClInclude Include="workspace\core\world\models.hxx" />
@@ -202,6 +203,7 @@
     <ClInclude Include="workspace\core\world\pfxstatic.hxx" />
     <ClInclude Include="workspace\core\world\query.hxx" />
     <ClInclude Include="workspace\core\world\race.hxx" />
+    <ClInclude Include="workspace\core\world\rules.hxx" />
     <ClInclude Include="workspace\core\world\session.hxx" />
     <ClInclude Include="workspace\core\world\spray.hxx" />
     <ClInclude Include="workspace\core\world\start.hxx" />
