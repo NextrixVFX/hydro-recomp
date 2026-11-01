@@ -25,6 +25,7 @@
 // 0x5EB4C0 (world/pfxstatic.hxx's entity).
 
 #include <workspace/core/world/race.hxx>   // entity_set_world (and, through game/types.hxx, world/surface.hxx)
+#include <workspace/core/world/pfxstatic.hxx>
 
 #include <functional>
 
@@ -274,4 +275,18 @@ inline bool water_surface_motion( water_built_t& b, entity_t& e, const float* mo
 inline bool water_point_entity_motion( entity_t& e, const float* motion_matrix )
 {
     return entity_set_world( e, motion_matrix, true, std::function< void( ) >( ) );
+}
+// VuStaticPfxEntity's motion handler 0x5EB4C0 (thiscall on entity +0x5C; the
+// motion component at +0x6C): setWorldTransform INLINED - the matrix copied
+// to the transform's world, the world euler, 0x534830 and the child walk
+// 0x534C00 with notify 0 (no watcher fired: entity_set_world with notify
+// false) - then, with an instance (+0x94), the instance's slot 2 (setMatrix
+// 0x58AB00) on the same matrix. False when entity_set_world refuses (nothing
+// of the transform written; the instance is still told, as retail's).
+inline bool pfx_static_motion( entity_t& e, const pfx_static_entity_t& p, const pfx_static_ops_t& o, const float* motion_matrix )
+{
+    const bool ran = entity_set_world( e, motion_matrix, false, std::function< void( ) >( ) );
+    if ( p.instance != 0 )
+        o.set_matrix( o.user, p.instance, motion_matrix );
+    return ran;
 }

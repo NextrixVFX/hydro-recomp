@@ -309,10 +309,74 @@ inline bool verify_water_surface_motion( )
         LOG_ERROR( "water_surface_motion FAILED %d of %u", failed, n );
     return failed == 0;
 }
+// pfx_static_motion (world/watchers.hxx) against VuStaticPfxEntity's 0x5EB4C0 (case static_pfx_motion): 12 entities with
+// no parent, the instance on every other. Compared: the transform's local, world, rotation and world euler (lanes 0 - 2;
+// the fourth is a stack word) bit for bit, and the setMatrix calls (count, the instance, the 16 words).
+inline bool verify_static_pfx_motion( )
+{
+    const unsigned* s = g_golden_spm_words;
+    const unsigned n = *s++;
+    int failed = 0, told = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        float matrix[ 16 ];
+        std::memcpy( matrix, s, 64 );
+        s += 16;
+        const unsigned inst = *s++;
+        const unsigned nt = *s++;
+        const unsigned* after = s;
+        s += nt;
+        const unsigned nc = *s++;
+        entity_t owner;
+        auto st = std::make_shared< transform_state_t >( );
+        std::memset( &st->c, 0x77, sizeof( st->c ) );
+        owner.m_components.push_back( entity_component_t{ "VuTransformComponent", k_transform_component_vtable, st } );
+        pfx_static_entity_t p{};
+        p.instance = inst ? 0x1234u : 0u;
+        struct log_t
+        {
+            std::vector< std::vector< unsigned > > calls;
+        } log;
+        pfx_static_ops_t o{};
+        o.user = &log;
+        o.set_matrix = []( void* u, std::uint32_t instance, const float* m ) {
+            std::vector< unsigned > c( 17 );
+            c[ 0 ] = instance == 0x1234u ? 1u : 0u;
+            std::memcpy( &c[ 1 ], m, 64 );
+            static_cast< log_t* >( u )->calls.push_back( c );
+        };
+        int bad = pfx_static_motion( owner, p, o, matrix ) ? 0 : 1;
+        const transform_component_t& c = st->c;
+        for ( int w = 0; w < 40 && w < static_cast< int >( nt ); ++w )
+        {
+            if ( w == 35 || w == 39 )
+                continue;
+            const float* f = w < 16 ? &c.local[ w ] : w < 32 ? &c.world[ w - 16 ] : w < 36 ? &c.rotation[ w - 32 ] : &c.world_rotation[ w - 36 ];
+            bad += std::memcmp( f, &after[ w ], 4 ) != 0;
+        }
+        bad += log.calls.size( ) != nc;
+        for ( unsigned k = 0; k < nc; ++k, s += 17 )
+            if ( k < log.calls.size( ) )
+                bad += log.calls[ k ] != std::vector< unsigned >( s, s + 17 );
+        told += static_cast< int >( nc );
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "static_pfx_motion: vector %u: %d differences", v, bad );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "pfx_static_motion matches VuStaticPfxEntity's motion handler 0x5EB4C0 over %u vectors (%d setMatrix calls): local, world, "
+                     "both eulers bit for bit", n, told );
+    else
+        LOG_ERROR( "static_pfx_motion FAILED %d of %u", failed, n );
+    return failed == 0;
+}
 inline bool verify_watchers_all( )
 {
     bool ok = true;
     ok = verify_water_controls( ) && ok;
     ok = verify_water_surface_motion( ) && ok;
+    ok = verify_static_pfx_motion( ) && ok;
     return ok;
 }
