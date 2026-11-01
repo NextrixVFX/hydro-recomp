@@ -3,6 +3,7 @@
 #include <workspace/core/ui/bind.hxx>
 #include <workspace/core/ui/board.hxx>
 #include <workspace/core/ui/chooser.hxx>
+#include <workspace/core/ui/ladder.hxx>
 #include <workspace/core/ui/results.hxx>
 
 #include <cstdio>
@@ -385,6 +386,16 @@ inline bool verify_ui_screen_game_init( )
         ui_bind_hooks_t hooks;
         hooks.m_touch_device = &device;
         hooks.m_settings = &settings;
+        // batch 22: a project the case gave a game-data root holds a mini leaderboard - its slot 6 / 7 run live
+        // (the leaderboard manager's read and the tick manager's register come out as the binding's traces)
+        ui_mini_board_hooks_t leaderboard;
+        value_t board_root;
+        if ( gp.m_root[ 0 ] )
+        {
+            board_root = c_reader( ui_unhex( gp.m_root ) ).parse( );
+            leaderboard.m_root = &board_root;
+            hooks.m_leaderboard = &leaderboard;
+        }
         c_ui_binding bind( *root, hooks );
         if ( static_cast< int >( bind.m_bound.size( ) ) != gp.m_count )
         {
@@ -439,6 +450,15 @@ inline bool verify_ui_screen_game_init( )
             t += "|F";
             for ( const auto& b : bind.m_bound )
                 t += ( b->m_entity->m_flags & 4u ) ? "1" : "0";
+            std::string boards;
+            for ( const auto& b : bind.m_bound )
+                if ( b->m_board )
+                {
+                    std::snprintf( word, sizeof word, "%d,%d,", b->m_index, b->m_board->m_fsm.m_current );
+                    boards += word + b->m_board->m_key + ";";
+                }
+            if ( !boards.empty( ) )
+                t += "|B" + boards;
             return t;
         };
         // the trace from `first` as retail's log lines (init / release: repository, slots, 0x5EFA60; trigger: broadcasts)
@@ -459,6 +479,8 @@ inline bool verify_ui_screen_game_init( )
                     std::snprintf( line, sizeof line, "%s|%d", t.m_name == "repository_add" ? "repo_add" : "repo_remove", t.m_index );
                 else if ( t.m_kind == ui_trace_kind_t::game )
                     std::snprintf( line, sizeof line, "slot|%d|0x%06X", t.m_index, t.m_word );
+                else if ( t.m_kind == ui_trace_kind_t::hook && t.m_name.compare( 0, 6, "board_" ) == 0 )
+                    std::snprintf( line, sizeof line, "%s", t.m_name.c_str( ) );
                 else if ( t.m_kind == ui_trace_kind_t::event && t.m_word == 0x5EFA60u )
                     std::snprintf( line, sizeof line, "event|%d|0x%06X", t.m_index, t.m_word );
                 if ( line[ 0 ] )
@@ -531,7 +553,7 @@ inline bool verify_ui_screen_game_init( )
     }
     if ( failed == 0 )
         LOG_SUCCESS( "c_ui_binding project_initialize / project_release (+ VuUserNextUIAction's Trigger) match retail's 0x500B10 / 0x501260 / "
-                     "0x500B80 (button 0x4426E0 + 0x53FAE0, subtitles 0x46D7A0, 0x4253D0; 0x470E50) on %d Screens projects: %d phases, %d log "
+                     "0x500B80 (button 0x4426E0 + 0x53FAE0, subtitles 0x46D7A0, 0x4253D0, mini leaderboard 0x47DAB0 / 0x47DB10; 0x470E50) on %d Screens projects: %d phases, %d log "
                      "lines in order (%d slot 6 / 7 entries), %d triggers, the touch device / combos / flags after each",
             static_cast< int >( g_golden_sgi_projects_count ), phases, logs, slots, triggers );
     else
@@ -746,9 +768,248 @@ inline bool verify_ui_mini_board( )
     return failed == 0;
 }
 
+// verify_ui_leaderboard_draw (batch 22): ui_leaderboard_draw (core/ui ladder.hxx) against
+// retail's VuUILeaderboardEntity draw 0x47A360 (the combo box draw 0x4578D0, the button
+// images 0x507360 / the inline solid rect, the button texts, the FSM's state draw: Read
+// 0x47BEF0 / Show 0x47BF90 / NotConnected 0x47C720 through 0x47B570) on Screens/Leaderboard
+// x the case's variants (oracle case leaderboard_draw). The fields from OUR loaded entity
+// (ui_leaderboard_of; compared with retail's bytes first), the combo block from OUR load
+// (ui_combo_block_of), the six fonts' params 0..40 from OUR load over FontDB (41..59
+// retail's - UNKNOWN), the two combo records from OUR ui_leaderboard_combos over the real
+// OptionDB (compared with retail's ctor 0x477FD0's); the head bytes (shown, arrows), focus,
+// press, the FSM state, the manager's rows, VuStringDB slot 6 / 7 and the font / texture
+// answers are the case's (inputs). Per run: the hook log in order, the commands and
+// records byte for byte (one sort per buffer), the records' focused bytes after.
+inline bool verify_ui_leaderboard_draw( )
+{
+    ui_gfx_sort_t sort;
+    ui_lv_sort( sort );
+    int failed = 0, runs = 0, commands = 0, logs = 0, fields = 0, choices = 0;
+    const value_t option_db = ui_cx_document( 4 );
+    for ( std::size_t k = 0; k < g_golden_lb_entities_count; ++k )
+    {
+        const golden_lb_entity_t& ge = g_golden_lb_entities[ k ];
+        const entity_t* e = ui_lv_entity( ge.m_project, ge.m_index );
+        const std::vector< std::uint8_t > raw = ui_unhex( ge.m_fields );
+        const std::vector< std::uint8_t > block_raw = ui_unhex( ge.m_block );
+        bool same = e && e->m_ctor && e->m_ctor->m_vtable == k_ui_leaderboard_vtable && raw.size( ) == 0x584 && block_raw.size( ) == 0x1E0;
+        ui_leaderboard_t f;
+        ui_combo_block_t b;
+        ui_results_font_t fonts[ 5 ];
+        ui_config_combo_t combos[ 2 ];
+        if ( same )
+        {
+            f = ui_leaderboard_of( *e );
+            const auto against = [ & ]( const void* ours, int offset, std::size_t bytes )
+            {
+                if ( std::memcmp( ours, raw.data( ) + ( offset - 0x60 ), bytes ) != 0 )
+                    same = false;
+                ++fields;
+            };
+            against( f.m_scale, 0x68, 8 );
+            against( f.m_pos, 0x70, 8 );
+            against( &f.m_combo_spacing, 0x78, 4 );
+            against( &f.m_rows, 0x27C, 4 );
+            against( f.m_row, 0x280, 16 );
+            against( &f.m_spacing, 0x290, 4 );
+            against( &f.m_rank_x, 0x294, 12 );
+            against( f.m_info, 0x3CC, 16 );
+            against( &f.m_h_align, 0x440, 8 );
+            against( &f.m_no_clip, 0x448, 3 );
+            against( f.m_button_touch, 0x4B0, 16 );
+            against( f.m_button_image, 0x4C0, 16 );
+            against( f.m_button_text, 0x4D0, 16 );
+            against( &f.m_button_spacing, 0x4E0, 4 );
+            same = same && ui_lv_bits( f.m_depth ) == ge.m_depth;
+            // the block (as verify_ui_combo_draw)
+            b = ui_combo_block_of( *e );
+            const auto block_against = [ & ]( const void* ours, int offset, std::size_t bytes )
+            {
+                if ( std::memcmp( ours, block_raw.data( ) + offset, bytes ) != 0 )
+                    same = false;
+                ++fields;
+            };
+            block_against( b.m_label_rect, 0x08, 16 );
+            block_against( &b.m_label_selected, 0x7C, 4 );
+            block_against( b.m_value_offset, 0x98, 8 );
+            block_against( b.m_value_rect, 0xA0, 16 );
+            block_against( &b.m_value_selected, 0x114, 12 );
+            block_against( b.m_left, 0x1B4, 8 );
+            block_against( b.m_right, 0x1BC, 8 );
+            for ( int c = 0; c < 2; ++c )
+            {
+                std::uint8_t* params = c ? b.m_value_params : b.m_label_params;
+                const int at = c ? 0xD0 : 0x38;
+                std::memcpy( params, block_raw.data( ) + at, 60 );   // 41..59: retail's (UNKNOWN)
+                std::memset( params, 0, 41 );
+                const ui_slot_t* name = ui_property_value( *e, c ? "ValueFont" : "HeadingFont" );
+                std::string asset;
+                if ( !name )
+                    same = false;
+                else
+                    ui_font_params( ui_font_db( 0 ), name->m_text, params, asset );
+                block_against( params, at, 41 );
+            }
+            const char* const font_names[ 5 ] = { "RankFont", "NameFont", "ScoreFont", "InfoFont", "ButtonFont" };
+            for ( int c = 0; same && c < 5; ++c )
+            {
+                const golden_rr_font_t& gf = g_golden_lb_font_rows[ ge.m_first_font + c ];
+                const ui_slot_t* name = ui_property_value( *e, font_names[ c ] );
+                const std::vector< std::uint8_t > want = ui_unhex( gf.m_params );
+                same = name && name->m_text == gf.m_name && want.size( ) == 60;
+                if ( !same )
+                    break;
+                std::memcpy( fonts[ c ].m_params, want.data( ), 60 );   // 41..59: retail's (UNKNOWN)
+                std::memset( fonts[ c ].m_params, 0, 41 );
+                std::string asset;
+                ui_font_params( ui_font_db( 0 ), name->m_text, fonts[ c ].m_params, asset );
+                same = std::memcmp( fonts[ c ].m_params, want.data( ), 41 ) == 0;
+                ++fields;
+            }
+            // the ctor's records from OUR builder over the real OptionDB
+            ui_leaderboard_combos( &option_db, combos );
+            same = same && combos[ 0 ].m_string_id == ge.m_id0 && combos[ 1 ].m_string_id == ge.m_id1 &&
+                   static_cast< int >( combos[ 0 ].m_choice_ids.size( ) ) == ge.m_choices0 &&
+                   static_cast< int >( combos[ 1 ].m_choice_ids.size( ) ) == ge.m_choices1;
+            for ( int c = 0; same && c < ge.m_choices0 + ge.m_choices1; ++c )
+            {
+                const ui_config_combo_t& cb = combos[ c < ge.m_choices0 ? 0 : 1 ];
+                const std::size_t j = static_cast< std::size_t >( c < ge.m_choices0 ? c : c - ge.m_choices0 );
+                const golden_lb_choice_t& want = g_golden_lb_choices[ ge.m_first_id + c ];
+                same = cb.m_choice_ids[ j ] == want.m_id && cb.m_locked[ j ] == want.m_locked;
+                ++choices;
+            }
+        }
+        if ( !same )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "ui leaderboard draw: %s entity %d: OUR loaded fields / block / fonts / ctor records differ from retail's", ge.m_project, ge.m_index );
+            continue;
+        }
+        for ( int r = 0; r < ge.m_runs; ++r )
+        {
+            const golden_lb_run_t& run = g_golden_lb_runs[ ge.m_first + r ];
+            const golden_txt_env_t& te = g_golden_txt_envs[ run.m_env ];
+            std::vector< std::string > log;
+            ui_leaderboard_state_t s;
+            for ( int c = 0; c < 2; ++c )
+            {
+                s.m_combos[ c ] = combos[ c ];
+                const std::vector< std::uint8_t > head = ui_unhex( c ? run.m_head1 : run.m_head0 );
+                s.m_combos[ c ].m_b41 = head[ 1 ];
+                s.m_combos[ c ].m_b42 = head[ 2 ];
+                std::memcpy( &s.m_combos[ c ].m_index, head.data( ) + 4, 4 );
+                std::memcpy( &s.m_combos[ c ].m_shown, head.data( ) + 8, 4 );
+            }
+            s.m_focus = run.m_focus;
+            s.m_press = run.m_press;
+            s.m_state = run.m_state;
+            ui_font_draw_env_t env;
+            const std::vector< std::uint8_t > matrix = ui_unhex( run.m_matrix );
+            ui_leaderboard_draw_t d;
+            ui_texture_t textures[ 7 ], buttons[ 3 ];
+            for ( int t = 0; t < 7; ++t )
+                if ( run.m_textures[ t ] >= 0 )
+                {
+                    const golden_img_texture_t& g = g_golden_lb_textures[ run.m_textures[ t ] ];
+                    textures[ t ] = { g.m_handle, g.m_width, g.m_height };
+                }
+            for ( int t = 0; t < 3; ++t )
+            {
+                d.m_buttons[ t ] = nullptr;
+                if ( run.m_buttons[ t ] >= 0 )
+                {
+                    const golden_img_texture_t& g = g_golden_lb_textures[ run.m_buttons[ t ] ];
+                    buttons[ t ] = { g.m_handle, g.m_width, g.m_height };
+                    d.m_buttons[ t ] = &buttons[ t ];
+                }
+            }
+            const auto font_of = [ & ]( int bit ) { return ( run.m_fonts_mask >> bit & 1 ) ? g_golden_lb_fonts[ 0 ] : ( te.m_default ? g_golden_lb_fonts[ 1 ] : 0u ); };
+            for ( int c = 0; c < 5; ++c )
+            {
+                d.m_fonts[ c ] = fonts[ c ];
+                d.m_fonts[ c ].m_font = font_of( c );
+            }
+            d.m_combo.m_label_font = font_of( 5 );
+            d.m_combo.m_value_font = font_of( 6 );
+            d.m_combo.m_string = [ & ]( const std::string& id ) { log.push_back( "id|" + id ); return id + "~"; };
+            d.m_combo.m_texture = [ & ]( int which ) -> const ui_texture_t* { return run.m_textures[ which ] >= 0 ? &textures[ which ] : nullptr; };
+            d.m_string = [ & ]( const std::string& id ) { log.push_back( "string|" + id ); return id + "~"; };
+            int count = 0;
+            for ( std::size_t q = 0; q < g_golden_lb_rows_count; ++q )
+                count += std::strcmp( g_golden_lb_rows[ q ].m_set, run.m_rows ) == 0 ? 1 : 0;
+            d.m_count = [ & ] { log.push_back( "count" ); return count; };
+            d.m_row = [ & ]( int k_row, std::int32_t& rank, std::string& name, std::int32_t& score )
+            {
+                log.push_back( "row|" + std::to_string( k_row ) );
+                for ( std::size_t q = 0; q < g_golden_lb_rows_count; ++q )
+                    if ( std::strcmp( g_golden_lb_rows[ q ].m_set, run.m_rows ) == 0 && g_golden_lb_rows[ q ].m_k == k_row )
+                    {
+                        rank = g_golden_lb_rows[ q ].m_rank;
+                        name = g_golden_lb_rows[ q ].m_name;
+                        score = g_golden_lb_rows[ q ].m_score;
+                    }
+            };
+            d.m_db.m_present = true;   // the case always serves VuStringDB
+            d.m_db.m_slot12 = te.m_sdb_answer != 0;
+            std::memcpy( env.m_matrix, matrix.data( ), 64 );
+            std::memcpy( &env.m_top, &te.m_top, 4 );
+            for ( int m = 0; m < 2; ++m )
+            {
+                env.m_material[ m ] = 0x5D001000u + 0x800u * static_cast< std::uint32_t >( m );   // TxtWorld's font materials
+                env.m_material_key[ m ] = g_golden_txt_material_keys[ m ];
+            }
+            env.m_texture_material = g_golden_lb_material[ 0 ];
+            env.m_texture_material_key = g_golden_lb_material[ 1 ];
+            env.m_rect_material = g_golden_lb_rect_material[ 0 ];
+            env.m_rect_material_key = g_golden_lb_rect_material[ 1 ];
+            d.m_sort = &sort;
+            d.m_env = &env;
+            sort.m_index = te.m_index;
+            sort.m_key_lo = te.m_key_lo;
+            sort.m_key_hi = te.m_key_hi;
+            std::vector< ui_gfx_command_t >& list = sort.m_commands[ te.m_index ];
+            const std::size_t before = list.size( );
+            const bool known = ui_leaderboard_draw( f, b, s, d );
+            bool ok = known && list.size( ) - before == static_cast< std::size_t >( run.m_commands ) && static_cast< int >( log.size( ) ) == run.m_logs;
+            for ( int q = 0; ok && q < run.m_logs; ++q )
+            {
+                ok = log[ static_cast< std::size_t >( q ) ] == g_golden_lb_logs[ run.m_first_log + q ];
+                ++logs;
+            }
+            for ( int c = 0; ok && c < run.m_commands; ++c )
+            {
+                const golden_txt_command_t& want = g_golden_lb_commands[ run.m_first + c ];
+                const ui_gfx_command_t& h = list[ before + static_cast< std::size_t >( c ) ];
+                const std::vector< std::uint8_t > record = ui_unhex( want.m_record );
+                const auto& memory = sort.m_buffers[ te.m_index ].m_memory;
+                ok = std::memcmp( h.m_words, want.m_words, sizeof( h.m_words ) ) == 0 && h.m_words[ 3 ] + record.size( ) <= memory.size( ) &&
+                     std::memcmp( memory.data( ) + h.m_words[ 3 ], record.data( ), record.size( ) ) == 0;
+                ++commands;
+            }
+            for ( int c = 0; ok && c < 2; ++c )
+                ok = s.m_combos[ c ].m_focused == ui_unhex( c ? run.m_head1 : run.m_head0 )[ 0 ];
+            ++runs;
+            if ( !ok && ++failed <= 8 )
+                LOG_ERROR( "ui leaderboard draw: %s entity %d run %d (variant %d): %d commands (retail %d), %d log lines (retail %d) - or a word / "
+                           "record / line / focused byte differs", ge.m_project, ge.m_index, r, run.m_variant, static_cast< int >( list.size( ) - before ),
+                           run.m_commands, static_cast< int >( log.size( ) ), run.m_logs );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_leaderboard_draw matches retail's VuUILeaderboardEntity draw 0x47A360 (0x4578D0, 0x507360 / the solid rect, 0x47B570, "
+                     "Read 0x47BEF0 / Show 0x47BF90 / NotConnected 0x47C720) on %d entities (%d of OUR loaded fields / block / fonts, %d ctor "
+                     "0x477FD0 choices from OUR builder): %d runs, %d commands byte for byte, %d hook calls in order",
+            static_cast< int >( g_golden_lb_entities_count ), fields, choices, runs, commands, logs );
+    else
+        LOG_ERROR( "the UI leaderboard draw FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_results_all( )
 {
     bool ok = true;
+    ok = verify_ui_leaderboard_draw( ) && ok;
     ok = verify_ui_race_results( ) && ok;
     ok = verify_ui_subtitles_combo( ) && ok;
     ok = verify_ui_screen_game_init( ) && ok;
