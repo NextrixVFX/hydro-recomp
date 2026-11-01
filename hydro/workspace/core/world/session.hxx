@@ -502,6 +502,8 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
         race_unwired( s, "the level's gameInitialize (0x500B10): slot 6 not recreated for " + rest + " (UNKNOWN)" );
 }
 
+inline void race_contact_counts( const race_session_t& s, int& calls, int& ran, int& meshes );   // world/drive.hxx
+
 // DEV TRACE - NOT RETAIL (no retail function; only with --verbose, logs
 // nothing else and writes nothing): at sync counts 1 / 10 / 30 / 60 / 120 /
 // 240 / 480, each boat's transform world position (+0x50 row 3) and the water
@@ -512,8 +514,15 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
 inline void race_session_dev_trace( const race_session_t& s, int before )
 {
     const int n = s.dynamics->syncs;
-    if ( !g_verbose || n == before || !( n == 1 || n == 10 || n == 30 || n == 60 || n == 120 || n == 240 || n == 480 ) )
+    if ( !g_verbose || n == before ||
+         !( n == 1 || n == 10 || n == 30 || n == 60 || n == 120 || n == 240 || n == 480 || n == 960 || n == 1920 || n == 3840 ) )
         return;
+    {
+        int calls = 0, ran = 0, meshes = 0;
+        race_contact_counts( s, calls, ran, meshes );
+        LOG_VERBOSE( "race (dev trace): sync %d: contact-added callbacks %d, 0x5751F0 run %d (%d with obj1's collision mesh)", n, calls, ran,
+                     meshes );
+    }
     if ( s.world.water )
     {
         int wakes = 0;

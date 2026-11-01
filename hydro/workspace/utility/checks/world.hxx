@@ -2423,7 +2423,7 @@ inline bool verify_prop_rigid_bodies( )
         g[ 0 ] = g[ 1 ] = 0.0f;
         std::memcpy( &g[ 2 ], &z, 4 );
     };
-    int failed = 0, bodies = 0, words = 0;
+    int failed = 0, bodies = 0, words = 0, contacts = 0;
     for ( std::size_t k = 0; k < g_golden_prop_bodies_count && tree; ++k )
     {
         const golden_prop_body_t& g = g_golden_prop_bodies[ k ];
@@ -2521,6 +2521,13 @@ inline bool verify_prop_rigid_bodies( )
             for ( int i = 0; i < 8 && bad < 0; ++i )
                 if ( shape[ i ] != p[ i ] )
                     bad = 200 + i;
+            // The contact-added callback's collision mesh (world/drive.hxx race_contact_level_mesh) against retail's
+            // shape +8 (1 null, 2 the asset) with the body's +0xD4 = the shape.
+            const collision_mesh_asset_t* user = race_contact_level_mesh( b );
+            const unsigned char want_user = g_golden_prop_bodies_shape_user[ k ];
+            if ( bad < 0 && ( g_golden_prop_bodies_d4_shape[ k ] != 1 || !( want_user == 1 ? user == nullptr : want_user == 2 && user && user == asset ) ) )
+                bad = 103;
+            ++contacts;
             const unsigned* mask = p + 8;
             const unsigned* want = p + 8 + 181;
             for ( int i = 0; i < 181 && bad < 0; ++i )
@@ -2542,8 +2549,8 @@ inline bool verify_prop_rigid_bodies( )
     }
     if ( failed == 0 )
         LOG_SUCCESS( "VuPropEntity gameInitialize 0x546910 / createRigidBody 0x544100 match retail on all %d Hydroelectric props (%d bodies: "
-                     "the component loads, shape aabbs and %d body words bit for bit)",
-                     static_cast< int >( g_golden_prop_bodies_count ), bodies, words );
+                     "the component loads, shape aabbs and %d body words bit for bit; the contact callback's shape +8 mesh on %d)",
+                     static_cast< int >( g_golden_prop_bodies_count ), bodies, words, contacts );
     else
         LOG_ERROR( "prop rigid bodies FAILED on %d of %d props", failed, static_cast< int >( g_golden_prop_bodies_count ) );
     return failed == 0;

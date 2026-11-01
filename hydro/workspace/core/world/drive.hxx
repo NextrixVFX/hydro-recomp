@@ -557,6 +557,7 @@ struct race_contact_t
 {
     race_session_t* session = nullptr;
     std::function< const collision_mesh_asset_t*( const solver_rigid_t* object, bool& known ) > mesh;
+    int calls = 0, ran = 0, meshes = 0;   // dev counts (not retail): callbacks, 0x5751F0 runs, runs with obj1's mesh
 };
 
 inline void race_contact_added( void* user, solver_contact_point_t& cp, solver_rigid_t* object0, int, int, solver_rigid_t* object1, int,
@@ -564,6 +565,7 @@ inline void race_contact_added( void* user, solver_contact_point_t& cp, solver_r
 {
     race_contact_t& c = *static_cast< race_contact_t* >( user );
     race_session_t& s = *c.session;
+    ++c.calls;
     if ( !s.surfaces_built )
     {
         race_unwired( s, "the contact-added callback 0x574E90 with no surface-type table - UNKNOWN" );
@@ -588,8 +590,24 @@ inline void race_contact_added( void* user, solver_contact_point_t& cp, solver_r
     o0.handle = static_cast< std::uint32_t >( reinterpret_cast< std::uintptr_t >( object0 ) );
     o1.handle = static_cast< std::uint32_t >( reinterpret_cast< std::uintptr_t >( object1 ) );
     contact_hooks_t h;
+    ++c.ran;
+    c.meshes += o1.mesh ? 1 : 0;
     if ( !contact_added( s.surfaces, reinterpret_cast< std::uint8_t* >( &cp ), o0, o1, index1, h ) )
         race_unwired( s, "the contact-added callback 0x5751F0 read past the surface table / mesh materials - UNKNOWN" );
+}
+
+// A level body's shape +8 (createRigidBody 0x544100): the collision mesh asset for the triangle mesh 7
+// (0x5445C0), null for the convex hull 6 (0x5444D5) - the only two types built (bodies.hxx).
+inline const collision_mesh_asset_t* race_contact_level_mesh( const level_body_t& lb )
+{
+    return lb.type == 7 ? lb.asset : nullptr;
+}
+
+inline void race_contact_counts( const race_session_t& s, int& calls, int& ran, int& meshes )
+{
+    calls = s.contact_user ? s.contact_user->calls : 0;
+    ran = s.contact_user ? s.contact_user->ran : 0;
+    meshes = s.contact_user ? s.contact_user->meshes : 0;
 }
 
 // The callbacks a race's dynamics world installs (0x574EC0's gContactAddedCallback).
@@ -605,6 +623,22 @@ inline void race_drive_contact_setup( race_session_t& s )
 {
     s.contact_user = std::make_shared< race_contact_t >( );
     s.contact_user->session = &s;
+    // The object's shape (+0xD4) +8, btCollisionShape's user pointer: a boat's shape is its compound (0x420A70:
+    // +0xD4 = the compound; the compound ctor 0x5269C0 writes +8 = 0, nothing in 0x420A70 sets it after) - no
+    // mesh; a level body's (createRigidBody 0x544100) is 0 for the convex hull 6 (+8 = 0 before 0x526380) and the
+    // collision mesh asset for the triangle mesh 7 (0x5445C0: +8 = the asset property's +0x4C, the asset +0xC0
+    // also holds). Any other object: not known (UNKNOWN).
+    s.contact_user->mesh = [ &s ]( const solver_rigid_t* object, bool& known ) -> const collision_mesh_asset_t* {
+        known = true;
+        for ( const auto& b : s.boats )
+            if ( &b->body.body == object )
+                return nullptr;
+        for ( const auto& lb : s.level_bodies )
+            if ( &lb->body.body == object )
+                return race_contact_level_mesh( *lb );
+        known = false;
+        return nullptr;
+    };
     s.contact = race_contact_callbacks( *s.contact_user );
 }
 
