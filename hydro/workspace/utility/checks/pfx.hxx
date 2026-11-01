@@ -4,6 +4,7 @@
 #include <workspace/core/world/pfxsim.hxx>
 #include <workspace/core/world/pfxload.hxx>
 #include <workspace/core/world/pfxmgr.hxx>
+#include <workspace/core/world/pfxstatic.hxx>
 
 #include <cstring>
 #include <map>
@@ -2082,6 +2083,225 @@ inline bool verify_ocean_field_menu( )
     return ocean_field_check( *tree, OCEAN_FIELD_GOLDEN( "ocean_field_menu", ofm ), "the front end's" );
 }
 
+// VuStaticPfxEntity (world/pfxstatic.hxx) against retail (case static_pfx): the front end's five (Screens/Background's child
+// 2 loaded as a project), each through the plan - slot 6 0x5EB060, the "Build" tick 0x5EB290, draws 0x5EB350 / 0x5EB370,
+// plugs 0x5EB200 / 0x5EB220 / 0x5EB250, watchers 0x5EB4A0 / 0x5EB390, slot 7 0x5EB1A0 - on recording hooks that answer as
+// retail's fakes did. Compared: the loaded properties and the transform's world matrix, every hook call with its arguments in
+// order, and after each op the instance, the draw byte and the copied AABB words.
+struct pfx_static_check_t
+{
+    std::vector< std::vector< unsigned > > log;
+    const std::vector< pfx_static_entity_t >* entities = nullptr;
+    unsigned create = 0, state = 0, count = 0;
+    const unsigned* aabb = nullptr;
+    static unsigned word( float f )
+    {
+        unsigned u;
+        std::memcpy( &u, &f, 4 );
+        return u;
+    }
+    unsigned ent( const void* e ) const
+    {
+        return static_cast< unsigned >( static_cast< const pfx_static_entity_t* >( e ) - entities->data( ) );
+    }
+};
+
+inline unsigned pfx_static_string( const std::string& s )
+{
+    for ( unsigned i = 0; i < sizeof( g_golden_spx_strings ) / sizeof( g_golden_spx_strings[ 0 ] ); ++i )
+        if ( s == g_golden_spx_strings[ i ] )
+            return i;
+    return 0xFFFFFFFEu;
+}
+
+inline bool verify_static_pfx_entity( )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_spx_document );
+    static const value_t document = c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_spx_document_bytes ) ).parse( );
+    static const entity_registry_t registry = build_entity_registry( { } );
+    entity_world_t world;
+    world.m_registry = &registry;
+    world.m_ctor_for = entity_ctor_for;
+    world.m_template = []( const std::string& ) -> const value_t* { return nullptr; };
+    world.m_components_for = entity_components_constructed;
+    world.m_component_load = entity_load_component;
+    world.m_component_mark = entity_mark_component;
+    world.m_state_for = entity_state_for;
+    world.m_properties_load = entity_load_properties;
+    world.m_properties_mark = entity_mark_properties;
+    const std::unique_ptr< entity_t > tree = entity_load_project( member( document, "VuProject" ), "Data/Projects/Background.vuprj", world );
+    if ( !tree )
+    {
+        LOG_ERROR( "static_pfx: the document did not load" );
+        return false;
+    }
+    std::vector< entity_t* > order;
+    const auto post = [ & ]( const auto& self, entity_t& e ) -> void {
+        for ( auto& child : e.m_children )
+            self( self, *child );
+        if ( e.m_type == "VuStaticPfxEntity" )
+            order.push_back( &e );
+    };
+    post( post, *tree );
+    const unsigned* s = g_golden_spx_words;
+    const unsigned n = *s++;
+    int bad = 0, compared = 0, calls = 0;
+    auto cmp = [ & ]( const char* what, unsigned a, unsigned k, unsigned ours, unsigned theirs ) {
+        ++compared;
+        if ( ours != theirs && ++bad <= 12 )
+            LOG_ERROR( "static_pfx %s %u / %u: ours 0x%08X retail 0x%08X", what, a, k, ours, theirs );
+    };
+    cmp( "entity count", 0, 0, static_cast< unsigned >( order.size( ) ), n );
+    std::vector< pfx_static_entity_t > ents( n );
+    std::vector< std::vector< float > > matrices( n, std::vector< float >( 16, 0.0f ) );
+    pfx_static_check_t c;
+    c.entities = &ents;
+    static const char params[ 0x100 ] = {};
+    pfx_static_ops_t o;
+    o.user = &c;
+    using C = pfx_static_check_t;
+    static C* cc = nullptr;
+    cc = &c;
+    o.tick_register = []( void*, void* e, const char* phase ) { cc->log.push_back( { 0u, 2u, cc->ent( e ), pfx_static_string( phase ) } ); };
+    o.tick_unregister = []( void*, void* e ) { cc->log.push_back( { 1u, 1u, cc->ent( e ) } ); };
+    o.draw_add = []( void*, void* e ) { cc->log.push_back( { 2u, 1u, cc->ent( e ) } ); };
+    o.draw_remove = []( void*, void* e ) { cc->log.push_back( { 3u, 1u, cc->ent( e ) } ); };
+    o.draw_update = []( void*, void* e ) { cc->log.push_back( { 4u, 1u, cc->ent( e ) } ); };
+    o.create = []( void*, const std::string& name ) -> std::uint32_t {
+        cc->log.push_back( { 5u, 1u, pfx_static_string( name ) } );
+        return cc->create == 0xFFFFFFFFu ? 0u : cc->create + 1u;
+    };
+    o.release = []( void*, std::uint32_t i ) { cc->log.push_back( { 6u, 1u, i - 1u } ); };
+    o.set_matrix = []( void*, std::uint32_t i, const float* m ) {
+        std::vector< unsigned > e{ 7u, 17u, i - 1u };
+        for ( int k = 0; k < 16; ++k )
+            e.push_back( C::word( m[ k ] ) );
+        cc->log.push_back( e );
+    };
+    o.set_scale = []( void*, std::uint32_t i, float f ) { cc->log.push_back( { 8u, 2u, i - 1u, C::word( f ) } ); };
+    o.set_color = []( void*, std::uint32_t i, const float* v ) {
+        cc->log.push_back( { 9u, 5u, i - 1u, C::word( v[ 0 ] ), C::word( v[ 1 ] ), C::word( v[ 2 ] ), C::word( v[ 3 ] ) } );
+    };
+    o.state = []( void*, std::uint32_t i ) -> std::uint32_t {
+        cc->log.push_back( { 10u, 1u, i - 1u } );
+        return cc->state;
+    };
+    o.aabb = []( void*, std::uint32_t i ) -> const std::uint32_t* {
+        cc->log.push_back( { 11u, 1u, i - 1u } );
+        return cc->aabb;
+    };
+    o.count = []( void*, std::uint32_t i ) -> std::uint32_t {
+        cc->log.push_back( { 12u, 1u, i - 1u } );
+        return cc->count;
+    };
+    o.start = []( void*, std::uint32_t i ) { cc->log.push_back( { 13u, 1u, i - 1u } ); };
+    o.stop = []( void*, std::uint32_t i, bool immediate ) { cc->log.push_back( { 14u, 2u, i - 1u, immediate ? 1u : 0u } ); };
+    o.tick = []( void*, std::uint32_t i, float dt ) { cc->log.push_back( { 15u, 2u, i - 1u, C::word( dt ) } ); };
+    o.draw = []( void*, std::uint32_t i, const void* p ) {
+        cc->log.push_back( { 16u, 2u, i - 1u, static_cast< unsigned >( static_cast< const char* >( p ) - params ) } );
+    };
+    o.draw_shadow = []( void*, std::uint32_t i, const void* p ) {
+        cc->log.push_back( { 17u, 2u, i - 1u, static_cast< unsigned >( static_cast< const char* >( p ) - params ) } );
+    };
+    std::vector< static_pfx_t > props( n );
+    int ops = 0;
+    for ( unsigned k = 0; k < n; ++k )
+    {
+        const unsigned name = *s++;
+        const unsigned effect = *s++;
+        const unsigned* loaded = s;
+        const unsigned* matrix = s + 3;
+        s += 3 + 16;
+        const unsigned nops = *s++;
+        if ( k < order.size( ) )
+        {
+            entity_t& e = *order[ k ];
+            cmp( "name", k, 0, pfx_static_string( e.m_name ), name );
+            const static_pfx_state_t* st = static_cast< const static_pfx_state_t* >( e.m_state.get( ) );
+            const transform_component_t* tc = entity_transform( e );
+            if ( st && tc )
+            {
+                props[ k ] = st->value;
+                cmp( "effect", k, 0, pfx_static_string( props[ k ].effect_name ), effect );
+                cmp( "loaded", k, 0, props[ k ].initially_active, loaded[ 0 ] );
+                cmp( "loaded", k, 1, C::word( props[ k ].pfx_scale ), loaded[ 1 ] );
+                cmp( "loaded", k, 2, props[ k ].pfx_color, loaded[ 2 ] );
+                for ( int j = 0; j < 16; ++j )
+                {
+                    matrices[ k ][ static_cast< std::size_t >( j ) ] = tc->world[ j ];
+                    cmp( "matrix", k, static_cast< unsigned >( j ), C::word( tc->world[ j ] ), matrix[ j ] );
+                }
+            }
+            else
+                cmp( "state", k, 0, 0, 1 );
+        }
+        pfx_static_entity_t& x = ents[ k ];
+        x.properties = &props[ k ];
+        x.matrix = matrices[ k ].data( );
+        bool copied = false;
+        for ( unsigned q = 0; q < nops; ++q, ++ops )
+        {
+            const unsigned op = s[ 0 ];
+            c.create = s[ 1 ];
+            c.state = s[ 2 ];
+            c.count = s[ 3 ];
+            c.aabb = s + 4;
+            if ( op == 8 )
+            {
+                std::memcpy( &props[ k ].pfx_scale, &s[ 12 ], 4 );
+                props[ k ].pfx_color = s[ 13 ];
+            }
+            const unsigned retval = s[ 14 ];
+            const unsigned nlog = s[ 15 ];
+            s += 16;
+            c.log.clear( );
+            unsigned rv = 0xDEADBEEFu;
+            switch ( op )
+            {
+            case 0: pfx_static_game_initialize( x, o ); break;
+            case 1: pfx_static_tick( x, o, 1.0f / 60.0f ); break;
+            case 2: pfx_static_draw( x, o, params + 0x10 * k ); break;
+            case 3: pfx_static_draw_shadow( x, o, params + 0x10 * k ); break;
+            case 4: pfx_static_start( x, o ); rv = 0; break;
+            case 5: pfx_static_stop( x, o ); rv = 0; break;
+            case 6: pfx_static_kill( x, o ); rv = 0; break;
+            case 7: pfx_static_moved( x, o ); break;
+            case 8: pfx_static_changed( x, o ); break;
+            default: pfx_static_game_release( x, o ); break;
+            }
+            if ( op >= 4 && op <= 6 )
+                cmp( "retval", k, q, rv, retval );
+            cmp( "log length", k, q, static_cast< unsigned >( c.log.size( ) ), nlog );
+            for ( unsigned j = 0; j < nlog; ++j )
+            {
+                const unsigned kind = s[ 0 ], args = s[ 1 ];
+                const std::vector< unsigned >* ours = j < c.log.size( ) ? &c.log[ j ] : nullptr;
+                cmp( "log kind", k, q * 100 + j, ours ? ( *ours )[ 0 ] : 0xFFFFFFFFu, kind );
+                for ( unsigned a = 0; a < args; ++a )
+                    cmp( "log arg", k, q * 100 + j, ours && ( *ours )[ 1 ] == args ? ( *ours )[ 2 + a ] : 0xFFFFFFFFu, s[ 2 + a ] );
+                s += 2 + args;
+                ++calls;
+            }
+            cmp( "instance", k, q, x.instance ? x.instance - 1u : 0xFFFFFFFFu, s[ 0 ] );
+            cmp( "drawn", k, q, x.drawn, s[ 1 ] );
+            // before the first copy the words are the draw component's own (its ctor 0x531A40: not this entity's): not compared
+            copied = copied || ( op == 1 && c.count != 0 && x.instance != 0 );
+            for ( int j = 0; j < 8 && copied; ++j )
+                cmp( "aabb", k, q, x.aabb[ j ], s[ 2 + j ] );
+            s += 10;
+        }
+    }
+    bad += s != g_golden_spx_words + g_golden_spx_size;
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuStaticPfxEntity (world/pfxstatic.hxx: slot 6 0x5EB060, tick 0x5EB290, plugs 0x5EB200 / 0x5EB220 / 0x5EB250, "
+                     "watchers 0x5EB390 / 0x5EB4A0, draws 0x5EB350 / 0x5EB370, slot 7 0x5EB1A0) matches retail on the front end's %u: %d ops, "
+                     "%d hook calls, %d values",
+            n, ops, calls, compared );
+    else
+        LOG_ERROR( "static_pfx FAILED: %d differences", bad );
+    return bad == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
@@ -2089,6 +2309,7 @@ inline bool verify_pfx_all( )
     ok = verify_ocean_infinite96( ) && ok;
     ok = verify_ocean_field_menu( ) && ok;
     ok = verify_water_release_menu( ) && ok;
+    ok = verify_static_pfx_entity( ) && ok;
     ok = verify_water_build_menu( ) && ok;
     ok = verify_water_map_unload( ) && ok;
     ok = verify_water_shutdown( ) && ok;
