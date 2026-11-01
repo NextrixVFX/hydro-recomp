@@ -28,7 +28,7 @@
 //     = boat +0x308); +0x15C / +0x160 / +0x164 / +0x174 (byte) / +0x178; +0x1CC
 //     the solver; +0x1DC / +0x1E0 the two waves the records' query excludes.
 //   solver (hull +0x1CC): +0 the fluids mesh asset, +0x30 / +0x34 its own
-//     excluded waves, +0x50 any-submerged, +0x54 volume, +0x58 area, +0x5C
+//     excluded waves (count, array pointer: solver_excluded), +0x50 any-submerged, +0x54 volume, +0x58 area, +0x5C
 //     least depth, +0x60 .. +0xFF the solve vectors, +0x100 the floor z.
 //   engine O (boat +0x22C, boat_engine_t): +4 / +0xC / +0x10 / +0x14 / +0x18 /
 //     +0x1C / +0x20 / +0x24 / +0x28 / +0x2C floats, the Power Curve (+0x30
@@ -60,6 +60,9 @@ struct boat_thunk_in_t
     fluid_gravity_fn gravity = nullptr;           // g_vudynamicsimpl vt+0x1C
     void* gravity_user = nullptr;
     std::function< int( std::uint32_t ) > wave_index;   // a VuWater wave pointer -> its index (-2 unknown)
+    // The solver's excluded waves: +0x30 the count, +0x34 a POINTER to the array of wave pointers (VuFluidSolver_prepare
+    // 0x524450: mov edi, [esi+0x30] ... mov edx, [esi+0x34]; [edx + 4k]) - its words, resolved by the caller.
+    const std::uint32_t* solver_excluded = nullptr;
 };
 
 struct boat_thunk_t
@@ -162,10 +165,22 @@ inline bool boat_thunk_build( boat_thunk_t& t, const boat_thunk_in_t& in )
         t.why = "the engine's +0xF8 records are fewer than its Drives (0x414760 would write past them - UNKNOWN)";
         return false;
     }
-    if ( thunk_u( s, 0x30 ) || thunk_u( s, 0x34 ) )
+    t.solver.exclude.clear( );
+    const std::int32_t excluded = static_cast< std::int32_t >( thunk_u( s, 0x30 ) );
+    if ( excluded > 0 )
     {
-        t.why = "the solver's own excluded waves (+0x30 / +0x34) - UNKNOWN";
-        return false;
+        if ( !in.solver_excluded )
+        {
+            t.why = "the solver's excluded waves (+0x30 count, +0x34 array) with no array given - UNKNOWN";
+            return false;
+        }
+        for ( std::int32_t k = 0; k < excluded; ++k )
+        {
+            int w = -1;
+            if ( !thunk_wave( in, in.solver_excluded[ k ], w, t ) )
+                return false;
+            t.solver.exclude.push_back( w );   // a null word: -1 (retail's null pointer, which no wave matches)
+        }
     }
     int ex0 = -1, ex1 = -1;
     if ( !thunk_wave( in, thunk_u( h, 0x1DC ), ex0, t ) || !thunk_wave( in, thunk_u( h, 0x1E0 ), ex1, t ) )
