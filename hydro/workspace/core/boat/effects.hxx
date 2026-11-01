@@ -6,7 +6,9 @@
 #include <workspace/core/boat/math.hxx>
 #include <workspace/core/boat/state.hxx>
 #include <workspace/core/assets/scene.hxx>
+#include <workspace/core/world/pfxmgr.hxx>
 #include <workspace/core/world/pfxsim.hxx>
+#include <workspace/core/boat/camera.hxx>
 
 #include <cstdint>
 #include <cstring>
@@ -522,4 +524,40 @@ inline void boat_debris_follow( solver_rigid_t& body, const solver_rigid_t& piec
     std::memcpy( body.linear_velocity, piece_body.linear_velocity, 16 );
     std::memcpy( body.angular_velocity, piece_body.angular_velocity, 16 );
     body_set_center_of_mass_transform( body, piece_body.basis, piece_body.origin );
+}
+// The hull tick 0x416630's splash (0x4167B8 .. 0x416921; boat/state.hxx
+// boat_hull_tick calls hooks.splash with the name at hull +0x17C - this is
+// what that hook stands for): createEffect 0x52BCD0 on the VuPfxManager g
+// 0x75905C by the name (world/pfxmgr.hxx pfx_manager_create: `create` here,
+// the caller's); none -> nothing. Else a handle (pfx_manager_handle: the
+// entry's serial bumped, past the cap 1), the instance's slot 10 (the Duration
+// getter, its x87 answer discarded - not called here), and when the handle is
+// nonzero and looks up (pfx_manager_lookup) the looked-up entry's instance
+// gets setMatrix( lookAtBasis 0x50CA70( (vx, vy, 0), (0, 0, 1) ) with row 3 =
+// the transform's +0x80 .. +0x88 ), slot 3 ( vx, vy, 0, the body's +0x14C
+// word ) and start (slot 11).
+inline void boat_hull_splash( pfx_manager_t& m, const char* name, int ( *create )( void* user, const char* name ), void* user,
+                              const std::uint32_t* velocity, const float* position, const boat_pfx_ops_t& o )
+{
+    const int e = create( user, name );
+    if ( e < 0 )
+        return;
+    const std::uint32_t h = pfx_manager_handle( m, e );
+    if ( h == 0u )
+        return;
+    const int x = pfx_manager_lookup( m, h );
+    if ( x < 0 )
+        return;
+    std::uint32_t v[ 4 ] = { velocity[ 0 ], velocity[ 1 ], 0u, velocity[ 3 ] };
+    float dir[ 4 ], mat[ 16 ];
+    std::memcpy( dir, v, 16 );
+    const float up[ 4 ] = { 0.0f, 0.0f, 1.0f, 0.0f };
+    camera_look_at( dir, up, mat );
+    mat[ 12 ] = position[ 0 ];
+    mat[ 13 ] = position[ 1 ];
+    mat[ 14 ] = position[ 2 ];
+    const std::uint32_t inst = m.entries[ static_cast< std::size_t >( x ) ].instance;
+    o.set_matrix( o.user, inst, mat );
+    o.set_velocity( o.user, inst, v );
+    o.start( o.user, inst );
 }

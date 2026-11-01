@@ -1089,3 +1089,92 @@ inline bool verify_piece_remove( )
     LOG_ERROR( "piece_remove FAILED %d of %d", failed, static_cast< int >( g_golden_piece_remove_count ) );
     return false;
 }
+// verify_hull_splash (boat batch 17): the hull tick's splash path (boat/effects.hxx
+// boat_hull_splash) against cases/boat.py hull_splash (0x416630 run whole, the
+// create planned): the calls in order (create, setMatrix 16 words, slot 3,
+// start) and every entry's serial after.
+inline bool verify_hull_splash( )
+{
+    int failed = 0, started = 0, created = 0;
+    for ( std::size_t v = 0; v < g_golden_hull_splash_count; ++v )
+    {
+        const unsigned* g = g_golden_hull_splash_words + g_golden_hull_splash_offsets[ v ];
+        float s178;
+        std::memcpy( &s178, g++, 4 );
+        const unsigned* vel = g;
+        g += 4;
+        float pos[ 4 ];
+        std::memcpy( pos, g, 16 );
+        g += 4;
+        const unsigned namelen = *g++;
+        pfx_manager_t m;
+        m.capacity = *g++;
+        m.mask = *g++;
+        m.bits = *g++;
+        m.serial_cap = *g++;
+        const unsigned ne = *g++;
+        m.entries.resize( ne );
+        for ( unsigned k = 0; k < ne; ++k )
+        {
+            m.entries[ k ].flags = *g++;
+            m.entries[ k ].index = *g++;
+            m.entries[ k ].serial = *g++;
+            m.entries[ k ].instance = 0x100u + k;
+        }
+        m.table.resize( m.capacity );
+        for ( unsigned k = 0; k < m.capacity; ++k )
+            m.table[ k ] = static_cast< int >( *g++ );
+        const unsigned pick = *g++;
+        const unsigned nlog = *g++;
+        const unsigned* want = g;
+        for ( unsigned e = 0; e < nlog; ++e )
+            g += 1 + g[ 0 ];
+        const std::vector< unsigned > want_log( want, g );
+        struct ctx_t
+        {
+            std::vector< unsigned > log;
+            unsigned namelen, pick;
+        } c{ { }, namelen, pick };
+        auto put = []( void* u, std::initializer_list< unsigned > head, const unsigned* w, unsigned n ) {
+            auto& l = static_cast< ctx_t* >( u )->log;
+            l.push_back( static_cast< unsigned >( head.size( ) ) + n );
+            l.insert( l.end( ), head );
+            if ( n )
+                l.insert( l.end( ), w, w + n );
+        };
+        static void ( *s_put )( void*, std::initializer_list< unsigned >, const unsigned*, unsigned );
+        s_put = put;
+        boat_pfx_ops_t o;
+        o.user = &c;
+        o.set_matrix = []( void* u, std::uint32_t s, const float* mm ) { s_put( u, { 2u, s - 0x100u }, reinterpret_cast< const unsigned* >( mm ), 16 ); };
+        o.set_velocity = []( void* u, std::uint32_t s, const std::uint32_t* w ) { s_put( u, { 3u, s - 0x100u }, w, 4 ); };
+        o.start = []( void* u, std::uint32_t s ) { s_put( u, { 11u, s - 0x100u }, nullptr, 0 ); };
+        // boat_hull_tick's splash branch: hull +0x178 not ordered-equal to 0.
+        if ( s178 != 0.0f || s178 != s178 )
+        {
+            ++created;
+            const std::string name( namelen, 'n' );
+            boat_hull_splash( m, name.c_str( ), []( void* u, const char* nm ) {
+                ctx_t& x = *static_cast< ctx_t* >( u );
+                x.log.insert( x.log.end( ), { 2u, 1u, static_cast< unsigned >( std::strlen( nm ) ) } );
+                return x.pick == 0xFFFFFFFFu ? -1 : static_cast< int >( x.pick );
+            }, &c, vel, pos, o );
+        }
+        bool same = c.log == want_log;
+        for ( unsigned k = 0; k < ne; ++k )
+            same = same && m.entries[ k ].serial == g[ k ];
+        for ( std::size_t i = 0; i + 1 < c.log.size( ); i += 1 + c.log[ i ] )
+            started += c.log[ i + 1 ] == 11u;
+        if ( !same && ++failed <= 4 )
+            LOG_ERROR( "hull_splash %u: %d log words (retail %d)", static_cast< unsigned >( v ), static_cast< int >( c.log.size( ) ),
+                       static_cast< int >( want_log.size( ) ) );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "the hull tick's splash 0x4167B8 .. 0x416921 (boat_hull_splash: createEffect, handle, lookup, lookAtBasis, slots 2 / 3 / 11) "
+                     "matches retail: %d ticks, %d splashes, %d effects started", static_cast< int >( g_golden_hull_splash_count ), created, started );
+        return true;
+    }
+    LOG_ERROR( "hull_splash FAILED %d of %d", failed, static_cast< int >( g_golden_hull_splash_count ) );
+    return false;
+}
