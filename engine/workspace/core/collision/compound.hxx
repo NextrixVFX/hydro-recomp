@@ -450,6 +450,52 @@ inline int compound_remove_child( compound_shape_t& c, int index )
     return 1;
 }
 
+// btCompoundShape::recalculateLocalAabb 0x527160 (slot 15) on the typed
+// model - arena.hxx bt_compound_recalculate_local_aabb is the same function on
+// retail memory: the local aabb reset to (1e18 x3, 0) / (-1e18 x3, 0)
+// (0x6F7B10 / 0x6F7C90), then per child its getAabb (vt+4) under the child
+// transform, per lane x / y / z min = the child's when min > it, max = the
+// child's when it > max (`comiss`, ordered). False when a child's getAabb is
+// not recreated.
+inline bool compound_recalculate_local_aabb( compound_shape_t& c )
+{
+    for ( int k = 0; k < 3; ++k )
+    {
+        c.local_aabb_min[ k ] = support_bits( 0x5D5E0B6Bu );
+        c.local_aabb_max[ k ] = support_bits( 0xDD5E0B6Bu );
+    }
+    c.local_aabb_min[ 3 ] = 0.0f;
+    c.local_aabb_max[ 3 ] = 0.0f;
+    for ( const compound_child_t& r : c.children )
+    {
+        float mn[ 4 ], mx[ 4 ];
+        if ( !shape_get_aabb( *r.shape, r.transform, mn, mx ) )
+            return false;
+        for ( int k = 0; k < 3; ++k )
+        {
+            if ( c.local_aabb_min[ k ] > mn[ k ] )
+                c.local_aabb_min[ k ] = mn[ k ];
+            if ( mx[ k ] > c.local_aabb_max[ k ] )
+                c.local_aabb_max[ k ] = mx[ k ];
+        }
+    }
+    return true;
+}
+
+// btCompoundShape::removeChildShape 0x527110 (slot 14; thiscall shape; retn
+// 4): ++revision (+0x44); from the last child (count - 1, read once) down to 0
+// every child whose shape (+0x40 of the 0x50-byte record, the data re-read)
+// is `shape` -> removeChildShapeByIndex 0x527030 (compound_remove_child: the
+// one-leaf model, else -1); then recalculateLocalAabb (vt+0x3C).
+inline int compound_remove_child_shape( compound_shape_t& c, const convex_shape_t* shape )
+{
+    ++c.revision;
+    for ( int i = static_cast< int >( c.children.size( ) ) - 1; i >= 0; --i )
+        if ( c.children[ static_cast< std::size_t >( i ) ].shape == shape && compound_remove_child( c, i ) < 0 )
+            return -1;
+    return compound_recalculate_local_aabb( c ) ? 1 : -1;
+}
+
 // btCompoundCollisionAlgorithm (CreateFunc 0x56C430 / swapped 0x56C4F0):
 // +28 isSwapped, +32 sharedManifold (ci.m_manifold), +40 the shape's revision
 // at creation - preallocateChildAlgorithms 0x5F7A60 does NOT update it, so a

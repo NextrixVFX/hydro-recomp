@@ -2100,3 +2100,66 @@ inline bool verify_mesh_scaling( )
             static_cast< int >( g_golden_mesh_scaling_count ), changed, nan_lanes );
     return failed == 0;
 }
+// verify_compound_remove (boat batch 20): cases/boat.py compound_remove -
+// btCompoundShape::removeChildShape 0x527110 (compound.hxx compound_remove
+// _child_shape -> removeChildShapeByIndex 0x527030 + the typed
+// recalculateLocalAabb 0x527160) on the typed compound built like retail's
+// (ctor + 0 or 1 addChildShape of a box): before the row (count, local aabb,
+// revision) and after, exact.
+inline bool verify_compound_remove( )
+{
+    int failed = 0, removed = 0;
+    for ( std::size_t index = 0; index < g_golden_compound_remove_count; ++index )
+    {
+        const golden_compound_remove_t& g = g_golden_compound_remove[ index ];
+        convex_shape_t box{}, other{};
+        for ( convex_shape_t* s : { &box, &other } )
+        {
+            s->type = 0;
+            s->local_scaling[ 0 ] = s->local_scaling[ 1 ] = s->local_scaling[ 2 ] = 1.0f;
+            std::memcpy( &s->margin, &g.m_margin, 4 );
+        }
+        std::memcpy( box.implicit, g.m_half, 16 );
+        other.implicit[ 0 ] = 1.0f;
+        other.implicit[ 1 ] = 2.0f;
+        other.implicit[ 2 ] = 3.0f;
+        float t[ 16 ];
+        std::memcpy( t, g.m_transform, 64 );
+        compound_shape_t c;
+        const char* what = nullptr;
+        if ( g.m_n != 0 && compound_add_child( c, t, box ) != 1 )
+            what = "addChildShape reached unrecreated code";
+        unsigned w[ 10 ];
+        const auto snap = [ & ]( ) {
+            w[ 0 ] = static_cast< unsigned >( c.children.size( ) );
+            std::memcpy( w + 1, c.local_aabb_min, 16 );
+            std::memcpy( w + 5, c.local_aabb_max, 16 );
+            w[ 9 ] = static_cast< unsigned >( c.revision );
+        };
+        snap( );
+        if ( !what && std::memcmp( w, g.m_before, 40 ) != 0 )
+            what = "the compound before the row";
+        if ( !what )
+        {
+            const convex_shape_t* target = g.m_target == 0 ? &box : g.m_target == 1 ? &other : nullptr;
+            if ( compound_remove_child_shape( c, target ) != 1 )
+                what = "the row reached unrecreated code";
+            snap( );
+            removed += g.m_count < g.m_before[ 0 ] ? 1 : 0;
+            if ( !what && ( w[ 0 ] != g.m_count || w[ 9 ] != g.m_revision ) )
+                what = "the count / revision";
+            if ( !what && std::memcmp( w + 1, g.m_aabb, 32 ) != 0 )
+                what = "the local aabb";
+        }
+        if ( what )
+        {
+            ++failed;
+            LOG_ERROR( "compound remove vector %d: %s", static_cast< int >( index ), what );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "btCompoundShape::removeChildShape 0x527110 (+ 0x527030, the typed recalculateLocalAabb 0x527160) matches retail over %d "
+                     "compounds, exact (%d children removed)",
+            static_cast< int >( g_golden_compound_remove_count ), removed );
+    return failed == 0;
+}
