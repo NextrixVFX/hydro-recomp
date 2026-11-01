@@ -870,52 +870,71 @@ public:
         return m_loaded;
     }
 
-    // The project path is built the way the game modes name their projects -
-    // Games/<track><mode> - which is read out of the pack's own asset table,
-    // not guessed. Everything the mode is supposed to MEAN (grid, rules,
-    // scoring, laps) lives in VuGameModeManagerImpl and is not transliterated,
-    // so this loads the scene and nothing else.
+    // VuActionGameMode's load 0x4BA060, in its order: the project by 0x4D3480 (race_project_name: GameData's Level,
+    // else "Games/" + its last path part + GameType [+ Course for Slalom]) from the GameData the front end left,
+    // loaded; then the game object by GameType (race_game_kind) - "Race" -> the VuRaceGame ctor 0x489030 and the
+    // race session (world/session.hxx: 0x481CE0, postLoad, begin 0x4829A0); Slalom / TimeTrial / Ghost -> their
+    // ctors 0x48BEC0 / 0x48ED30 / 0x484A20, NOT recreated (logged, no game); anything else -> no game.
+    // THE GAMEDATA: with --boat / --skin, the front end's (race_session_game_data from --mode / --race / --course /
+    // --boat / --skin - the roster drawn from the shared VuRandom). Without them (the gates' bench) there is no front
+    // end run and retail has no counterpart (its dev config's ActionGameData is the null container,
+    // 0x4FDB70): SCAFFOLD, ours - GameData {Level: --race, GameType: --mode (else "Race"), Course: --course}, the
+    // inputs the old Games/<track><mode> path took; with Level a bare track name 0x4D3480 names the same projects.
     void load_scene( const char* track, const char* mode, const char* course = nullptr )
     {
         if ( !m_opened )
             load( );
-        const char* name = track != nullptr && track[ 0 ] != '\0' ? track : "Hydroelectric";
-        std::string suffix = "Race";
-        if ( mode != nullptr )
+        m_race = race_session_t{ };
+        race_session_dbs_t dbs = race_dbs( );
+        const auto text = []( const char* v ) { return std::string( v ? v : "" ); };
+        const bool race = c_engine::option( "boat" ) != nullptr || c_engine::option( "skin" ) != nullptr;
+        value_t util;
+        value_t& game_data = ui_json_child( util, "GameData" );
+        bool front_end = false;
+        if ( race )
+            front_end = race_session_game_data( text( mode ), text( track ), text( course ), text( c_engine::option( "boat" ) ),
+                                                text( c_engine::option( "skin" ) ), dbs, m_vurandom, game_data );
+        if ( !front_end )
         {
-            if ( std::strstr( mode, "Slalom" ) != nullptr )
-            {
-                suffix = "Slalom";
-                if ( course != nullptr && std::strncmp( course, "Course", 6 ) == 0 )
-                    suffix += course;
-                else
-                    suffix += "CourseA";
-            }
-            else if ( std::strstr( mode, "TimeTrial" ) != nullptr )
-                suffix = "TimeTrial";
-            else if ( std::strstr( mode, "Ghost" ) != nullptr )
-                suffix = "Ghost";
+            game_data = value_t{ };
+            ui_json_set_string( ui_json_child( game_data, "Level" ), text( track ).c_str( ) );
+            ui_json_set_string( ui_json_child( game_data, "GameType" ), mode != nullptr && mode[ 0 ] != '\0' ? mode : "Race" );
+            if ( course != nullptr && course[ 0 ] != '\0' )
+                ui_json_set_string( ui_json_child( game_data, "Course" ), course );
         }
-        const std::string path = std::string( "VuProjectAsset/Games/" ) + name + suffix;
+        const std::string name = race_project_name( util, nullptr, [ this ]( const std::string& type, const std::string& n ) {
+            for ( const std::string& rest : m_archive.names( type + "/" + n ) )   // names() strips the prefix: exact = ""
+                if ( rest.empty( ) )
+                    return true;
+            return false;
+        } );
+        const std::string path = "VuProjectAsset/" + name;
         wipe_scene( );
         m_vantage_ready = false;
         m_authored_camera = false;
         m_authored_far = 500.0f;
         load_project( path.c_str( ) );
         m_loaded = true;
-        LOG_SUCCESS( "scene %s%s", name, suffix.c_str( ) );
-        race_switch_on( );
+        LOG_SUCCESS( "scene %s (0x4D3480 from the %s GameData)", name.c_str( ), front_end ? "front end's" : "scaffold" );
+        const std::string type = race_game_data_text( util, nullptr, "GameType" );
+        switch ( race_game_kind( type ) )
+        {
+        case race_game_kind_t::race:
+            if ( front_end )
+                race_switch_on( game_data, dbs, type );
+            break;
+        case race_game_kind_t::none:
+            LOG_INFO( "0x4BA060: GameType '%s' makes no game object", type.c_str( ) );
+            break;
+        default:
+            LOG_WARNING( "0x4BA060: the %s game's ctor (0x48BEC0 / 0x48ED30 / 0x484A20) is NOT recreated - no game object", type.c_str( ) );
+            break;
+        }
     }
 
-    // The race (world/session.hxx) when --boat or --skin asks for one; the
-    // bench passes neither, so a scene-only run never reaches it.
-    void race_switch_on( )
+    // BoatDB / TrackDB / ConstantDB (and SkinDB for the skin pass) from the pack.
+    race_session_dbs_t race_dbs( )
     {
-        m_race = race_session_t{ };
-        const char* boat = c_engine::option( "boat" );
-        const char* skin = c_engine::option( "skin" );
-        if ( boat == nullptr && skin == nullptr )
-            return;
         const auto db = [ this ]( const char* asset, value_t& out ) -> const value_t*
         {
             std::vector< std::uint8_t > bytes;
@@ -929,14 +948,18 @@ public:
         dbs.track_db = db( "VuDBAsset/TrackDB", m_track_db );
         dbs.constant_db = db( "VuDBAsset/ConstantDB", m_constant_db );
         db( "VuDBAsset/SkinDB", m_skin_db );
-        const auto text = []( const char* key ) { const char* v = c_engine::option( key ); return std::string( v ? v : "" ); };
+        return dbs;
+    }
+
+    // The race (world/session.hxx) on the front end's GameData, after the project load.
+    void race_switch_on( const value_t& game_data, const race_session_dbs_t& dbs, const std::string& mode )
+    {
         if ( !m_tree )
         {
             LOG_WARNING( "race: the project's entity tree did not load; no race" );
             return;
         }
-        if ( !race_session_start( m_race, text( "mode" ), text( "race" ), text( "course" ), text( "boat" ), text( "skin" ), dbs, m_archive,
-                                  *m_tree, track( ), m_vurandom ) )
+        if ( !race_session_start( m_race, mode, game_data, dbs, m_archive, *m_tree, track( ), m_vurandom ) )
             return;
         // The hulls: each boat's three model instances (+0x2A4 / +0x2A8 / +0x2AC from BoatDB's Model Asset / LOD 1 /
         // LOD 2 Model Asset - the instance loads 0x5322C0 / 0x520080 are the rendering layer: our model path) placed

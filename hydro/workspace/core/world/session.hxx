@@ -301,16 +301,51 @@ struct race_session_dbs_t
     const value_t* constant_db = nullptr;
 };
 
-// The start: GameData, the boat load + postLoad, begin. `tree` the race
-// project's entity tree, `track` the world's track manager built from it. False
-// (logged) when there is no race: an option missing, an UNKNOWN builder, a boat
-// that cannot be made.
-inline bool race_session_start( race_session_t& s, const std::string& mode, const std::string& track_name, const std::string& course,
-                                const std::string& boat, const std::string& skin, const race_session_dbs_t& db, const c_archive& archive,
-                                entity_t& tree, const track_manager_t* track, fleet_random_t& random )
+// The front end's GameData (ui_front_end_game_data, core/ui config.hxx) from
+// --mode / --race / --course / --boat / --skin - built BEFORE the project load,
+// as retail's front end leaves it for VuActionGameMode's load 0x4BA060 (whose
+// project choice 0x4D3480 reads its Level / GameType / Course). False (logged)
+// when an option is missing or the builder is not recreated. The roster picks
+// draw from the shared VuRandom 0x736810 in whatever state the run has left it.
+inline bool race_session_game_data( const std::string& mode, const std::string& track_name, const std::string& course, const std::string& boat,
+                                    const std::string& skin, const race_session_dbs_t& db, fleet_random_t& random, value_t& out )
+{
+    if ( mode.empty( ) || boat.empty( ) || skin.empty( ) || track_name.empty( ) )
+    {
+        LOG_WARNING( "race: boats UNKNOWN - --mode, --race, --boat and --skin are all required (no defaults); no race" );
+        return false;
+    }
+    if ( !db.boat_db || !db.track_db || !db.constant_db )
+    {
+        LOG_ERROR( "race: BoatDB / TrackDB / ConstantDB not readable from the pack; no race" );
+        return false;
+    }
+    ui_game_env_t env;
+    env.boat_db = db.boat_db;
+    env.track_db = db.track_db;
+    env.random = &random;
+    ui_game_config_t built;
+    out = ui_front_end_game_data( mode, track_name, course, boat, skin, env, &built );
+    if ( !built.built )
+    {
+        LOG_WARNING( "race: GameData UNKNOWN - mode '%s' reaches builder 0x%X, %s; no race", mode.c_str( ), built.builder,
+                     built.builder ? "not recreated" : "none (not a front-end event type)" );
+        return false;
+    }
+    return true;
+}
+
+// The start (0x4BA060 after the project load, for GameType "Race": the
+// VuRaceGame ctor, the boat load + postLoad, begin) on the GameData
+// race_session_game_data built. `tree` the race project's entity tree, `track`
+// the world's track manager built from it. False (logged) when a boat cannot
+// be made.
+inline bool race_session_start( race_session_t& s, const std::string& mode, const value_t& game_data, const race_session_dbs_t& db,
+                                const c_archive& archive, entity_t& tree, const track_manager_t* track, fleet_random_t& random )
 {
     s = race_session_t{ };
     s.random = &random;
+    s.game_data = game_data;
     race_game_construct( s.game );   // the VuRaceGame ctor 0x489030 (its base 0x480BA0's values)
     {
         std::vector< std::uint8_t > bytes;
@@ -323,30 +358,6 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
             LOG_WARNING( "race: VuDBAsset/SurfaceDB did not build the surface-type table - the sections load will stop at it" );
         else
             LOG_INFO( "race: surface-type table built from SurfaceDB: %d types", static_cast< int >( surface_count( s.surfaces ) ) );
-    }
-    if ( mode.empty( ) || boat.empty( ) || skin.empty( ) || track_name.empty( ) )
-    {
-        LOG_WARNING( "race: boats UNKNOWN - --mode, --race, --boat and --skin are all required (no defaults); no race" );
-        return false;
-    }
-    if ( !db.boat_db || !db.track_db || !db.constant_db )
-    {
-        LOG_ERROR( "race: BoatDB / TrackDB / ConstantDB not readable from the pack; no race" );
-        return false;
-    }
-    // The roster picks draw from the shared VuRandom 0x736810 in whatever state the run has left it (seeded once at
-    // the engine init, drawn by the pfx since).
-    ui_game_env_t env;
-    env.boat_db = db.boat_db;
-    env.track_db = db.track_db;
-    env.random = s.random;
-    ui_game_config_t built;
-    s.game_data = ui_front_end_game_data( mode, track_name, course, boat, skin, env, &built );
-    if ( !built.built )
-    {
-        LOG_WARNING( "race: GameData UNKNOWN - mode '%s' reaches builder 0x%X, %s; no race", mode.c_str( ), built.builder,
-                     built.builder ? "not recreated" : "none (not a front-end event type)" );
-        return false;
     }
     s.mode = mode;
     s.track = track;
@@ -502,7 +513,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     for ( const race_start_boat_t& b : s.start_boats )
         placed += b.transform ? 1 : 0;
     LOG_SUCCESS( "race: %s on %s - %d boat(s) from GameData, %d grid position(s), %d lap(s), difficulty %s, begin 0x4829A0 run "
-                 "(humans %d, AI %d)", mode.c_str( ), track_name.c_str( ), static_cast< int >( s.boats.size( ) ),
+                 "(humans %d, AI %d)", mode.c_str( ), s.game.track.c_str( ), static_cast< int >( s.boats.size( ) ),
                  static_cast< int >( s.manager.grid.size( ) ), s.game.laps, s.game.difficulty.c_str( ),
                  static_cast< int >( s.manager.lists.humans.boats.size( ) ), static_cast< int >( s.manager.lists.ais.boats.size( ) ) );
     s.active = true;
