@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -613,4 +614,86 @@ inline bool track_build_from_tree( entity_t& root, track_manager_t& tm )
     for ( std::size_t k = 0; k < tm.waypoints.size( ); ++k )
         track_waypoint_initialize( tm, static_cast< int >( k ) );
     return track_build( tm );
+}
+
+// ---- VuAiWaypointEntity's input plugs (ctor 0x431770: VuScriptComponent +0x5C) ----
+//
+// "AllowRecovery" 0x432740 / "DisallowRecovery" 0x432760 (thiscall(this,
+// VuRetVal* out, VuParams const&), retn 8; *out = 0): +0x8B "Allow
+// Recovery" = 1 / 0 (what track slot 22's respawn search filters on).
+inline void waypoint_allow_recovery( track_waypoint_t& w, bool allow )
+{
+    w.p.allow_recovery = allow ? 1 : 0;
+}
+
+// 0x432780 (thiscall; a in xmm1, b in xmm2): the branch sectors (+0x98 /
+// +0x9C, -1 none) through track slot 23 0x4D0C00 (the sector array's entry,
+// unchecked - false, UNKNOWN, past it); a = 0 without branch A, b = 0
+// without B; +0xA0 = a, then inv = 1 / (b + a), +0xA0 = +0xA0 x inv, +0xA4 =
+// inv x b; each branch sector's probability +0xC8 = its value; the AI
+// manager's slot 16 (vt+0x40, 0x404220: fleet_replan) with 2 and the list of
+// the sectors that exist (compacted, the rest -1) - `replan`.
+inline bool waypoint_set_branches( track_manager_t& tm, track_waypoint_t& w, float a, float b,
+                                   const std::function< void( const int ( &sectors )[ 2 ] ) >& replan )
+{
+    const int count = static_cast< int >( tm.sectors.size( ) );
+    if ( ( w.sector_a != -1 && ( w.sector_a < 0 || w.sector_a >= count ) ) || ( w.sector_b != -1 && ( w.sector_b < 0 || w.sector_b >= count ) ) )
+        return false;
+    const int sa = w.sector_a, sb = w.sector_b;
+    w.p.branch_a = sa != -1 ? a : 0.0f;
+    if ( sb == -1 )
+        b = 0.0f;
+    const float inv = 1.0f / ( b + w.p.branch_a );
+    w.p.branch_a = w.p.branch_a * inv;
+    w.p.branch_b = inv * b;
+    int list[ 2 ] = { -1, -1 };
+    int n = 0;
+    if ( sa != -1 )
+    {
+        state_put_f( tm.sectors[ static_cast< std::size_t >( sa ) ].image, 0xC8, w.p.branch_a );
+        list[ n++ ] = sa;
+    }
+    if ( sb != -1 )
+    {
+        state_put_f( tm.sectors[ static_cast< std::size_t >( sb ) ].image, 0xC8, w.p.branch_b );
+        list[ n ] = sb;
+    }
+    if ( replan )
+        replan( list );
+    return true;
+}
+
+// "UpdateBranchProbabilities" 0x4325D0 (thiscall(this, VuRetVal* out,
+// VuParams const&), retn 8; *out = 0). The params (+0x80 the size) read in
+// order, each only while the size left is > 0: a bool (type 3: its byte,
+// 5 bytes consumed), a second bool, a float (type 2: 8 consumed), a second
+// float; a type that does not match consumes nothing (the next read sees
+// it again). a = the first float when the first bool's byte is set, else
+// +0xA0; b likewise from the second, else +0xA4; then 0x432780.
+inline bool waypoint_update_branches( track_manager_t& tm, track_waypoint_t& w, const std::uint8_t* params,
+                                      const std::function< void( const int ( &sectors )[ 2 ] ) >& replan )
+{
+    std::int32_t left;
+    std::memcpy( &left, params + 0x80, 4 );
+    const std::uint8_t* at = params;
+    std::uint8_t use[ 2 ] = { 0, 0 };
+    for ( int k = 0; k < 2; ++k )
+        if ( left > 0 && track_u32( at, 0 ) == 3 )
+        {
+            use[ k ] = at[ 4 ];
+            at += 5;
+            left -= 5;
+        }
+    float value[ 2 ] = { 0.0f, 0.0f };
+    if ( left > 0 && track_u32( at, 0 ) == 2 )
+    {
+        std::memcpy( &value[ 0 ], at + 4, 4 );
+        at += 8;
+        left -= 8;
+    }
+    if ( left > 0 && track_u32( at, 0 ) == 2 )
+        std::memcpy( &value[ 1 ], at + 4, 4 );
+    const float a = use[ 0 ] ? value[ 0 ] : w.p.branch_a;
+    const float b = use[ 1 ] ? value[ 1 ] : w.p.branch_b;
+    return waypoint_set_branches( tm, w, a, b, replan );
 }

@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <xmmintrin.h>
 
 // VuHumanDriver (vtable 0x737F44, 27 slots + RTTI; ctor 0x40ED50; the
@@ -395,4 +396,89 @@ inline void human_decision_driver( void* user, float dt )
 {
     human_decision_driver_t* d = static_cast< human_decision_driver_t* >( user );
     human_driver_tick( *d->track, *d->pilot, d->tick, dt, d->env, d->hooks );
+}
+
+// ---- The explosion listener (driver +0x80, vtable 0x737F30) and slots 6 / 7 / 20 ----
+//
+// Slot 6 0x40F210 (gameInitialize) / slot 7 0x40F240 (gameRelease): the
+// explosion manager g_vuexplosionmanagerimpl 0x759034's vt+0x1C / vt+0x20
+// with the listener (the driver + 0x80; a null driver passes 0) - hooks
+// here. The listener's slots reach the driver's boat through its +0x5C
+// (the listener's -0x24).
+
+// Listener slot 0 0x40F4F0 (thiscall; out*; retn 4): the boat's position -
+// its transform component's (+0x50) +0x80..+0x8F, all four lanes.
+inline void human_explosion_position( const std::uint8_t* transform, float out[ 4 ] )
+{
+    std::memcpy( out, transform + 0x80, 16 );
+}
+
+// Listener slot 1 0x40F520 (a float in st0): VuMath_sqrt(((y x 0.5)^2 +
+// (x x 0.5)^2) + (z x 0.5)^2) x 0.5 with (x, y, z) = the boat's +0x280.. less
+// +0x270.. (the aabb's max less its min).
+inline float human_explosion_radius( const std::uint8_t* boat )
+{
+    const float y = ( state_f( boat, 0x284 ) - state_f( boat, 0x274 ) ) * 0.5f;
+    const float x = ( state_f( boat, 0x280 ) - state_f( boat, 0x270 ) ) * 0.5f;
+    const float z = ( state_f( boat, 0x288 ) - state_f( boat, 0x278 ) ) * 0.5f;
+    return hull_sqrt( ( y * y + x * x ) + z * z ) * 0.5f;
+}
+
+// Listener slot 2 0x40F5A0 (thiscall; the explosion's params*, scale; retn
+// 8). m = params +0x18 x scale. On the boat's camera (+0x224): when its
+// shake timer +0x2E8 is ordered <= 0 (a NaN is not), or m is ordered above the
+// amplitude +0x2E4: +0x2E4 = m, +0x2EC = params +0x20 (the duration), +0x2F0
+// = params +0x24 (the frequency), +0x2E8 = params +0x1C + params +0x20,
+// +0x2F4.. = (0, 0, 1). The rumble pair: driver +0xC8 = maxss(+0xC8, params
+// +0x28 x scale), +0xCC = maxss(+0xCC, params +0x2C x scale). Then the lens
+// water manager g 0x759048's vt+0x28(params +0x30) - `lens_water`, a hook.
+inline void human_explosion_hit( std::uint8_t* drv, std::uint8_t* cam, const std::uint8_t* params, float scale,
+                                 const std::function< void( float ) >& lens_water )
+{
+    const float m = state_f( params, 0x18 ) * scale;
+    if ( human_ge( 0.0f, state_f( cam, 0x2E8 ) ) || human_gt( m, state_f( cam, 0x2E4 ) ) )
+    {
+        const float duration = state_f( params, 0x20 );
+        state_put_f( cam, 0x2E4, m );
+        state_put_f( cam, 0x2EC, duration );
+        std::memcpy( cam + 0x2F0, params + 0x24, 4 );
+        state_put_f( cam, 0x2F4, 0.0f );
+        state_put_f( cam, 0x2E8, state_f( params, 0x1C ) + duration );
+        state_put_f( cam, 0x2F8, 0.0f );
+        state_put_f( cam, 0x2FC, 1.0f );
+    }
+    state_put_f( drv, 0xC8, ai_maxss( state_f( drv, 0xC8 ), state_f( params, 0x28 ) * scale ) );
+    state_put_f( drv, 0xCC, ai_maxss( state_f( drv, 0xCC ), state_f( params, 0x2C ) * scale ) );
+    if ( lens_water )
+        lens_water( state_f( params, 0x30 ) );
+}
+
+// Slot 20 0x40F4A0 (the recovery notice): g_vueventmanager 0x759028's
+// broadcast 0x505690(FNV-1a("OnHumanRecovered") from 0x811C9DC5, an empty
+// VuParams - its +0x80 size 0) - `broadcast`, a hook.
+inline std::uint32_t human_event_hash( const char* name )
+{
+    std::uint32_t h = 0x811C9DC5u;
+    for ( ; *name; ++name )
+        h = ( h ^ static_cast< unsigned char >( *name ) ) * 0x1000193u;
+    return h;
+}
+
+inline void human_recovered( const std::function< void( std::uint32_t hash, std::uint32_t params_size ) >& broadcast )
+{
+    if ( broadcast )
+        broadcast( human_event_hash( "OnHumanRecovered" ), 0u );
+}
+// Slots 6 / 7: the listener (the driver + 0x80, or null for a null driver)
+// to the explosion manager's vt+0x1C (add) / vt+0x20 (remove).
+inline void human_game_initialize( std::uint8_t* drv, const std::function< void( std::uint8_t* listener ) >& add_listener )
+{
+    if ( add_listener )
+        add_listener( drv ? drv + 0x80 : nullptr );
+}
+
+inline void human_game_release( std::uint8_t* drv, const std::function< void( std::uint8_t* listener ) >& remove_listener )
+{
+    if ( remove_listener )
+        remove_listener( drv ? drv + 0x80 : nullptr );
 }

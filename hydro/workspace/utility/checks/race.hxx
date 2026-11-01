@@ -9,11 +9,15 @@
 #include <workspace/core/boat/powerup.hxx>
 #include <workspace/core/boat/meshes.hxx>
 #include <workspace/core/boat/surface.hxx>
+#include <workspace/core/boat/nuisance.hxx>
+#include <workspace/core/boat/contact.hxx>
 
 #include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <map>
+#include <string>
 #include <vector>
 
 // The boat area's race-time checks (the camera, the respawn, the animation tick, the drivers): included by
@@ -2111,6 +2115,485 @@ inline bool verify_boat_manager_game( )
     return false;
 }
 
+// The document as the case serialises it: s<len>:<text>, o<n>{<len>:<key><value>...}, t<tag>.
+inline std::string nuisance_serial( const value_t& v )
+{
+    if ( v.tag == 4 )
+        return "s" + std::to_string( v.text.size( ) ) + ":" + v.text;
+    if ( v.tag == 6 )
+    {
+        std::string out = "o" + std::to_string( v.object.size( ) ) + "{";
+        for ( const auto& m : v.object )
+            out += std::to_string( m.first.size( ) ) + ":" + m.first + nuisance_serial( m.second );
+        return out + "}";
+    }
+    return "t" + std::to_string( v.tag );
+}
+
+// VuAiNuisanceDriverStartEntity's slots 6 0x42FDC0 / 7 0x42FF80 and its plugs DriverTarget 0x42FF90 / DriverDisable
+// 0x430020 against retail (oracle case nuisance_start): the document handed to the child's load, the child's name, the
+// hook order and arguments, and - after a plug - every weak-reference link word, +0x81 and the VuRetVal word.
+inline bool verify_nuisance_start( )
+{
+    const unsigned* g = g_golden_nuisance_start_words;
+    auto text = [ & ]( ) {
+        const unsigned n = *g++;
+        std::string s( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        return s;
+    };
+    const std::uint32_t tgt = 0x900, child = 0x400, old = 0x940, r0 = 0x980, r1 = 0x9C0, r2 = 0xA00, drv = 0x2200, ref = drv + 0xE4;
+    auto sym = [ & ]( std::uint32_t x ) -> unsigned {
+        if ( x == 0 ) return 0;
+        if ( x == tgt ) return 1;
+        if ( x == child ) return 2;
+        if ( x == old ) return 3;
+        if ( x == r0 ) return 4;
+        if ( x == r1 ) return 5;
+        if ( x == r2 ) return 6;
+        if ( x == ref ) return 7;
+        return 0x100 + ( x & 0xFF );
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++, has_child = *g++, b80 = *g++, b81 = *g++, kind = *g++, state = *g++, has_r2 = *g++, ptype = *g++,
+                       size = *g++, hash = *g++, key = *g++, answer = *g++;
+        const std::string name = text( ), boat = text( );
+        unsigned after[ 13 ];
+        for ( unsigned& a : after )
+            a = *g++;
+        const std::string child_name = text( );
+        std::vector< std::vector< unsigned > > glog( *g++ );
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        std::map< std::uint32_t, std::uint32_t > mem;
+        vu_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0u : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        mem[ child + 0x220 ] = drv;
+        mem[ drv ] = kind;
+        if ( state == 1 )
+        {
+            mem[ old + 8 ] = ref;
+            mem[ ref + 8 ] = r1; mem[ ref + 0xC ] = old;
+            mem[ r1 + 4 ] = ref; mem[ r1 + 0xC ] = old;
+        }
+        else if ( state == 2 || state == 3 )
+        {
+            mem[ old + 8 ] = r0;
+            mem[ r0 + 8 ] = ref; mem[ r0 + 0xC ] = old;
+            mem[ ref + 4 ] = r0; mem[ ref + 8 ] = state == 2 ? r1 : 0; mem[ ref + 0xC ] = old;
+            if ( state == 2 )
+            {
+                mem[ r1 + 4 ] = ref; mem[ r1 + 0xC ] = old;
+            }
+        }
+        if ( has_r2 )
+        {
+            mem[ tgt + 8 ] = r2;
+            mem[ r2 + 0xC ] = tgt;
+        }
+        std::uint8_t params[ 0x84 ] = {};
+        std::memcpy( params, &ptype, 4 );
+        std::memcpy( params + 4, &hash, 4 );
+        std::memcpy( params + 0x80, &size, 4 );
+        const std::uint32_t answers[ 4 ] = { 0, tgt, child, old };
+        std::vector< std::vector< unsigned > > log;
+        auto find = [ & ]( std::uint32_t h ) -> std::uint32_t {
+            log.push_back( { 6u, h } );
+            return h == key && answer < 4 ? answers[ answer ] : 0u;
+        };
+        nuisance_start_t s;
+        s.boat = boat;
+        s.active = static_cast< std::uint8_t >( b80 );
+        s.disabled = static_cast< std::uint8_t >( b81 );
+        std::uint32_t ret = 0xCDCDCDCDu;
+        std::string named;
+        nuisance_start_hooks_t h;
+        h.name_child = [ & ]( const std::string& n ) { named = n; };
+        h.load_child = [ & ]( const value_t& doc ) {
+            const std::string serial = nuisance_serial( doc );
+            std::vector< unsigned > e = { 1u, 1u, static_cast< unsigned >( serial.size( ) ) };
+            for ( std::size_t k = 0; k < serial.size( ); k += 4 )
+            {
+                unsigned word = 0;
+                std::memcpy( &word, serial.data( ) + k, std::min< std::size_t >( 4, serial.size( ) - k ) );
+                e.push_back( word );
+            }
+            log.push_back( e );
+        };
+        h.hash_child = [ & ]( std::uint32_t seed ) { log.push_back( { 2u, 1u, seed } ); };
+        h.place_child = [ & ]( bool notify ) { log.push_back( { 3u, 1u, 1u, notify ? 1u : 0u } ); };
+        h.add_child = [ & ]( ) { log.push_back( { 4u, 1u } ); };
+        h.remove_child = [ & ]( ) { log.push_back( { 5u, 1u } ); };
+        const std::uint32_t c = has_child ? child : 0u;
+        if ( fn == 6 )
+            nuisance_start_game_initialize( name, s, h );
+        else if ( fn == 7 )
+            nuisance_start_game_release( h );
+        else if ( fn == 1 )
+            ret = nuisance_start_driver_target( s, c, params, find, w );
+        else
+            ret = nuisance_start_driver_disable( s, c, params, find, w );
+        const unsigned mine[ 13 ] = { sym( w.get( ref + 4 ) ), sym( w.get( ref + 8 ) ), sym( w.get( ref + 0xC ) ), sym( w.get( tgt + 8 ) ),
+                                      sym( w.get( old + 8 ) ), sym( w.get( r0 + 4 ) ), sym( w.get( r0 + 8 ) ), sym( w.get( r1 + 4 ) ),
+                                      sym( w.get( r1 + 8 ) ), sym( w.get( r2 + 4 ) ), sym( w.get( r2 + 8 ) ), s.disabled, ret };
+        const bool same = log == glog && std::equal( mine, mine + 13, after ) && ( fn != 6 || named == child_name );
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "nuisance_start vector %u (function %u): %zu calls (%zu), +0xF0 %u (retail %u), +0x81 %u (%u), name \"%s\" (\"%s\")", v, fn,
+                       log.size( ), glog.size( ), mine[ 2 ], after[ 2 ], mine[ 11 ], after[ 11 ], named.c_str( ), child_name.c_str( ) );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuAiNuisanceDriverStartEntity slots 6 0x42FDC0 / 7 0x42FF80, DriverTarget 0x42FF90 / DriverDisable 0x430020 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "nuisance_start FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+
+// The contact-added callback 0x574E90 -> 0x5751F0 -> 0x519720 against retail (oracle case contact_added): the manifold
+// point after (every word, bit for bit), the return, and each listener / callback call's record (but its stale-stack
+// words) with the case's scripted write-backs replayed.
+inline bool verify_contact_added( )
+{
+    const unsigned* g = g_golden_contact_added_words;
+    auto bits = []( float f ) { unsigned u; std::memcpy( &u, &f, 4 ); return u; };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        collision_mesh_asset_t mesh;
+        const unsigned nvert = *g++;
+        mesh.vertices.bytes.assign( 16u * nvert, 0 );
+        for ( unsigned k = 0; k < nvert; ++k )
+        {
+            std::memcpy( mesh.vertices.bytes.data( ) + 16 * k, g, 12 );
+            const float one = 1.0f;
+            std::memcpy( mesh.vertices.bytes.data( ) + 16 * k + 12, &one, 4 );
+            g += 3;
+        }
+        const unsigned ntri = *g++;
+        mesh.indices.bytes.assign( 6u * ntri, 0 );
+        for ( unsigned k = 0; k < 3 * ntri; ++k )
+        {
+            const std::uint16_t i = static_cast< std::uint16_t >( *g++ );
+            std::memcpy( mesh.indices.bytes.data( ) + 2 * k, &i, 2 );
+        }
+        mesh.triangles.bytes.assign( 4u * ntri, 0 );
+        std::memcpy( mesh.triangles.bytes.data( ), g, 4u * ntri );
+        g += ntri;
+        mesh.materials.bytes.assign( 44u * 32, 0xCD );
+        for ( unsigned k = 0; k < 32; ++k )
+            mesh.materials.bytes[ 44 * k + 40 ] = static_cast< std::uint8_t >( *g++ );
+        surface_table_t table;
+        table.types.resize( 12 );
+        for ( auto& t : table.types )
+        {
+            std::memcpy( &t.friction, g++, 4 );
+            t.color = 0xFFFFFFFFu;
+        }
+        const std::int32_t index = static_cast< std::int32_t >( *g++ );
+        std::uint8_t cp[ 0x80 ];
+        std::memcpy( cp, g, 0x80 );
+        g += 32;
+        const unsigned has_mesh = *g++;
+        const unsigned type0 = *g++, type1 = *g++, s0 = *g++, s1 = *g++, cb0 = *g++, cb1 = *g++, nl = *g++;
+        std::vector< std::pair< unsigned, unsigned > > muts( *g++ );
+        for ( auto& m : muts )
+        {
+            m.first = g[ 0 ];
+            m.second = g[ 1 ];
+            g += 2;
+        }
+        std::uint8_t img[ 2 ][ 0x300 ] = { };
+        std::memcpy( img[ 1 ] + 0x10, g, 48 );
+        g += 12;
+        const unsigned ret = *g++;
+        const unsigned* after = g;
+        g += 32;
+        std::vector< std::vector< unsigned > > glog( *g++ );
+        for ( auto& e : glog )
+        {
+            e.assign( g, g + 14 );
+            g += 14;
+        }
+        const unsigned types[ 2 ] = { type0, type1 }, surfs[ 2 ] = { s0, s1 }, cbs[ 2 ] = { cb0, cb1 };
+        for ( int j = 0; j < 2; ++j )
+        {
+            std::memcpy( img[ j ] + 0xF4, &types[ j ], 4 );
+            const unsigned cb = cbs[ j ] ? 0x100u + j : 0u;
+            std::memcpy( img[ j ] + 0x2C4, &cb, 4 );
+            img[ j ][ 0x2C8 ] = static_cast< std::uint8_t >( surfs[ j ] );
+        }
+        contact_body_t o0, o1;
+        o0.image = img[ 0 ];
+        o0.handle = 1;
+        o1.image = img[ 1 ];
+        o1.handle = 2;
+        o1.mesh = has_mesh ? &mesh : nullptr;
+        std::vector< std::vector< unsigned > > log;
+        std::size_t next = 0;
+        auto call = [ & ]( unsigned who ) {
+            return [ &, who ]( contact_record_t& r ) {
+                const std::pair< unsigned, unsigned > m = next < muts.size( ) ? muts[ next++ ] : std::pair< unsigned, unsigned >( 0u, 0u );
+                log.push_back( { who, r.body0, r.body1, r.other, bits( r.pos[ 0 ] ), bits( r.pos[ 1 ] ), bits( r.pos[ 2 ] ), bits( r.normal[ 0 ] ),
+                                 bits( r.normal[ 1 ] ), bits( r.normal[ 2 ] ), static_cast< unsigned >( r.surface0 | r.surface1 << 8 ),
+                                 bits( r.friction ), m.first, m.second } );
+                if ( m.first == 1 )
+                    std::memcpy( &r.friction, &m.second, 4 );
+                else if ( m.first == 2 )
+                    std::memcpy( &r.normal[ 0 ], &m.second, 4 );
+            };
+        };
+        contact_hooks_t h;
+        for ( unsigned k = 0; k < nl; ++k )
+            h.listeners.push_back( call( 1 + k ) );
+        h.callback0 = call( 5 );
+        h.callback1 = call( 6 );
+        const bool known = contact_added( table, cp, o0, o1, index, h );
+        const bool same = known && ret == 0 && std::memcmp( cp, after, 0x80 ) == 0 && log == glog;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "contact_added vector %u: %s, normal 0x%X 0x%X 0x%X (retail 0x%X 0x%X 0x%X), %zu calls (%zu)", v, known ? "ran" : "UNKNOWN",
+                       contact_u32( cp, 0x40 ), contact_u32( cp, 0x44 ), contact_u32( cp, 0x48 ), after[ 16 ], after[ 17 ], after[ 18 ], log.size( ), glog.size( ) );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "The contact-added callback 0x574E90 / 0x5751F0 / 0x519720 matches retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "contact_added FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+
+// The boat classes' VuRTTI (boat rtti.hxx) against retail (oracle case boat_rtti): every descriptor's parent and name,
+// every class's slot 1 / descriptor / chain, and 0x41B4B0 for every class against every descriptor plus 0 / a stray word.
+inline bool verify_boat_rtti( )
+{
+    const unsigned* g = g_golden_boat_rtti_words;
+    int failed = 0;
+    const unsigned nn = *g++;
+    for ( unsigned k = 0; k < nn; ++k )
+    {
+        const unsigned d = *g++, parent = *g++, n = *g++;
+        const std::string name( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        const boat_rtti_t* mine = nullptr;
+        for ( const boat_rtti_t& r : g_boat_rtti )
+            if ( r.descriptor == d )
+                mine = &r;
+        if ( ( !mine || mine->parent != parent || name != mine->name ) && ++failed <= 8 )
+            LOG_ERROR( "boat_rtti descriptor 0x%X (%s): parent 0x%X (retail 0x%X)", d, name.c_str( ), mine ? mine->parent : 0u, parent );
+    }
+    if ( nn != sizeof( g_boat_rtti ) / sizeof( g_boat_rtti[ 0 ] ) && ++failed <= 8 )
+        LOG_ERROR( "boat_rtti: %u descriptors met (the table has %zu)", nn, sizeof( g_boat_rtti ) / sizeof( g_boat_rtti[ 0 ] ) );
+    const unsigned nc = *g++;
+    std::vector< unsigned > vtables;
+    for ( unsigned k = 0; k < nc; ++k )
+    {
+        const unsigned vt = *g++, get = *g++, d = *g++, nch = *g++;
+        std::vector< unsigned > chain( g, g + nch );
+        g += nch;
+        vtables.push_back( vt );
+        const boat_rtti_class_t* mine = nullptr;
+        for ( const boat_rtti_class_t& c : g_boat_rtti_classes )
+            if ( c.vtable == vt )
+                mine = &c;
+        std::vector< unsigned > walk;
+        for ( std::uint32_t x = boat_rtti_of( vt ); x; x = boat_rtti_parent( x ) )
+            walk.push_back( x );
+        if ( ( !mine || mine->get_type != get || mine->descriptor != d || walk != chain ) && ++failed <= 8 )
+            LOG_ERROR( "boat_rtti class 0x%X: getType 0x%X (retail 0x%X), descriptor 0x%X (0x%X)", vt, mine ? mine->get_type : 0u, get,
+                       mine ? mine->descriptor : 0u, d );
+    }
+    const unsigned nw = *g++;
+    std::vector< unsigned > wanted( g, g + nw );
+    g += nw;
+    unsigned pairs = 0;
+    for ( unsigned vt : vtables )
+        for ( unsigned w : wanted )
+        {
+            const unsigned r = *g++;
+            ++pairs;
+            if ( ( boat_rtti_is( vt, w ) ? 1u : 0u ) != r && ++failed <= 8 )
+                LOG_ERROR( "boat_rtti 0x41B4B0(0x%X, 0x%X): %u (retail %u)", vt, w, boat_rtti_is( vt, w ) ? 1u : 0u, r );
+        }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "The boat classes' getType slots and 0x41B4B0 match retail: %u descriptors, %u classes, %u pairs", nn, nc, pairs );
+        return true;
+    }
+    LOG_ERROR( "boat_rtti FAILED %d", failed );
+    return false;
+}
+
+// VuHumanDriver's explosion listener (0x40F4F0 / 0x40F520 / 0x40F5A0) and slots 6 / 7 / 20 against retail (oracle case
+// human_explosion): the camera's shake words, the rumble pair, the radius and position bits, the hooks and arguments.
+inline bool verify_human_explosion( )
+{
+    const unsigned* g = g_golden_human_explosion_words;
+    const unsigned listener = *g++, nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++, null = *g++;
+        std::uint8_t drv[ 0x100 ] = { }, boat[ 0x300 ] = { }, cam[ 0x300 ] = { }, tr[ 0xA0 ] = { }, params[ 0x40 ] = { };
+        std::memcpy( drv + 0xC8, g, 8 );
+        g += 2;
+        std::memcpy( boat + 0x270, g, 12 );
+        std::memcpy( boat + 0x280, g + 4, 12 );
+        g += 7;
+        std::memcpy( cam + 0x2E4, g, 28 );
+        g += 7;
+        std::memcpy( tr + 0x80, g, 16 );
+        g += 4;
+        std::memcpy( params + 0x18, g, 28 );
+        g += 7;
+        float scale;
+        std::memcpy( &scale, g++, 4 );
+        const unsigned ret = *g++;
+        const unsigned* out = g;
+        g += 4;
+        const unsigned* drv_after = g;
+        g += 2;
+        const unsigned* cam_after = g;
+        g += 7;
+        std::vector< std::vector< unsigned > > glog( *g++ );
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        std::vector< std::vector< unsigned > > log;
+        bool same = true;
+        if ( fn == 1 )
+            human_explosion_hit( drv, cam, params, scale, [ & ]( float f ) { unsigned u; std::memcpy( &u, &f, 4 ); log.push_back( { 3u, u } ); } );
+        else if ( fn == 2 )
+        {
+            const float r = human_explosion_radius( boat );
+            unsigned u;
+            std::memcpy( &u, &r, 4 );
+            same = u == ret;
+        }
+        else if ( fn == 3 )
+        {
+            float p[ 4 ];
+            human_explosion_position( tr, p );
+            same = std::memcmp( p, out, 16 ) == 0;
+        }
+        else if ( fn == 20 )
+            human_recovered( [ & ]( std::uint32_t h, std::uint32_t size ) { log.push_back( { 4u, h, size } ); } );
+        else
+        {
+            auto rec = [ & ]( std::uint8_t* l ) { log.push_back( { fn == 6 ? 1u : 2u, l == drv + 0x80 ? listener : l ? 1u : 0u } ); };
+            if ( fn == 6 )
+                human_game_initialize( null ? nullptr : drv, rec );
+            else
+                human_game_release( null ? nullptr : drv, rec );
+        }
+        same = same && log == glog && std::memcmp( drv + 0xC8, drv_after, 8 ) == 0 && std::memcmp( cam + 0x2E4, cam_after, 28 ) == 0;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "human_explosion vector %u (function %u): %zu calls (%zu), amplitude 0x%X (retail 0x%X)", v, fn, log.size( ), glog.size( ),
+                       contact_u32( cam, 0x2E4 ), cam_after[ 0 ] );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuHumanDriver's explosion listener 0x40F4F0 / 0x40F520 / 0x40F5A0 and slots 6 / 7 / 20 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "human_explosion FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+
+// VuAiWaypointEntity's plugs (0x4325D0 -> 0x432780, 0x432740, 0x432760) and the AI manager's slot 16 0x404220 against
+// retail (oracle case waypoint_plugs): the waypoint's words, every sector's probability bits, the plan restarts.
+inline bool verify_waypoint_plugs( )
+{
+    const unsigned* g = g_golden_waypoint_plugs_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++, ns = *g++;
+        track_manager_t tm;
+        tm.sectors.resize( ns );
+        for ( auto& s : tm.sectors )
+            std::memcpy( s.image + 0xC8, g++, 4 );
+        fleet_manager_t m;
+        std::vector< fleet_pilot_t > pilots( *g++ );
+        for ( std::size_t j = 0; j < pilots.size( ); ++j )
+        {
+            const unsigned n = *g++;
+            for ( unsigned k = 0; k < n; ++k )
+                pilots[ j ].plan.sectors.push_back( static_cast< int >( *g++ ) );
+            fleet_entry_t e;
+            e.pilot = static_cast< int >( j );
+            m.entries.push_back( e );
+        }
+        track_waypoint_t w;
+        w.sector_a = static_cast< std::int32_t >( *g++ );
+        w.sector_b = static_cast< std::int32_t >( *g++ );
+        std::memcpy( &w.p.branch_a, g++, 4 );
+        std::memcpy( &w.p.branch_b, g++, 4 );
+        w.p.allow_recovery = static_cast< std::uint8_t >( *g++ );
+        std::uint8_t params[ 0x84 ];
+        std::memcpy( params, g, 0x84 );
+        g += 33;
+        std::vector< int > direct( *g++ );
+        for ( int& s : direct )
+            s = static_cast< int >( *g++ );
+        const unsigned a8b = *g++, aa = *g++, ab = *g++;
+        const unsigned* aprobs = g;
+        g += ns;
+        const unsigned aret = *g++;
+        std::vector< std::vector< unsigned > > glog( *g++ );
+        for ( auto& e : glog )
+        {
+            e.assign( g, g + 2 );
+            g += 2;
+        }
+        std::vector< std::vector< unsigned > > log;
+        fleet_random_t rng;
+        auto restart = [ & ]( int pilot, int sector ) { log.push_back( { static_cast< unsigned >( pilot ), static_cast< unsigned >( sector ) } ); };
+        auto replan = [ & ]( const int ( &list )[ 2 ] ) { fleet_replan( m, pilots, tm, 2, list, rng, restart ); };
+        unsigned ret = 0xCDCDCDCDu;
+        bool known = true;
+        if ( fn == 1 )
+        {
+            known = waypoint_update_branches( tm, w, params, replan );
+            ret = 0;
+        }
+        else if ( fn == 2 || fn == 3 )
+        {
+            waypoint_allow_recovery( w, fn == 2 );
+            ret = 0;
+        }
+        else
+            fleet_replan( m, pilots, tm, static_cast< int >( direct.size( ) ), direct.data( ), rng, restart );
+        unsigned mine_a, mine_b;
+        std::memcpy( &mine_a, &w.p.branch_a, 4 );
+        std::memcpy( &mine_b, &w.p.branch_b, 4 );
+        bool same = known && log == glog && w.p.allow_recovery == a8b && mine_a == aa && mine_b == ab && ret == aret;
+        for ( unsigned i = 0; i < ns; ++i )
+            same = same && contact_u32( tm.sectors[ i ].image, 0xC8 ) == aprobs[ i ];
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "waypoint_plugs vector %u (function %u): +0xA0 0x%X (retail 0x%X), +0xA4 0x%X (0x%X), %zu restarts (%zu)", v, fn, mine_a, aa, mine_b,
+                       ab, log.size( ), glog.size( ) );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuAiWaypointEntity's plugs 0x4325D0 / 0x432780 / 0x432740 / 0x432760 and the AI manager's slot 16 0x404220 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "waypoint_plugs FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -2136,5 +2619,10 @@ inline bool verify_race_all( )
     ok = verify_surface_table( ) && ok;
     ok = verify_hidden_package( ) && ok;
     ok = verify_boat_manager_game( ) && ok;
+    ok = verify_nuisance_start( ) && ok;
+    ok = verify_contact_added( ) && ok;
+    ok = verify_boat_rtti( ) && ok;
+    ok = verify_human_explosion( ) && ok;
+    ok = verify_waypoint_plugs( ) && ok;
     return ok;
 }

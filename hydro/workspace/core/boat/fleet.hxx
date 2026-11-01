@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <vector>
 #include <xmmintrin.h>
 
@@ -502,4 +503,46 @@ inline void fleet_decision_driver( void* user, float dt )
 {
     const fleet_decision_driver_t* d = static_cast< const fleet_decision_driver_t* >( user );
     fleet_driver_tick( *d->track, *d->pilot, d->tick, d->transforms, dt, d->hooks );
+}
+
+// AI manager slot 16 0x404220 (thiscall(count, sectors*), retn 8) - what a
+// waypoint's UpdateBranchProbabilities (0x432780) calls with its branch
+// sectors. For each entry in order, its driver's plan (+0x84): for each
+// listed sector s (none skipped) that the plan holds (+0x8C / +0x90 searched
+// in order): f = the plan's sector 0 (0x4D0E10(0)); when f is not s and 0 >=
+// s's probability +0xC8 (comiss, ordered: a NaN keeps the plan), the plan
+// restarts from f (vt+4 = slot 1 0x4D0D50: fleet_plan_start, or `restart`
+// when given) and that entry is done.
+inline void fleet_replan( const fleet_manager_t& m, std::vector< fleet_pilot_t >& pilots, const track_manager_t& tm, int count, const int* sectors,
+                          fleet_random_t& rng, const std::function< void( int pilot, int sector ) >& restart = nullptr )
+{
+    for ( const fleet_entry_t& e : m.entries )
+    {
+        if ( e.pilot < 0 || static_cast< std::size_t >( e.pilot ) >= pilots.size( ) )
+            continue;
+        fleet_plan_t& plan = pilots[ static_cast< std::size_t >( e.pilot ) ].plan;
+        for ( int k = 0; k < count; ++k )
+        {
+            const int s = sectors[ k ];
+            if ( s < 0 )
+                continue;
+            bool held = false;
+            for ( int x : plan.sectors )
+                if ( x == s )
+                {
+                    held = true;
+                    break;
+                }
+            if ( !held )
+                continue;
+            const int f = fleet_plan_at( plan, 0 );
+            if ( f == s || !_mm_comige_ss( _mm_setzero_ps( ), _mm_set_ss( state_f( tm.sectors[ static_cast< std::size_t >( s ) ].image, 0xC8 ) ) ) )
+                continue;
+            if ( restart )
+                restart( e.pilot, f );
+            else
+                fleet_plan_start( plan, tm, f, rng );
+            break;
+        }
+    }
 }
