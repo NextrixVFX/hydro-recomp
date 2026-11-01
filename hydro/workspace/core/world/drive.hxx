@@ -2,6 +2,7 @@
 
 #include <workspace/core/boat/anim.hxx>
 #include <workspace/core/boat/camera.hxx>
+#include <workspace/core/boat/contact.hxx>
 #include <workspace/core/boat/fleet.hxx>
 #include <workspace/core/boat/human.hxx>
 #include <workspace/core/boat/manager.hxx>
@@ -83,6 +84,8 @@ struct race_drive_t
     boat_respawn_t respawn{};
     boat_respawn_hooks_t respawn_hooks{};
 };
+
+inline void race_drive_contact_setup( race_session_t& s );
 
 inline void race_unwired( race_session_t& s, const std::string& what )
 {
@@ -400,10 +403,87 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         h.hull.wake = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the hull's wake update 0x417D80 (not recreated)" ); };
         s.drives[ k ] = r;
     }
+    race_drive_contact_setup( s );
     int made = 0;
     for ( const auto& r : s.drives )
         made += r ? 1 : 0;
     LOG_INFO( "race: the Decision tick 0x41EFF0 composed on %d of %d boat(s)", made, static_cast< int >( s.boats.size( ) ) );
+}
+
+// A waypoint's replan (boat track.hxx waypoint_set_branches' `replan`): the
+// AI manager's slot 16 0x404220 with 2 and the branch sectors = fleet_replan
+// on the session's fleet, pilots, track and the shared VuRandom.
+inline void race_drive_replan( race_session_t& s, const int ( &sectors )[ 2 ] )
+{
+    if ( !s.active || !s.track || !s.random )
+        return;
+    fleet_replan( s.fleet, s.pilots, *s.track, 2, sectors, *s.random );
+}
+
+// Bullet's gContactAddedCallback 0x7590D8 = 0x574E90 -> the contact manager's
+// 0x5751F0 (boat contact.hxx contact_added, on the session's surface-type
+// table): the engine's contact_callbacks_t::added (dynamics/contact.hxx)
+// adapted. The objects are btCollisionObject images (VuRigidBody: +0x2C4 /
+// +0x2C8 read past btRigidBody); a world object's collision mesh (shape +0xD4
+// +8) comes from `mesh` - the dynamics world that owns the bodies answers it.
+// NOT REACHED YET: no dynamics world steps in the race. Unwired pieces stay
+// declared: no mesh lookup -> UNKNOWN (the callback does nothing); the
+// manager's +4 listener list and the bodies' +0x2C4 callbacks are not wired
+// (none registered here). The record's body words are the objects' addresses
+// truncated to 32 bits (retail's pointers - a model value).
+struct race_contact_t
+{
+    race_session_t* session = nullptr;
+    std::function< const collision_mesh_asset_t*( const solver_rigid_t* object, bool& known ) > mesh;
+};
+
+inline void race_contact_added( void* user, solver_contact_point_t& cp, solver_rigid_t* object0, int, int, solver_rigid_t* object1, int,
+                                int index1 )
+{
+    race_contact_t& c = *static_cast< race_contact_t* >( user );
+    race_session_t& s = *c.session;
+    if ( !s.surfaces_built )
+    {
+        race_unwired( s, "the contact-added callback 0x574E90 with no surface-type table - UNKNOWN" );
+        return;
+    }
+    if ( !c.mesh )
+    {
+        race_unwired( s, "the contact-added callback 0x574E90: no collision-mesh lookup for the bodies' shapes - UNKNOWN, not run" );
+        return;
+    }
+    bool known0 = false, known1 = false;
+    contact_body_t o0, o1;
+    o0.image = reinterpret_cast< const std::uint8_t* >( object0 );
+    o1.image = reinterpret_cast< const std::uint8_t* >( object1 );
+    o0.mesh = c.mesh( object0, known0 );
+    o1.mesh = c.mesh( object1, known1 );
+    if ( !known0 || !known1 )
+    {
+        race_unwired( s, "the contact-added callback 0x574E90: a body's shape is not known to the mesh lookup - UNKNOWN, not run" );
+        return;
+    }
+    o0.handle = static_cast< std::uint32_t >( reinterpret_cast< std::uintptr_t >( object0 ) );
+    o1.handle = static_cast< std::uint32_t >( reinterpret_cast< std::uintptr_t >( object1 ) );
+    contact_hooks_t h;
+    if ( !contact_added( s.surfaces, reinterpret_cast< std::uint8_t* >( &cp ), o0, o1, index1, h ) )
+        race_unwired( s, "the contact-added callback 0x5751F0 read past the surface table / mesh materials - UNKNOWN" );
+}
+
+// The callbacks a race's dynamics world installs (0x574EC0's gContactAddedCallback).
+inline contact_callbacks_t race_contact_callbacks( race_contact_t& c )
+{
+    contact_callbacks_t cb;
+    cb.user = &c;
+    cb.added = race_contact_added;
+    return cb;
+}
+
+inline void race_drive_contact_setup( race_session_t& s )
+{
+    s.contact_user = std::make_shared< race_contact_t >( );
+    s.contact_user->session = &s;
+    s.contact = race_contact_callbacks( *s.contact_user );
 }
 
 // ---- per frame ---------------------------------------------------------------

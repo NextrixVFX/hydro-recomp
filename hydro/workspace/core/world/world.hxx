@@ -1457,6 +1457,8 @@ private:
     // Events delivered to node kinds that are not built yet. Counted rather
     // than guessed at, so the size of the remaining graph stays visible.
     int m_unhandled_events = 0;
+    // UpdateBranchProbabilities events reached without their VuParams (UNKNOWN, graph.hxx).
+    int m_waypoint_params_unknown = 0;
     // Assets already scored by the extent test, so it reports once each.
     std::set< std::string > m_scored;
     // Route single-bone props through the placement matrix instead of CPU

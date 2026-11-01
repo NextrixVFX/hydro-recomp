@@ -6,6 +6,7 @@
 #include <workspace/core/boat/driver.hxx>
 #include <workspace/core/boat/hull.hxx>
 #include <workspace/core/boat/manager.hxx>
+#include <workspace/core/boat/nuisance.hxx>
 #include <workspace/core/boat/track.hxx>
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/entity/property.hxx>
@@ -58,7 +59,8 @@
 
 // The callbacks the race project's tree is loaded with: the verified entity
 // loads (engine entity/node.hxx, hydro game/types.hxx) plus the AI waypoint's
-// property set (boat track.hxx, ctor 0x431770) - the track manager reads it.
+// property set (boat track.hxx, ctor 0x431770) - the track manager reads it -
+// and VuAiNuisanceDriverStartEntity's (boat nuisance.hxx, ctor 0x42FA20: Boat).
 inline entity_world_t race_entity_world( const entity_registry_t& registry, std::function< const value_t*( const std::string& ) > templates )
 {
     entity_world_t world;
@@ -69,9 +71,14 @@ inline entity_world_t race_entity_world( const entity_registry_t& registry, std:
     world.m_component_load = entity_load_component;
     world.m_component_post = entity_post_load_component;
     world.m_component_mark = entity_mark_component;
-    world.m_state_for = []( const std::string& cls ) { auto s = waypoint_state_for( cls ); return s ? s : entity_state_for( cls ); };
-    world.m_properties_load = []( entity_t& e, const value_t& p ) { waypoint_load_properties( e, p ); entity_load_properties( e, p ); };
-    world.m_properties_mark = []( entity_t& e ) { waypoint_mark_properties( e ); entity_mark_properties( e ); };
+    world.m_state_for = []( const std::string& cls ) {
+        auto s = waypoint_state_for( cls );
+        if ( !s )
+            s = nuisance_start_state_for( cls );
+        return s ? s : entity_state_for( cls );
+    };
+    world.m_properties_load = []( entity_t& e, const value_t& p ) { waypoint_load_properties( e, p ); nuisance_start_load_properties( e, p ); entity_load_properties( e, p ); };
+    world.m_properties_mark = []( entity_t& e ) { waypoint_mark_properties( e ); nuisance_start_mark_properties( e ); entity_mark_properties( e ); };
     return world;
 }
 
@@ -272,8 +279,10 @@ inline std::string race_file_part( const std::string& name )
 // and reloaded when its name differs (0x626B00), then the game's vt+0x10 on
 // GameData (VuRaceGame slot 4 = 0x4021A0, ret 4: nothing). False when the
 // registry cannot create the boat type (retail would push null - UNKNOWN).
-inline bool race_load_boats( race_game_t& game, const value_t& game_data, const value_t& util_data, const value_t& trackdb,
-                             const entity_registry_t& registry, const race_load_hooks_t& hooks )
+// The entity world a VuBoatEntity is made and loaded in (its ctor facts and
+// its three string properties on top of race_entity_world) - 0x481CE0's boats
+// and VuAiNuisanceDriverStartEntity's child (0x42FDC0) alike.
+inline entity_world_t race_boat_world( const entity_registry_t& registry, const race_load_hooks_t& hooks )
 {
     entity_world_t world = race_entity_world( registry, nullptr );
     world.m_ctor_for = race_ctor_for;
@@ -288,6 +297,13 @@ inline bool race_load_boats( race_game_t& game, const value_t& game_data, const 
         else
             properties_load( e, p );
     };
+    return world;
+}
+
+inline bool race_load_boats( race_game_t& game, const value_t& game_data, const value_t& util_data, const value_t& trackdb,
+                             const entity_registry_t& registry, const race_load_hooks_t& hooks )
+{
+    entity_world_t world = race_boat_world( registry, hooks );
     static const value_t null{};
     const value_t& boats = member( game_data, "Boats" );
     const int count = boats.tag == 5 ? static_cast< int >( boats.list.size( ) ) : 0;
