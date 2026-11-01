@@ -181,6 +181,7 @@
     <ClInclude Include="workspace\core\ui\leave.hxx" />
     <ClInclude Include="workspace\core\ui\leaves.hxx" />
     <ClInclude Include="workspace\core\ui\map.hxx" />
+    <ClInclude Include="workspace\core\ui\message.hxx" />
     <ClInclude Include="workspace\core\ui\navigate.hxx" />
     <ClInclude Include="workspace\core\ui\overlay.hxx" />
     <ClInclude Include="workspace\core\ui\results.hxx" />

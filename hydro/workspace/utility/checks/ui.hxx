@@ -2370,10 +2370,19 @@ inline bool verify_ui_boat_config( )
             vujb_dump( out, text );
             if ( text != run.m_given )
                 bad( "0x44E090's container", row );
-            const bool wrote = ui_boat_config_release( root, run.m_player, static_cast< std::size_t >( run.m_options ) );
+            // batch 26: slot 7 whole (ui_boat_config_game_release): the write, then the touch removal
+            int touches = 0;
+            std::string at_touch;
+            ui_config_hooks_t h;
+            h.touch_remove = [ & ]
+            {
+                ++touches;
+                vujb_dump( root, at_touch );
+            };
+            const bool wrote = ui_boat_config_game_release( root, run.m_player, static_cast< std::size_t >( run.m_options ), h );
             text.clear( );
             vujb_dump( root, text );
-            if ( !wrote || text != run.m_after || run.m_touches != 1 || run.m_other != 0 )
+            if ( !wrote || text != run.m_after || at_touch != run.m_after || touches != run.m_touches || run.m_other != 0 )
                 bad( "the root after 0x44D090 / its touch removal", row );
             ++runs;
         }

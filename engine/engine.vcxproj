@@ -176,6 +176,7 @@ copy /Y "$(ProjectDir)impl\engine.hxx" "$(ProjectDir)..\hydro\impl\engine\engine
     <ClInclude Include="workspace\core\dynamics\writeback.hxx" />
     <ClInclude Include="workspace\core\entity\actions.hxx" />
     <ClInclude Include="workspace\core\entity\bind.hxx" />
+    <ClInclude Include="workspace\core\entity\broadcast.hxx" />
     <ClInclude Include="workspace\core\entity\corona.hxx" />
     <ClInclude Include="workspace\core\entity\draw.hxx" />
     <ClInclude Include="workspace\core\entity\dynamic.hxx" />
@@ -187,6 +188,7 @@ copy /Y "$(ProjectDir)impl\engine.hxx" "$(ProjectDir)..\hydro\impl\engine\engine
     <ClInclude Include="workspace\core\entity\pfx.hxx" />
     <ClInclude Include="workspace\core\entity\property.hxx" />
     <ClInclude Include="workspace\core\entity\registry.hxx" />
+    <ClInclude Include="workspace\core\entity\repository.hxx" />
     <ClInclude Include="workspace\core\entity\rig.hxx" />
     <ClInclude Include="workspace\core\entity\rigid.hxx" />
     <ClInclude Include="workspace\core\entity\schema.hxx" />

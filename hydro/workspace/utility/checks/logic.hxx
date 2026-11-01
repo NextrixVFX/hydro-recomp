@@ -196,12 +196,18 @@ inline bool verify_logic_types( )
         }
     }
     bad += n != g_golden_lgt_count ? 1 : 0;
-    // VuControlComponent's name getter 0x619F50
-    bad += g_golden_lgt_name_count == 1 && g_golden_lgt_names[ 0 ].address == 0x619F50u
-        && std::strcmp( g_golden_lgt_names[ 0 ].chain, control_component_name( ) ) == 0 ? 0 : 1;
+    // the components' name getters (VuControlComponent's 0x619F50 first)
+    const std::size_t nn = sizeof( g_component_names ) / sizeof( g_component_names[ 0 ] );
+    bad += g_golden_lgt_name_count == nn && std::strcmp( g_component_names[ 0 ].name, control_component_name( ) ) == 0 ? 0 : 1;
+    for ( std::size_t i = 0; i < g_golden_lgt_name_count && i < nn; ++i )
+        if ( g_golden_lgt_names[ i ].address != g_component_names[ i ].address || std::strcmp( g_golden_lgt_names[ i ].chain, g_component_names[ i ].name ) != 0 )
+        {
+            ++bad;
+            LOG_ERROR( "logic_types name getter 0x%X differs (retail %s)", g_golden_lgt_names[ i ].address, g_golden_lgt_names[ i ].chain );
+        }
     if ( bad == 0 )
-        LOG_SUCCESS( "g_logic_types match the logic / script classes' %d getType slots (descriptor and chain each); VuControlComponent's name 0x619F50",
-                     static_cast< int >( n ) );
+        LOG_SUCCESS( "g_logic_types match the logic / script / framework classes' %d getType slots (descriptor and chain each); %d component name getters",
+                     static_cast< int >( n ), static_cast< int >( nn ) );
     else
         LOG_ERROR( "logic_types FAILED %d", bad );
     return bad == 0;
@@ -1374,6 +1380,570 @@ inline bool verify_json_access( )
         LOG_SUCCESS( "VuJsonContainer's accessors match retail (0x4FC470 0x4FC500 0x4FC520 0x4FC5E0 0x4FC550 0x4FDD30 0x4FDE40 0x4FBF30 0x4FBD30): %u documents, %d nodes, %d appends", n, nodes, appends );
     else
         LOG_ERROR( "json_access FAILED %d", bad );
+    return bad == 0;
+}
+// entity/repository.hxx against retail's VuEntityRepositoryImpl (case entity_repository): the same op sequence on 48
+// entities (each prev starting at a dummy) and 8 projects; after every op the answer, every link, the bucket heads,
+// the count and the project set.
+#include <workspace/core/entity/repository.hxx>
+
+inline bool verify_entity_repository( )
+{
+    logic_check_t c{ g_golden_erp_words };
+    const unsigned n = c.next( );
+    std::vector< entity_link_t > links( n + 1 );
+    entity_link_t& dummy = links[ n ];
+    for ( unsigned i = 0; i < n; ++i )
+        links[ i ].hash = c.next( ), links[ i ].prev = &dummy;
+    std::vector< std::string > projects( c.next( ) );
+    for ( auto& p : projects )
+        p = c.str( );
+    auto index = [ & ]( const entity_link_t* e ) -> std::int32_t
+    {
+        return e == nullptr ? -1 : e == &dummy ? -2 : static_cast< std::int32_t >( e - links.data( ) );
+    };
+    entity_repository_t r;
+    const unsigned no = c.next( );
+    int bad = 0;
+    for ( unsigned k = 0; k < no; ++k )
+    {
+        const unsigned kind = c.next( ), e = c.next( ), p = c.next( );
+        std::int32_t answer = 0;
+        if ( kind == 0 )
+            entity_repository_add( r, links[ e ] );
+        else if ( kind == 1 )
+            entity_repository_remove( r, links[ e ] );
+        else if ( kind == 2 )
+            answer = index( entity_repository_find( r, c.next( ) ) );
+        else if ( kind == 3 )
+            answer = index( entity_repository_find( r, c.str( ).c_str( ) ) );
+        else if ( kind == 4 )
+            entity_repository_add_project( r, projects[ p ] );
+        else if ( kind == 5 )
+            entity_repository_remove_project( r, projects[ p ] );
+        else
+            answer = entity_repository_has_project( r, projects[ p ] ) ? 1 : 0;
+        bool same = static_cast< std::int32_t >( c.next( ) ) == answer;
+        for ( unsigned i = 0; i < n; ++i )
+        {
+            same = static_cast< std::int32_t >( c.next( ) ) == index( links[ i ].prev ) && same;
+            same = static_cast< std::int32_t >( c.next( ) ) == index( links[ i ].next ) && same;
+        }
+        same = static_cast< std::int32_t >( c.next( ) ) == index( dummy.next ) && same;
+        std::vector< std::pair< std::uint32_t, std::int32_t > > heads;
+        for ( std::uint32_t b = 0; b < 256; ++b )
+            if ( r.buckets[ b ] != nullptr )
+                heads.push_back( { b, index( r.buckets[ b ] ) } );
+        const unsigned nh = c.next( );
+        same = nh == heads.size( ) && same;
+        for ( unsigned h = 0; h < nh; ++h )
+        {
+            const std::uint32_t b = c.next( );
+            const std::int32_t at = static_cast< std::int32_t >( c.next( ) );
+            same = h < heads.size( ) && heads[ h ].first == b && heads[ h ].second == at && same;
+        }
+        same = c.next( ) == r.count && same;
+        same = c.next( ) == r.projects.size( ) && same;
+        const unsigned np = c.next( );
+        auto it = r.projects.begin( );
+        for ( unsigned q = 0; q < np; ++q )
+        {
+            const std::string name = c.str( );
+            same = it != r.projects.end( ) && *it == name && same;
+            if ( it != r.projects.end( ) )
+                ++it;
+        }
+        if ( !same && bad++ < 6 )
+            LOG_ERROR( "entity_repository op %u (kind %u, entity %u) differs", k, kind, e );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuEntityRepositoryImpl matches retail (0x5527D0 0x552810 0x5528A0 0x552860 0x552740 0x552790 0x5528D0): %u ops on %u entities", no, n );
+    else
+        LOG_ERROR( "entity_repository FAILED %d", bad );
+    return bad == 0;
+}
+
+// entity/repository.hxx entity_repository_tree against retail's slot 13 0x552960 (case repository_tree): Hydroelectric's
+// 1379 template entities registered in the case's orders into a fresh repository per vector; out's dump after.
+inline bool verify_repository_tree( )
+{
+    logic_check_t c{ g_golden_rtr_words };
+    const unsigned n = c.next( );
+    std::vector< std::string > names( n ), paths( n );
+    std::vector< entity_link_t > links( n );
+    for ( unsigned i = 0; i < n; ++i )
+    {
+        names[ i ] = c.str( );
+        const std::int32_t parent = static_cast< std::int32_t >( c.next( ) );
+        paths[ i ] = parent < 0 ? names[ i ] : paths[ parent ] + "/" + names[ i ];   // 0x500BF0 (parents come first)
+        links[ i ].hash = c.next( );
+    }
+    auto of = [ & ]( const entity_link_t& e, std::string& name, std::string& path )
+    {
+        const std::size_t i = static_cast< std::size_t >( &e - links.data( ) );
+        name = names[ i ], path = paths[ i ];
+    };
+    const unsigned nv = c.next( );
+    value_t out;
+    int bad = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned preset = c.next( );
+        if ( preset == 0 )
+            out = value_t{ };
+        else if ( preset == 1 )
+            json_set_int( out, 7 );
+        for ( auto& l : links )
+            l.prev = nullptr, l.next = nullptr;
+        entity_repository_t r;
+        const unsigned no = c.next( );
+        for ( unsigned k = 0; k < no; ++k )
+            entity_repository_add( r, links[ c.next( ) ] );
+        entity_repository_tree( r, out, of );
+        const std::string want = c.str( );
+        std::string got;
+        vujb_dump( out, got );
+        if ( got != want && bad++ < 6 )
+            LOG_ERROR( "repository_tree vector %u (%u entities): dump differs (%u bytes, retail %u)", v, no,
+                       static_cast< unsigned >( got.size( ) ), static_cast< unsigned >( want.size( ) ) );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuEntityRepositoryImpl slot 13 matches retail (0x552960 0x564940 0x5649C0 0x4FCAB0): %u vectors over %u entities", nv, n );
+    else
+        LOG_ERROR( "repository_tree FAILED %d", bad );
+    return bad == 0;
+}
+
+// entity/repository.hxx vu_property_dtor / vu_entity_dtor against retail's 0x405260 / 0x500870 (case entity_dtors): fake
+// objects in one region, the region's words after and every call out in order.
+struct edt_check_memory_t
+{
+    std::uint32_t base = 0;
+    std::vector< std::uint32_t > words;
+    bool outside = false;
+
+    std::uint32_t& operator[]( std::uint32_t a )
+    {
+        static std::uint32_t sink = 0;
+        if ( a < base || ( a - base ) / 4u >= words.size( ) )
+            return outside = true, sink = 0, sink;
+        return words[ ( a - base ) / 4u ];
+    }
+};
+
+inline bool verify_entity_dtors( )
+{
+    logic_check_t c{ g_golden_edt_words };
+    const unsigned n = c.next( );
+    const std::uint32_t base = c.next( );
+    int bad = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = c.next( ), self = c.next( ), count = c.next( );
+        edt_check_memory_t m;
+        m.base = base;
+        m.words.resize( count );
+        for ( auto& x : m.words )
+            x = c.next( );
+        std::vector< std::uint32_t > after( count );
+        for ( auto& x : after )
+            x = c.next( );
+        std::vector< std::vector< std::uint32_t > > want( c.next( ) );
+        for ( auto& e : want )
+        {
+            e.resize( c.next( ) );
+            for ( auto& x : e )
+                x = c.next( );
+        }
+        std::vector< std::vector< std::uint32_t > > got;
+        vu_dtor_hooks_t h;
+        h.free = [ & ]( std::uint32_t b ) { got.push_back( { 0u, b } ); };
+        h.call = [ & ]( std::uint32_t o, std::uint32_t slot, std::int64_t arg )
+        {
+            got.push_back( { 1u, o, slot, static_cast< std::uint32_t >( arg ) } );
+            if ( arg < 0 )   // a weak reference's slot 0: unlinked from its target's +8 list (the case's stub does the same)
+                m[ m[ o + 8 ] + 8 ] = m[ o + 4 ];
+        };
+        h.asset_release = [ & ]( std::uint32_t a ) { got.push_back( { 2u, a } ); };
+        h.event_remove = [ & ]( std::uint32_t k, std::uint32_t val ) { got.push_back( { 3u, k, val } ); };
+        if ( kind == 0 )
+            vu_property_dtor( m, self, h );
+        else
+            vu_entity_dtor( m, self, h );
+        const bool same = m.words == after && got == want && !m.outside;
+        if ( !same && bad++ < 6 )
+            LOG_ERROR( "entity_dtors vector %u (%s): memory %s, calls %s (%u, retail %u)", v, kind == 0 ? "0x405260" : "0x500870",
+                       m.words == after ? "ok" : "differs", got == want ? "ok" : "differ", static_cast< unsigned >( got.size( ) ),
+                       static_cast< unsigned >( want.size( ) ) );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuProperty / VuEntity base dtors match retail (0x405260 0x500870 0x500E00 0x500DB0 0x515620 0x43CD80 0x43CD30 0x43CA10): %u vectors", n );
+    else
+        LOG_ERROR( "entity_dtors FAILED %d", bad );
+    return bad == 0;
+}
+
+// entity/repository.hxx vu_framework_delete against retail's component / plug / ref / project deleting dtors (case
+// framework_dtors): fake objects in one region; the region's words after and every call out in order.
+inline bool verify_framework_dtors( )
+{
+    logic_check_t c{ g_golden_fdt_words };
+    const unsigned n = c.next( );
+    const std::uint32_t base = c.next( );
+    const unsigned count = c.next( );
+    int bad = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = c.next( ), self = c.next( ), flags = c.next( );
+        edt_check_memory_t m;
+        m.base = base;
+        m.words.assign( count, 0u );
+        for ( unsigned k = c.next( ); k > 0; --k )
+        {
+            const unsigned i = c.next( );
+            m.words[ i ] = c.next( );
+        }
+        std::vector< std::uint32_t > after = m.words;
+        for ( unsigned k = c.next( ); k > 0; --k )
+        {
+            const unsigned i = c.next( );
+            after[ i ] = c.next( );
+        }
+        std::vector< std::vector< std::uint32_t > > want( c.next( ) );
+        for ( auto& e : want )
+        {
+            e.resize( c.next( ) );
+            for ( auto& x : e )
+                x = c.next( );
+        }
+        std::vector< std::vector< std::uint32_t > > got;
+        vu_dtor_hooks_t h;
+        h.free = [ & ]( std::uint32_t b ) { got.push_back( { 0u, b } ); };
+        h.call = [ & ]( std::uint32_t o, std::uint32_t slot, std::int64_t arg )
+        {
+            got.push_back( { 1u, o, slot, static_cast< std::uint32_t >( arg ) } );
+            if ( slot == 0 && arg < 0 )   // a weak reference's slot 0: unlinked from its target's +8 list (the case's stub does the same)
+                m[ m[ o + 8 ] + 8 ] = m[ o + 4 ];
+        };
+        h.asset_release = [ & ]( std::uint32_t a ) { got.push_back( { 2u, a } ); };
+        h.event_remove = [ & ]( std::uint32_t k, std::uint32_t val ) { got.push_back( { 3u, k, val } ); };
+        h.instigator_remove = [ & ]( std::uint32_t comp ) { got.push_back( { 4u, 0x30000000u + 0x20C0u, comp } ); };   // the case's g 0x759064
+        h.json_clear = [ & ]( std::uint32_t j ) { got.push_back( { 5u, j } ); };
+        h.aligned_free = [ & ]( std::uint32_t b ) { got.push_back( { 6u, b } ); };
+        bool ok = true;
+        if ( kind == 11 )   // VuScriptComponent slot 8 0x5042A0 (not a dtor; the case's appended vectors)
+            vu_script_component_snapshot( m, self );
+        else
+            ok = vu_framework_delete( m, static_cast< vu_framework_dtor_t >( kind ), self, flags, h );
+        const bool same = ok && m.words == after && got == want && !m.outside;
+        if ( !same && bad++ < 6 )
+            LOG_ERROR( "framework_dtors vector %u (kind %u): %s, memory %s, calls %s (%u, retail %u)", v, kind, ok ? "ended" : "UNKNOWN",
+                       m.words == after ? "ok" : "differs", got == want ? "ok" : "differ", static_cast< unsigned >( got.size( ) ),
+                       static_cast< unsigned >( want.size( ) ) );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "the framework dtors match retail (0x423770 0x4268F0/0x539610 0x50B960/0x50B990 0x531D90/0x531DC0 0x534280/0x5342B0 "
+                     "0x503B70/0x503BA0 0x4052E0/0x502180/0x502340 0x542680/0x5426B0/0x504980 0x4B4330/0x4B4290 0x5EFA30 0x4032A0 0x5CE980 0x5EB000 0x5F4AB0/0x5F4AE0 0x5D6F50/0x5DB430/0x59A300; VuScriptComponent "
+                     "slot 8 0x5042A0): %u vectors", n );
+    else
+        LOG_ERROR( "framework_dtors FAILED %d", bad );
+    return bad == 0;
+}
+
+// entity/broadcast.hxx against retail's VuEventManager (case event_manager): the same op sequence on the model; per op
+// the calls out in order (fires with their params, locks, the platform calls), the queue (record words; the real-time
+// word's low byte only - its other three bytes are the resize's fill, never written), the subscriber sets.
+#include <workspace/core/entity/broadcast.hxx>
+
+inline bool verify_event_manager( )
+{
+    logic_check_t c{ g_golden_evm_words };
+    const std::uint32_t self = c.next( );
+    const unsigned n = c.next( );
+    event_manager_t m;
+    std::uint32_t mutex = 0;
+    std::vector< std::vector< std::uint32_t > > got;
+    float real = 0.0f;
+    event_manager_hooks_t h;
+    h.fire = [ & ]( std::uint32_t handler, const std::uint32_t* p )
+    {
+        std::vector< std::uint32_t > e{ 1u, handler };
+        e.insert( e.end( ), p, p + 33 );
+        got.push_back( e );
+    };
+    h.real_delta = [ & ]( ) { return real; };
+    h.lock = [ & ]( bool on ) { got.push_back( { on ? 6u : 7u, mutex } ); };
+    int bad = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = c.next( );
+        std::vector< std::uint32_t > args( c.next( ) );
+        for ( auto& a : args )
+            a = c.next( );
+        const std::string name = c.str( );
+        std::vector< std::uint32_t > params( c.next( ) );
+        for ( auto& p : params )
+            p = c.next( );
+        params.resize( 33 );
+        const std::uint32_t poke = c.next( ), poke_delay = c.next( ), poke_handler = c.next( ), real_bits = c.next( ), g = c.next( );
+        std::memcpy( &real, &real_bits, 4 );
+        got.clear( );
+        switch ( kind )
+        {
+        case 0:
+            event_manager_init( self, mutex,
+                                [ & ]( std::uint32_t vt, std::uint32_t s, std::uint32_t fn, const char* phase )
+                                {
+                                    std::vector< std::uint32_t > e{ 2u, vt, s, fn, 0u };
+                                    for ( const char* q = phase; *q; ++q )
+                                        e.push_back( static_cast< unsigned char >( *q ) );
+                                    got.push_back( e );
+                                },
+                                [ & ]( ) { got.push_back( { 4u } ); return 0x4D555458u; } );
+            break;
+        case 1: event_manager_subscribe( m, event_hash( name.c_str( ) ), args[ 0 ] ); break;
+        case 2: event_manager_broadcast( m, args[ 0 ], params.data( ), h ); break;
+        case 3: event_manager_broadcast( m, name.c_str( ), params.data( ), h ); break;
+        case 4:
+        {
+            float f;
+            std::memcpy( &f, &args[ 0 ], 4 );
+            event_manager_queue( m, f, ( args[ 1 ] & 0xFFu ) != 0, name.c_str( ), params.data( ), h );   // retail's bool: the word's low byte
+            if ( poke & 1u )
+                std::memcpy( &m.queue.back( ).delay, &poke_delay, 4 );
+            if ( poke & 2u )
+                m.queue.back( ).handler = poke_handler;
+            break;
+        }
+        case 5:
+        {
+            float dt;
+            std::memcpy( &dt, &args[ 0 ], 4 );
+            event_manager_tick( m, dt, h );
+            break;
+        }
+        case 6: event_manager_remove( m, args[ 0 ], args[ 1 ], h ); break;
+        default:
+            event_manager_release( self, mutex, [ & ]( std::uint32_t s ) { got.push_back( { 3u, s } ); },
+                                   [ & ]( std::uint32_t x ) { got.push_back( { 5u, x } ); } );
+            break;
+        }
+        std::vector< std::vector< std::uint32_t > > want( c.next( ) );
+        for ( auto& e : want )
+        {
+            e.resize( c.next( ) );
+            for ( auto& x : e )
+                x = c.next( );
+        }
+        bool same = got == want && ( kind != 7 || g == 0 );
+        const unsigned nq = c.next( );
+        same = nq == m.queue.size( ) && same;
+        for ( unsigned q = 0; q < nq; ++q )
+        {
+            std::uint32_t w[ 37 ];
+            for ( auto& x : w )
+                x = c.next( );
+            if ( q >= m.queue.size( ) )
+                continue;
+            const event_record_t& r = m.queue[ q ];
+            std::uint32_t delay;
+            std::memcpy( &delay, &r.delay, 4 );
+            same = same && w[ 0 ] == r.handler && w[ 1 ] == delay && ( w[ 2 ] & 0xFFu ) == r.real_time && w[ 3 ] == r.hash
+                && std::memcmp( w + 4, r.params, sizeof( r.params ) ) == 0;
+        }
+        const unsigned ns = c.next( );
+        same = ns == m.subscribers.size( ) && same;
+        auto it = m.subscribers.begin( );
+        for ( unsigned s = 0; s < ns; ++s )
+        {
+            std::vector< std::uint32_t > e( c.next( ) );
+            for ( auto& x : e )
+                x = c.next( );
+            if ( it == m.subscribers.end( ) )
+            {
+                same = false;
+                continue;
+            }
+            std::vector< std::uint32_t > mine{ it->first };
+            mine.insert( mine.end( ), it->second.begin( ), it->second.end( ) );
+            same = same && mine == e;
+            ++it;
+        }
+        if ( !same && bad++ < 6 )
+            LOG_ERROR( "event_manager op %u (kind %u) differs: calls %s (%u, retail %u), queue %u (retail %u)", v, kind, got == want ? "ok" : "differ",
+                       static_cast< unsigned >( got.size( ) ), static_cast< unsigned >( want.size( ) ), static_cast< unsigned >( m.queue.size( ) ), nq );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuEventManager matches retail (0x505690 0x505650 0x505720 0x5057E0 0x505950 0x5055C0 0x505610 0x505430): %u ops", n );
+    else
+        LOG_ERROR( "event_manager FAILED %d", bad );
+    return bad == 0;
+}
+
+// world/logic.hxx tick_is_paused / tick_delta / tick_real_delta against VuTickManagerImpl slots 14 / 15 / 16 (case
+// tick_slots: retail's ctor, the four fields poked per vector).
+inline bool verify_tick_slots( )
+{
+    logic_check_t c{ g_golden_tks_words };
+    const unsigned n = c.next( );
+    int bad = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        tick_manager_t tm;
+        tm.paused = c.next( ) != 0;
+        tm.pause_count = static_cast< std::int32_t >( c.next( ) );
+        const std::uint32_t dt = c.next( ), raw = c.next( );
+        std::memcpy( &tm.dt, &dt, 4 );
+        std::memcpy( &tm.raw, &raw, 4 );
+        const unsigned paused = c.next( ), delta = c.next( ), real = c.next( );
+        const float d = tick_delta( tm ), r = tick_real_delta( tm );
+        std::uint32_t db, rb;
+        std::memcpy( &db, &d, 4 );
+        std::memcpy( &rb, &r, 4 );
+        if ( ( ( tick_is_paused( tm ) ? 1u : 0u ) != paused || db != delta || rb != real ) && bad++ < 6 )
+            LOG_ERROR( "tick_slots vector %u differs", v );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuTickManagerImpl isPaused / getDeltaTime / getRealDeltaTime match retail (0x4F6EA0 0x4F6EC0 0x4F6ED0): %u vectors", n );
+    else
+        LOG_ERROR( "tick_slots FAILED %d", bad );
+    return bad == 0;
+}
+
+// entity/json.hxx json_member against retail's member-or-insert 0x4FC090 (case json_member) on c_reader-built roots
+// whose objects keep the file's (unsorted) key order: per op the returned member, the int written into it, the root.
+inline bool verify_json_member( )
+{
+    logic_check_t c{ g_golden_jsm_words };
+    const unsigned n = c.next( );
+    int bad = 0, ops = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const std::string bytes = c.str( );
+        const std::vector< std::uint8_t > blob( bytes.begin( ), bytes.end( ) );
+        value_t root;
+        c_reader::read_at_start( blob, root );
+        const unsigned no = c.next( );
+        for ( unsigned k = 0; k < no; ++k, ++ops )
+        {
+            const std::string key = c.str( ), want_member = c.str( );
+            const bool wrote = c.next( ) != 0;
+            const std::string want_root = c.str( );
+            value_t& m = json_member( root, key );
+            std::string member, whole;
+            vujb_dump( m, member );
+            if ( wrote )
+                json_set_int( m, static_cast< std::int32_t >( 100 + k ) );
+            vujb_dump( root, whole );
+            if ( ( member != want_member || whole != want_root ) && bad++ < 6 )
+                LOG_ERROR( "json_member document %u op %u (key '%s'): member %s, root %s", v, k, key.c_str( ),
+                           member == want_member ? "ok" : "differs", whole == want_root ? "ok" : "differs" );
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "json_member matches retail's member-or-insert 0x4FC090 (0x4FC6B0 0x4FC970) on unsorted objects: %u documents, %d ops", n, ops );
+    else
+        LOG_ERROR( "json_member FAILED %d", bad );
+    return bad == 0;
+}
+
+// entity/json.hxx's text reader against retail's VuJsonReader (case json_text): loadFromString 0x4FEEC0 on 173 texts
+// (every value / comment / escape / number branch and error) and loadFromFile 0x4FEDF0 on a fake file system - per
+// vector the answer, the container's dump, the error text (every line), the cursor's offset and the file-system calls.
+// Vectors the case marks unknown (a float its correctly rounded stand-in for MSVCR110's sscanf_s may not match) are
+// skipped and counted.
+struct json_text_check_fs_t
+{
+    std::string path;
+    std::string bytes;
+    bool exists = false;
+    const char* buffer = nullptr;
+    std::vector< std::pair< std::uint32_t, std::uint32_t > > calls;
+};
+
+inline bool verify_json_text( )
+{
+    logic_check_t c{ g_golden_jst_words };
+    const unsigned n = c.next( );
+    int bad = 0, unknown = 0, texts = 0, files = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = c.next( ), unk = c.next( ), want_ret = c.next( ), want_cursor = c.next( );
+        const std::string text = c.str( ), want_dump = c.str( ), want_error = c.str( );
+        json_text_reader_t r;
+        r.error = "junk";
+        value_t out;
+        json_set_int( out, 5 );
+        int got = 0;
+        std::uint32_t cursor = ~0u;
+        json_text_check_fs_t fs;
+        std::vector< std::pair< std::uint32_t, std::uint32_t > > want_calls;
+        if ( kind == 0 )
+        {
+            ++texts;
+            const std::string buffer = text;   // NUL-terminated by std::string
+            got = json_read_text( r, out, buffer.c_str( ) );
+            cursor = static_cast< std::uint32_t >( r.cursor - buffer.c_str( ) );
+        }
+        else
+        {
+            ++files;
+            fs.path = c.str( );
+            fs.exists = c.next( ) != 0;
+            fs.bytes = text;
+            const unsigned calls = c.next( );
+            for ( unsigned k = 0; k < calls; ++k )
+            {
+                const std::uint32_t op = c.next( );
+                want_calls.push_back( { op, c.next( ) } );
+            }
+            json_file_hooks_t hooks;
+            hooks.user = &fs;
+            hooks.open = []( void* u, const std::string& path ) -> void*
+            {
+                auto& f = *static_cast< json_text_check_fs_t* >( u );
+                f.calls.push_back( { 0x34u, 0u } );
+                return path == f.path && f.exists ? &f : nullptr;
+            };
+            hooks.size = []( void* u, void* ) -> std::uint32_t
+            {
+                auto& f = *static_cast< json_text_check_fs_t* >( u );
+                f.calls.push_back( { 0x2Cu, 0u } );
+                return static_cast< std::uint32_t >( f.bytes.size( ) );
+            };
+            hooks.read = []( void* u, void*, char* buffer, std::uint32_t size )
+            {
+                auto& f = *static_cast< json_text_check_fs_t* >( u );
+                f.calls.push_back( { 0x40u, size } );
+                std::memcpy( buffer, f.bytes.data( ), size );
+                f.buffer = buffer;
+            };
+            hooks.close = []( void* u, void* )
+            {
+                static_cast< json_text_check_fs_t* >( u )->calls.push_back( { 0x3Cu, 0u } );
+            };
+            got = json_read_file( r, out, fs.path, hooks );
+            if ( fs.buffer != nullptr )
+                cursor = static_cast< std::uint32_t >( reinterpret_cast< std::uintptr_t >( r.cursor ) - reinterpret_cast< std::uintptr_t >( fs.buffer ) );
+        }
+        if ( unk != 0 )
+        {
+            ++unknown;
+            continue;
+        }
+        std::string dump;
+        vujb_dump( out, dump );
+        const bool same = got == static_cast< int >( want_ret ) && cursor == want_cursor && dump == want_dump &&
+                          r.error == want_error && fs.calls == want_calls;
+        if ( !same && bad++ < 8 )
+            LOG_ERROR( "json_text vector %u (%s %.40s): answer %d (retail %u), cursor %u (%u), dump %s, error %s, calls %s", v,
+                       kind == 0 ? "text" : "file", text.c_str( ), got, want_ret, cursor, want_cursor, dump == want_dump ? "ok" : "differs",
+                       r.error == want_error ? "ok" : "differs", fs.calls == want_calls ? "ok" : "differ" );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuJsonReader matches retail (0x4FEEC0 0x4FEDF0 0x4FEF40 0x4FEFD0 0x4FF090 0x4FF1E0 0x4FF3E0 0x4FF510 0x4FF5B0 0x4FF790 0x4FF820 0x4FF870 0x4FFA70 0x4FFB60 0x559EB0 0x559B50): %d texts, %d files, %d unknown skipped", texts, files, unknown );
+    else
+        LOG_ERROR( "json_text FAILED %d", bad );
     return bad == 0;
 }
 // world/voice.hxx against retail's VuVoiceOverManagerImpl (case voice_over): two sessions (Base.apf's VoiceOverDB and a

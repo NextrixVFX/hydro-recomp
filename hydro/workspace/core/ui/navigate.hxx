@@ -1,9 +1,11 @@
 #pragma once
 
+#include <workspace/core/ui/controls.hxx>
 #include <workspace/core/ui/expand.hxx>
 
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <string>
 
 // The config selectors' navigation (VuBaseConfigEntity, ctor 0x4471C0, vtable
@@ -66,6 +68,28 @@ inline void ui_config_touch_up( ui_config_nav_t& n ) { n.m_up = 1; }
 inline void ui_config_touch_move( ui_config_nav_t& n, const float inverse[ 16 ], const float point[ 2 ] )
 {
     ui_touch_map( inverse, point, n.m_touch );
+}
+
+// Batch 26: the selector's VuTouchCallback (+0x5C, vtable 0x73C4C0) as the touch
+// device's dispatch reaches it (controls.hxx ui_touch_dispatch_*): slot 0 down
+// with the dispatched point, slot 1 up, slot 2 move = the device's touch 0 (slot
+// 7 0x539230 - an entry never written is indeterminate in retail: `faults` + 1,
+// nothing run). The registration itself is 0x448140's 0x53FB90 { this + 0x5C, 0 }
+// (ui_touch_add by the caller, keyed on `n`). `inverse` answers VuUIImpl +0x4C.
+inline void ui_config_touch_handlers( ui_touch_device_t& device, ui_config_nav_t* n, std::function< const float*( ) > inverse, int& faults )
+{
+    ui_touch_handler_t h;
+    h.m_down = [ n, inverse ]( const float p[ 2 ] ) { ui_config_touch_down( *n, inverse( ), p ); };
+    h.m_up = [ n ]( const float* ) { ui_config_touch_up( *n ); };
+    h.m_move = [ n, inverse, &device, &faults ]
+    {
+        float p[ 2 ];
+        if ( ui_touch_point( device, 0u, p ) )
+            ui_config_touch_move( *n, inverse( ), p );
+        else
+            ++faults;
+    };
+    device.m_handlers[ n ] = h;
 }
 
 // 0x44BEE0 (thiscall this, k): option k's combo record (+0x2B0 + 52 x asInt(

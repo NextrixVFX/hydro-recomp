@@ -127,15 +127,7 @@ inline int ui_json_size( const value_t& v )
 
 // 0x4FCAB0 (a map's member by a VuString key, the whole string; inserted null
 // when absent) after 0x4FC6B0.
-inline value_t& ui_json_child_s( value_t& v, const std::string& key )   // (not forwarded: see ui_json_child)
-{
-    ui_json_make_map( v );
-    for ( auto& field : v.object )
-        if ( field.first == key )
-            return field.second;
-    v.object.emplace_back( key, value_t{ } );
-    return v.object.back( ).second;
-}
+inline value_t& ui_json_child_s( value_t& v, const std::string& key ) { return json_member( v, key ); }   // forwards (batch 26)
 
 // 0x4FC450 asInt (1 the int, 2 cvttss2si, 7 the low dword, else 0).
 inline int ui_json_as_int( const value_t& v )
@@ -296,6 +288,10 @@ struct ui_config_hooks_t
     // the asset factory) and the 3D draw manager g 0x7590B8 slot +40 add.
     std::function< void( const char* model ) > trophy;
     std::function< void( ) > draw_add;
+    // Batch 26 (slot 7): the touch removal 0x53FA60 (g_vumetrotouch, this + 92)
+    // and the 3D draw manager g 0x7590B8 slot +44 remove. Unset: nothing.
+    std::function< void( ) > touch_remove;
+    std::function< void( ) > draw_remove;
 };
 
 // VuParams' bool add 0x4051A0: with size + 5 <= 128, type 3 then one byte.
@@ -807,5 +803,17 @@ inline bool ui_boat_config_release( value_t& root, int player, std::size_t optio
     ui_boat_config_give( props, root, options );
     value_t& boats = ui_json_child( ui_json_child( root, "BoatConfig" ), "PlayerBoats" );
     ui_json_child( ui_json_at( boats, static_cast< std::size_t >( player ) ), "Properties" ) = props;
+    return true;
+}
+
+// Slot 7 0x44D090 whole (disassembled, batch 26): the write above, then the
+// touch removal (h.touch_remove) - after the write, and only when it ran here
+// (a negative player is retail's out-of-array write: false, nothing after).
+inline bool ui_boat_config_game_release( value_t& root, int player, std::size_t options, const ui_config_hooks_t& h )
+{
+    if ( !ui_boat_config_release( root, player, options ) )
+        return false;
+    if ( h.touch_remove )
+        h.touch_remove( );
     return true;
 }

@@ -719,10 +719,73 @@ inline const logic_type_t g_logic_types[] = {
     // batch 24: VuLensWaterEmitterEntity's getType 0x5E64B0 (`mov eax, 0x736D40; ret`; lens.hxx). The rows above the inventory
     // missed (cited only as C++ literals): 0x619FF0 0x5CE2C0 0x5CE080 0x5EF500 0x5EEA00.
     { 0x5E64B0u, 0x736D40u, "VuLensWaterEmitterEntity|VuEntity" },
+    // batch 28: the entity / component framework's getType slots (entity slot 1, VuComponent's own slot 0 0x423730 - the
+    // base vtable 0x738CE0's; its descriptor names no parent).
+    { 0x42E6B0u, 0x736360u, "VuControlMethodEntity|VuEntity" },
+    { 0x5DDB60u, 0x736C78u, "VuIfEntity|VuEntity" },
+    { 0x5DECB0u, 0x736C98u, "VuOneShotFilterEntity|VuEntity" },
+    { 0x5DFCF0u, 0x736CB0u, "VuMultiDelayEntity|VuEntity" },
+    { 0x5E0DA0u, 0x736CC0u, "VuTriggerForwarderEntity|VuEntity" },
+    { 0x5EFFF0u, 0x736DB0u, "VuGenericEventEntity|VuEntity" },
+    { 0x5F0780u, 0x736DC0u, "VuSceneEntity|VuEntity" },
+    { 0x5F5840u, 0x736E10u, "VuPlayAnimationEntity|VuEntity" },
+    { 0x5EF840u, 0x736DA0u, "VuOnProjectInitializedEntity|VuEntity" },
+    { 0x423730u, 0x736920u, "VuComponent" },
+    // the framework components' slot 0 (0x736800 is the descriptor script.hxx keys VuScriptComponent by), VuDelayEntity,
+    // VuBooleanEntity, VuStaticPfxEntity
+    { 0x4238E0u, 0x736928u, "Vu2dLayoutComponent|VuComponent" },
+    { 0x503A10u, 0x736800u, "VuScriptComponent|VuComponent" },
+    { 0x50B8C0u, 0x736808u, "Vu3dLayoutComponent|VuComponent" },
+    { 0x531D80u, 0x7368E0u, "VuInstigatorComponent|VuComponent" },
+    { 0x534170u, 0x7368E8u, "VuTransformComponent|VuComponent" },
+    { 0x5DF7A0u, 0x736CA8u, "VuDelayEntity|VuEntity" },
+    { 0x5E5780u, 0x736D30u, "VuBooleanEntity|VuEntity" },
+    { 0x5EA930u, 0x736D70u, "VuStaticPfxEntity|VuEntity" },
 };
 
 // VuControlComponent's slot 1 0x619F50 (mov eax, 0x6F6FC8; ret): the component's name.
 inline const char* control_component_name( )
 {
     return "Control";
+}
+
+// The components' slot 1 (mov eax, <C string>; ret): the name a component is keyed by (batch 28: the framework's).
+struct component_name_t
+{
+    std::uint32_t address;
+    const char* name;
+};
+
+inline const component_name_t g_component_names[] = {
+    { 0x619F50u, "Control" },      // VuControlComponent
+    { 0x4238D0u, "2dLayout" },     // Vu2dLayoutComponent (0x6F365C)
+    { 0x50B8B0u, "3dLayout" },     // Vu3dLayoutComponent (0x6F630C)
+    { 0x531D70u, "Instigator" },   // VuInstigatorComponent (0x6F633C)
+    { 0x534160u, "Transform" },    // VuTransformComponent (0x6F6348)
+    { 0x503A00u, "Script" },       // VuScriptComponent (0x6F6304)
+};
+// VuTickManagerImpl's small slots (vtable 0x74BEBC; world/tick.hxx is the world agent's model of the manager - these
+// read its fields, added here, not there). Verified: hydro checks/logic.hxx verify_tick_slots (case tick_slots).
+//   slot 14 0x4F6EA0 isPaused: byte +0x20 != 0, or the pause count +0x24 > 0 (signed: a negative count is not paused).
+//   slot 15 0x4F6EC0 getDeltaTime: fld +0x28 - this frame's capped dt (the race's g 0x759008 vt+0x3C).
+//   slot 16 0x4F6ED0 getRealDeltaTime: fld +0x2C - the raw clock difference.
+//   0x4F6D40 release: g 0x759008 = 0. Slot 0 0x4F7010 (deleting dtor): the phase list's nodes (0x4F77F0) and head
+//   freed, the base vtable 0x736EE8, delete with flags & 1 = std::list's destructor here. The second vtable 0x74BF04's
+//   0x4F74F0 is the dev keyboard callback (key 0x1A toggles +0x20 pause; 0x19 single step when paused, else toggles
+//   +0x21 slow motion) - DEV, STOPPED.
+#include <workspace/core/world/tick.hxx>
+
+inline bool tick_is_paused( const tick_manager_t& tm )
+{
+    return tm.paused || tm.pause_count > 0;
+}
+
+inline float tick_delta( const tick_manager_t& tm )
+{
+    return tm.dt;
+}
+
+inline float tick_real_delta( const tick_manager_t& tm )
+{
+    return tm.raw;
 }

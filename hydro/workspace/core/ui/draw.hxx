@@ -463,6 +463,27 @@ inline bool ui_text_draw( ui_gfx_sort_t& sort, const ui_font_draw_env_t& env, co
     return ui_font_draw( sort, env, f, text.c_str( ), t.m_params, rect, flags, alpha, offset, depth );
 }
 
+// The text base's Vu2dLayoutComponent draw, slot 13 0x627B30 (thiscall, byte
+// `layout`; ret 4 - disassembled, batch 26): with `layout` a rect draw 0x507A00
+// of the rect over the screen scale (no anchor) in the font colour (the params
+// +12 - this +0xAC), depth 0.005 x Depth + 0.5; always then slot 14( slot 12's
+// text, 1.0 ) - for the text base's own slot 14 0x627C60 that is ui_text_draw
+// with the factor 1.0 (the text is slot 12's: an input).
+inline bool ui_text_layout_draw( ui_gfx_sort_t& sort, const ui_font_draw_env_t& env, const ui_crop_t& crop, const ui_string_db_t& db,
+                                 const ui_text_base_t& t, const ui_text_font_t& font, const std::string& text, std::uint8_t layout )
+{
+    if ( layout )
+    {
+        const float ix = 1.0f / t.m_screen_scale[ 0 ];   // 0x6F76B8
+        const float iy = 1.0f / t.m_screen_scale[ 1 ];
+        const float rect[ 4 ] = { t.m_rect[ 0 ] * ix, t.m_rect[ 1 ] * iy, t.m_rect[ 2 ] * ix, t.m_rect[ 3 ] * iy };
+        std::uint32_t colour;
+        std::memcpy( &colour, t.m_params + 12, 4 );
+        ui_rect_draw( sort, env, colour, rect, t.m_depth * 0.005f + 0.5f );   // 0x6F75C4, 0x6F765C
+    }
+    return ui_text_draw( sort, env, crop, db, t, font, text, 1.0f );
+}
+
 // VuInfoUITextEntity (ctor 0x446120, vtable 0x73BC5C): the text base's member
 // 0x627040 reaches ITS slot 14 0x446670 (transliterated from the disassembly),
 // a scrolling ticker. It ignores the text it is handed and calls slot 12
