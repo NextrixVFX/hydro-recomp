@@ -479,3 +479,102 @@ inline void ai_avoid( float margin, const std::uint8_t* body, const float* pos, 
             return;
     }
 }
+
+// Everything VuAiDriver's tick reads, by the pointers retail follows: the
+// driver image, the boat (+0x5C), its body (+0x21C), transform component
+// (+0x50), engine (+0x22C) and the engine's owner (engine +0), animation
+// (+0x230); the other boat's transform (driver +0xBC's +0x50; null when
+// +0xBC is 0); the path points (driver +0x8C / +0x90); VuBoatManager's
+// boats (g 0x758FB8 +0x24 / +0x28).
+struct ai_tick_t
+{
+    std::uint8_t* driver = nullptr;
+    std::uint8_t* boat = nullptr;
+    const std::uint8_t* body = nullptr;
+    const std::uint8_t* solver = nullptr;   // the hull's (+0x228) +0x1CC
+    const std::uint8_t* transform = nullptr;
+    const std::uint8_t* engine = nullptr;
+    const std::uint8_t* owner = nullptr;
+    const std::uint8_t* animation = nullptr;
+    const std::uint8_t* other = nullptr;
+    const std::uint8_t* const* points = nullptr;
+    std::int32_t count = 0;
+    const std::uint8_t* const* boats = nullptr;
+    std::int32_t boat_count = 0;
+};
+
+struct ai_tick_hooks_t
+{
+    ai_avoid_hooks_t avoid;
+    ai_controls_hooks_t controls;
+};
+
+// VuAiDriver vtable slot 18 0x40B940 (thiscall, the driver; dt; retn 4).
+// +0xA0 = |v| (body +0x140, VuMath_sqrt((vx^2 + vy^2) + vz^2)) signed by the
+// transform's forward row (+0x60; ordered >= 0 is +1, a NaN -1). Without a
+// first path point: 0x40D5A0(dt, 0, 0, no boost). Else 0x40BEC0 (into +0xA8;
+// the direction goes to a dead stack local), 0x40C750, the wanted speed +0xB8
+// = minss(+0x9C, (owner +0x470 x (engine +0xC x +4)) x 0.44704); with another
+// boat whose direction from pos agrees with point 0's (+0xA0; dot > 0)
+// boost and +0xB8 = ((engine +0xC x +4) x +0x28) x 0.44704. With +0x80 >= 2
+// and a full boost (+0x310 == 16, ucomiss) the boat boosts when its +0x4CC
+// is greater than the least among the boats; with no boats and +0x467 set
+// it boosts once the water time +0x33C > 1. Then 0x40D110 (outputs 0 first)
+// and 0x40D5A0. (The DebugDrivers byte 0x758F8A's loop does nothing.)
+inline void ai_tick( const ai_tick_t& t, float dt, const ai_tick_hooks_t& hooks )
+{
+    std::uint8_t* driver = t.driver;
+    std::uint8_t* boat = t.boat;
+    const float vx = state_f( t.body, 0x140 ), vy = state_f( t.body, 0x144 ), vz = state_f( t.body, 0x148 );
+    const float* fwd = reinterpret_cast< const float* >( t.transform + 0x60 );
+    const float d = ( fwd[ 1 ] * vy + vx * fwd[ 0 ] ) + fwd[ 2 ] * vz;
+    const float sign = _mm_comige_ss( _mm_set_ss( d ), _mm_set_ss( 0.0f ) ) ? 1.0f : -1.0f;
+    state_put_f( driver, 0xA0, hull_sqrt( ( vx * vx + vy * vy ) + vz * vz ) * sign );
+    const float* pos = reinterpret_cast< const float* >( t.transform + 0x80 );
+    if ( t.count <= 0 || t.points[ 0 ] == nullptr )
+    {
+        ai_controls( driver, boat, t.animation, dt, 0.0f, 0.0f, 0, hooks.controls );
+        return;
+    }
+    const std::uint8_t* first = t.points[ 0 ];
+    float* target = reinterpret_cast< float* >( driver + 0xA8 );
+    float direction[ 4 ];
+    ai_path_follow( t.points, t.count, pos, target, direction );
+    ai_avoid( state_f( driver, 0x98 ), t.body, pos, target, hooks.avoid );
+    const float mph = ai_bits( 0x3EE4E26Du );   // 0x6F7654
+    std::uint8_t boost = 0;
+    const float top = ( state_f( t.owner, 0x470 ) * ( state_f( t.engine, 0xC ) * state_f( t.engine, 4 ) ) ) * mph;
+    state_put_f( driver, 0xB8, ai_minss( state_f( driver, 0x9C ), top ) );
+    if ( t.other )
+    {
+        const float dy = state_f( t.other, 0x84 ) - pos[ 1 ], dx = state_f( t.other, 0x80 ) - pos[ 0 ], dz = state_f( t.other, 0x88 ) - pos[ 2 ];
+        const float il = 1.0f / hull_sqrt( ( dy * dy + dx * dx ) + dz * dz );
+        const float dot = ( state_f( first, 0xA4 ) * ( il * dy ) + state_f( first, 0xA0 ) * ( il * dx ) ) + state_f( first, 0xA8 ) * ( il * dz );
+        if ( dot > 0.0f )
+        {
+            boost = 1;
+            state_put_f( driver, 0xB8, ( ( state_f( t.engine, 0xC ) * state_f( t.engine, 4 ) ) * state_f( t.engine, 0x28 ) ) * mph );
+        }
+    }
+    std::int32_t mode;
+    std::memcpy( &mode, driver + 0x80, 4 );
+    if ( mode >= 2 && state_f( boat, 0x310 ) == 16.0f )
+    {
+        std::int32_t least = 0x7FFFFFFF;
+        for ( std::int32_t k = 0; k < t.boat_count; ++k )
+        {
+            std::int32_t place;
+            std::memcpy( &place, t.boats[ k ] + 0x4CC, 4 );
+            least = least < place ? least : place;
+        }
+        std::int32_t mine;
+        std::memcpy( &mine, boat + 0x4CC, 4 );
+        if ( mine > least )
+            boost = 1;
+    }
+    if ( t.boat_count == 0 && boat[ 0x467 ] && state_f( boat, 0x33C ) > 1.0f )
+        boost = 1;
+    float steer = 0.0f, throttle = 0.0f;
+    ai_steer( t.body, t.solver, pos, fwd, target, state_f( driver, 0xA0 ), state_f( driver, 0xB8 ), dt, &steer, &throttle );
+    ai_controls( driver, boat, t.animation, dt, steer, throttle, boost, hooks.controls );
+}
