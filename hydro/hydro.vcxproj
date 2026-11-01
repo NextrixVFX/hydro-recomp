@@ -204,6 +204,7 @@
     <ClInclude Include="workspace\core\world\huds.hxx" />
     <ClInclude Include="workspace\core\world\kernel.hxx" />
     <ClInclude Include="workspace\core\world\livery.hxx" />
+    <ClInclude Include="workspace\core\world\logic.hxx" />
     <ClInclude Include="workspace\core\world\models.hxx" />
     <ClInclude Include="workspace\core\world\motion.hxx" />
     <ClInclude Include="workspace\core\world\pfx.hxx" />
@@ -230,6 +231,7 @@
     <ClInclude Include="workspace\utility\checks\boat.hxx" />
     <ClInclude Include="workspace\utility\checks\game.hxx" />
     <ClInclude Include="workspace\utility\checks\leaves.hxx" />
+    <ClInclude Include="workspace\utility\checks\logic.hxx" />
     <ClInclude Include="workspace\utility\checks\menu.hxx" />
     <ClInclude Include="workspace\utility\checks\pfx.hxx" />
     <ClInclude Include="workspace\utility\checks\race.hxx" />
