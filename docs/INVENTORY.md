@@ -18,10 +18,10 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 696 | 330370 |
-| callee | 897 | 266960 |
-| cited | 175 | 90722 |
-| absent | 6870 | 1538208 |
+| verified | 703 | 334792 |
+| callee | 902 | 266990 |
+| cited | 189 | 97441 |
+| absent | 6844 | 1527037 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -30,18 +30,18 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 
 | subsystem | functions | verified | callee | cited | absent | verified bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| unattributed | 1845 | 186 | 192 | 30 | 1437 | 130042 of 695394 |
-| physics (Bullet) | 646 | 188 | 26 | 35 | 397 | 74075 of 256657 |
-| entity / component / script framework | 1094 | 98 | 179 | 38 | 779 | 29917 of 207438 |
+| unattributed | 1845 | 190 | 192 | 33 | 1430 | 132167 of 695394 |
+| physics (Bullet) | 646 | 190 | 26 | 35 | 395 | 75553 of 256657 |
+| entity / component / script framework | 1094 | 98 | 179 | 40 | 777 | 29917 of 207438 |
 | HUD / UI / fonts | 648 | 20 | 164 | 7 | 457 | 12313 of 184315 |
 | game modes / race | 766 | 22 | 63 | 3 | 678 | 6096 of 179957 |
 | rendering / gfx | 552 | 42 | 48 | 14 | 448 | 16911 of 126915 |
-| water | 325 | 67 | 54 | 14 | 190 | 31548 of 96416 |
-| boat | 264 | 25 | 43 | 12 | 184 | 12594 of 87400 |
+| water | 325 | 67 | 54 | 17 | 187 | 31548 of 96416 |
+| boat | 264 | 26 | 48 | 17 | 173 | 13413 of 87400 |
 | engine core / math / containers | 391 | 9 | 10 | 6 | 366 | 2550 of 76072 |
 | other classes | 731 | 9 | 2 | 1 | 719 | 5251 of 67698 |
 | assets | 286 | 8 | 38 | 2 | 238 | 1021 of 61239 |
-| particles | 215 | 10 | 5 | 9 | 191 | 5839 of 45495 |
+| particles | 215 | 10 | 5 | 10 | 190 | 5839 of 45495 |
 | audio | 163 | 4 | 33 | 0 | 126 | 783 of 30823 |
 | input | 156 | 0 | 5 | 0 | 151 | 0 of 30388 |
 | C++ runtime / STL | 227 | 3 | 25 | 1 | 198 | 82 of 30128 |
@@ -58,7 +58,7 @@ Over-approximate (a referenced vtable brings every slot) and under-approximate (
 
 | tier | functions | verified | callee | cited | absent | runtime / STL / thunk | platform layer | game + engine logic not verified |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| race | 4905 | 654 | 576 | 166 | 3509 | 68 | 610 | 3622 |
+| race | 4905 | 661 | 581 | 180 | 3483 | 68 | 610 | 3615 |
 | game | 2431 | 40 | 320 | 9 | 2062 | 77 | 313 | 2002 |
 | service | 452 | 0 | 0 | 0 | 452 | 45 | 98 | 309 |
 | dead | 850 | 2 | 1 | 0 | 847 | 61 | 126 | 661 |
