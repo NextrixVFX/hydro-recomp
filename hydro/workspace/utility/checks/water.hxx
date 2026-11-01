@@ -2374,9 +2374,91 @@ inline bool verify_pfx_classes( )
     return failed == 0;
 }
 
+// world/pfxclass.hxx's VuPfxSystemInstance slots against retail's (case pfx_system_instance): per vector each slot on
+// a fresh instance, its return and all 48 instance words after (slot 2's +0x78 skipped: a stack word retail never
+// sets), the draw passes' pattern calls.
+inline bool verify_pfx_system_instance( )
+{
+    int failed = 0, compared = 0;
+    const unsigned* s = g_golden_psi_words;
+    for ( std::size_t index = 0; index < g_golden_psi_count; ++index )
+    {
+        const unsigned* words = s;
+        const unsigned duration = s[ 48 ];
+        const int patterns = static_cast< int >( s[ 49 ] );
+        const bool enabled = s[ 50 ] != 0u;
+        s += 51;
+        int bad = 0;
+        for ( int n = 0; n < 14; ++n )
+        {
+            const unsigned slot = s[ 0 ];
+            const unsigned* arg = s + 1;
+            const unsigned ret = s[ 17 ];
+            const unsigned* after = s + 18;
+            const int calls = static_cast< int >( s[ 66 ] );
+            const unsigned* seen = s + 67;
+            s += 67 + 3 * calls;
+            std::uint32_t w[ 48 ];
+            std::memcpy( w, words, sizeof( w ) );
+            w[ 0 ] = 0x74FF8Cu;
+            std::uint32_t params[ 16 ]{};
+            params[ 0x30 / 4 ] = duration;
+            unsigned r = 0;
+            struct pass_t { unsigned kind, arg; int n; unsigned got[ 12 ]; } pass{ slot == 15u ? 3u : 2u, arg[ 0 ], 0, { } };
+            auto record = []( void* u, int k ) {
+                auto& p = *static_cast< pass_t* >( u );
+                if ( p.n < 4 )
+                {
+                    p.got[ 3 * p.n ] = p.kind;
+                    p.got[ 3 * p.n + 1 ] = static_cast< unsigned >( k );
+                    p.got[ 3 * p.n + 2 ] = p.arg;
+                }
+                ++p.n;
+            };
+            switch ( slot )
+            {
+            case 0: pfx_system_set_position( w, arg ); r = ret; break;   // eax: whatever the copy left (not a result)
+            case 1: pfx_system_set_rotation( w, arg ); r = ret; break;
+            case 2: pfx_system_set_matrix( w, arg ); w[ 0x78 / 4 ] = after[ 0x78 / 4 ]; r = ret; break;
+            case 3: pfx_system_set_words5c( w, arg ); r = ret; break;
+            case 4: pfx_system_set_scale( w, arg[ 0 ] ); r = ret; break;
+            case 5: pfx_system_set_wordsac( w, arg ); r = ret; break;
+            case 6: r = pfx_system_state( w ); break;
+            case 7: r = pfx_system_aabb_offset( ); break;
+            case 8: r = pfx_system_count( w ); break;
+            case 9: r = pfx_system_clock( w ); break;
+            case 10: r = pfx_system_duration( params ); break;
+            case 14:
+            case 15: pfx_system_draw( enabled, patterns, record, &pass ); r = ret; break;
+            case 16: r = 0u; break;   // this itself
+            default: ++bad; break;
+            }
+            bad += r != ret;
+            bad += std::memcmp( w, after, sizeof( w ) ) != 0;
+            bad += pass.n != calls;
+            if ( calls <= 4 && pass.n == calls )
+                bad += calls && std::memcmp( pass.got, seen, 12 * static_cast< std::size_t >( calls ) ) != 0;
+            ++compared;
+        }
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "pfx_system_instance vector %d: %d differences", static_cast< int >( index ), bad );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuPfxSystemInstance slots 0 .. 10, 14, 15, 16 (0x58ABF0 .. 0x58A700, 0x58AF60, 0x58AFA0, 0x401DA0) match retail on %d "
+                     "vectors (%d slot runs): returns, every instance word, the draw passes' pattern calls",
+            static_cast< int >( g_golden_psi_count ), compared );
+    else
+        LOG_ERROR( "pfx_system_instance FAILED %d of %d", failed, static_cast< int >( g_golden_psi_count ) );
+    return failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
+    ok = verify_pfx_system_instance( ) && ok;
     ok = verify_pfx_classes( ) && ok;
     ok = verify_boat_hull( ) && ok;
     ok = verify_pfx_springs( ) && ok;

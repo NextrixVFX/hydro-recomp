@@ -1,7 +1,11 @@
 #pragma once
 
+#include <workspace/core/boat/math.hxx>
+#include <workspace/core/world/surface.hxx>
+
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 // THE VuPfx NODE CLASSES' OWN SLOTS - the constant getters and the placement
 // creates every node class carries (read from each vtable, census/vtref.py
@@ -222,6 +226,86 @@ inline const pfx_class_t g_pfx_classes[] = {
     { "VuPfxQuadPattern", 0x7505ACu, 0x5913C0u, 0x736A68u, "VuPfxQuadPattern|VuPfxPattern|VuPfxNode", 0x58FA90u, 0x4Cu, 0x591470u,
         0x591490u, 0x5Cu, 0x5914A0u, 0x58FE80u },
 };
+
+// VuPfxSystemInstance (vtable 0x74FF8C, 17 slots) on its words: +0x0C the
+// VuPfxSystem's params (+0x30 Duration), +0x10 the pattern instance list (next
+// at +4), +0x1C the matrix (16 floats; its translation +0x4C .. +0x54), +0x5C
+// four words (slot 3), +0x6C the rotation (4), +0x7C the state, +0x80 the AABB,
+// +0xA0 the live particle count, +0xA4 the clock, +0xA8 the instance scale,
+// +0xAC four words (slot 5). Slots 11 / 12 / 13 (start / stop / tick) are
+// world/pfx.hxx's; these are the rest.
+inline void pfx_system_set_position( std::uint32_t* w, const std::uint32_t* p )   // slot 0 0x58ABF0
+{
+    w[ 0x4C / 4 ] = p[ 0 ];
+    w[ 0x50 / 4 ] = p[ 1 ];
+    w[ 0x54 / 4 ] = p[ 2 ];
+}
+
+// Slot 1 0x58AC10: the rotation (4 words) to +0x6C, the matrix rebuilt by
+// VuMatrix_fromEuler 0x435640 (boat/math.hxx vu_matrix_from_euler) from it,
+// the old translation +0x4C .. +0x54 put back (+0x58 the rebuilt matrix's).
+inline void pfx_system_set_rotation( std::uint32_t* w, const std::uint32_t* r )
+{
+    std::uint32_t keep[ 3 ] = { w[ 0x4C / 4 ], w[ 0x50 / 4 ], w[ 0x54 / 4 ] };
+    for ( int k = 0; k < 4; ++k )
+        w[ 0x6C / 4 + k ] = r[ k ];
+    float e[ 4 ], m[ 16 ];
+    std::memcpy( e, w + 0x6C / 4, 16 );
+    vu_matrix_from_euler( m, e );
+    std::memcpy( w + 0x1C / 4, m, 64 );
+    w[ 0x4C / 4 ] = keep[ 0 ];
+    w[ 0x50 / 4 ] = keep[ 1 ];
+    w[ 0x54 / 4 ] = keep[ 2 ];
+}
+
+// Slot 2 0x58AB00: the matrix (16 words) to +0x1C, the rotation +0x6C .. +0x74
+// its euler - the same three as 0x534AA0's (world/surface.hxx
+// water_world_euler, with its SUBSTITUTION of the CRT's atan2 / asinf) -, +0x78
+// a stack word retail never writes (esp+0x1C): UNKNOWN, not written here.
+inline void pfx_system_set_matrix( std::uint32_t* w, const std::uint32_t* m )
+{
+    std::memcpy( w + 0x1C / 4, m, 64 );
+    float f[ 16 ], e[ 3 ];
+    std::memcpy( f, m, 64 );
+    water_world_euler( f, e );
+    std::memcpy( w + 0x6C / 4, e, 12 );
+}
+
+inline void pfx_system_set_words5c( std::uint32_t* w, const std::uint32_t* v )   // slot 3 0x58A650: 4 words to +0x5C
+{
+    std::memcpy( w + 0x5C / 4, v, 16 );
+}
+
+inline void pfx_system_set_scale( std::uint32_t* w, std::uint32_t s )   // slot 4 0x58A670: +0xA8
+{
+    w[ 0xA8 / 4 ] = s;
+}
+
+inline void pfx_system_set_wordsac( std::uint32_t* w, const std::uint32_t* v )   // slot 5 0x58A690: 4 words to +0xAC
+{
+    std::memcpy( w + 0xAC / 4, v, 16 );
+}
+
+// The getters: slot 6 0x58A6C0 the state +0x7C; slot 7 0x58A6D0 the AABB's
+// address (this + 0x80); slot 8 0x58A6E0 the count +0xA0; slot 9 0x58A6F0 the
+// clock +0xA4 (fld); slot 10 0x58A700 the system's Duration (params +0x30,
+// fld); slot 16 0x401DA0 this itself.
+inline std::uint32_t pfx_system_state( const std::uint32_t* w ) { return w[ 0x7C / 4 ]; }
+inline std::uint32_t pfx_system_aabb_offset( ) { return 0x80u; }
+inline std::uint32_t pfx_system_count( const std::uint32_t* w ) { return w[ 0xA0 / 4 ]; }
+inline std::uint32_t pfx_system_clock( const std::uint32_t* w ) { return w[ 0xA4 / 4 ]; }
+inline std::uint32_t pfx_system_duration( const std::uint32_t* params ) { return params[ 0x30 / 4 ]; }
+
+// Slots 14 / 15 0x58AF60 / 0x58AFA0 (thiscall; one argument; retn 4): when the
+// byte g_vupfximpl (0x75904C) +0x1C is set, every pattern instance's slot 2
+// (14) or slot 3 (15) with the argument - Vu virtuals: `pass( user, k )`.
+inline void pfx_system_draw( bool enabled, int patterns, void ( *pass )( void* user, int k ), void* user )
+{
+    if ( !enabled )
+        return;
+    for ( int k = 0; k < patterns; ++k )
+        pass( user, k );
+}
 
 inline const pfx_class_t* pfx_class_find( const char* name )
 {
