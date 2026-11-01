@@ -108,8 +108,8 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x404A40,114,sub_404A40,,,entity / component / script framework (by address),callee,,False,False,race
 0x404AB2,5,sub_404AB2,,,entity / component / script framework (by address),absent,,False,False,race
 0x404AC0,96,sub_404AC0,,,entity / component / script framework (by address),verified,engine/workspace/core/entity/node.hxx; engine/workspace/core/entity/values.hxx; hydro/workspace/core/ui/hud.hxx,False,False,race
-0x404B20,63,sub_404B20,VuAiRayTestResult; VuBoatCameraRayTestResult,VuAiRayTestResult+1; VuBoatCameraRayTestResult+1,boat,absent,,False,False,race
-0x404B60,46,sub_404B60,VuAiRayTestResult,VuAiRayTestResult+0,AI,absent,,False,False,race
+0x404B20,63,sub_404B20,VuAiRayTestResult; VuBoatCameraRayTestResult,VuAiRayTestResult+1; VuBoatCameraRayTestResult+1,boat,verified,hydro/workspace/core/boat/ai.hxx,False,False,race
+0x404B60,46,sub_404B60,VuAiRayTestResult,VuAiRayTestResult+0,AI,verified,hydro/workspace/core/boat/ai.hxx,False,False,race
 0x404B90,53,sub_404B90,,,AI (by address),callee,,False,False,game
 0x404BD0,3,sub_404BD0,Vu3dDrawManager; VuAchievementManager; VuAiDriver; VuAiNuisanceDriver; VuAiUiDriver; VuCloudManager; VuD3d11Gfx; VuD3d11ShaderProgram; VuDevConfig; VuDevConsole; VuDevMenu; VuDevProfile; VuDevStat; VuDevTimer; VuDrawManagerImpl; VuDriverEntity; VuEntityRepositoryImpl; VuExplosionManagerImpl; VuGfxComposer; VuGhostDriver; VuGhostManager; VuHUDButtonEntity; VuHumanDriver; VuMetroAccel; VuMetroCommunityManager; VuMetroHttpClient; VuMetroLicenseManager; VuMetroNet; VuMetroThread; VuMetroTouch; VuProgressManagerImpl; VuProjectManager; VuScriptInputPlug; VuSignInManager; VuTelemetryClientImpl; VuTelemetryServerImpl; VuThrottleRemappingEntity,VuScriptInputPlug+1; VuAiDriver+13; VuAiDriver+14; VuAiNuisanceDriver+13; VuAiNuisanceDriver+14; VuAiNuisanceDriver+16,boat,verified,hydro/workspace/core/boat/sections.hxx,False,False,race
 0x404BE0,24,sub_404BE0,VuScriptInputPlug,VuScriptInputPlug+2,input,callee,,False,False,race
@@ -236,7 +236,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x408790,382,sub_408790,VuSayVoiceOverBoxEntity,VuSayVoiceOverBoxEntity+12,audio,absent,,False,False,race
 0x408910,153,sub_408910,,,audio (by address),callee,,False,False,race
 0x4089B0,14,sub_4089B0,VuMethod1<...>,VuMethod1<...>+2; VuMethod1<...>+2; VuMethod1<...>+2; VuMethod1<...>+2; VuMethod1<...>+2; VuMethod1<...>+2,entity / component / script framework,callee,,False,False,race
-0x4089C0,17,VuVector_abs,,,entity / component / script framework (by address),verified,hydro/workspace/core/boat/fluid.hxx; hydro/workspace/core/trigger/volume.hxx; hydro/workspace/core/world/query.hxx,False,False,race
+0x4089C0,17,VuVector_abs,,,entity / component / script framework (by address),verified,hydro/workspace/core/boat/ai.hxx; hydro/workspace/core/boat/fluid.hxx; hydro/workspace/core/trigger/volume.hxx; hydro/workspace/core/world/query.hxx,False,False,race
 0x4089E0,113,sub_4089E0,,,entity / component / script framework (by address),absent,,False,False,game
 0x408A60,6,sub_408A60,VuSetFrontEndCameraEntity,VuSetFrontEndCameraEntity+1,camera,absent,,False,False,game
 0x408A70,8,sub_408A70,VuSetFrontEndCameraEntity,VuSetFrontEndCameraEntity+2,camera,callee,,False,False,game
@@ -272,19 +272,19 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x40B5A0,14,VuMath_sqrt,,,unattributed,verified,hydro/workspace/core/boat/fluid.hxx; hydro/workspace/core/boat/hull.hxx,False,False,race
 0x40B5B0,39,sub_40B5B0,,,unattributed,verified,hydro/workspace/core/boat/hull.hxx; hydro/workspace/utility/fluid.hxx,False,False,race
 0x40B5E0,6,sub_40B5E0,VuAiDriver,VuAiDriver+1,boat,callee,,False,False,race
-0x40B5F0,148,sub_40B5F0,,,boat (by address),verified,hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
-0x40B690,323,sub_40B690,,,boat (by address),verified,hydro/workspace/core/boat/driver.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
+0x40B5F0,148,sub_40B5F0,,,boat (by address),verified,hydro/workspace/core/boat/ai.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/checks/water.hxx,False,False,race
+0x40B690,323,sub_40B690,,,boat (by address),verified,hydro/workspace/core/boat/ai.hxx; hydro/workspace/core/boat/driver.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
 0x40B7E0,103,sub_40B7E0,VuAiDriver,VuAiDriver+0,boat,absent,,False,False,race
-0x40B8A0,158,VuAiDriver_load_Name,VuAiDriver; VuAiNuisanceDriver; VuAiUiDriver,VuAiDriver+2; VuAiNuisanceDriver+2; VuAiUiDriver+2,boat,verified,hydro/workspace/core/boat/driver.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
-0x40B940,989,sub_40B940,VuAiDriver,VuAiDriver+18,boat,cited,hydro/workspace/core/boat/state.hxx,False,False,race
+0x40B8A0,158,VuAiDriver_load_Name,VuAiDriver; VuAiNuisanceDriver; VuAiUiDriver,VuAiDriver+2; VuAiNuisanceDriver+2; VuAiUiDriver+2,boat,verified,hydro/workspace/core/boat/ai.hxx; hydro/workspace/core/boat/driver.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
+0x40B940,989,sub_40B940,VuAiDriver,VuAiDriver+18,boat,verified,hydro/workspace/core/boat/ai.hxx; hydro/workspace/core/boat/state.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
 0x40BD20,21,sub_40BD20,VuAiDriver; VuAiNuisanceDriver; VuAiUiDriver,VuAiDriver+23; VuAiNuisanceDriver+23; VuAiUiDriver+23,boat,absent,,False,False,race
 0x40BD40,137,sub_40BD40,VuAiDriver; VuAiNuisanceDriver; VuAiUiDriver,VuAiDriver+24; VuAiNuisanceDriver+24; VuAiUiDriver+24,boat,absent,,False,False,race
 0x40BDD0,7,sub_40BDD0,VuAiDriver; VuAiNuisanceDriver; VuAiUiDriver,VuAiDriver+25; VuAiNuisanceDriver+25; VuAiUiDriver+25,boat,absent,,False,False,race
 0x40BDE0,217,sub_40BDE0,,,boat (by address),absent,,False,False,race
-0x40BEC0,2183,sub_40BEC0,,,boat (by address),absent,,False,False,race
-0x40C750,2494,sub_40C750,,,unattributed,absent,,False,False,race
-0x40D110,1164,sub_40D110,,,unattributed,absent,,False,False,race
-0x40D5A0,621,sub_40D5A0,,,unattributed,absent,,False,False,race
+0x40BEC0,2183,sub_40BEC0,,,boat (by address),verified,hydro/workspace/core/boat/ai.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
+0x40C750,2494,sub_40C750,,,unattributed,verified,hydro/workspace/core/boat/ai.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
+0x40D110,1164,sub_40D110,,,unattributed,verified,hydro/workspace/core/boat/ai.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
+0x40D5A0,621,sub_40D5A0,,,unattributed,verified,hydro/workspace/core/boat/ai.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
 0x40D810,15,sub_40D810,,,unattributed,verified,hydro/workspace/core/boat/parts.hxx,False,False,race
 0x40D870,6,sub_40D870,VuAiNuisanceDriver,VuAiNuisanceDriver+1,boat,callee,,False,False,race
 0x40D880,160,sub_40D880,,,boat (by address),absent,,False,False,race
@@ -455,7 +455,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x41DA90,1066,sub_41DA90,,,boat (by address),cited,hydro/workspace/core/trigger/volume.hxx; hydro/workspace/core/world/world.hxx,False,False,race
 0x41DEC0,322,sub_41DEC0,,,unattributed,absent,,False,False,race
 0x41E010,72,sub_41E010,,,unattributed,verified,hydro/workspace/core/boat/state.hxx,False,False,race
-0x41E060,160,sub_41E060,,,unattributed,absent,,False,False,race
+0x41E060,160,sub_41E060,,,unattributed,cited,hydro/workspace/core/boat/ai.hxx,False,False,race
 0x41E100,160,sub_41E100,,,unattributed,cited,hydro/workspace/core/boat/state.hxx,False,False,race
 0x41E1A0,160,sub_41E1A0,,,unattributed,absent,,False,False,race
 0x41E240,160,sub_41E240,,,unattributed,cited,hydro/workspace/core/boat/state.hxx,False,False,race
@@ -4816,10 +4816,10 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x50C670,61,sub_50C670,,,unattributed,absent,,False,False,race
 0x50C6B0,946,sub_50C6B0,,,unattributed,absent,,False,False,race
 0x50CA70,883,VuMatrix_lookAtBasis,,,unattributed,cited,hydro/workspace/core/boat/state.hxx,False,False,race
-0x50CDF0,36,sub_50CDF0,VuDynamicsRayTest::RayTestWrapper,VuDynamicsRayTest::RayTestWrapper+1,physics (Bullet),absent,,False,False,race
-0x50CE20,326,sub_50CE20,VuDynamicsRayTest::RayTestWrapper,VuDynamicsRayTest::RayTestWrapper+2,physics (Bullet),absent,,False,False,race
+0x50CDF0,36,sub_50CDF0,VuDynamicsRayTest::RayTestWrapper,VuDynamicsRayTest::RayTestWrapper+1,physics (Bullet),verified,hydro/workspace/core/boat/ai.hxx,False,False,race
+0x50CE20,326,sub_50CE20,VuDynamicsRayTest::RayTestWrapper,VuDynamicsRayTest::RayTestWrapper+2,physics (Bullet),verified,hydro/workspace/core/boat/ai.hxx,False,False,race
 0x50CF70,35,sub_50CF70,PBVbtCollisionShape::0PAVbtCollisionObject::SAXABVbtTransform::btCollisionWorld::??rayTestSingle::?BP::.?AULocalInfoAdder2; VuDynamicsRayTest::RayTestWrapper; btCollisionWorld::RayResultCallback,VuDynamicsRayTest::RayTestWrapper+0; btCollisionWorld::RayResultCallback+0; PBVbtCollisionShape::0PAVbtCollisionObject::SAXABVbtTransform::btCollisionWorld::??rayTestSingle::?BP::.?AULocalInfoAdder2+0,physics (Bullet),absent,,False,False,race
-0x50CFB0,257,sub_50CFB0,,,physics (Bullet) (by address),absent,,False,False,race
+0x50CFB0,257,sub_50CFB0,,,physics (Bullet) (by address),callee,,False,False,race
 0x50D0C0,38,sub_50D0C0,btCollisionWorld::RayResultCallback,btCollisionWorld::RayResultCallback+1,physics (Bullet),absent,,False,False,race
 0x50D0F0,214,sub_50D0F0,,,physics (Bullet) (by address),cited,engine/workspace/core/dynamics/setup.hxx,False,False,race
 0x50D1D0,1203,sub_50D1D0,,,physics (Bullet) (by address),verified,engine/workspace/core/dynamics/body.hxx; engine/workspace/core/dynamics/row.hxx,False,False,race
@@ -8555,7 +8555,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x631CB8,6,_CxxThrowException,,,C++ runtime / STL,absent,,True,False,race
 0x631CBE,6,_CIfmod,,,C++ runtime / STL,absent,,True,False,race
 0x631CC4,6,__libm_sse2_acosf,,,C++ runtime / STL,callee,,True,False,race
-0x631CCA,6,__libm_sse2_asinf,,,C++ runtime / STL,verified,hydro/workspace/core/boat/load.hxx,True,False,race
+0x631CCA,6,__libm_sse2_asinf,,,C++ runtime / STL,verified,hydro/workspace/core/boat/ai.hxx; hydro/workspace/core/boat/load.hxx,True,False,race
 0x631CD0,6,__libm_sse2_atan2,,,C++ runtime / STL,verified,hydro/workspace/core/boat/load.hxx,True,False,race
 0x631CD6,6,__libm_sse2_atanf,,,C++ runtime / STL,absent,,True,False,race
 0x631CDC,6,__libm_sse2_cosf,,,C++ runtime / STL,callee,,True,False,race
