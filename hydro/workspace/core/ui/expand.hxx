@@ -204,7 +204,7 @@ struct ui_game_config_t2
 {
     bool m_drawn = false;   // +0x2E0 -> +0x1E
     bool m_trophy = false;  // +0x324
-    bool m_info_reached = false;  // slot 23 0x45DBF0 (not recreated) was asked for a text
+    bool m_info_reached = false;  // slot 23 0x45DBF0 was asked for a text
 };
 
 // 0x45F710 (thiscall this): the first option of the vector whose current
@@ -268,16 +268,45 @@ inline bool ui_game_config_changed( const ui_config_entity_t& e, ui_game_config_
     return true;
 }
 
+// VuGameConfigEntity slot 23 (+92) 0x45DBF0 (stdcall VuString* out): the
+// locked option's info text from root GameConfig's Mode / Track / Course /
+// Championship texts (lookups; tag 4 else ""), each compared whole (0x404990
+// and the inline 12-byte compare + length test):
+//   Mode "Championship" -> "Unlock_" + Championship + "_Info"
+//   Mode "Slalom"       -> "Unlock_" + Mode + "_" + Course + "_" + Track + "_Info"
+//   Mode "RubberDucky"  -> "Unlock_Race_" + Track + "_Info"
+//   any other           -> "Unlock_" + Mode + "_" + Track + "_Info"
+// (std::string concatenations 0x44F310 / 0x4366B0 / 0x436700: whole texts.)
+inline void ui_game_config_info_text( const value_t& root, std::string& out )
+{
+    const value_t& config = member( root, "GameConfig" );
+    const std::string& mode = ui_json_text( member( config, "Mode" ) );
+    const std::string& track = ui_json_text( member( config, "Track" ) );
+    const std::string& course = ui_json_text( member( config, "Course" ) );
+    const std::string& championship = ui_json_text( member( config, "Championship" ) );
+    if ( mode == "Championship" )
+        out = "Unlock_" + championship + "_Info";
+    else if ( mode == "Slalom" )
+        out = "Unlock_" + mode + "_" + course + "_" + track + "_Info";
+    else if ( mode == "RubberDucky" )
+        out = "Unlock_Race_" + track + "_Info";
+    else
+        out = "Unlock_" + mode + "_" + track + "_Info";
+}
+
 // VuGameConfigEntity's whole class for the walks (slot 12 bound to `g`; slot
-// 23 0x45DBF0 READ - it only builds the "Unlock_..._Info" texts - NOT
-// recreated: answers nothing and sets m_info_reached; slot 20 0x4471A0 =
-// false; slot 17 0x45D720 is reached only from 0x45E300, the next_choice HOOK).
+// 23 0x45DBF0 above; slot 20 0x4471A0 = false; slot 17 0x45D720 is reached
+// only from 0x45E300, the next_choice HOOK).
 inline void ui_game_config_class_full( ui_config_class_t& c, ui_config_entity_t& e, ui_game_config_t2& g, value_t& root, const ui_profile_t& p,
                                        const ui_config_hooks_t& h )
 {
     c = ui_game_config_class( e, root, p );
     c.unavailable = []( const std::string&, const std::string& ) { return false; };
-    c.info = [ &g ]( std::string& ) { g.m_info_reached = true; };
+    c.info = [ &g, &root ]( std::string& out )
+    {
+        g.m_info_reached = true;
+        ui_game_config_info_text( root, out );
+    };
     c.changed = [ &c, &e, &g, &root, &p, &h ]( ) { return ui_game_config_changed( e, g, root, c, p, h ); };
 }
 

@@ -117,6 +117,7 @@
     <ClInclude Include="workspace\core\boat\anim.hxx" />
     <ClInclude Include="workspace\core\boat\camera.hxx" />
     <ClInclude Include="workspace\core\boat\construct.hxx" />
+    <ClInclude Include="workspace\core\boat\contact.hxx" />
     <ClInclude Include="workspace\core\boat\driver.hxx" />
     <ClInclude Include="workspace\core\boat\entity.hxx" />
     <ClInclude Include="workspace\core\boat\fleet.hxx" />
@@ -127,10 +128,12 @@
     <ClInclude Include="workspace\core\boat\manager.hxx" />
     <ClInclude Include="workspace\core\boat\math.hxx" />
     <ClInclude Include="workspace\core\boat\meshes.hxx" />
+    <ClInclude Include="workspace\core\boat\nuisance.hxx" />
     <ClInclude Include="workspace\core\boat\parts.hxx" />
     <ClInclude Include="workspace\core\boat\pilots.hxx" />
     <ClInclude Include="workspace\core\boat\powerup.hxx" />
     <ClInclude Include="workspace\core\boat\respawn.hxx" />
+    <ClInclude Include="workspace\core\boat\rtti.hxx" />
     <ClInclude Include="workspace\core\boat\sections.hxx" />
     <ClInclude Include="workspace\core\boat\state.hxx" />
     <ClInclude Include="workspace\core\boat\steer.hxx" />
@@ -154,11 +157,13 @@
     <ClInclude Include="workspace\core\ui\entity.hxx" />
     <ClInclude Include="workspace\core\ui\expand.hxx" />
     <ClInclude Include="workspace\core\ui\flow.hxx" />
+    <ClInclude Include="workspace\core\ui\frame.hxx" />
     <ClInclude Include="workspace\core\ui\fsm.hxx" />
     <ClInclude Include="workspace\core\ui\gauge.hxx" />
     <ClInclude Include="workspace\core\ui\hud.hxx" />
     <ClInclude Include="workspace\core\ui\leave.hxx" />
     <ClInclude Include="workspace\core\ui\map.hxx" />
+    <ClInclude Include="workspace\core\ui\navigate.hxx" />
     <ClInclude Include="workspace\core\ui\schema.hxx" />
     <ClInclude Include="workspace\core\ui\screen.hxx" />
     <ClInclude Include="workspace\core\ui\select.hxx" />
@@ -192,6 +197,7 @@
     <ClInclude Include="workspace\core\world\wave.hxx" />
     <ClInclude Include="workspace\core\world\world.hxx" />
     <ClInclude Include="workspace\utility\checks\boat.hxx" />
+    <ClInclude Include="workspace\utility\checks\menu.hxx" />
     <ClInclude Include="workspace\utility\checks\pfx.hxx" />
     <ClInclude Include="workspace\utility\checks\race.hxx" />
     <ClInclude Include="workspace\utility\checks\ui.hxx" />

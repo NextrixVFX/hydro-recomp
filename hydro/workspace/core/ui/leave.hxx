@@ -22,12 +22,11 @@
 // The player's own picks enter where retail keeps them: the root's
 // LastGameConfigSelection [option name] and LastBoatConfigSelection [player]
 // [option name] (the profile's - the caller seeds them). The navigation that
-// changes a choice on screen (0x448470 -> 0x449830) is NOT recreated.
-// NOT recreated on this path (hooks the caller answers through `p`): the
-// game selector's slot 26 0x45E300 (`p.next_choice`, asked for a single-player
-// "push"), and its slot 23 0x45DBF0 (the locked option's info text - only a
-// broadcast, so the root does not depend on it; ui_game_config_t2::
-// m_info_reached records that it was asked).
+// changes a choice on screen is navigate.hxx (0x448470 -> 0x449830).
+// The game selector's slot 26 0x45E300 (asked for a single-player "push") is
+// select.hxx's ui_game_config_next over the progress answers p.race_done /
+// champ_done / ghost_done (leave p.next_choice empty to use it); its slot 23
+// 0x45DBF0 (the locked option's info text) is expand.hxx.
 
 // What a config screen's entity contributes, read from OUR loaded entity: its
 // "OptionType" (the OptionDB entry), "Single Player", "Force Online", and for

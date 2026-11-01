@@ -79,6 +79,44 @@ inline std::uint32_t ui_hud_key_hi( std::uint32_t hi )
     return hi;
 }
 
+// VuUIScreenEntity's draw, slot 13 0x629D60 (thiscall; the alpha on the
+// stack): the key bits with the screen's +0x5C (`layer`, 4 from the ctor
+// 0x6299A0) as bits 27..31, the crop matrix and VuUIImpl +0x8C pushed (as the
+// HUD's), then the screen's OWN first UI draw component (+0x48 order; its
+// +0x10 object's slot 2 with the alpha) - `draw`(screen, its index, alpha) -
+// then the child walk 0x628070, then both popped (floats first).
+inline std::uint32_t ui_screen_key_hi( std::uint32_t hi, std::uint32_t layer )
+{
+    hi &= 0x7FFFFFFu;
+    hi |= layer << 27;
+    hi &= 0xFCFFFFFFu;
+    hi &= 0xFF7FFFFFu;
+    hi &= 0xFFC3FFFFu;
+    hi |= 0x280000u;
+    return hi;
+}
+
+inline void ui_screen_draw( ui_gfx_sort_t& sort, ui_gfx_stacks_t& stacks, const ui_impl_t& impl, const entity_t& screen, std::uint32_t layer, float alpha,
+                            const std::function< void( const entity_t&, int, float ) >& draw )
+{
+    sort.m_key_hi = ui_screen_key_hi( sort.m_key_hi, layer );
+    std::array< float, 16 > m;
+    std::memcpy( m.data( ), impl.m_crop.m_matrix, sizeof( impl.m_crop.m_matrix ) );
+    stacks.m_matrices.push_back( m );
+    stacks.m_floats.push_back( impl.m_float );
+    for ( std::size_t c = 0; c < screen.m_components.size( ); ++c )
+        if ( screen.m_components[ c ].m_vtable == k_ui_draw_component_vtable )
+        {
+            draw( screen, static_cast< int >( c ), alpha );
+            break;
+        }
+    ui_draw_children( screen, alpha, draw );
+    if ( !stacks.m_floats.empty( ) )
+        stacks.m_floats.pop_back( );
+    if ( !stacks.m_matrices.empty( ) )
+        stacks.m_matrices.pop_back( );
+}
+
 // 0x423A70 (thiscall; the alpha on the stack, passed on in xmm1): the key bits,
 // VuUIImpl's guard (0x626190 on first use - the caller's ui_impl_t), the crop
 // matrix pushed on the matrix stack and +0x8C on the float stack, the child
