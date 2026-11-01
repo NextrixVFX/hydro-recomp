@@ -2414,9 +2414,100 @@ inline bool verify_pfx_unload( )
     return failed == 0;
 }
 
+// pfx_impl_destroy (world/pfxload.hxx) against VuPfxImpl's slot 0 0x51C640 -> dtor 0x51C700 (case pfx_impl_teardown):
+// VuPfxImpl as its ctor 0x51C4E0 / init 0x51C840 leave it (the pools' blocks null: their init is hooked there), deleted;
+// and with Hydroelectric + Generic loaded, the blocks and render words set (inputs), not deleted. Compared: every object
+// freed in order (by what it is), every render release with its word, the groups' refcounts after, no project left.
+inline bool verify_pfx_impl_teardown( )
+{
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) )
+    {
+        LOG_ERROR( "pfx_impl_teardown: Base.apf did not open" );
+        return false;
+    }
+    struct ev_t
+    {
+        int kind;
+        std::string what, name;
+        std::uint32_t value;
+    };
+    std::vector< ev_t > log;
+    pfx_impl_teardown_hooks_t hooks;
+    hooks.user = &log;
+    hooks.freed = []( void* u, bool array, const char* what, const std::string& name ) {
+        static_cast< std::vector< ev_t >* >( u )->push_back( { array ? 1 : 0, what, name, 0u } );
+    };
+    hooks.shader = []( void* u, std::uint32_t v ) { static_cast< std::vector< ev_t >* >( u )->push_back( { 2, "", "", v } ); };
+    hooks.asset = []( void* u, std::uint32_t v ) { static_cast< std::vector< ev_t >* >( u )->push_back( { 3, "", "", v } ); };
+    int failed = 0, events = 0;
+    for ( std::size_t i = 0; i < g_golden_pit_variant_count; ++i )
+    {
+        const golden_pfx_teardown_t& v = g_golden_pit_variants[ i ];
+        static pfx_runtime_t rt;
+        pfx_runtime_init( rt );
+        pfx_library_t lib;
+        if ( v.load )
+        {
+            for ( const char* name : { "Hydroelectric", "Generic" } )
+            {
+                std::vector< std::uint8_t > blob;
+                if ( !archive.read( ( std::string( "VuPfxAsset/" ) + name ).c_str( ), blob ) || !pfx_load_asset( rt, lib, name, blob ) )
+                {
+                    LOG_ERROR( "pfx_impl_teardown: %s did not load", name );
+                    return false;
+                }
+            }
+        }
+        else
+            for ( int b = 0; b < 4; ++b )
+                rt.heap[ rt.resources + 4u * b ] = 0u;
+        std::map< std::string, std::uint32_t > groups( lib.projects.begin( ), lib.projects.end( ) );
+        pfx_impl_render_t render;
+        for ( int e = 0; e < 8; ++e )
+        {
+            render.quad[ e ][ 0 ] = v.render[ 2 * e ];
+            render.quad[ e ][ 1 ] = v.render[ 2 * e + 1 ];
+        }
+        render.extra[ 0 ] = v.render[ 16 ];
+        render.extra[ 1 ] = v.render[ 17 ];
+        const std::size_t regions = rt.heap.regions.size( );
+        log.clear( );
+        pfx_impl_destroy( rt, lib, render, v.flags, hooks );
+        int bad = log.size( ) != v.count;
+        for ( unsigned e = 0; e < v.count && e < log.size( ); ++e )
+        {
+            const golden_pfx_teardown_event_t& g = g_golden_pit_events[ v.first + e ];
+            bad += log[ e ].kind != g.kind || log[ e ].what != g.what || log[ e ].name != g.name || log[ e ].value != g.value;
+        }
+        std::string after;
+        for ( const auto& g : groups )
+            after += ( after.empty( ) ? "" : "," ) + g.first + ":" + std::to_string( rt.heap[ g.second + 4u ] );
+        bad += after != v.groups || !lib.projects.empty( );
+        // the resources and their blocks left the heap (the blocks only when they were allocated)
+        bad += rt.heap.regions.size( ) != regions - ( v.load ? 5u : 1u );
+        events += static_cast< int >( v.count );
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "pfx_impl_teardown: variant %d: %d differences (%d events, retail %u)", static_cast< int >( i ), bad,
+                static_cast< int >( log.size( ) ), v.count );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "pfx_impl_destroy matches VuPfxImpl's 0x51C640 -> 0x51C700 (0x51DF10 / 0x51E2B0, 0x4CCCE0, 0x4CDB30): %d variants, "
+                     "%d frees / render releases in order, the groups untouched",
+            static_cast< int >( g_golden_pit_variant_count ), events );
+    else
+        LOG_ERROR( "pfx_impl_teardown FAILED %d", failed );
+    return failed == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_pfx_impl_teardown( ) && ok;
     ok = verify_pfx_unload( ) && ok;
     ok = verify_ocean_infinite( ) && ok;
     ok = verify_ocean_infinite96( ) && ok;
