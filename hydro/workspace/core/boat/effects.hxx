@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 #include <xmmintrin.h>
 
@@ -37,6 +38,7 @@
 
 struct boat_pfx_record_t
 {
+    std::string name;           // +0 (the effect's name: what the fill creates it by)
     std::uint32_t system = 0;   // +0x18
     std::int32_t bone = -1;     // +0x1C
     float local[ 16 ]{};        // +0x20
@@ -44,6 +46,10 @@ struct boat_pfx_record_t
 
 struct boat_pfx_t
 {
+    std::string fluids_asset;                     // +0x00 (HullEffect's "Fluids Mesh Asset")
+    std::string hull_effect;                      // +0x18 (HullEffect's "Effect" / "CameraTargetEffect")
+    std::uint32_t boat = 0;                       // +0x30 (the boat's address, written into bound processes)
+    std::uint32_t fluids = 0;                     // +0x34 (the VuFluidsObject's address)
     std::vector< boat_pfx_record_t > list[ 7 ];   // +0x38 +0x44 +0x50 +0x5C +0x68 +0x74 +0x80
     std::uint8_t on[ 5 ]{};                       // +0x8C .. +0x90 (lists 2 .. 6)
     std::uint32_t extra = 0;                      // +0x94
@@ -781,4 +787,231 @@ inline void boat_destroyed_event( const std::string& name, const float* position
         h.attributes( h.user, ev, position );
     if ( h.start )
         h.start( h.user, ev );
+}
+// ---------------------------------------------------------------------------
+// THE FILL (postLoad's Pfx step, boat/load.hxx): what puts records into the
+// seven lists. Recreated 1:1 from 0x419EF0 (clear), 0x419D70 (the reader,
+// VuBoat_selectHullEffect, run with Default's Pfx section then the boat's),
+// 0x41A1A0 (one list from a JSON array), 0x419FF0 (create) with 0x41A0E0 /
+// 0x41A640. Hooks (not recreated - other subsystems' Vu code):
+//   create / release  g_vupfx 0x75904C vt+0x28 (name) / vt+0x2C (system)
+//   start / root      the system's vt+0x2C (slot 11) / vt+0x40
+//   type_of           a process object's vt+4 (its type node; +4 = the parent)
+//   find_bone         boat +0x2A4 (the model instance) +0x10 (its skeleton):
+//                     VuSkeleton_findNodeByName 0x52F3C0 (render / model lane)
+//   fluids_set        0x5243A0 on the VuFluidsObject +0x34 (the water agent's)
+//   word / put        the pfx runtime's memory (patterns +0x10 / +4, processes
+//                     +0x14 / +4, the object +0x10, type nodes +4) and the
+//                     fluids object's word 0
+// A missing hook answers false (UNKNOWN): nothing is guessed.
+struct boat_pfx_fill_hooks_t
+{
+    void* user = nullptr;
+    bool manager = true;   // g_vupfx non-null: only 0x41A0E0 tests it
+    std::uint32_t ( *create )( void* user, const char* name ) = nullptr;
+    void ( *release )( void* user, std::uint32_t system ) = nullptr;
+    void ( *start )( void* user, std::uint32_t system ) = nullptr;
+    std::uint32_t ( *root )( void* user, std::uint32_t system ) = nullptr;
+    std::uint32_t ( *type_of )( void* user, std::uint32_t object ) = nullptr;
+    std::int32_t ( *find_bone )( void* user, const char* name ) = nullptr;
+    void ( *fluids_set )( void* user, const std::string& name ) = nullptr;
+    std::uint32_t ( *word )( void* user, std::uint32_t address ) = nullptr;
+    void ( *put )( void* user, std::uint32_t address, std::uint32_t value ) = nullptr;
+};
+
+inline bool boat_pfx_fill_ready( const boat_pfx_fill_hooks_t& h )
+{
+    return h.create && h.release && h.start && h.root && h.type_of && h.find_bone && h.fluids_set && h.word && h.put;
+}
+
+// 0x41A0E0 (stdcall list): with g_vupfx, every record's non-null system
+// released (vt+0x2C); then every name destroyed and end = begin.
+inline void boat_pfx_clear_list( std::vector< boat_pfx_record_t >& l, const boat_pfx_fill_hooks_t& h )
+{
+    if ( h.manager )
+        for ( const boat_pfx_record_t& r : l )
+            if ( r.system )
+                h.release( h.user, r.system );
+    l.clear( );
+}
+
+// 0x419EF0 (thiscall controller): 0x5243A0( "" ) on +0x34, the seven lists
+// cleared (+0x38 .. +0x80 in order), then +0x94 released when set - retail
+// does not zero it.
+inline bool boat_pfx_clear( boat_pfx_t& c, const boat_pfx_fill_hooks_t& h )
+{
+    if ( !boat_pfx_fill_ready( h ) )
+        return false;
+    h.fluids_set( h.user, std::string( ) );
+    for ( std::vector< boat_pfx_record_t >& l : c.list )
+        boat_pfx_clear_list( l, h );
+    if ( c.extra )
+        h.release( h.user, c.extra );
+    return true;
+}
+
+// The euler matrix 0x41A3BD .. 0x41A54C (angles = RotOffset x 0x3C8EFA35, the
+// three x87 fsincos), in retail's operation order; its row 3 = (0, 0, 0, 1).
+inline void boat_pfx_euler( const float* rot, float* e )
+{
+    const float k = support_bits( 0x3C8EFA35u );
+    float cx, sx, cy, sy, cz, sz;
+    x87_sincos( rot[ 0 ] * k, &cx, &sx );
+    x87_sincos( rot[ 1 ] * k, &cy, &sy );
+    x87_sincos( rot[ 2 ] * k, &cz, &sz );
+    const float czcx = cz * cx, czsx = cz * sx;
+    e[ 0 ] = cz * cy;
+    e[ 1 ] = sz * cy;
+    e[ 2 ] = -sy;
+    e[ 3 ] = 0.0f;
+    e[ 4 ] = sy * czsx - sz * cx;
+    e[ 5 ] = ( sy * sx ) * sz + czcx;
+    e[ 6 ] = cy * sx;
+    e[ 7 ] = 0.0f;
+    e[ 8 ] = sz * sx + sy * czcx;
+    e[ 9 ] = ( sy * cx ) * sz - czsx;
+    e[ 10 ] = cy * cx;
+    for ( int i = 11; i < 15; ++i )
+        e[ i ] = 0.0f;
+    e[ 15 ] = 1.0f;
+}
+
+// 0x41A1A0 (thiscall controller; list, array; retn 8): per element (the
+// array's i-th, or the null container past it / for a non-array): "Effect"
+// (tag 4, else ""), "PosOffset" / "RotOffset" (vec3 into zeros), the local =
+// identity x euler (VuMatrix_multiply 0x4078C0) with row 3 = PosOffset,
+// "Bone" (tag 4, else "") through findNodeByName, system 0; pushed back
+// (0x41AD70).
+inline void boat_pfx_load_list( std::vector< boat_pfx_record_t >& l, const value_t& array, const boat_pfx_fill_hooks_t& h )
+{
+    static const value_t null{ };
+    const std::size_t count = array.tag == 5 ? array.list.size( ) : 0u;
+    for ( std::size_t i = 0; i < count; ++i )
+    {
+        const value_t& e = i < array.list.size( ) ? array.list[ i ] : null;
+        boat_pfx_record_t r;
+        const value_t& effect = member( e, "Effect" );
+        if ( effect.tag == 4 )
+            r.name = effect.text;
+        float pos[ 3 ] = { 0.0f, 0.0f, 0.0f }, rot[ 3 ] = { 0.0f, 0.0f, 0.0f };
+        vec3( member( e, "PosOffset" ), pos );
+        vec3( member( e, "RotOffset" ), rot );
+        float euler[ 16 ];
+        boat_pfx_euler( rot, euler );
+        const float identity[ 16 ] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+        hull_multiply( identity, r.local, euler );
+        r.local[ 12 ] = pos[ 0 ];
+        r.local[ 13 ] = pos[ 1 ];
+        r.local[ 14 ] = pos[ 2 ];
+        const value_t& bone = member( e, "Bone" );
+        r.bone = h.find_bone( h.user, bone.tag == 4 ? bone.text.c_str( ) : "" );
+        l.push_back( std::move( r ) );
+    }
+}
+
+// 0x419D70 (thiscall controller; section; retn 4). `driver` = boat +0x220's
+// class: slot 12 (vt+0x30) and slot 14 (vt+0x38).
+inline bool boat_pfx_read( boat_pfx_t& c, const value_t& section, const boat_driver_t& driver, const boat_pfx_fill_hooks_t& h )
+{
+    if ( !boat_pfx_fill_ready( h ) )
+        return false;
+    const value_t& hull = member( section, "HullEffect" );
+    const value_t& mesh = member( hull, "Fluids Mesh Asset" );
+    if ( mesh.tag == 4 )
+        c.fluids_asset = mesh.text;
+    const value_t& effect = member( hull, driver.slot[ 0 ] && driver.slot[ 2 ] ? "CameraTargetEffect" : "Effect" );
+    if ( effect.tag == 4 )
+        c.hull_effect = effect.text;
+    boat_pfx_load_list( c.list[ 0 ], member( section, "ThrustAlphaEffects" ), h );
+    boat_pfx_load_list( c.list[ 1 ], member( section, "ThrustColorEffects" ), h );
+    boat_pfx_load_list( c.list[ 4 ], member( section, "BoostEffects" ), h );
+    if ( driver.slot[ 0 ] )
+    {
+        boat_pfx_load_list( c.list[ 2 ], member( section, "BackfireEffects" ), h );
+        boat_pfx_load_list( c.list[ 5 ], member( section, "SpeedEffects" ), h );
+        if ( driver.slot[ 2 ] )
+        {
+            boat_pfx_load_list( c.list[ 3 ], member( section, "ChurnEffects" ), h );
+            boat_pfx_load_list( c.list[ 6 ], member( section, "DraftEffects" ), h );
+        }
+    }
+    return true;
+}
+
+// The process walk 0x41A69B / 0x41A08A: patterns from +0x10 (next +4), their
+// processes from +0x14 (next +4); a process whose object's (+0x10) type chain
+// (vt+4, then each node's +4) holds `type` is bound by `bind`.
+template < typename F >
+inline void boat_pfx_walk( std::uint32_t base, std::uint32_t type, const boat_pfx_fill_hooks_t& h, F bind )
+{
+    for ( std::uint32_t pat = h.word( h.user, base + 0x10 ); pat; pat = h.word( h.user, pat + 4 ) )
+        for ( std::uint32_t proc = h.word( h.user, pat + 0x14 ); proc; proc = h.word( h.user, proc + 4 ) )
+            for ( std::uint32_t t = h.type_of( h.user, h.word( h.user, proc + 0x10 ) ); t; t = h.word( h.user, t + 4 ) )
+                if ( t == type )
+                {
+                    bind( proc );
+                    break;
+                }
+}
+
+// 0x41A640 (thiscall controller; list; retn 4): every record's system =
+// vt+0x28( name ); a created one's VuPfxBoat* (0x7367D0) processes get +0x28 =
+// the boat; then the records left null are erased in order (0x41B040).
+inline void boat_pfx_create_list( boat_pfx_t& c, std::vector< boat_pfx_record_t >& l, const boat_pfx_fill_hooks_t& h )
+{
+    for ( boat_pfx_record_t& r : l )
+    {
+        r.system = h.create( h.user, r.name.c_str( ) );
+        if ( r.system )
+            boat_pfx_walk( r.system, 0x7367D0u, h, [ & ]( std::uint32_t proc ) { h.put( h.user, proc + 0x28, c.boat ); } );
+    }
+    for ( std::size_t i = 0; i < l.size( ); )
+    {
+        if ( l[ i ].system == 0 )
+        {
+            l.erase( l.begin( ) + static_cast< std::ptrdiff_t >( i ) );
+            i = 0;
+        }
+        else
+            ++i;
+    }
+}
+
+// 0x419FF0 (thiscall controller; behind its owner's flag bit 2): the seven
+// lists created, +0x38 / +0x44 started (0x41ABE0), 0x5243A0( +0 ) on +0x34;
+// with the fluids object's word 0 set: +0x94 = vt+0x28( +0x18 ), its root's
+// (vt+0x40) 0x7367D8 processes bound (+0x18 = the fluids object, +0x14 = the
+// boat), then started.
+inline bool boat_pfx_create( boat_pfx_t& c, const boat_pfx_fill_hooks_t& h )
+{
+    if ( !boat_pfx_fill_ready( h ) )
+        return false;
+    for ( std::vector< boat_pfx_record_t >& l : c.list )
+        boat_pfx_create_list( c, l, h );
+    for ( int k = 0; k < 2; ++k )
+        for ( const boat_pfx_record_t& r : c.list[ k ] )
+            h.start( h.user, r.system );
+    h.fluids_set( h.user, c.fluids_asset );
+    if ( h.word( h.user, c.fluids ) == 0 )
+        return true;
+    c.extra = h.create( h.user, c.hull_effect.c_str( ) );
+    if ( c.extra == 0 )
+        return true;
+    boat_pfx_walk( h.root( h.user, c.extra ), 0x7367D8u, h, [ & ]( std::uint32_t proc )
+    {
+        h.put( h.user, proc + 0x18, c.fluids );
+        h.put( h.user, proc + 0x14, c.boat );
+    } );
+    h.start( h.user, c.extra );
+    return true;
+}
+
+// postLoad's whole Pfx step (boat/load.hxx): clear, Default's section, the
+// boat's own, then (owner flag bit 2) create.
+inline bool boat_pfx_fill( boat_pfx_t& c, const value_t& fallback, const value_t& own, const boat_driver_t& driver, bool create,
+                           const boat_pfx_fill_hooks_t& h )
+{
+    if ( !boat_pfx_clear( c, h ) || !boat_pfx_read( c, fallback, driver, h ) || !boat_pfx_read( c, own, driver, h ) )
+        return false;
+    return !create || boat_pfx_create( c, h );
 }
