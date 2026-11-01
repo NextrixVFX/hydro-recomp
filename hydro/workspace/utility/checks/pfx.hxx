@@ -8,6 +8,7 @@
 #include <cstring>
 #include <map>
 #include <memory>
+#include <tuple>
 #include <vector>
 
 // The water area's particle checks (included by checks/water.hxx before verify_water_all, which runs
@@ -1055,9 +1056,123 @@ inline bool verify_water_snap( )
     return failed == 0;
 }
 
+// pfx_reload_project / pfx_remove_project and the node dtors (world/pfxload.hxx) against VuPfxImpl's 0x51D870 / 0x51D9C0
+// and retail's node slot 0s (case pfx_reload): the race's two documents loaded, three nodes held (refcount 2), then reload
+// Generic with Hydroelectric's document, remove Hydroelectric, reload / remove a missing name. Compared: each return, the
+// events in order (0x563C00's entries, the geom model resets, the texture asset releases: by the node's path before the
+// operation and the offset), every remaining node (path, vtable, +4, child count), the held nodes' refcounts.
+inline bool verify_pfx_reload( )
+{
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) )
+    {
+        LOG_ERROR( "pfx_reload: Base.apf did not open" );
+        return false;
+    }
+    static pfx_runtime_t rt;
+    pfx_runtime_init( rt );
+    pfx_library_t lib;
+    std::map< std::string, value_t > docs;
+    for ( const char* asset : { "VuPfxAsset/Hydroelectric", "VuPfxAsset/Generic" } )
+    {
+        std::vector< std::uint8_t > blob;
+        const std::string name = std::string( asset ).substr( 11 );
+        if ( !archive.read( asset, blob ) || !pfx_asset_document( blob, docs[ asset ] ) || pfx_add_project( rt, lib, name, docs[ asset ] ) == 0u )
+        {
+            LOG_ERROR( "pfx_reload: %s did not load", asset );
+            return false;
+        }
+    }
+    auto paths = [ & ]( ) {
+        std::vector< std::pair< std::string, std::uint32_t > > rows;
+        for ( const auto& pr : lib.projects )
+            pfx_load_rows( rt, lib, pr.second, pr.first, rows );
+        return rows;
+    };
+    std::map< std::string, std::uint32_t > held;
+    for ( const auto& r : paths( ) )
+        for ( std::size_t i = 0; i < g_golden_prl_ref_count; ++i )
+            if ( r.first == g_golden_prl_refs[ i ].path )
+            {
+                rt.heap[ r.second + 4 ] = 2u;
+                held[ r.first ] = r.second;
+            }
+    struct log_t
+    {
+        std::map< std::uint32_t, std::string > path_of;
+        std::vector< std::tuple< int, std::string, std::uint32_t > > events;
+    } log;
+    pfx_release_hooks_t hooks;
+    hooks.user = &log;
+    hooks.destroyed = []( void* u, std::uint32_t node ) {
+        log_t& l = *static_cast< log_t* >( u );
+        l.events.emplace_back( 0, l.path_of[ node ], 0u );
+    };
+    hooks.model = []( void* u, std::uint32_t node ) {
+        log_t& l = *static_cast< log_t* >( u );
+        l.events.emplace_back( 1, l.path_of[ node ], 0u );
+    };
+    hooks.texture = []( void* u, std::uint32_t node, std::uint32_t offset ) {
+        log_t& l = *static_cast< log_t* >( u );
+        l.events.emplace_back( 2, l.path_of[ node ], offset );
+    };
+    int failed = 0, events = 0;
+    for ( std::size_t i = 0; i < g_golden_prl_op_count; ++i )
+    {
+        const golden_pfx_reload_op_t& op = g_golden_prl_ops[ i ];
+        log.path_of.clear( );
+        for ( const auto& r : paths( ) )
+            log.path_of[ r.second ] = r.first;
+        log.events.clear( );
+        unsigned ret = 0;
+        if ( op.remove )
+            pfx_remove_project( rt, lib, op.name, hooks );
+        else
+            ret = pfx_reload_project( rt, lib, op.name, docs[ op.doc ], pfx_load_hooks_t( ), hooks ) ? 1u : 0u;
+        int bad = ret != op.ret || log.events.size( ) != op.count;
+        for ( unsigned e = 0; e < op.count && e < log.events.size( ); ++e )
+        {
+            const golden_pfx_reload_event_t& g = g_golden_prl_events[ op.first + e ];
+            bad += std::get< 0 >( log.events[ e ] ) != g.kind || std::get< 1 >( log.events[ e ] ) != g.path || std::get< 2 >( log.events[ e ] ) != g.offset;
+        }
+        events += static_cast< int >( op.count );
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "pfx_reload: %s %s: %d differences (%d events, retail %u)", op.remove ? "remove" : "reload", op.name, bad,
+                static_cast< int >( log.events.size( ) ), op.count );
+        }
+    }
+    const auto rows = paths( );
+    int row_bad = rows.size( ) != g_golden_prl_row_count;
+    for ( std::size_t i = 0; i < rows.size( ) && i < g_golden_prl_row_count; ++i )
+    {
+        const golden_pfx_reload_row_t& g = g_golden_prl_rows[ i ];
+        const std::uint32_t a = rows[ i ].second;
+        row_bad += rows[ i ].first != g.path || rt.heap[ a ] != g.vtable || rt.heap[ a + 4 ] != g.w4 || rt.heap[ a + 0x10 ] != g.count;
+    }
+    for ( std::size_t i = 0; i < g_golden_prl_ref_count; ++i )
+        row_bad += held.count( g_golden_prl_refs[ i ].path ) == 0 || rt.heap[ held[ g_golden_prl_refs[ i ].path ] + 4 ] != g_golden_prl_refs[ i ].refs;
+    if ( row_bad )
+    {
+        ++failed;
+        LOG_ERROR( "pfx_reload: %d differences in the nodes after (%d nodes, retail %d)", row_bad, static_cast< int >( rows.size( ) ),
+            static_cast< int >( g_golden_prl_row_count ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "pfx_reload_project / pfx_remove_project and the node dtors match VuPfxImpl 0x51D870 / 0x51D9C0 and 0x563C00 et al.: "
+                     "%d operations, %d destruction events in order, %d nodes after, %d held refcounts",
+            static_cast< int >( g_golden_prl_op_count ), events, static_cast< int >( rows.size( ) ), static_cast< int >( g_golden_prl_ref_count ) );
+    else
+        LOG_ERROR( "pfx_reload FAILED %d", failed );
+    return failed == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_pfx_reload( ) && ok;
     ok = verify_water_snap( ) && ok;
     ok = verify_pfx_boats( ) && ok;
     ok = verify_pfx_manager( ) && ok;
