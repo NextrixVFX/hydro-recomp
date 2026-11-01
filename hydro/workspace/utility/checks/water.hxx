@@ -2560,6 +2560,7 @@ inline bool verify_water_all( )
     ok = verify_collision_init( ) && ok;
     ok = verify_collision_scrape( ) && ok;
     ok = verify_dynamics_sync( ) && ok;
+    ok = verify_dynamics_create( ) && ok;
     ok = verify_ocean_kernels96( ) && ok;
     ok = verify_water_built_tick( ) && ok;
     ok = verify_water_query96( ) && ok;
