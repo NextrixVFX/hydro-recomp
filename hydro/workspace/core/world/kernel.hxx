@@ -200,8 +200,10 @@ inline int water_flatten_tree( const water_tree_t& t, bool waves, std::vector< w
 
 // water_t from a build: the surface tree (water +0x3C), then each surface's
 // fields - +20 the height, +40 / +44 below / above, +144 the world-to-surface
-// rows, +216 the floor (the z band's low end), +240 / +244 the half extents -
-// and its wave tree (+0xFC); each wave's centre (+44 / +48) and radius (+52).
+// rows, +216 the floor (the z band's low end), +240 / +244 the half extents,
+// +72 / +76 the sizes, +0x100 its water map (b.maps, null until
+// water_build_maps) - and its wave tree (+0xFC); each wave's centre (+44 /
+// +48) and radius (+52).
 // water +0x18 (skip waves) is the build's zero (VuWater's ctor).
 inline void water_view_build( const water_built_t& b, water_view_t& v )
 {
@@ -220,6 +222,9 @@ inline void water_view_build( const water_built_t& b, water_view_t& v )
         q.floor = s.f( 216 );
         q.half_x = s.f( 240 );
         q.half_y = s.f( 244 );
+        q.size_x = static_cast< std::int32_t >( s.word[ 72 / 4 ] );
+        q.size_y = static_cast< std::int32_t >( s.word[ 76 / 4 ] );
+        q.map = i < b.maps.size( ) ? b.maps[ i ].get( ) : nullptr;   // +0x100 (water_build_maps)
         q.wave_root = water_flatten_tree( b.hold.surfaces[ i ].waves, true, v.water.nodes );
         v.water.surfaces.push_back( q );
     }

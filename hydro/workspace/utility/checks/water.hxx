@@ -1828,9 +1828,171 @@ inline bool verify_wake_kernels96( )
     return failed == 0;
 }
 
+// The water maps and VuWater's one-point query against retail (case water_point). Hydroelectric's water built by
+// water_build_world, its maps fetched from Base.apf by name through water_build_maps (the fetch is the asset manager
+// hook) and loaded by water_map_load (0x5C8650); then
+//   1. per surface: the WaterMap name, the asset's +0x58 / +0x5C / +0x64, each byte array's size and FNV-1a 64, every
+//      entry's +0 / +4 / size / FNV - against retail's own load of the same bytes;
+//   2. water_map_sample (0x535E10) at points inside every mapped surface - the float bits;
+//   3. water_point_query (0x5292D0 over 0x52AEC0 / 0x535E10 / 0x52B0E0, kernels water_view_kernel): all 8 out words
+//      and the slot 3 calls in order; the last queries with water +0x18 set.
+inline std::uint64_t water_check_fnv( const std::vector< std::uint8_t >& v )
+{
+    std::uint64_t x = 0xCBF29CE484222325ull;
+    for ( std::uint8_t b : v )
+        x = ( x ^ b ) * 0x100000001B3ull;
+    return x;
+}
+
+inline bool verify_water_point( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    if ( !tree || pack.empty( ) || !archive.open( pack.c_str( ) ) )
+    {
+        LOG_ERROR( "water_point: the document or Base.apf did not load" );
+        return false;
+    }
+    water_built_t built{};
+    water_build_world( *tree, built, []( entity_t& e ) { return entity_transform( e ); } );
+    const int missing = water_build_maps(
+        built,
+        []( void* user, const std::string& asset, std::vector< std::uint8_t >& blob ) {
+            return static_cast< c_archive* >( user )->read( asset.c_str( ), blob );
+        },
+        &archive );
+    int failed = 0;
+    // 1. the loads
+    int words = 0;
+    if ( built.map_names.size( ) != g_golden_wpt_surfaces )
+    {
+        LOG_ERROR( "water_point: %d surfaces built, retail %d", static_cast< int >( built.map_names.size( ) ), static_cast< int >( g_golden_wpt_surfaces ) );
+        return false;
+    }
+    const unsigned* m = g_golden_wpt_maps;
+    for ( std::size_t k = 0; k < g_golden_wpt_surfaces; ++k )
+    {
+        const char* what = nullptr;
+        if ( built.map_names[ k ] != g_golden_wpt_names[ k ] )
+            what = "the WaterMap name";
+        const water_map_t* map = built.maps[ k ].get( );
+        const unsigned loaded = *m++;
+        if ( !what && ( loaded != 0 ) != ( map != nullptr ) )
+            what = "loaded or not";
+        if ( loaded )
+        {
+            std::vector< unsigned > ours;
+            if ( map )
+            {
+                ours = { map->width, map->height, static_cast< unsigned >( map->map.size( ) ) };
+                for ( const std::vector< std::uint8_t >* a : { &map->map, &map->second, &map->third } )
+                {
+                    const std::uint64_t h = water_check_fnv( *a );
+                    ours.insert( ours.end( ), { static_cast< unsigned >( a->size( ) ), static_cast< unsigned >( h ), static_cast< unsigned >( h >> 32 ) } );
+                }
+                ours.push_back( static_cast< unsigned >( map->entries.size( ) ) );
+                for ( const water_map_t::entry_t& e : map->entries )
+                {
+                    const std::uint64_t h = water_check_fnv( e.bytes );
+                    ours.insert( ours.end( ), { e.a, e.b, static_cast< unsigned >( e.bytes.size( ) ), static_cast< unsigned >( h ),
+                                                  static_cast< unsigned >( h >> 32 ) } );
+                }
+            }
+            const std::size_t n = 13 + 5 * static_cast< std::size_t >( m[ 12 ] );
+            if ( !what && ours.size( ) != n )
+                what = "the entry count";
+            for ( std::size_t i = 0; i < n; ++i )
+                if ( !what && ours[ i ] != m[ i ] )
+                    what = "an asset word";
+            words += static_cast< int >( n );
+            m += n;
+        }
+        if ( what )
+        {
+            ++failed;
+            LOG_ERROR( "water_point: surface %d (%s): %s", static_cast< int >( k ), g_golden_wpt_names[ k ], what );
+        }
+    }
+    water_view_t view{};
+    water_view_build( built, view );
+    // 2. the samples
+    int nonzero = 0;
+    for ( std::size_t k = 0; k < g_golden_wpt_sample_count; ++k )
+    {
+        const unsigned* s = g_golden_wpt_samples + 5 * k;
+        const float p[ 3 ] = { water_bits( s[ 1 ] ), water_bits( s[ 2 ] ), water_bits( s[ 3 ] ) };
+        float r = 0.0f;
+        const bool reached = water_map_sample( view.water.surfaces[ s[ 0 ] ], p, r );
+        std::uint32_t bits;
+        std::memcpy( &bits, &r, 4 );
+        nonzero += s[ 4 ] != 0u ? 1 : 0;
+        if ( !reached || bits != s[ 4 ] )
+        {
+            ++failed;
+            LOG_ERROR( "water_point: sample %d on surface %u: 0x%08X, retail 0x%08X", static_cast< int >( k ), s[ 0 ], bits, s[ 4 ] );
+        }
+    }
+    // 3. the point queries
+    struct logged_t
+    {
+        const water_view_t* view;
+        std::vector< std::uint32_t > log;
+    } logged{ &view, {} };
+    const water_kernel_fn kernel = []( void* user, int wave, water_query_t& ctx ) {
+        logged_t& l = *static_cast< logged_t* >( user );
+        l.log.push_back( static_cast< std::uint32_t >( wave ) );
+        l.log.push_back( ctx.tag );
+        l.log.push_back( ctx.flag100 );
+        return water_view_kernel( const_cast< water_view_t* >( l.view ), wave, ctx );
+    };
+    int found = 0, calls = 0, skipped = 0;
+    for ( std::size_t index = 0; index < g_golden_wpt_count; ++index )
+    {
+        const unsigned* s = g_golden_wpt_words + g_golden_wpt_offsets[ index ];
+        view.water.skip_waves = s[ 0 ] != 0u;
+        skipped += s[ 0 ] ? 1 : 0;
+        float point[ 4 ];
+        for ( int k = 0; k < 4; ++k )
+            point[ k ] = water_bits( s[ 1 + k ] );
+        std::uint32_t out[ 8 ];
+        std::memset( out, 0x77, sizeof( out ) );
+        logged.log.clear( );
+        const bool reached = water_point_query( view.water, point, kernel, &logged, reinterpret_cast< float* >( out ) );
+        const char* what = reached ? nullptr : "a path not recreated was reached";
+        for ( int k = 0; k < 8; ++k )
+            if ( !what && out[ k ] != s[ 5 + k ] )
+                what = "an out word";
+        found += s[ 5 + 2 ] != 0xFEFFFFFFu ? 1 : 0;
+        const unsigned n = s[ 13 ];
+        calls += static_cast< int >( n );
+        if ( !what && logged.log.size( ) != 3 * n )
+            what = "the number of slot 3 calls";
+        for ( unsigned k = 0; k < 3 * n && !what; ++k )
+            if ( logged.log[ k ] != s[ 14 + k ] )
+                what = "a slot 3 call";
+        if ( what )
+        {
+            ++failed;
+            LOG_ERROR( "water_point: query %d: %s", static_cast< int >( index ), what );
+        }
+    }
+    view.water.skip_waves = false;
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_build_maps / water_map_load (VuWaterMapAsset 0x5C8650: %d surfaces, %d asset words incl. FNV-1a of every "
+                     "array, %d names unfetched), water_map_sample (0x535E10: %d samples, %d non-zero) and water_point_query (0x5292D0 / "
+                     "0x52AEC0 / 0x52B0E0: %d queries, %d on a surface, %d slot 3 calls, %d with waves skipped) match retail",
+            static_cast< int >( g_golden_wpt_surfaces ), words, missing, static_cast< int >( g_golden_wpt_sample_count ), nonzero,
+            static_cast< int >( g_golden_wpt_count ), found, calls, skipped );
+    else
+        LOG_ERROR( "water_point FAILED %d", failed );
+    return failed == 0;
+}
+
 inline bool verify_water_all( )
 {
     bool ok = true;
+    ok = verify_water_point( ) && ok;
     ok = verify_wake_kernels96( ) && ok;
     ok = verify_ocean_field( ) && ok;
     ok = verify_ocean_kernels96( ) && ok;
