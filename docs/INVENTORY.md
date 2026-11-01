@@ -18,10 +18,10 @@ Subsystems come from the RTTI class whose vtable holds the function (1253 classe
 
 | | functions | bytes of code |
 |---|---:|---:|
-| verified | 1772 | 740731 |
-| callee | 980 | 206936 |
-| cited | 364 | 124343 |
-| absent | 5522 | 1154250 |
+| verified | 1810 | 747082 |
+| callee | 1013 | 218084 |
+| cited | 366 | 124496 |
+| absent | 5449 | 1136598 |
 | **all** | **8638** | **2226260** |
 
 ## By subsystem
@@ -30,9 +30,9 @@ Sorted by code size. Counts are functions; the last column is the share of that 
 
 | subsystem | functions | verified | callee | cited | absent | verified bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| unattributed | 1845 | 419 | 195 | 87 | 1144 | 251440 of 695394 |
-| physics (Bullet) | 646 | 329 | 89 | 46 | 182 | 111398 of 256657 |
-| entity / component / script framework | 1094 | 166 | 174 | 42 | 712 | 55571 of 207438 |
+| unattributed | 1845 | 419 | 197 | 87 | 1142 | 251440 of 695394 |
+| physics (Bullet) | 646 | 332 | 89 | 47 | 178 | 112027 of 256657 |
+| entity / component / script framework | 1094 | 201 | 205 | 43 | 645 | 61293 of 207438 |
 | HUD / UI / fonts | 648 | 100 | 138 | 14 | 396 | 53572 of 184315 |
 | game modes / race | 766 | 81 | 60 | 22 | 603 | 40888 of 179957 |
 | rendering / gfx | 552 | 79 | 43 | 33 | 397 | 28659 of 126915 |
@@ -58,8 +58,8 @@ Over-approximate (a referenced vtable brings every slot) and under-approximate (
 
 | tier | functions | verified | callee | cited | absent | runtime / STL / thunk | platform layer | game + engine logic not verified |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| race | 4905 | 1537 | 683 | 327 | 2358 | 68 | 610 | 2784 |
-| game | 2431 | 233 | 295 | 35 | 1868 | 77 | 313 | 1817 |
+| race | 4905 | 1539 | 682 | 327 | 2357 | 68 | 610 | 2782 |
+| game | 2431 | 269 | 329 | 37 | 1796 | 77 | 313 | 1781 |
 | service | 452 | 0 | 0 | 0 | 452 | 45 | 98 | 309 |
 | dead | 850 | 2 | 2 | 2 | 844 | 61 | 126 | 661 |
 
