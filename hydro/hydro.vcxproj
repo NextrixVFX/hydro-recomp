@@ -189,9 +189,12 @@
     <ClInclude Include="workspace\core\ui\split.hxx" />
     <ClInclude Include="workspace\core\ui\ticker.hxx" />
     <ClInclude Include="workspace\core\ui\wiring.hxx" />
+    <ClInclude Include="workspace\core\world\action.hxx" />
     <ClInclude Include="workspace\core\world\animate.hxx" />
+    <ClInclude Include="workspace\core\world\background.hxx" />
     <ClInclude Include="workspace\core\world\blend.hxx" />
     <ClInclude Include="workspace\core\world\bodies.hxx" />
+    <ClInclude Include="workspace\core\world\breakable.hxx" />
     <ClInclude Include="workspace\core\world\build.hxx" />
     <ClInclude Include="workspace\core\world\collide.hxx" />
     <ClInclude Include="workspace\core\world\control.hxx" />
@@ -199,6 +202,7 @@
     <ClInclude Include="workspace\core\world\dynamics.hxx" />
     <ClInclude Include="workspace\core\world\dynprop.hxx" />
     <ClInclude Include="workspace\core\world\effects.hxx" />
+    <ClInclude Include="workspace\core\world\emitters.hxx" />
     <ClInclude Include="workspace\core\world\entities.hxx" />
     <ClInclude Include="workspace\core\world\field.hxx" />
     <ClInclude Include="workspace\core\world\force.hxx" />
@@ -213,6 +217,7 @@
     <ClInclude Include="workspace\core\world\lens.hxx" />
     <ClInclude Include="workspace\core\world\livery.hxx" />
     <ClInclude Include="workspace\core\world\logic.hxx" />
+    <ClInclude Include="workspace\core\world\mine.hxx" />
     <ClInclude Include="workspace\core\world\models.hxx" />
     <ClInclude Include="workspace\core\world\motion.hxx" />
     <ClInclude Include="workspace\core\world\pfx.hxx" />
