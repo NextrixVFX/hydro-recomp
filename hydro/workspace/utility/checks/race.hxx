@@ -2510,6 +2510,90 @@ inline bool verify_human_explosion( )
     return false;
 }
 
+// VuAiWaypointEntity's plugs (0x4325D0 -> 0x432780, 0x432740, 0x432760) and the AI manager's slot 16 0x404220 against
+// retail (oracle case waypoint_plugs): the waypoint's words, every sector's probability bits, the plan restarts.
+inline bool verify_waypoint_plugs( )
+{
+    const unsigned* g = g_golden_waypoint_plugs_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++, ns = *g++;
+        track_manager_t tm;
+        tm.sectors.resize( ns );
+        for ( auto& s : tm.sectors )
+            std::memcpy( s.image + 0xC8, g++, 4 );
+        fleet_manager_t m;
+        std::vector< fleet_pilot_t > pilots( *g++ );
+        for ( std::size_t j = 0; j < pilots.size( ); ++j )
+        {
+            const unsigned n = *g++;
+            for ( unsigned k = 0; k < n; ++k )
+                pilots[ j ].plan.sectors.push_back( static_cast< int >( *g++ ) );
+            fleet_entry_t e;
+            e.pilot = static_cast< int >( j );
+            m.entries.push_back( e );
+        }
+        track_waypoint_t w;
+        w.sector_a = static_cast< std::int32_t >( *g++ );
+        w.sector_b = static_cast< std::int32_t >( *g++ );
+        std::memcpy( &w.p.branch_a, g++, 4 );
+        std::memcpy( &w.p.branch_b, g++, 4 );
+        w.p.allow_recovery = static_cast< std::uint8_t >( *g++ );
+        std::uint8_t params[ 0x84 ];
+        std::memcpy( params, g, 0x84 );
+        g += 33;
+        std::vector< int > direct( *g++ );
+        for ( int& s : direct )
+            s = static_cast< int >( *g++ );
+        const unsigned a8b = *g++, aa = *g++, ab = *g++;
+        const unsigned* aprobs = g;
+        g += ns;
+        const unsigned aret = *g++;
+        std::vector< std::vector< unsigned > > glog( *g++ );
+        for ( auto& e : glog )
+        {
+            e.assign( g, g + 2 );
+            g += 2;
+        }
+        std::vector< std::vector< unsigned > > log;
+        fleet_random_t rng;
+        auto restart = [ & ]( int pilot, int sector ) { log.push_back( { static_cast< unsigned >( pilot ), static_cast< unsigned >( sector ) } ); };
+        auto replan = [ & ]( const int ( &list )[ 2 ] ) { fleet_replan( m, pilots, tm, 2, list, rng, restart ); };
+        unsigned ret = 0xCDCDCDCDu;
+        bool known = true;
+        if ( fn == 1 )
+        {
+            known = waypoint_update_branches( tm, w, params, replan );
+            ret = 0;
+        }
+        else if ( fn == 2 || fn == 3 )
+        {
+            waypoint_allow_recovery( w, fn == 2 );
+            ret = 0;
+        }
+        else
+            fleet_replan( m, pilots, tm, static_cast< int >( direct.size( ) ), direct.data( ), rng, restart );
+        unsigned mine_a, mine_b;
+        std::memcpy( &mine_a, &w.p.branch_a, 4 );
+        std::memcpy( &mine_b, &w.p.branch_b, 4 );
+        bool same = known && log == glog && w.p.allow_recovery == a8b && mine_a == aa && mine_b == ab && ret == aret;
+        for ( unsigned i = 0; i < ns; ++i )
+            same = same && contact_u32( tm.sectors[ i ].image, 0xC8 ) == aprobs[ i ];
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "waypoint_plugs vector %u (function %u): +0xA0 0x%X (retail 0x%X), +0xA4 0x%X (0x%X), %zu restarts (%zu)", v, fn, mine_a, aa, mine_b,
+                       ab, log.size( ), glog.size( ) );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuAiWaypointEntity's plugs 0x4325D0 / 0x432780 / 0x432740 / 0x432760 and the AI manager's slot 16 0x404220 match retail: %u vectors", nv );
+        return true;
+    }
+    LOG_ERROR( "waypoint_plugs FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -2539,5 +2623,6 @@ inline bool verify_race_all( )
     ok = verify_contact_added( ) && ok;
     ok = verify_boat_rtti( ) && ok;
     ok = verify_human_explosion( ) && ok;
+    ok = verify_waypoint_plugs( ) && ok;
     return ok;
 }
