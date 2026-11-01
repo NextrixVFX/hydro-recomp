@@ -338,9 +338,179 @@ inline bool verify_pfx_lifecycle( )
     return failed == 0;
 }
 
+// VuPfx systems END TO END (world/pfxsim.hxx: pfx_system_tick with pfx_heap_pattern_tick, every process's slot 1 by
+// its vtable, the fountains' emit + slot 2 on the heap) against retail running its own per-frame code (case pfx_run):
+// after the init and every operation, the 25 resource words, every block word (but the stack-word pads: system +0x8C /
+// +0x9C, pattern +0x38 / +0x48, and a directional fountain particle's +0x24 / a geom fountain particle's +0x50 - here
+// every particle's +0x24 and +0x50 are skipped, as the case cannot tell which fountain made a particle) and the
+// VuRand's 34 words; no unrecreated path may be reached.
+struct pfx_check_run_t
+{
+    std::map< std::uint32_t, std::vector< std::uint32_t > > kids;
+    pfx_frame_t frame;
+    std::uint32_t r = 0;
+};
+
+inline bool verify_pfx_run( )
+{
+    const unsigned* s = g_golden_prn_words;
+    const std::uint32_t res = s[ 0 ];
+    const std::uint32_t blocks[ 4 ] = { s[ 1 ], s[ 2 ], s[ 3 ], s[ 4 ] };
+    std::uint32_t authored[ 8 ], pairs[ 8 ];
+    std::memcpy( authored, s + 5, 32 );
+    std::memcpy( pairs, s + 5, 32 );
+    for ( int k = 1; k < 8; k += 2 )
+        pairs[ k ] = ( pairs[ k ] + 15u ) & 0xFFFFFFF0u;
+    pfx_check_run_t run;
+    run.r = res;
+    const unsigned* box = s + 13;
+    for ( int k = 0; k < 3; ++k )
+    {
+        std::memcpy( &run.frame.geom_box[ k ], box + k, 4 );
+        std::memcpy( &run.frame.geom_box[ 3 + k ], box + 4 + k, 4 );
+    }
+    float camera[ 3 ];
+    std::memcpy( camera, s + 21, 12 );
+    pfx_rand_t rand;
+    rand.seed = static_cast< std::int32_t >( s[ 24 ] );
+    rand.previous = static_cast< std::int32_t >( s[ 25 ] );
+    for ( int k = 0; k < 32; ++k )
+        rand.table[ k ] = static_cast< std::int32_t >( s[ 26 + k ] );
+    run.frame.cameras = camera;
+    run.frame.camera_count = 1;
+    run.frame.rand = &rand;
+    s += 58;
+    pfx_heap_t h;
+    h.add( res, 0x64 );
+    for ( int k = 0; k < 4; ++k )
+        h.add( blocks[ k ], pairs[ 2 * k ] * pairs[ 2 * k + 1 ] );
+    const unsigned nnodes = *s++;
+    std::vector< std::uint32_t > addr;
+    for ( const unsigned* ns = s; addr.size( ) < nnodes; )
+    {
+        addr.push_back( ns[ 0 ] );
+        const unsigned nw = ns[ 2 ];
+        ns += 4 + 2 * nw + ns[ 3 + 2 * nw ];
+    }
+    h.add( addr[ 0 ], 0x100u * nnodes );
+    for ( unsigned i = 0; i < nnodes; ++i )
+    {
+        const std::uint32_t a = s[ 0 ];
+        h[ a ] = s[ 1 ];
+        const unsigned nw = s[ 2 ];
+        for ( unsigned k = 0; k < nw; ++k )
+            h[ a + s[ 3 + 2 * k ] ] = s[ 4 + 2 * k ];
+        const unsigned nk = s[ 3 + 2 * nw ];
+        std::vector< std::uint32_t >& v = run.kids[ a ];
+        for ( unsigned k = 0; k < nk; ++k )
+            v.push_back( addr[ s[ 4 + 2 * nw + k ] ] );
+        s += 4 + 2 * nw + nk;
+    }
+    pfx_sim_hooks_t hooks;
+    hooks.user = &run;
+    hooks.children = []( void* u, std::uint32_t node ) -> const std::vector< std::uint32_t >* {
+        auto& m = static_cast< pfx_check_run_t* >( u )->kids;
+        auto it = m.find( node );
+        return it == m.end( ) ? nullptr : &it->second;
+    };
+    hooks.pattern_tick = []( void* u, pfx_heap_t& hp, std::uint32_t pattern, float dt ) {
+        pfx_check_run_t& c = *static_cast< pfx_check_run_t* >( u );
+        pfx_heap_pattern_tick( hp, c.r, pattern, dt, c.frame );
+    };
+    const std::uint32_t sizes[ 4 ] = { pairs[ 0 ] * pairs[ 1 ], pairs[ 2 ] * pairs[ 3 ], pairs[ 4 ] * pairs[ 5 ], pairs[ 6 ] * pairs[ 7 ] };
+    int compared = 0;
+    auto compare = [ & ]( const unsigned* want, int step ) {
+        int bad = 0;
+        auto one = [ & ]( std::uint32_t got, std::uint32_t w, const char* what, std::uint32_t o ) {
+            ++compared;
+            if ( got == w )
+                return;
+            static std::map< const char*, int > logged;
+            if ( logged[ what ]++ < 3 )
+                LOG_ERROR( "pfx_run step %d: %s +0x%X = 0x%08X, retail 0x%08X", step, what, o, got, w );
+            ++bad;
+        };
+        for ( std::uint32_t k = 0; k < 25; ++k )
+            one( h[ res + 4 * k ], *want++, "resources", 4 * k );
+        static const char* const names[ 4 ] = { "systems", "patterns", "processes", "particles" };
+        for ( int b = 0; b < 4; ++b )
+            for ( std::uint32_t o = 0; o < sizes[ b ]; o += 4, ++want )
+            {
+                const std::uint32_t in = o % pairs[ 2 * b + 1 ];
+                if ( ( b == 0 && ( in == 0x8Cu || in == 0x9Cu ) ) || ( b == 1 && ( in == 0x38u || in == 0x48u ) ) ||
+                     ( b == 3 && ( in == 0x24u || in == 0x50u ) ) )
+                    continue;
+                one( h[ blocks[ b ] + o ], *want, names[ b ], o );
+            }
+        one( static_cast< std::uint32_t >( rand.seed ), *want++, "VuRand", 0 );
+        one( static_cast< std::uint32_t >( rand.previous ), *want++, "VuRand", 4 );
+        for ( int k = 0; k < 32; ++k )
+            one( static_cast< std::uint32_t >( rand.table[ k ] ), *want++, "VuRand", 8 + 4 * k );
+        return bad;
+    };
+    const std::size_t region = 25 + ( sizes[ 0 ] + sizes[ 1 ] + sizes[ 2 ] + sizes[ 3 ] ) / 4 + 34;
+    pfx_resources_ctor( h, res );
+    pfx_resources_init( h, res, authored, blocks );
+    int failed = compare( s, -1 ) ? 1 : 0;
+    s += region;
+    const unsigned nops = *s++;
+    int particles = 0;
+    for ( unsigned i = 0; i < nops; ++i )
+    {
+        const unsigned code = *s++;
+        int bad = 0;
+        switch ( code )
+        {
+        case 0: bad += pfx_system_instance_create( h, res, addr[ s[ 0 ] ], hooks ) != s[ 1 ] ? 1 : 0; s += 2; break;
+        case 1: pfx_system_start( h, s[ 0 ] ); s += 1; break;
+        case 3:
+        {
+            float dt;
+            std::memcpy( &dt, s + 1, 4 );
+            pfx_system_tick( h, s[ 0 ], dt, hooks );
+            s += 2;
+            break;
+        }
+        case 4: pfx_system_stop( h, res, s[ 0 ], s[ 1 ] != 0u ); s += 2; break;
+        case 5: pfx_system_release( h, res, s[ 0 ] ); s += 1; break;
+        case 7:
+            for ( int k = 0; k < 3; ++k )
+            {
+                h[ s[ 0 ] + 0x4C + 4 * k ] = s[ 1 + k ];
+                h[ s[ 0 ] + 0x5C + 4 * k ] = s[ 4 + k ];
+            }
+            s += 7;
+            break;
+        default: pfx_impl_tick( h, res ); break;
+        }
+        bad += compare( s, static_cast< int >( i ) );
+        const int live = static_cast< int >( pairs[ 6 ] - h[ res + 0x3C ] );
+        particles = live > particles ? live : particles;
+        s += region;
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "pfx_run step %d (operation %u): %d differences", static_cast< int >( i ), code, bad );
+        }
+    }
+    if ( run.frame.unrecreated != 0 )
+    {
+        ++failed;
+        LOG_ERROR( "pfx_run reached %d unrecreated paths", run.frame.unrecreated );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuPfx systems end to end (create, start, the real pattern / fountain / tick-process frames, stop, release) match "
+                     "retail's memory over %d operations (up to %d live particles), %d words",
+            static_cast< int >( nops ), particles, compared );
+    else
+        LOG_ERROR( "pfx_run FAILED %d of %d steps", failed, static_cast< int >( nops ) + 1 );
+    return failed == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_pfx_run( ) && ok;
     ok = verify_pfx_lifecycle( ) && ok;
     ok = verify_pattern_draw( ) && ok;
     ok = verify_fountain_init( ) && ok;

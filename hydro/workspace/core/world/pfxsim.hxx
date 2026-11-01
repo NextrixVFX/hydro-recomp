@@ -512,3 +512,258 @@ inline void pfx_impl_tick( pfx_heap_t& h, std::uint32_t r )
 {
     h[ r + 0x60 ] = 0u;
 }
+
+// ---------------------------------------------------------------------------
+// THE PER-FRAME BODIES ON THE HEAP: a pattern instance's tick and its
+// processes' slot 1, dispatched by vtable as retail's virtual calls are.
+// What a frame needs from outside the pools: the viewports' camera positions
+// (g_vuviewportmanager 0x759060: +4 count, +0x28 + 0x274 k), the global VuRand
+// 0x736810, the static box 0x7593F0 (CRT initializer 0x64B690) a geom pattern
+// without a model reads, and the count of paths reached that are not
+// recreated (the trail pattern's tick 0x58F0C0, the boat processes - thrust
+// 0x4CD5B0, hull 0x4CE760, boat spring 0x4CD980 need a boat -, the water snap
+// 0x529140 of a fountain whose params +0x90 byte is set).
+struct pfx_frame_t
+{
+    const float* cameras = nullptr;   // x y z per viewport
+    int camera_count = 0;
+    pfx_rand_t* rand = nullptr;
+    float geom_box[ 6 ]{};            // 0x7593F0: min x y z, max x y z
+    int unrecreated = 0;
+};
+
+inline pfx_quad_particle_t& pfx_heap_particle( pfx_heap_t& h, std::uint32_t p )
+{
+    return *reinterpret_cast< pfx_quad_particle_t* >( h.find( p ) );   // a particle's words are contiguous in its block
+}
+
+inline pfx_tick_particle_t pfx_heap_tick_in( pfx_heap_t& h, std::uint32_t p )
+{
+    pfx_tick_particle_t t;
+    t.velocity[ 0 ] = h.f( p + 0x18 );
+    t.velocity[ 1 ] = h.f( p + 0x1C );
+    t.velocity[ 2 ] = h.f( p + 0x20 );
+    t.alpha = h.f( p + 0x34 );
+    t.scale = h.f( p + 0x38 );
+    t.age = h.f( p + 0x3C );
+    t.world_scale_z = h.f( p + 0x4C );
+    return t;
+}
+
+inline void pfx_heap_tick_out( pfx_heap_t& h, std::uint32_t p, const pfx_tick_particle_t& t )
+{
+    h.set( p + 0x18, t.velocity[ 0 ] );
+    h.set( p + 0x1C, t.velocity[ 1 ] );
+    h.set( p + 0x20, t.velocity[ 2 ] );
+    h.set( p + 0x34, t.alpha );
+    h.set( p + 0x38, t.scale );
+    h.set( p + 0x3C, t.age );
+    h.set( p + 0x4C, t.world_scale_z );
+}
+
+struct pfx_heap_emit_t
+{
+    pfx_heap_t* h;
+    std::uint32_t r, pattern, process;
+    pfx_rand_t* rand;
+    float matrix[ 16 ];
+};
+
+// One process instance's slot 1 (dt). The fountains' 0x55D030 (world/pfx.hxx
+// pfx_fountain_emit: allocation = the pattern's slot 4 pfx_particle_allocate,
+// the matrix its slot 5, the init the instance's slot 2 - 0x55E100 / 0x55E9B0
+// / 0x55E640 by the instance vtable); the tick processes walk the pattern's
+// particles first to next with their per-particle bodies.
+inline void pfx_process_tick( pfx_heap_t& h, std::uint32_t r, std::uint32_t b, float dt, pfx_frame_t& f )
+{
+    const std::uint32_t node = h[ b + 0x10 ];
+    const std::uint32_t pattern = h[ b + 0x0C ];
+    const std::uint32_t vt = h[ b ];
+    float params[ 8 ];
+    for ( int k = 0; k < 8; ++k )
+        params[ k ] = h.f( node + 0x30 + 4 * k );
+    auto each = [ & ]( auto&& body ) {
+        for ( std::uint32_t p = h[ pattern + 0x20 ]; p != 0u; p = h[ p ] )
+        {
+            pfx_tick_particle_t t = pfx_heap_tick_in( h, p );
+            body( t );
+            pfx_heap_tick_out( h, p, t );
+        }
+    };
+    switch ( vt )
+    {
+    case 0x746AE0u:   // the quad fountain
+    case 0x74EEE8u:   // the directional quad fountain
+    case 0x74EF1Cu:   // the geom fountain
+    {
+        const std::uint8_t* bytes = reinterpret_cast< const std::uint8_t* >( h.find( node ) );
+        if ( bytes[ 0x90 ] != 0u )
+            ++f.unrecreated;   // the water snap 0x529140
+        pfx_fountain_node_t n;
+        n.alive = static_cast< int >( h[ b + 0x14 ] );
+        n.accumulator = h.f( b + 0x18 );
+        n.count_scale = h.f( b + 0x1C );
+        n.rate_scale = h.f( b + 0x20 );
+        n.alpha_scale = h.f( b + 0x24 );
+        pfx_heap_emit_t e{ &h, r, pattern, b, f.rand, {} };
+        const std::uint32_t m = pfx_pattern_spawn_matrix( h, pattern );
+        static const float identity[ 16 ] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+        for ( int k = 0; k < 16; ++k )
+            e.matrix[ k ] = m == 0u ? identity[ k ] : h.f( m + 4 * k );
+        pfx_fountain_hooks_t hooks;
+        hooks.user = &e;
+        hooks.allocate = []( void* u ) -> pfx_quad_particle_t* {
+            pfx_heap_emit_t& x = *static_cast< pfx_heap_emit_t* >( u );
+            const std::uint32_t p = pfx_particle_allocate( *x.h, x.r, x.pattern );
+            return p != 0u ? &pfx_heap_particle( *x.h, p ) : nullptr;
+        };
+        hooks.matrix = []( void* u ) -> const float* { return static_cast< pfx_heap_emit_t* >( u )->matrix; };
+        hooks.init = []( void* u, pfx_quad_particle_t& p ) {
+            pfx_heap_emit_t& x = *static_cast< pfx_heap_emit_t* >( u );
+            pfx_heap_t& hh = *x.h;
+            const std::uint8_t* pb = reinterpret_cast< const std::uint8_t* >( hh.find( hh[ x.process + 0x10 ] ) );
+            const std::uint32_t s = hh[ x.pattern + 0x0C ];
+            const float velocity[ 3 ] = { hh.f( s + 0x5C ), hh.f( s + 0x60 ), hh.f( s + 0x64 ) };
+            switch ( hh[ x.process ] )
+            {
+            case 0x74EEE8u: pfx_directional_fountain_init( *x.rand, pb, velocity, x.matrix, p ); break;
+            case 0x74EF1Cu: pfx_geom_fountain_init( *x.rand, pb, x.matrix, p ); break;
+            default: pfx_quad_fountain_init( *x.rand, pb, p ); break;
+            }
+        };
+        const std::uint32_t s = h[ pattern + 0x0C ];
+        const float position[ 3 ] = { h.f( s + 0x4C ), h.f( s + 0x50 ), h.f( s + 0x54 ) };
+        const float velocity[ 3 ] = { h.f( s + 0x5C ), h.f( s + 0x60 ), h.f( s + 0x64 ) };
+        pfx_fountain_emit( n, bytes, *f.rand, f.cameras, f.camera_count, position, velocity, dt, hooks );
+        h[ b + 0x14 ] = static_cast< std::uint32_t >( n.alive );
+        h.set( b + 0x18, n.accumulator );
+        break;
+    }
+    case 0x7501B0u: each( [ & ]( pfx_tick_particle_t& t ) { pfx_tick_dampen( t, params, dt ); } ); break;
+    case 0x750240u: each( [ & ]( pfx_tick_particle_t& t ) { pfx_tick_accelerate( t, params, dt ); } ); break;
+    case 0x7503E8u: each( [ & ]( pfx_tick_particle_t& t ) { pfx_tick_world_scale_z( t, params, dt ); } ); break;
+    case 0x75043Cu: each( [ & ]( pfx_tick_particle_t& t ) { pfx_tick_scale( t, params, dt ); } ); break;
+    case 0x7504BCu: each( [ & ]( pfx_tick_particle_t& t ) { pfx_tick_alpha_in_out( t, params, dt ); } ); break;
+    case 0x750558u: each( [ & ]( pfx_tick_particle_t& t ) { pfx_tick_alpha( t, params, dt ); } ); break;
+    case 0x750128u:   // the spring constraint: its offset at the instance's +0x14 .. +0x1C
+    {
+        const float offset[ 3 ] = { h.f( b + 0x14 ), h.f( b + 0x18 ), h.f( b + 0x1C ) };
+        for ( std::uint32_t p = h[ pattern + 0x20 ]; p != 0u; p = h[ p ] )
+        {
+            float w[ 25 ];
+            std::memcpy( w, h.find( p ), sizeof( w ) );
+            pfx_tick_spring( w, params, offset, dt );
+            std::memcpy( h.find( p ), w, sizeof( w ) );
+        }
+        break;
+    }
+    default: ++f.unrecreated; break;   // the boat processes
+    }
+}
+
+// The quad / geom pattern instances' slot 1 (0x591C30 / 0x58FEA0; world/pfx.hxx
+// pfx_pattern_tick, the same body on the heap): past the system clock's Start
+// Delay (params +0x38) integrate every particle, run every process's slot 1
+// first to last, retire the dead to the free particles; then the AABB.
+inline void pfx_heap_pattern_tick( pfx_heap_t& h, std::uint32_t r, std::uint32_t pattern, float dt, pfx_frame_t& f )
+{
+    const std::uint32_t s = h[ pattern + 0x0C ];
+    const std::uint32_t node = h[ pattern + 0x10 ];
+    const std::uint32_t vt = h[ pattern ];
+    if ( vt != 0x7505D8u && vt != 0x750354u )
+    {
+        ++f.unrecreated;   // the trail pattern's tick 0x58F0C0
+        return;
+    }
+    const bool geom = vt == 0x750354u;
+    if ( _mm_comigt_ss( _mm_set_ss( h.f( s + 0xA4 ) ), _mm_set_ss( h.f( node + 0x38 ) ) ) )
+    {
+        for ( std::uint32_t n = h[ pattern + 0x20 ]; n != 0u; n = h[ n ] )
+        {
+            const float vy = h.f( n + 0x1C ) * dt;
+            const float vz = h.f( n + 0x20 ) * dt;
+            h.set( n + 0x08, ( dt * h.f( n + 0x18 ) ) + h.f( n + 0x08 ) );
+            h.set( n + 0x0C, h.f( n + 0x0C ) + vy );
+            h.set( n + 0x10, h.f( n + 0x10 ) + vz );
+            h.set( n + 0x3C, dt + h.f( n + 0x3C ) );
+            if ( !geom )
+                h.set( n + 0x44, ( h.f( n + 0x48 ) * dt ) + h.f( n + 0x44 ) );
+            else
+            {
+                h.set( n + 0x44, ( dt * h.f( n + 0x54 ) ) + h.f( n + 0x44 ) );
+                h.set( n + 0x48, ( h.f( n + 0x58 ) * dt ) + h.f( n + 0x48 ) );
+                h.set( n + 0x4C, ( h.f( n + 0x5C ) * dt ) + h.f( n + 0x4C ) );
+            }
+        }
+        for ( std::uint32_t b = h[ pattern + 0x14 ]; b != 0u; b = h[ b + 4 ] )
+            pfx_process_tick( h, r, b, dt, f );
+        auto below = []( float x ) { return !_mm_comige_ss( _mm_set_ss( x ), _mm_setzero_ps( ) ); };
+        for ( std::uint32_t n = h[ pattern + 0x20 ]; n != 0u; )
+        {
+            const std::uint32_t next = h[ n ];
+            const bool dead = below( h.f( n + 0x40 ) - h.f( n + 0x3C ) ) || below( h.f( n + 0x34 ) ) || below( h.f( n + 0x38 ) ) ||
+                              ( !geom && below( h.f( n + 0x4C ) ) );
+            if ( dead )
+            {
+                const std::uint32_t prev = h[ n + 4 ];
+                if ( n == h[ pattern + 0x20 ] )
+                    h[ pattern + 0x20 ] = next;
+                if ( n == h[ pattern + 0x24 ] )
+                    h[ pattern + 0x24 ] = prev;
+                if ( next != 0u )
+                    h[ next + 4 ] = prev;
+                if ( prev != 0u )
+                    h[ prev ] = next;
+                --h[ pattern + 0x28 ];
+                pfx_particle_free( h, r, n );
+            }
+            n = next;
+        }
+    }
+    if ( h[ pattern + 0x28 ] == 0u )
+    {
+        for ( std::uint32_t o : { 0x2Cu, 0x30u, 0x34u, 0x3Cu, 0x40u, 0x44u } )
+            h[ pattern + o ] = 0u;
+        return;
+    }
+    static const float identity[ 16 ] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+    float m[ 16 ];
+    for ( int k = 0; k < 16; ++k )
+        m[ k ] = h[ node + 0x34 ] == 1u ? h.f( s + 0x1C + 4 * k ) : identity[ k ];
+    const float instance_scale = h.f( s + 0xA8 );
+    const float big = 3.4028235e38f;
+    float lo[ 3 ] = { big, big, big }, hi[ 3 ] = { -big, -big, -big };
+    auto mn = []( float a, float b ) { return _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); };
+    auto mx = []( float a, float b ) { return _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( a ), _mm_set_ss( b ) ) ); };
+    float half_diagonal = 0.0f;
+    if ( geom )
+    {
+        const std::uint32_t asset = h[ node + 0x6C ];
+        float box[ 6 ];
+        for ( int k = 0; k < 6; ++k )
+            box[ k ] = asset != 0u ? h.f( asset + 0x5C + 4 * ( k < 3 ? k : k + 1 ) ) : f.geom_box[ k ];
+        const float hy = ( box[ 4 ] - box[ 1 ] ) * 0.5f;
+        const float hx = ( box[ 3 ] - box[ 0 ] ) * 0.5f;
+        const float hz = ( box[ 5 ] - box[ 2 ] ) * 0.5f;
+        half_diagonal = _mm_cvtss_f32( _mm_sqrt_ss( _mm_set_ss( ( ( hy * hy ) + ( hx * hx ) ) + ( hz * hz ) ) ) );
+    }
+    for ( std::uint32_t n = h[ pattern + 0x20 ]; n != 0u; n = h[ n ] )
+    {
+        const float px = h.f( n + 0x08 ), py = h.f( n + 0x0C ), pz = h.f( n + 0x10 );
+        const float x = ( ( ( m[ 0 ] * px ) + ( m[ 4 ] * py ) ) + ( m[ 8 ] * pz ) ) + m[ 12 ];
+        const float y = ( ( ( m[ 1 ] * px ) + ( m[ 5 ] * py ) ) + ( m[ 9 ] * pz ) ) + m[ 13 ];
+        const float z = ( ( ( m[ 2 ] * px ) + ( m[ 6 ] * py ) ) + ( pz * m[ 10 ] ) ) + m[ 14 ];
+        const float rr = !geom ? ( instance_scale * 0.5f ) * h.f( n + 0x38 ) : ( h.f( n + 0x38 ) * instance_scale ) * half_diagonal;
+        lo[ 0 ] = mn( lo[ 0 ], x - rr );
+        lo[ 1 ] = mn( lo[ 1 ], y - rr );
+        lo[ 2 ] = mn( lo[ 2 ], z - rr );
+        hi[ 0 ] = mx( hi[ 0 ], x + rr );
+        hi[ 1 ] = mx( hi[ 1 ], y + rr );
+        hi[ 2 ] = mx( hi[ 2 ], z + rr );
+    }
+    for ( int k = 0; k < 3; ++k )
+    {
+        h.set( pattern + 0x2C + 4 * k, lo[ k ] );
+        h.set( pattern + 0x3C + 4 * k, hi[ k ] );
+    }
+}

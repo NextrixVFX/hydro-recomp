@@ -280,7 +280,7 @@ inline void water_world_euler( const float* world, float* euler )
     const float lo = _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( 1.0f ), _mm_set_ss( -world[ 2 ] ) ) );
     const float s = _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( -1.0f ), _mm_set_ss( lo ) ) );
     euler[ 0 ] = static_cast< float >( std::atan2( static_cast< double >( world[ 6 ] ), static_cast< double >( world[ 10 ] ) ) );
-    euler[ 1 ] = std::asin( s );
+    euler[ 1 ] = static_cast< float >( std::asin( static_cast< double >( s ) ) );   // the CRT double function narrowed, as field.hxx's powf / expf
     euler[ 2 ] = static_cast< float >( std::atan2( static_cast< double >( world[ 1 ] ), static_cast< double >( world[ 0 ] ) ) );
 }
 
