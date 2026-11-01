@@ -1701,9 +1701,66 @@ inline bool verify_water_shutdown( )
     return bad == 0;
 }
 
+// water_map_unload / water_map_destroy (world/query.hxx) against VuWaterMapAsset's unload 0x5C8780 and slot 0 0x5C7D00 on
+// Hydroelectric's maps loaded from the pack (case water_map_unload). Compared: the loaded size and entry count, the CRT
+// frees, VuAsset's dtor reached with the vtable 0x752498, the words +0x58 .. +0x8F after (each array as pointer / size /
+// capacity: ours null and empty).
+inline bool verify_water_map_unload( )
+{
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) )
+    {
+        LOG_ERROR( "water_map_unload: the pack did not open" );
+        return false;
+    }
+    int failed = 0;
+    for ( std::size_t i = 0; i < g_golden_wmu_count; ++i )
+    {
+        const golden_water_map_unload_t& g = g_golden_wmu[ i ];
+        std::vector< std::uint8_t > blob;
+        water_map_t m;
+        if ( !archive.read( ( std::string( "VuWaterMapAsset/" ) + g.name ).c_str( ), blob ) || !water_map_load( blob.data( ), blob.size( ), m ) )
+        {
+            ++failed;
+            LOG_ERROR( "water_map_unload: %s did not load", g.name );
+            continue;
+        }
+        int bad = m.width != g.before[ 0 ] || m.height != g.before[ 1 ] || m.entries.size( ) != g.before[ 2 ];
+        int based = 0;
+        const int frees = g.dtor ? water_map_destroy( m, []( void* u ) { ++*static_cast< int* >( u ); }, &based ) : water_map_unload( m );
+        bad += frees != static_cast< int >( g.frees ) || ( g.dtor ? ( based != 1 || g.base != 0x752498u ) : g.base != 0u );
+        auto arr = []( const auto& v, unsigned* w ) {
+            w[ 0 ] = v.empty( ) ? 0u : 1u;
+            w[ 1 ] = static_cast< unsigned >( v.size( ) );
+            w[ 2 ] = static_cast< unsigned >( v.capacity( ) );
+        };
+        unsigned ours[ 14 ] = { m.width, m.height };
+        arr( m.map, ours + 2 );
+        arr( m.second, ours + 5 );
+        arr( m.third, ours + 8 );
+        arr( m.entries, ours + 11 );
+        for ( int k = 0; k < 14; ++k )
+            bad += ours[ k ] != g.after[ k ];
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "water_map_unload: %s (%s): %d differences", g.name, g.dtor ? "slot 0" : "unload", bad );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_map_unload / water_map_destroy match VuWaterMapAsset 0x5C8780 / 0x5C7D00 on %d loads of Hydroelectric's maps: "
+                     "the frees, the base dtor, every word after",
+            static_cast< int >( g_golden_wmu_count ) );
+    else
+        LOG_ERROR( "water_map_unload FAILED %d of %d", failed, static_cast< int >( g_golden_wmu_count ) );
+    return failed == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_water_map_unload( ) && ok;
     ok = verify_water_shutdown( ) && ok;
     ok = verify_point_entity( ) && ok;
     ok = verify_water_surface_release( ) && ok;
