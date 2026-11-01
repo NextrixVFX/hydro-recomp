@@ -263,6 +263,9 @@
     <ClInclude Include="workspace\core\entity\bind.hxx">
       <Filter>workspace\core\entity</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\entity\broadcast.hxx">
+      <Filter>workspace\core\entity</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\entity\corona.hxx">
       <Filter>workspace\core\entity</Filter>
     </ClInclude>
