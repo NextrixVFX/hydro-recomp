@@ -767,6 +767,29 @@ inline int water_create_point_wave( water_built_t& b, const std::uint32_t* desc 
     return water_hold_wave( b.hold, water_held_from( b.waves.back( ).word ) );
 }
 
+// VuPointWaveEntity_tick 0x5D4C50 (thiscall entity; float dt), THE EXPORT the
+// entity's Emit path calls: when the pending byte +0x9C is set it is cleared
+// and the descriptor at entity +0x70 is the transform component's +0x80 ..
+// +0x8F (the world position, four words) followed by the entity's +0x80 ..
+// +0x9B - the ctor 0x5D43B0's bindings, in order: Falloff Time, Magnitude,
+// Range Start, Range End, Speed, Frequency, Foaminess; then 0x528E10, entity
+// +0xA0 = the wave, wave +0x8C = entity + 0x5C (its VuPointWaveCallbackIF:
+// the wave's tick fires it once on expiry). The +0x8C pointer is held here as
+// a non-zero word with `known` false - the caller owns the expiry hook.
+// READ FROM THE DISASSEMBLY, NOT ORACLE-MEASURED as a unit (0x528E10 and the
+// ctor it calls are: case point_waves).
+inline int water_point_wave_emit( water_built_t& b, const std::uint32_t* position, const std::uint32_t* properties )
+{
+    std::uint32_t desc[ 11 ];
+    for ( int k = 0; k < 4; ++k )
+        desc[ k ] = position[ k ];
+    for ( int k = 0; k < 7; ++k )
+        desc[ 4 + k ] = properties[ k ];
+    const int wave = water_create_point_wave( b, desc );
+    b.waves.back( ).word[ 140 / 4 ] = 1u;   // entity + 0x5C: non-null
+    return wave;
+}
+
 // Is `cls` a water class (registry category "Water") this build does not
 // make? Counted so the gap is visible.
 inline bool water_class_unbuilt( const std::string& cls )
