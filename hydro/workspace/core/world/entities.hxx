@@ -484,6 +484,25 @@ inline void c_world::load_entity_tree( const char* asset, const value_t& project
     water_build_world( *m_tree, m_water, []( entity_t& e ) { return entity_transform( e ); } );
     LOG_INFO( "water: %u surfaces, %u waves built from the tree; %d water entities not built", static_cast< unsigned >( m_water.surfaces.size( ) ),
         static_cast< unsigned >( m_water.waves.size( ) ), m_water.skipped );
+    // Each surface's VuWaterMapAsset (+0x100) by its WaterMap name; the fetch
+    // is the asset manager hook (the pack read). A name the pack lacks keeps a
+    // null map, counted.
+    const int maps_missing = water_build_maps(
+        m_water,
+        []( void* user, const std::string& asset, std::vector< std::uint8_t >& blob ) {
+            return static_cast< c_archive* >( user )->read( asset.c_str( ), blob );
+        },
+        &m_archive );
+    // KNOWN GAP (surface.hxx, the water area's): the race project instantiates
+    // the level through templates, and the WaterMap property's template mark
+    // (VuAssetProperty slot 7 = 0x406A70: default = value) is not recreated -
+    // water_entity_load falls back to the empty ctor default - so every
+    // surface here arrives with no name and keeps a null map.
+    int maps_named = 0;
+    for ( const std::string& name : m_water.map_names )
+        maps_named += name.empty( ) ? 0 : 1;
+    LOG_INFO( "water: %d of %u surfaces name a water map, %d named but not loaded", maps_named,
+        static_cast< unsigned >( m_water.map_names.size( ) ), maps_missing );
     water_view_build( m_water, m_water_view );
     // The water renderer's templates (its ctor's 0x595D40) and our draw's geometry: k_water_draw_vertices
     // degenerate vertices with the indices 0 .. n-1, placed once per scene (world.hxx water_draw).
