@@ -2,6 +2,7 @@
 
 #include <workspace/core/collision/teardown.hxx>
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <xmmintrin.h>
@@ -579,9 +580,8 @@ inline std::uint32_t bt_matrix3x3_construct( const bt_mem_t& m, std::uint32_t se
 // size (+4, unsigned) -> -1; else the chain from m_hashTable[index] (+0xC)
 // through m_next (+0x20) until -1 or m_keyArray[i] (+0x48, 8-byte keys, the
 // first word) equals the key.
-inline std::uint32_t bt_hash_map_find_index( const bt_mem_t& m, std::uint32_t self, std::uint32_t key_ptr )
+inline std::uint32_t bt_hash_wang( std::uint32_t key )
 {
-    const std::uint32_t key = m.rd( m.user, key_ptr );
     const auto sar = []( std::uint32_t v, int s ) { return static_cast< std::uint32_t >( static_cast< std::int32_t >( v ) >> s ); };
     std::uint32_t h = key + ~( key << 15 );
     h ^= sar( h, 10 );
@@ -589,13 +589,24 @@ inline std::uint32_t bt_hash_map_find_index( const bt_mem_t& m, std::uint32_t se
     h ^= sar( h, 6 );
     h += ~( h << 11 );
     h ^= sar( h, 16 );
-    const std::uint32_t index = h & ( m.rd( m.user, self + 0x30 ) - 1u );
+    return h;
+}
+
+// findIndex on the key's word (0x551E90's body; 0x5516E0 inlines it).
+inline std::uint32_t bt_hash_map_find( const bt_mem_t& m, std::uint32_t self, std::uint32_t key )
+{
+    const std::uint32_t index = bt_hash_wang( key ) & ( m.rd( m.user, self + 0x30 ) - 1u );
     if ( index >= m.rd( m.user, self + 4 ) )
         return 0xFFFFFFFFu;
     std::uint32_t i = m.rd( m.user, m.rd( m.user, self + 0xC ) + 4u * index );
     while ( i != 0xFFFFFFFFu && key != m.rd( m.user, m.rd( m.user, self + 0x48 ) + 8u * i ) )
         i = m.rd( m.user, m.rd( m.user, self + 0x20 ) + 4u * i );
     return i;
+}
+
+inline std::uint32_t bt_hash_map_find_index( const bt_mem_t& m, std::uint32_t self, std::uint32_t key_ptr )
+{
+    return bt_hash_map_find( m, self, m.rd( m.user, key_ptr ) );
 }
 // btBoxShape::getHalfExtentsWithMargin 0x548B20 (thiscall; out*; retn 4):
 // out = m_implicitShapeDimensions (+0x20, 16 bytes); getMargin (vt+0x28)
@@ -751,4 +762,525 @@ inline void bt_world_serialize_rigid_bodies( const bt_mem_t& m, std::uint32_t se
     }
     for ( std::int32_t i = 0; i < static_cast< std::int32_t >( m.rd( m.user, self + 0xB8 ) ); ++i )
         bt_serialize_chunk( m, m.rd( m.user, m.rd( m.user, self + 0xC0 ) + 4u * static_cast< std::uint32_t >( i ) ), serializer, 0x20, 0x24, 0x534E4F43u );
+}
+// --- btHashMap<btHashPtr, btCollisionShape*> (boat batch 21; 0x50 bytes, Bullet
+// 2.79): four btAlignedObjectArrays - +0x00 m_hashTable (int), +0x14 m_next
+// (int), +0x28 m_valueArray (pointers), +0x3C m_keyArray (8-byte btHashPtr: the
+// pointer, then the union's second word). The hash is bt_hash_wang masked by
+// m_valueArray's capacity (+0x30) - 1.
+
+// btAlignedObjectArray::reserve inlined (the map's arrays): a block of count x
+// `stride` bytes (btAlignedAlloc( size, 16 ); none for 0), the m_size elements
+// copied (each only to a non-null destination - placement new), the old block
+// freed when owned (then m_data = 0), m_ownsMemory = 1, m_data, m_capacity.
+inline void bt_array_reserve( const bt_mem_t& m, std::uint32_t array, std::uint32_t count, std::uint32_t stride )
+{
+    const std::uint32_t block = count != 0 ? bt_aligned_alloc( m, count * stride, 16 ) : 0u;
+    const std::int32_t size = static_cast< std::int32_t >( m.rd( m.user, array + 4 ) );
+    for ( std::int32_t i = 0; i < size; ++i )
+    {
+        const std::uint32_t to = block + stride * static_cast< std::uint32_t >( i );
+        if ( to == 0 )
+            continue;
+        const std::uint32_t from = m.rd( m.user, array + 12 ) + stride * static_cast< std::uint32_t >( i );
+        for ( std::uint32_t k = 0; k < stride; k += 4 )
+            m.wr( m.user, to + k, m.rd( m.user, from + k ) );
+    }
+    const std::uint32_t data = m.rd( m.user, array + 12 );
+    if ( data != 0 )
+    {
+        if ( m.rd8( m.user, array + 16 ) != 0 )
+            bt_aligned_free( m, data );
+        m.wr( m.user, array + 12, 0 );
+    }
+    m.wr8( m.user, array + 16, 1 );
+    m.wr( m.user, array + 12, block );
+    m.wr( m.user, array + 8, count );
+}
+
+// push_back inlined: at size == capacity (both read first) a reserve of
+// size ? 2 x size : 1 when the capacity is (signed) below it; the element
+// (`words` words read from `from`) to data + stride x size when that is
+// non-null; ++size.
+inline void bt_array_push( const bt_mem_t& m, std::uint32_t array, std::uint32_t stride, std::uint32_t from )
+{
+    const std::int32_t size = static_cast< std::int32_t >( m.rd( m.user, array + 4 ) );
+    const std::int32_t capacity = static_cast< std::int32_t >( m.rd( m.user, array + 8 ) );
+    if ( size == capacity )
+    {
+        const std::int32_t grown = size != 0 ? size * 2 : 1;
+        if ( capacity < grown )
+            bt_array_reserve( m, array, static_cast< std::uint32_t >( grown ), stride );
+    }
+    const std::uint32_t to = m.rd( m.user, array + 12 ) + stride * m.rd( m.user, array + 4 );
+    if ( to != 0 )
+        for ( std::uint32_t k = 0; k < stride; k += 4 )
+            m.wr( m.user, to + k, m.rd( m.user, from + k ) );
+    m.wr( m.user, array + 4, m.rd( m.user, array + 4 ) + 1u );
+}
+
+// resize( n ) of an int array inlined (growTables): n (signed) below m_size
+// -> only m_size = n; above it a reserve( n ) when the capacity is below n,
+// then the new elements [m_size, n) = 0 (non-null destinations); m_size = n.
+inline void bt_int_array_resize( const bt_mem_t& m, std::uint32_t array, std::int32_t n )
+{
+    const std::int32_t size = static_cast< std::int32_t >( m.rd( m.user, array + 4 ) );
+    if ( n >= size )
+    {
+        if ( n > size && static_cast< std::int32_t >( m.rd( m.user, array + 8 ) ) < n )
+            bt_array_reserve( m, array, static_cast< std::uint32_t >( n ), 4 );
+        for ( std::int32_t i = size; i < n; ++i )
+        {
+            const std::uint32_t to = m.rd( m.user, array + 12 ) + 4u * static_cast< std::uint32_t >( i );
+            if ( to != 0 )
+                m.wr( m.user, to, 0 );
+        }
+    }
+    m.wr( m.user, array + 4, static_cast< std::uint32_t >( n ) );
+}
+
+// btHashMap::growTables 0x551C70 (thiscall; key* - unused; retn 4): newSize =
+// m_valueArray's capacity, curHashtableSize = m_hashTable's size; only when
+// cur < newSize: both int arrays resized to newSize, every m_hashTable /
+// m_next entry -1, then for i < cur (the OLD hashtable size, as retail) key i
+// relinked: m_next[i] = m_hashTable[h], m_hashTable[h] = i.
+inline void bt_hash_map_grow_tables( const bt_mem_t& m, std::uint32_t self )
+{
+    const std::int32_t n = static_cast< std::int32_t >( m.rd( m.user, self + 0x30 ) );
+    const std::int32_t cur = static_cast< std::int32_t >( m.rd( m.user, self + 4 ) );
+    if ( cur >= n )
+        return;
+    bt_int_array_resize( m, self, n );
+    bt_int_array_resize( m, self + 0x14, n );
+    for ( std::int32_t i = 0; i < n; ++i )
+        m.wr( m.user, m.rd( m.user, self + 0xC ) + 4u * static_cast< std::uint32_t >( i ), 0xFFFFFFFFu );
+    for ( std::int32_t i = 0; i < n; ++i )
+        m.wr( m.user, m.rd( m.user, self + 0x20 ) + 4u * static_cast< std::uint32_t >( i ), 0xFFFFFFFFu );
+    for ( std::int32_t i = 0; i < cur; ++i )
+    {
+        const std::uint32_t key = m.rd( m.user, m.rd( m.user, self + 0x48 ) + 8u * static_cast< std::uint32_t >( i ) );
+        const std::uint32_t h = bt_hash_wang( key ) & ( m.rd( m.user, self + 0x30 ) - 1u );
+        m.wr( m.user, m.rd( m.user, self + 0x20 ) + 4u * static_cast< std::uint32_t >( i ), m.rd( m.user, m.rd( m.user, self + 0xC ) + 4u * h ) );
+        m.wr( m.user, m.rd( m.user, self + 0xC ) + 4u * h, static_cast< std::uint32_t >( i ) );
+    }
+}
+
+// btHashMap::insert 0x551A30 (thiscall; key*, value*; retn 8): the hash under
+// the capacity at entry kept; a key found (findIndex 0x551E90) -> its value
+// replaced; else value and key pushed (m_valueArray, then the 8-byte key),
+// growTables + the hash again when the value array's capacity grew (signed),
+// and the new index linked at the head of its bucket. The key / value are
+// re-read through their pointers where retail re-reads them.
+inline void bt_hash_map_insert( const bt_mem_t& m, std::uint32_t self, std::uint32_t key_ptr, std::uint32_t value_ptr )
+{
+    const std::uint32_t old_capacity = m.rd( m.user, self + 0x30 );
+    std::uint32_t h = bt_hash_wang( m.rd( m.user, key_ptr ) ) & ( old_capacity - 1u );
+    const std::uint32_t index = bt_hash_map_find_index( m, self, key_ptr );
+    if ( index != 0xFFFFFFFFu )
+    {
+        m.wr( m.user, m.rd( m.user, self + 0x34 ) + 4u * index, m.rd( m.user, value_ptr ) );
+        return;
+    }
+    const std::uint32_t count = m.rd( m.user, self + 0x2C );
+    bt_array_push( m, self + 0x28, 4, value_ptr );
+    bt_array_push( m, self + 0x3C, 8, key_ptr );
+    if ( static_cast< std::int32_t >( old_capacity ) < static_cast< std::int32_t >( m.rd( m.user, self + 0x30 ) ) )
+    {
+        bt_hash_map_grow_tables( m, self );
+        h = bt_hash_wang( m.rd( m.user, key_ptr ) ) & ( m.rd( m.user, self + 0x30 ) - 1u );
+    }
+    m.wr( m.user, m.rd( m.user, self + 0x20 ) + 4u * count, m.rd( m.user, m.rd( m.user, self + 0xC ) + 4u * h ) );
+    m.wr( m.user, m.rd( m.user, self + 0xC ) + 4u * h, count );
+}
+
+// btHashMap's dtor 0x5518B0: the four arrays cleared, keys, values, next,
+// hashtable (bt_array_clear each).
+inline void bt_hash_map_destroy( const bt_mem_t& m, std::uint32_t self )
+{
+    bt_array_clear( m, self + 0x3C );
+    bt_array_clear( m, self + 0x28 );
+    bt_array_clear( m, self + 0x14 );
+    bt_array_clear( m, self );
+}
+
+// btCollisionWorld::serializeCollisionObjects 0x5516E0 (serializer; retn 4):
+// each collision object (+8 count, +0x10 data, re-read) whose internal type
+// (+0xF4, a dword) is 1 -> its vt+0x14 serializeSingleObject( serializer );
+// then a local btHashMap of the shapes already done: each object's shape
+// (+0xCC) not found (findIndex inlined: found = index != -1 and &values[index]
+// non-null) -> insert( shape, shape ) and the shape's vt+0x34
+// serializeSingleShape( serializer ); the map's dtor. `frame` = 0x5C bytes
+// standing in for retail's stack frame: the map at +0, the key at +0x50 (its
+// second word is never written - the caller's stale word, copied into the key
+// array as retail copies its stack), the value at +0x58.
+inline void bt_collision_world_serialize_objects( const bt_mem_t& m, std::uint32_t self, std::uint32_t serializer, std::uint32_t frame )
+{
+    for ( std::int32_t i = 0; i < static_cast< std::int32_t >( m.rd( m.user, self + 8 ) ); ++i )
+    {
+        const std::uint32_t object = m.rd( m.user, m.rd( m.user, self + 0x10 ) + 4u * static_cast< std::uint32_t >( i ) );
+        if ( m.rd( m.user, object + 0xF4 ) == 1u )
+            m.vcall( m.user, object, 0x14, &serializer, 1 );
+    }
+    const std::uint32_t map = frame, key = frame + 0x50, value = frame + 0x58;
+    for ( std::uint32_t a = 0; a < 0x50; a += 0x14 )
+    {
+        m.wr8( m.user, map + a + 16, 1 );
+        m.wr( m.user, map + a + 12, 0 );
+        m.wr( m.user, map + a + 4, 0 );
+        m.wr( m.user, map + a + 8, 0 );
+    }
+    for ( std::int32_t i = 0; i < static_cast< std::int32_t >( m.rd( m.user, self + 8 ) ); ++i )
+    {
+        const std::uint32_t object = m.rd( m.user, m.rd( m.user, self + 0x10 ) + 4u * static_cast< std::uint32_t >( i ) );
+        const std::uint32_t shape = m.rd( m.user, object + 0xCC );
+        m.wr( m.user, value, shape );
+        const std::uint32_t index = bt_hash_map_find( m, map, shape );
+        if ( index != 0xFFFFFFFFu && m.rd( m.user, map + 0x34 ) + 4u * index != 0 )
+            continue;
+        m.wr( m.user, key, shape );
+        bt_hash_map_insert( m, map, key, value );
+        m.vcall( m.user, shape, 0x34, &serializer, 1 );
+    }
+    bt_hash_map_destroy( m, map );
+}
+
+// btCollisionWorld::serialize 0x551A00 (slot 10; serializer; retn 4): the
+// serializer's vt+0x1C startSerialization, serializeCollisionObjects, vt+0x20
+// finishSerialization. btDiscreteDynamicsWorld::serialize 0x605D60 (slot 10)
+// adds serializeRigidBodies 0x605C90 before the objects.
+inline void bt_collision_world_serialize( const bt_mem_t& m, std::uint32_t self, std::uint32_t serializer, std::uint32_t frame, bool dynamics )
+{
+    m.vcall( m.user, serializer, 0x1C, nullptr, 0 );
+    if ( dynamics )
+        bt_world_serialize_rigid_bodies( m, self, serializer );
+    bt_collision_world_serialize_objects( m, self, serializer, frame );
+    m.vcall( m.user, serializer, 0x20, nullptr, 0 );
+}
+// btDbvt::collideTV 0x56F220 (static; ecx = root - the callers test it, it
+// does not; volume*, policy*; retn 8) with btDbvtBroadphase's
+// BroadphaseAabbTester policy (one word, the callback: Process(leaf) = its
+// vt+4 process( leaf->data (+0x24) )): the volume copied (min +0, max +0x10,
+// four lanes each), a btAlignedObjectArray stack reserved to 64 (btAlignedAlloc
+// 0x100), the root pushed; until empty: pop; the node (min +0, max +0x10)
+// intersects when no lane 0..2 has volume.max < node.min or node.max <
+// volume.min (cmpltps: a NaN lane intersects); an internal node (childs[1]
+// +0x28 non-zero) pushes childs[0] (+0x24) then childs[1], a leaf calls the
+// policy. A push at size == capacity grows to 2 x size (1 at 0): a new
+// block, the size entries copied, the old block freed (owned: no test). The
+// stack's block freed at the end.
+inline void bt_dbvt_collide_tv( const bt_mem_t& m, std::uint32_t root, std::uint32_t volume, std::uint32_t policy )
+{
+    float v[ 8 ];
+    for ( int k = 0; k < 8; ++k )
+        v[ k ] = bt_rdf( m, volume + 4u * static_cast< std::uint32_t >( k ) );
+    std::uint32_t data = bt_aligned_alloc( m, 0x100, 16 );
+    std::int32_t capacity = 0x40;
+    if ( data != 0 )
+        m.wr( m.user, data, root );
+    std::int32_t size = 1;
+    const auto push = [ & ]( std::uint32_t node ) {
+        if ( size == capacity )
+        {
+            const std::int32_t grown = size != 0 ? size * 2 : 1;
+            if ( capacity < grown )
+            {
+                const std::uint32_t block = grown != 0 ? bt_aligned_alloc( m, 4u * static_cast< std::uint32_t >( grown ), 16 ) : 0u;
+                for ( std::int32_t i = 0; i < size; ++i )
+                    if ( block + 4u * static_cast< std::uint32_t >( i ) != 0 )
+                        m.wr( m.user, block + 4u * static_cast< std::uint32_t >( i ), m.rd( m.user, data + 4u * static_cast< std::uint32_t >( i ) ) );
+                if ( data != 0 )
+                    bt_aligned_free( m, data );
+                data = block;
+                capacity = grown;
+            }
+        }
+        if ( data + 4u * static_cast< std::uint32_t >( size ) != 0 )
+            m.wr( m.user, data + 4u * static_cast< std::uint32_t >( size ), node );
+        ++size;
+    };
+    do
+    {
+        const std::uint32_t n = m.rd( m.user, data + 4u * static_cast< std::uint32_t >( size - 1 ) );
+        --size;
+        bool apart = false;
+        for ( std::uint32_t k = 0; k < 3; ++k )
+            apart = apart || v[ 4 + k ] < bt_rdf( m, n + 4 * k ) || bt_rdf( m, n + 0x10 + 4 * k ) < v[ k ];
+        if ( apart )
+            continue;
+        if ( m.rd( m.user, n + 0x28 ) != 0 )
+        {
+            push( m.rd( m.user, n + 0x24 ) );
+            push( m.rd( m.user, n + 0x28 ) );
+        }
+        else
+        {
+            const std::uint32_t leaf = m.rd( m.user, n + 0x24 );
+            m.vcall( m.user, m.rd( m.user, policy ), 4, &leaf, 1 );
+        }
+    } while ( size > 0 );
+    if ( data != 0 )
+        bt_aligned_free( m, data );
+}
+
+// btDbvtBroadphase::aabbTest 0x56E0D0 (slot 6; aabbMin*, aabbMax*, callback;
+// retn 0Ch): the policy (the callback) and the volume from the two points
+// (four lanes each) on its stack, then collideTV over m_sets[0] (root +4)
+// and m_sets[1] (root +0x2C) where the root is set. `frame` = 0x24 bytes
+// standing in for that stack: the policy word at +0, the volume at +4.
+inline void bt_dbvt_broadphase_aabb_test( const bt_mem_t& m, std::uint32_t self, std::uint32_t aabb_min, std::uint32_t aabb_max, std::uint32_t callback,
+                                          std::uint32_t frame )
+{
+    const std::uint32_t volume = frame + 4;
+    m.wr( m.user, frame, callback );
+    for ( std::uint32_t k = 0; k < 16; k += 4 )
+    {
+        m.wr( m.user, volume + k, m.rd( m.user, aabb_min + k ) );
+        m.wr( m.user, volume + 0x10 + k, m.rd( m.user, aabb_max + k ) );
+    }
+    if ( const std::uint32_t root = m.rd( m.user, self + 4 ) )
+        bt_dbvt_collide_tv( m, root, volume, frame );
+    if ( const std::uint32_t root = m.rd( m.user, self + 0x2C ) )
+        bt_dbvt_collide_tv( m, root, volume, frame );
+}
+
+// btPolyhedralConvexShape::localGetSupportingVertexWithoutMargin 0x54B230
+// (slot; out*, dir*; retn 8; eax = out): out = 0; maxDot = -9.99999984e17
+// (0xDD5E0B6B); the direction's length squared (y y + x x) + z z under
+// 9.99999975e-05 (ordered) -> (1, 0, 0), else the direction x 1 / sqrt; then
+// for each vertex (getNumVertices vt+0x58, re-asked each step; getVertex
+// vt+0x64( i, v* ) through io) the dot (v.y d.y + v.x d.x) + v.z d.z above
+// maxDot (ordered) -> out = v (four lanes), maxDot = dot.
+inline std::uint32_t bt_polyhedral_local_support( const bt_io_t& io, std::uint32_t self, std::uint32_t out, std::uint32_t dir )
+{
+    const bt_mem_t& m = *io.m;
+    for ( std::uint32_t k = 0; k < 16; k += 4 )
+        m.wr( m.user, out + k, 0 );
+    float max_dot;
+    const std::uint32_t lowest = 0xDD5E0B6Bu;
+    std::memcpy( &max_dot, &lowest, 4 );
+    const float x = bt_rdf( m, dir ), y = bt_rdf( m, dir + 4 ), z = bt_rdf( m, dir + 8 );
+    const float len2 = ( y * y + x * x ) + z * z;
+    float dx = 1.0f, dy = 0.0f, dz = 0.0f;
+    if ( !( 9.99999975e-05f > len2 ) )
+    {
+        const float r = 1.0f / std::sqrt( len2 );
+        dx = x * r;
+        dy = y * r;
+        dz = z * r;
+    }
+    for ( std::int32_t i = 0; i < static_cast< std::int32_t >( m.vcall( m.user, self, 0x58, nullptr, 0 ) ); ++i )
+    {
+        const std::uint32_t a = static_cast< std::uint32_t >( i );
+        std::uint32_t v[ 4 ] = { };
+        io.vcall_out( m.user, self, 0x64, &a, 1, v, 4 );
+        float f[ 3 ];
+        std::memcpy( f, v, 12 );
+        const float dot = ( f[ 1 ] * dy + f[ 0 ] * dx ) + f[ 2 ] * dz;
+        if ( dot > max_dot )
+        {
+            for ( std::uint32_t k = 0; k < 4; ++k )
+                m.wr( m.user, out + 4 * k, v[ k ] );
+            max_dot = dot;
+        }
+    }
+    return out;
+}
+
+// btPolyhedralConvexShape::batchedUnitVectorGetSupportingVertexWithoutMargin
+// 0x54B3C0 (dirs*, outs*, n; retn 0Ch): each out's w = -9.99999984e17; then
+// per direction j, per vertex (vt+0x58 re-asked, vt+0x64 through io) the dot
+// (d.x v.x + d.y v.y) + d.z v.z above out[ j ].w (ordered) -> out[ j ] = v
+// (four lanes), then its w = the dot.
+inline void bt_polyhedral_batched_support( const bt_io_t& io, std::uint32_t self, std::uint32_t dirs, std::uint32_t outs, std::int32_t n )
+{
+    const bt_mem_t& m = *io.m;
+    for ( std::int32_t j = 0; j < n; ++j )
+        m.wr( m.user, outs + 16u * static_cast< std::uint32_t >( j ) + 0xC, 0xDD5E0B6Bu );
+    for ( std::int32_t j = 0; j < n; ++j )
+    {
+        const std::uint32_t d = dirs + 16u * static_cast< std::uint32_t >( j ), o = outs + 16u * static_cast< std::uint32_t >( j );
+        for ( std::int32_t i = 0; i < static_cast< std::int32_t >( m.vcall( m.user, self, 0x58, nullptr, 0 ) ); ++i )
+        {
+            const std::uint32_t a = static_cast< std::uint32_t >( i );
+            std::uint32_t v[ 4 ] = { };
+            io.vcall_out( m.user, self, 0x64, &a, 1, v, 4 );
+            float f[ 3 ];
+            std::memcpy( f, v, 12 );
+            const float dot = ( bt_rdf( m, d ) * f[ 0 ] + bt_rdf( m, d + 4 ) * f[ 1 ] ) + bt_rdf( m, d + 8 ) * f[ 2 ];
+            if ( dot > bt_rdf( m, o + 0xC ) )
+            {
+                for ( std::uint32_t k = 0; k < 4; ++k )
+                    m.wr( m.user, o + 4 * k, v[ k ] );
+                bt_wrf( m, o + 0xC, dot );
+            }
+        }
+    }
+}
+
+// btTriangleShape::isInside 0x5B8110 (slot 28; point*, tolerance; retn 8; al):
+// the normal (e1 x e2 of the vertices +0x50 / +0x60 / +0x70) normalised (1 /
+// sqrt), the point's plane distance within [-tol, tol] (both ordered: a NaN
+// is outside), then for each edge (getEdge vt+0x60( i, pa*, pb* ) through io)
+// its inward normal (edge x normal, normalised) - the point's distance below
+// -tol (ordered) -> false. Products / sums in retail's grouping.
+inline bool bt_triangle_is_inside( const bt_io_t& io, std::uint32_t self, std::uint32_t point, std::uint32_t tolerance_bits )
+{
+    const bt_mem_t& m = *io.m;
+    const auto v = [ & ]( std::uint32_t k, std::uint32_t lane ) { return bt_rdf( m, self + 0x50 + 0x10 * k + 4 * lane ); };
+    const float e1y = v( 1, 1 ) - v( 0, 1 ), e1z = v( 1, 2 ) - v( 0, 2 ), e2z = v( 2, 2 ) - v( 0, 2 );
+    const float e2y = v( 2, 1 ) - v( 0, 1 ), e1x = v( 1, 0 ) - v( 0, 0 ), e2x = v( 2, 0 ) - v( 0, 0 );
+    const float nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+    const float r = 1.0f / std::sqrt( ( ny * ny + nx * nx ) + nz * nz );
+    const float ux = nx * r, uy = ny * r, uz = nz * r;
+    const float px = bt_rdf( m, point ), py = bt_rdf( m, point + 4 ), pz = bt_rdf( m, point + 8 );
+    const float dist = ( ( uy * py + px * ux ) + uz * pz ) - ( ( v( 0, 1 ) * uy + v( 0, 0 ) * ux ) + v( 0, 2 ) * uz );
+    float tol, neg;
+    const std::uint32_t neg_bits = tolerance_bits ^ 0x80000000u;
+    std::memcpy( &tol, &tolerance_bits, 4 );
+    std::memcpy( &neg, &neg_bits, 4 );
+    if ( !( dist >= neg ) || !( tol >= dist ) )
+        return false;
+    for ( std::uint32_t i = 0; i < 3; ++i )
+    {
+        std::uint32_t w[ 8 ] = { };
+        io.vcall_out( m.user, self, 0x60, &i, 1, w, 8 );
+        float pa[ 3 ], pb[ 3 ];
+        std::memcpy( pa, w, 12 );
+        std::memcpy( pb, w + 4, 12 );
+        const float edz = pb[ 2 ] - pa[ 2 ], edy = pb[ 1 ] - pa[ 1 ], edx = pb[ 0 ] - pa[ 0 ];
+        const float enx = edy * uz - edz * uy, eny = edz * ux - edx * uz, enz = edx * uy - edy * ux;
+        const float s = 1.0f / std::sqrt( ( eny * eny + enx * enx ) + enz * enz );
+        const float qx = enx * s, qy = eny * s, qz = enz * s;
+        const float edist = ( ( qy * py + px * qx ) + qz * pz ) - ( ( qy * pa[ 1 ] + qx * pa[ 0 ] ) + qz * pa[ 2 ] );
+        if ( neg > edist )
+            return false;
+    }
+    return true;
+}
+
+// btConvexPlaneCollisionAlgorithm::CreateFunc::CreateCollisionAlgorithm
+// 0x56C5B0 (ci*, body0, body1; retn 0Ch): mem = the dispatcher's (ci +0)
+// vt+0x34 allocateCollisionAlgorithm( 0x1C ); null -> 0; else the ctor
+// inline: [mem] = 0x7573CC then 0x7575BC, +4 the dispatcher, +8 m_ownManifold
+// 0, +0xC m_manifoldPtr 0, +0x10 m_isSwapped (this +4 non-zero -> 1), +0x14 /
+// +0x18 = this +8 / +0xC (the perturbation iterations / threshold); the
+// bodies in that order (swapped: body1, body0) to needsCollision vt+0x14 -
+// al set -> m_manifoldPtr = getNewManifold vt+8 (same order) on mem +4, own
+// = 1. eax = mem.
+inline std::uint32_t bt_convex_plane_create( const bt_mem_t& m, std::uint32_t self, std::uint32_t ci, std::uint32_t body0, std::uint32_t body1 )
+{
+    const std::uint32_t size = 0x1C;
+    const std::uint32_t mem = m.vcall( m.user, m.rd( m.user, ci ), 0x34, &size, 1 );
+    const bool swapped = m.rd8( m.user, self + 4 ) != 0;
+    if ( mem == 0 )
+        return 0;
+    const std::uint32_t threshold = m.rd( m.user, self + 0xC ), iterations = m.rd( m.user, self + 8 );
+    const std::uint32_t dispatcher = m.rd( m.user, ci );
+    m.wr( m.user, mem, 0x7573CCu );
+    m.wr( m.user, mem + 4, dispatcher );
+    m.wr( m.user, mem + 0x14, iterations );
+    m.wr( m.user, mem, 0x7575BCu );
+    m.wr8( m.user, mem + 8, 0 );
+    m.wr( m.user, mem + 0xC, 0 );
+    m.wr8( m.user, mem + 0x10, swapped ? 1 : 0 );
+    m.wr( m.user, mem + 0x18, threshold );
+    const std::uint32_t bodies[ 2 ] = { swapped ? body1 : body0, swapped ? body0 : body1 };
+    if ( ( m.vcall( m.user, dispatcher, 0x14, bodies, 2 ) & 0xFFu ) != 0 )
+    {
+        m.wr( m.user, mem + 0xC, m.vcall( m.user, m.rd( m.user, mem + 4 ), 8, bodies, 2 ) );
+        m.wr8( m.user, mem + 8, 1 );
+    }
+    return mem;
+}
+// The transform products of btConvexShape's getAabbSlow / project (a
+// btTransform: basis rows +0 / +0x10 / +0x20, origin +0x30): every sum in
+// retail's grouping (the x and y terms first, then z, then the origin).
+// dir * basis (column k):
+inline float bt_basis_column_dot( const bt_mem_t& m, std::uint32_t trans, std::uint32_t k, const float* v )
+{
+    return ( bt_rdf( m, trans + 4 * k ) * v[ 0 ] + bt_rdf( m, trans + 0x10 + 4 * k ) * v[ 1 ] ) + bt_rdf( m, trans + 0x20 + 4 * k ) * v[ 2 ];
+}
+
+// trans( s ) row r:
+inline float bt_transform_row( const bt_mem_t& m, std::uint32_t trans, std::uint32_t r, const float* s )
+{
+    const std::uint32_t row = trans + 0x10 * r;
+    return ( ( bt_rdf( m, row ) * s[ 0 ] + bt_rdf( m, row + 4 ) * s[ 1 ] ) + bt_rdf( m, row + 8 ) * s[ 2 ] ) + bt_rdf( m, trans + 0x30 + 4 * r );
+}
+
+// localGetSupportingVertex vt+0x38( out*, dir* ) through io: the direction's
+// four words go as the call's arguments (the w lane 0), the vertex comes back
+// through out (retail reads it from out, or through the returned out).
+inline void bt_convex_support_call( const bt_io_t& io, std::uint32_t self, const float* dir, float* out )
+{
+    std::uint32_t d[ 4 ] = { 0, 0, 0, 0 };
+    std::memcpy( d, dir, 12 );
+    std::uint32_t o[ 4 ] = { };
+    io.vcall_out( io.m->user, self, 0x38, d, 4, o, 4 );
+    std::memcpy( out, o, 12 );
+}
+
+// btConvexShape::getAabbSlow 0x552F90 (trans*, min*, max*; retn 0Ch): margin
+// = getMargin (vt+0x28, `margin` answers it) once; per axis i: the unit
+// vector e_i (the others 0) through the basis, its supporting vertex
+// transformed, max[ i ] = that + margin; then -e_i the same, min[ i ] = that
+// - margin.
+inline void bt_convex_aabb_slow( const bt_io_t& io, std::uint32_t self, std::uint32_t trans, std::uint32_t mn, std::uint32_t mx,
+                                 std::uint32_t ( *margin )( const bt_mem_t& m, std::uint32_t self ) )
+{
+    const bt_mem_t& m = *io.m;
+    const std::uint32_t mb = margin( m, self );
+    float mf;
+    std::memcpy( &mf, &mb, 4 );
+    for ( std::uint32_t i = 0; i < 3; ++i )
+    {
+        for ( int sign = 0; sign < 2; ++sign )
+        {
+            float vec[ 3 ] = { 0.0f, 0.0f, 0.0f };
+            vec[ i ] = sign == 0 ? 1.0f : -1.0f;
+            const float dir[ 3 ] = { bt_basis_column_dot( m, trans, 0, vec ), bt_basis_column_dot( m, trans, 1, vec ),
+                                     bt_basis_column_dot( m, trans, 2, vec ) };
+            float s[ 3 ];
+            bt_convex_support_call( io, self, dir, s );
+            const float t = bt_transform_row( m, trans, i, s );
+            if ( sign == 0 )
+                bt_wrf( m, mx + 4 * i, t + mf );
+            else
+                bt_wrf( m, mn + 4 * i, t - mf );
+        }
+    }
+}
+
+// btConvexShape::project 0x553610 (trans*, dir*, min*, max*; retn 10h): the
+// local axis dir * basis; the supporting vertices along it and along its
+// negation (sign bits flipped), each transformed; min = vertex1 . dir, max =
+// vertex2 . dir ((y, x first) then z); min > max (ordered) -> swapped.
+inline void bt_convex_project( const bt_io_t& io, std::uint32_t self, std::uint32_t trans, std::uint32_t dir, std::uint32_t mn, std::uint32_t mx )
+{
+    const bt_mem_t& m = *io.m;
+    const float d[ 3 ] = { bt_rdf( m, dir ), bt_rdf( m, dir + 4 ), bt_rdf( m, dir + 8 ) };
+    const float axis[ 3 ] = { bt_basis_column_dot( m, trans, 0, d ), bt_basis_column_dot( m, trans, 1, d ), bt_basis_column_dot( m, trans, 2, d ) };
+    float s[ 3 ];
+    bt_convex_support_call( io, self, axis, s );
+    const float v1[ 3 ] = { bt_transform_row( m, trans, 0, s ), bt_transform_row( m, trans, 1, s ), bt_transform_row( m, trans, 2, s ) };
+    float neg[ 3 ];
+    for ( int k = 0; k < 3; ++k )
+    {
+        std::uint32_t w;
+        std::memcpy( &w, &axis[ k ], 4 );
+        w ^= 0x80000000u;
+        std::memcpy( &neg[ k ], &w, 4 );
+    }
+    bt_convex_support_call( io, self, neg, s );
+    const float v2[ 3 ] = { bt_transform_row( m, trans, 0, s ), bt_transform_row( m, trans, 1, s ), bt_transform_row( m, trans, 2, s ) };
+    const float lo = ( bt_rdf( m, dir + 4 ) * v1[ 1 ] + bt_rdf( m, dir ) * v1[ 0 ] ) + bt_rdf( m, dir + 8 ) * v1[ 2 ];
+    bt_wrf( m, mn, lo );
+    const float hi = ( bt_rdf( m, dir + 4 ) * v2[ 1 ] + bt_rdf( m, dir ) * v2[ 0 ] ) + bt_rdf( m, dir + 8 ) * v2[ 2 ];
+    bt_wrf( m, mx, hi );
+    const float kept = bt_rdf( m, mn );
+    if ( kept > hi )
+    {
+        bt_wrf( m, mn, hi );
+        bt_wrf( m, mx, kept );
+    }
 }
