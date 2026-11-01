@@ -389,7 +389,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x415720,70,sub_415720,,,unattributed,callee,,False,False,race
 0x415770,43,sub_415770,,,unattributed,callee,,False,False,race
 0x4157A0,17,sub_4157A0,,,unattributed,verified,hydro/workspace/core/boat/fluid.hxx; hydro/workspace/utility/fluid.hxx,False,False,race
-0x4157C0,1430,sub_4157C0,,,unattributed,verified,hydro/workspace/core/boat/hull.hxx; hydro/workspace/core/world/surface.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/fluid.hxx,False,False,race
+0x4157C0,1430,sub_4157C0,,,unattributed,verified,hydro/workspace/core/boat/hull.hxx; hydro/workspace/core/ui/draw.hxx; hydro/workspace/core/world/surface.hxx; hydro/workspace/core/world/wave.hxx; hydro/workspace/utility/fluid.hxx,False,False,race
 0x415D60,1876,VuBoatHull_ctor,,,unattributed,verified,hydro/workspace/core/boat/parts.hxx; hydro/workspace/core/boat/sections.hxx; hydro/workspace/utility/check.hxx,False,False,race
 0x4164C0,365,sub_4164C0,,,unattributed,absent,,False,False,race
 0x416630,1773,sub_416630,,,unattributed,verified,hydro/workspace/core/boat/state.hxx; hydro/workspace/utility/checks/boat.hxx,False,False,race
@@ -594,7 +594,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4269D0,177,sub_4269D0,,,assets (by address),callee,,False,False,race
 0x426A90,173,sub_426A90,,,assets (by address),callee,,False,False,race
 0x426B40,52,sub_426B40,,,assets (by address),verified,hydro/workspace/core/world/surface.hxx,False,False,race
-0x426B80,142,sub_426B80,,,assets (by address),absent,,False,False,race
+0x426B80,142,sub_426B80,,,assets (by address),verified,hydro/workspace/core/ui/draw.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x426C10,6,sub_426C10,VuHUDMiniMapEntity,VuHUDMiniMapEntity+1,HUD / UI / fonts,absent,,False,False,race
 0x426C20,117,sub_426C20,,,HUD / UI / fonts (by address),callee,,False,False,race
 0x426CA0,194,sub_426CA0,,,HUD / UI / fonts (by address),callee,,False,False,race
@@ -611,11 +611,11 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x428C00,95,sub_428C00,,,unattributed,absent,,False,False,race
 0x428C60,255,sub_428C60,,,unattributed,callee,,False,False,race
 0x428D60,93,sub_428D60,,,unattributed,absent,,False,False,race
-0x428DC0,99,sub_428DC0,,,unattributed,absent,,False,False,race
+0x428DC0,99,sub_428DC0,,,unattributed,verified,hydro/workspace/core/ui/draw.hxx,False,False,race
 0x428E30,139,sub_428E30,,,unattributed,callee,,False,False,race
 0x428EC0,148,sub_428EC0,,,unattributed,callee,,False,False,race
 0x428F60,173,sub_428F60,,,unattributed,callee,,False,False,race
-0x429010,241,sub_429010,,,unattributed,absent,,False,False,race
+0x429010,241,sub_429010,,,unattributed,verified,hydro/workspace/core/ui/draw.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x429110,50,VuHUDOnScreenButtonEntity_load_Buttons,,,unattributed,callee,,False,False,race
 0x429150,6,sub_429150,VuConstStringEnumProperty; VuDBEntryProperty; VuInputAxisEnumProperty; VuInputButtonEnumProperty; VuStaticStringEnumProperty; VuUIEventEnumProperty,VuUIEventEnumProperty+1; VuInputAxisEnumProperty+1; VuInputButtonEnumProperty+1; VuStaticStringEnumProperty+1; VuDBEntryProperty+1; VuConstStringEnumProperty+1,HUD / UI / fonts,absent,,False,False,race
 0x429160,53,sub_429160,VuInputButtonEnumProperty,VuInputButtonEnumProperty+12,HUD / UI / fonts,absent,,False,False,race
@@ -4751,8 +4751,8 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x5070E0,97,sub_5070E0,,,rendering / gfx (by address),absent,,False,False,game
 0x507150,225,sub_507150,VuGfxUtil,VuGfxUtil+3,rendering / gfx,absent,,False,False,game
 0x507240,128,sub_507240,,,rendering / gfx (by address),absent,,False,False,game
-0x5072C0,74,sub_5072C0,,,rendering / gfx (by address),absent,,False,False,race
-0x507310,72,sub_507310,,,rendering / gfx (by address),absent,,False,False,race
+0x5072C0,74,sub_5072C0,,,rendering / gfx (by address),verified,hydro/workspace/core/ui/draw.hxx,False,False,race
+0x507310,72,sub_507310,,,rendering / gfx (by address),verified,hydro/workspace/core/ui/draw.hxx,False,False,race
 0x507360,200,sub_507360,,,rendering / gfx (by address),absent,,False,False,race
 0x507430,387,sub_507430,,,rendering / gfx (by address),absent,,False,False,race
 0x5075C0,206,sub_5075C0,,,rendering / gfx (by address),absent,,False,False,game
@@ -5333,12 +5333,12 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x536730,487,sub_536730,,,entity / component / script framework (by address),absent,,False,False,game
 0x536920,198,sub_536920,,,unattributed,absent,,False,False,game
 0x5369F0,540,sub_5369F0,,,unattributed,absent,,False,False,game
-0x536C10,1154,sub_536C10,,,unattributed,absent,,False,False,race
+0x536C10,1154,sub_536C10,,,unattributed,verified,hydro/workspace/core/ui/draw.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x5370A0,77,sub_5370A0,,,unattributed,absent,,False,False,race
 0x5370F0,730,sub_5370F0,,,unattributed,absent,,False,False,game
 0x5373D0,515,sub_5373D0,,,unattributed,absent,,False,False,game
-0x5375E0,27,sub_5375E0,,,unattributed,absent,,False,False,race
-0x537600,1231,sub_537600,,,unattributed,absent,,False,False,race
+0x5375E0,27,sub_5375E0,,,unattributed,cited,hydro/workspace/core/ui/draw.hxx,False,False,race
+0x537600,1231,sub_537600,,,unattributed,cited,hydro/workspace/core/ui/draw.hxx,False,False,race
 0x537AD0,649,sub_537AD0,,,unattributed,absent,,False,False,race
 0x537D60,75,sub_537D60,,,unattributed,absent,,False,False,race
 0x537DB0,305,sub_537DB0,,,unattributed,absent,,False,False,race
@@ -5775,7 +5775,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x554420,503,sub_554420,,,physics (Bullet) (by address),absent,,False,False,race
 0x554620,67,sub_554620,btCollisionShape; btTriangleMeshShape,btCollisionShape+12; btTriangleMeshShape+12,physics (Bullet),absent,,False,False,race
 0x554670,61,sub_554670,btBoxShape; btBvhTriangleMeshShape; btCollisionShape; btCompoundShape; btConvexTriangleMeshShape; btCylinderShape; btCylinderShapeX; btCylinderShapeZ; btPolyhedralConvexAabbCachingShape; btPolyhedralConvexShape; btSphereShape; btTriangleMeshShape; btTriangleShape,btSphereShape+13; btConvexTriangleMeshShape+13; btCompoundShape+13; btCollisionShape+13; btBoxShape+13; btPolyhedralConvexAabbCachingShape+13,physics (Bullet),absent,,False,False,race
-0x5546B0,120,sub_5546B0,,,physics (Bullet) (by address),absent,,False,False,race
+0x5546B0,120,sub_5546B0,,,physics (Bullet) (by address),verified,hydro/workspace/core/ui/draw.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x554730,11,sub_554730,VuMetroProfileManager,VuMetroProfileManager+4,save / settings / profile,absent,,False,False,service
 0x554740,89,sub_554740,,,save / settings / profile (by address),absent,,False,False,game
 0x5547A0,51,sub_5547A0,VuMetroProfileManager,VuMetroProfileManager+0,save / settings / profile,absent,,False,False,service
@@ -8303,29 +8303,29 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x6260E0,20,sub_6260E0,VuUIImpl,VuUIImpl+10,HUD / UI / fonts,absent,,False,False,race
 0x626100,7,sub_626100,VuUIImpl,VuUIImpl+11,HUD / UI / fonts,absent,,False,False,race
 0x626110,116,sub_626110,,,HUD / UI / fonts (by address),absent,,False,False,race
-0x626190,114,sub_626190,,,HUD / UI / fonts (by address),callee,,False,False,race
-0x626210,381,sub_626210,VuUIImpl,VuUIImpl+0,HUD / UI / fonts,absent,,False,False,race
+0x626190,114,sub_626190,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/draw.hxx,False,False,race
+0x626210,381,sub_626210,VuUIImpl,VuUIImpl+0,HUD / UI / fonts,cited,hydro/workspace/core/ui/draw.hxx,False,False,race
 0x626390,60,sub_626390,VuUIImpl,VuUIImpl+1,HUD / UI / fonts,absent,,False,False,race
 0x6263D0,519,sub_6263D0,VuUIImpl,VuUIImpl+4,HUD / UI / fonts,absent,,False,False,race
 0x6265E0,178,sub_6265E0,VuUIImpl,VuUIImpl+5,HUD / UI / fonts,absent,,False,False,race
 0x6266A0,161,sub_6266A0,VuUIImpl,VuUIImpl+6,HUD / UI / fonts,absent,,False,False,race
-0x626750,47,sub_626750,VuUIImpl,VuUIImpl+7,HUD / UI / fonts,absent,,False,False,race
+0x626750,47,sub_626750,VuUIImpl,VuUIImpl+7,HUD / UI / fonts,verified,hydro/workspace/core/ui/draw.hxx,False,False,race
 0x626780,17,sub_626780,VuUIImpl,VuUIImpl+12,HUD / UI / fonts,absent,,False,False,race
 0x6267A0,164,sub_6267A0,,,HUD / UI / fonts (by address),callee,,False,False,race
 0x626850,161,sub_626850,,,HUD / UI / fonts (by address),callee,,False,False,race
 0x626900,312,sub_626900,,,HUD / UI / fonts (by address),callee,,False,False,race
 0x626A40,179,sub_626A40,,,HUD / UI / fonts (by address),absent,,False,False,race
 0x626B00,124,sub_626B00,,,HUD / UI / fonts (by address),callee,,False,False,race
-0x626B80,145,sub_626B80,,,HUD / UI / fonts (by address),callee,,False,False,race
+0x626B80,145,sub_626B80,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/draw.hxx,False,False,race
 0x626C20,197,sub_626C20,,,HUD / UI / fonts (by address),absent,,False,False,race
-0x626CF0,830,VuDBAsset_load_Size,,,HUD / UI / fonts (by address),callee,,False,False,race
+0x626CF0,830,VuDBAsset_load_Size,,,HUD / UI / fonts (by address),verified,hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x627030,6,sub_627030,VuUITextBaseEntity,VuUITextBaseEntity+1,HUD / UI / fonts,absent,,False,False,race
 0x627040,41,sub_627040,,,HUD / UI / fonts (by address),absent,,False,False,race
-0x627070,2607,sub_627070,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/hud.hxx,False,False,race
+0x627070,2607,sub_627070,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/draw.hxx; hydro/workspace/core/ui/hud.hxx,False,False,race
 0x627AA0,137,sub_627AA0,,,unattributed,absent,,False,False,race
 0x627B30,176,sub_627B30,VuAchievementNameUITextEntity; VuAchievementValueUITextEntity; VuBarracudaEventUITextEntity; VuBarracudaSlalomPenaltyUITextEntity; VuBarracudaTeamScoreUITextEntity; VuBarracudaTrackUITextEntity; VuBarracudaTuningUITextEntity; VuBarracudaUICreditTextEntity; VuBarracudaUITrophyTextEntity; VuBarracudaUIUnlockCatTextEntity; VuBarracudaUIUnlockInfoTextEntity; VuBarracudaUnlockUITextEntity; VuChampionshipCompletionUITextEntity; VuCreditsUITextEntity; VuCurrentAchievementUITextEntity; VuGamerTagUITextEntity; VuHUDElementEntity; VuHUDHiddenPackageToastEntity; VuInfoUITextEntity; VuLeaderboardRowCountUITextEntity; VuPackFileVersionsUITextEntity; VuRaceCompletionUITextEntity; VuShortUnlockUITextEntity; VuSlalomCompletionUITextEntity; VuTimeTrialCompletionUITextEntity; VuUIDebugTextEntity; VuUIScrollingTextEntity; VuUITextBaseEntity; VuUITextEntity,VuUITextBaseEntity+13; VuUIDebugTextEntity+13; VuUIScrollingTextEntity+13; VuUITextEntity+13; VuHUDHiddenPackageToastEntity+13; VuHUDElementEntity+13,HUD / UI / fonts,absent,,False,False,race
 0x627BE0,123,sub_627BE0,,,HUD / UI / fonts (by address),absent,,False,False,game
-0x627C60,312,sub_627C60,VuAchievementNameUITextEntity; VuAchievementValueUITextEntity; VuBarracudaEventUITextEntity; VuBarracudaSlalomPenaltyUITextEntity; VuBarracudaTeamScoreUITextEntity; VuBarracudaTrackUITextEntity; VuBarracudaTuningUITextEntity; VuBarracudaUICreditTextEntity; VuBarracudaUITrophyTextEntity; VuBarracudaUIUnlockCatTextEntity; VuBarracudaUIUnlockInfoTextEntity; VuBarracudaUnlockUITextEntity; VuChampionshipCompletionUITextEntity; VuCreditsUITextEntity; VuCurrentAchievementUITextEntity; VuGamerTagUITextEntity; VuHUDElementEntity; VuHUDHiddenPackageToastEntity; VuInvalidNetGameUITextEntity; VuLeaderboardRowCountUITextEntity; VuPackFileVersionsUITextEntity; VuRaceCompletionUITextEntity; VuShortUnlockUITextEntity; VuSlalomCompletionUITextEntity; VuTimeTrialCompletionUITextEntity; VuUIDebugTextEntity; VuUIScrollingTextEntity; VuUITextBaseEntity; VuUITextEntity,VuUITextBaseEntity+14; VuUIDebugTextEntity+14; VuUIScrollingTextEntity+14; VuUITextEntity+14; VuHUDHiddenPackageToastEntity+14; VuHUDElementEntity+14,HUD / UI / fonts,cited,hydro/workspace/core/ui/hud.hxx,False,False,race
+0x627C60,312,sub_627C60,VuAchievementNameUITextEntity; VuAchievementValueUITextEntity; VuBarracudaEventUITextEntity; VuBarracudaSlalomPenaltyUITextEntity; VuBarracudaTeamScoreUITextEntity; VuBarracudaTrackUITextEntity; VuBarracudaTuningUITextEntity; VuBarracudaUICreditTextEntity; VuBarracudaUITrophyTextEntity; VuBarracudaUIUnlockCatTextEntity; VuBarracudaUIUnlockInfoTextEntity; VuBarracudaUnlockUITextEntity; VuChampionshipCompletionUITextEntity; VuCreditsUITextEntity; VuCurrentAchievementUITextEntity; VuGamerTagUITextEntity; VuHUDElementEntity; VuHUDHiddenPackageToastEntity; VuInvalidNetGameUITextEntity; VuLeaderboardRowCountUITextEntity; VuPackFileVersionsUITextEntity; VuRaceCompletionUITextEntity; VuShortUnlockUITextEntity; VuSlalomCompletionUITextEntity; VuTimeTrialCompletionUITextEntity; VuUIDebugTextEntity; VuUIScrollingTextEntity; VuUITextBaseEntity; VuUITextEntity,VuUITextBaseEntity+14; VuUIDebugTextEntity+14; VuUIScrollingTextEntity+14; VuUITextEntity+14; VuHUDHiddenPackageToastEntity+14; VuHUDElementEntity+14,HUD / UI / fonts,verified,hydro/workspace/core/ui/draw.hxx; hydro/workspace/core/ui/hud.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x627DA0,139,sub_627DA0,,,HUD / UI / fonts (by address),callee,,False,False,race
 0x627E30,148,sub_627E30,,,HUD / UI / fonts (by address),callee,,False,False,race
 0x627ED0,150,sub_627ED0,,,HUD / UI / fonts (by address),callee,,False,False,race
@@ -8335,7 +8335,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x628100,241,sub_628100,,,HUD / UI / fonts (by address),callee,,False,False,race
 0x628200,5,j_VuDBAsset_load_Size,,,HUD / UI / fonts (by address),callee,,True,False,race
 0x628210,181,sub_628210,,,HUD / UI / fonts (by address),callee,,False,False,game
-0x6282D0,465,sub_6282D0,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/button.hxx,False,False,race
+0x6282D0,465,sub_6282D0,,,HUD / UI / fonts (by address),verified,hydro/workspace/core/ui/button.hxx; hydro/workspace/core/ui/draw.hxx; hydro/workspace/utility/checks/ui.hxx,False,False,race
 0x6284B0,6,sub_6284B0,VuUIImageBaseEntity,VuUIImageBaseEntity+1,HUD / UI / fonts,absent,,False,False,race
 0x6284C0,20,sub_6284C0,,,HUD / UI / fonts (by address),absent,,False,False,race
 0x6284E0,3461,sub_6284E0,,,HUD / UI / fonts (by address),callee,,False,False,race
