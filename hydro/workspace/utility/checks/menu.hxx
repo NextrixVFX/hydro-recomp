@@ -946,7 +946,7 @@ inline bool verify_ui_screen_frame_records( )
         for ( const ui_frame_draw_t& d : frame.m_draws )
         {
             emitted += d.m_emitted ? 1 : 0;
-            if ( d.m_kind != ui_frame_kind_t::other )
+            if ( d.m_kind != ui_frame_kind_t::other && d.m_kind != ui_frame_kind_t::info )   // no m_info: the Info texts stay unrecreated
                 continue;
             std::uint32_t bits;
             std::memcpy( &bits, &d.m_alpha, 4 );
@@ -970,9 +970,136 @@ inline bool verify_ui_screen_frame_records( )
     return failed == 0;
 }
 
+// ui_info_text_draw (core/ui draw.hxx) against retail's VuInfoUITextEntity slot
+// 14 0x446670 (oracle case info_draw) on every Info text in the loaded projects
+// x 6 runs (text, ticker state, +0x108 written per run): the property-backed
+// fields from OUR loaded entity (compared with retail's bytes; the params 0..40
+// from OUR "Font" over FontDB), the commands and records byte for byte, ONE sort
+// per buffer through all vectors.
+inline bool verify_ui_info_draw( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    ui_gfx_sort_t sort;
+    sort.m_buffers[ 0 ].m_capacity = 0x300000;
+    sort.m_buffers[ 1 ].m_used = 0x35;
+    sort.m_buffers[ 1 ].m_capacity = 0x100000;
+    for ( auto& b : sort.m_buffers )
+        b.m_memory.resize( static_cast< std::size_t >( b.m_capacity ) );
+    int failed = 0, commands = 0, fields = 0;
+    for ( std::size_t k = 0; k < g_golden_info_vectors_count; ++k )
+    {
+        const golden_info_vector_t& v = g_golden_info_vectors[ k ];
+        const golden_txt_env_t& e = g_golden_txt_envs[ v.m_env ];
+        ui_crop_t crop;
+        std::memcpy( &crop.m_matrix[ 0 ], &e.m_crop[ 0 ], 4 );
+        std::memcpy( &crop.m_matrix[ 5 ], &e.m_crop[ 1 ], 4 );
+        std::memcpy( &crop.m_matrix[ 12 ], &e.m_crop[ 2 ], 4 );
+        std::memcpy( &crop.m_matrix[ 13 ], &e.m_crop[ 3 ], 4 );
+        ui_font_draw_env_t env;
+        std::memcpy( &env.m_matrix[ 0 ], &e.m_matrix[ 0 ], 4 );
+        std::memcpy( &env.m_matrix[ 5 ], &e.m_matrix[ 1 ], 4 );
+        std::memcpy( &env.m_matrix[ 12 ], &e.m_matrix[ 2 ], 4 );
+        std::memcpy( &env.m_matrix[ 13 ], &e.m_matrix[ 3 ], 4 );
+        std::memcpy( &env.m_top, &e.m_top, 4 );
+        for ( int m = 0; m < 2; ++m )
+        {
+            env.m_material[ m ] = 0x5D001000u + 0x800u * static_cast< std::uint32_t >( m );   // TxtWorld's font materials
+            env.m_material_key[ m ] = g_golden_txt_material_keys[ m ];
+        }
+        ui_string_db_t db;
+        db.m_present = e.m_sdb != 0;
+        db.m_slot12 = e.m_sdb_answer != 0;
+        ui_text_font_t font;
+        font.m_asset = true;
+        font.m_asset_font = 0x0F0E0D0Cu;
+        ui_text_base_t t = ui_text_base_of( ui_unhex( v.m_fields ), v.m_depth );
+        const entity_t* have = nullptr;
+        for ( std::size_t p = 0; p < g_golden_ui_projects_count && !have; ++p )
+            if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, v.m_project ) == 0 && v.m_index < static_cast< int >( loaded.trees[ p ].size( ) ) )
+                have = loaded.trees[ p ][ static_cast< std::size_t >( v.m_index ) ].second;
+        bool same = have && have->m_type == "VuInfoUITextEntity";
+        const auto take = [ & ]( const char* name, void* target, int bytes )
+        {
+            const ui_slot_t* slot = have ? ui_property_value( *have, name ) : nullptr;
+            if ( !slot )
+            {
+                same = false;
+                return;
+            }
+            if ( std::memcmp( target, slot->m_bits, static_cast< std::size_t >( bytes ) ) != 0 )
+                same = false;
+            std::memcpy( target, slot->m_bits, static_cast< std::size_t >( bytes ) );
+            ++fields;
+        };
+        if ( same )
+        {
+            take( "Screen Scale", t.m_screen_scale, 8 );
+            take( "X", &t.m_rect[ 0 ], 4 );
+            take( "Y", &t.m_rect[ 1 ], 4 );
+            take( "Width", &t.m_rect[ 2 ], 4 );
+            take( "Height", &t.m_rect[ 3 ], 4 );
+            take( "Horizontal Alignment", &t.m_h_align, 4 );
+            take( "Vertical Alignment", &t.m_v_align, 4 );
+            take( "No Clip", &t.m_no_clip, 1 );
+            take( "Single Line", &t.m_single_line, 1 );
+            take( "Wordbreak", &t.m_wordbreak, 1 );
+            take( "Horizontal Anchor", &t.m_anchor.m_horizontal, 4 );
+            take( "Horizontal Ratio", &t.m_anchor.m_h_ratio, 4 );
+            take( "Vertical Anchor", &t.m_anchor.m_vertical, 4 );
+            take( "Vertical Ratio", &t.m_anchor.m_v_ratio, 4 );
+            float depth = ui_frame_depth( *have );
+            if ( std::memcmp( &depth, &t.m_depth, 4 ) != 0 )
+                same = false;
+            std::uint8_t params[ 60 ];
+            std::memcpy( params, t.m_params, 60 );
+            const ui_slot_t* name = ui_property_value( *have, "Font" );
+            std::string asset;
+            ui_font_params( ui_font_db( 0 ), name ? name->m_text : std::string( ), params, asset );
+            if ( !name || std::memcmp( params, t.m_params, 41 ) != 0 )
+                same = false;
+        }
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui info draw: %s entity %d: our loaded fields differ from retail's", v.m_project, v.m_index );
+        ui_info_scroll_t s;
+        std::memcpy( &s, v.m_scroll, 16 );
+        const std::vector< std::uint8_t > raw = ui_unhex( v.m_text );
+        const std::string text( raw.begin( ), raw.end( ) );
+        float alpha;
+        std::memcpy( &alpha, &v.m_alpha, 4 );
+        sort.m_index = e.m_index;
+        sort.m_key_lo = e.m_key_lo;
+        sort.m_key_hi = e.m_key_hi;
+        std::vector< ui_gfx_command_t >& list = sort.m_commands[ e.m_index ];
+        const std::size_t before = list.size( );
+        const bool known = ui_info_text_draw( sort, env, crop, db, t, font, text, s, alpha );
+        same = known && list.size( ) - before == static_cast< std::size_t >( v.m_commands );
+        for ( int c = 0; same && c < v.m_commands; ++c )
+        {
+            const golden_txt_command_t& want = g_golden_info_commands[ v.m_first + c ];
+            const ui_gfx_command_t& h = list[ before + static_cast< std::size_t >( c ) ];
+            const std::vector< std::uint8_t > record = ui_unhex( want.m_record );
+            const auto& memory = sort.m_buffers[ e.m_index ].m_memory;
+            same = std::memcmp( h.m_words, want.m_words, sizeof( h.m_words ) ) == 0 && h.m_words[ 3 ] + record.size( ) <= memory.size( ) &&
+                   std::memcmp( memory.data( ) + h.m_words[ 3 ], record.data( ), record.size( ) ) == 0;
+            ++commands;
+        }
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui info draw: vector %d (%s %d) gave %d commands, retail %d - or a word / record byte differs", static_cast< int >( k ), v.m_project,
+                v.m_index, static_cast< int >( list.size( ) - before ), v.m_commands );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_info_text_draw matches retail's VuInfoUITextEntity draw slot 14 0x446670 (anchor 0x6282D0, flags 0x5546B0, font draw "
+                     "0x536C10 once or twice) on %d vectors (%d of OUR loaded fields): %d commands and records byte for byte",
+            static_cast< int >( g_golden_info_vectors_count ), fields, commands );
+    else
+        LOG_ERROR( "the UI info draw FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_menu_all( )
 {
     bool ok = true;
+    ok = verify_ui_info_draw( ) && ok;
     ok = verify_ui_screen_frame_records( ) && ok;
     ok = verify_ui_button_draw( ) && ok;
     ok = verify_ui_image_draw( ) && ok;

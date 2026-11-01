@@ -44,7 +44,8 @@ enum class ui_frame_kind_t
     image,      // slot 15 0x4401C0 -> slot 13 0x629300
     other,      // any other UI-drawn type: its draw NOT recreated
     button,     // 0x443280
-    container   // 0x62F7E0: walked into, never a leaf
+    container,  // 0x62F7E0: walked into, never a leaf
+    info        // VuInfoUITextEntity: 0x627040 -> its slot 14 0x446670 (draw.hxx ui_info_text_draw; needs inputs->m_info)
 };
 
 struct ui_draw_target_t
@@ -77,7 +78,7 @@ inline const ui_draw_target_t k_ui_draw_targets[ ] = {
     { 0x0073B5DCu, 0x004077DEu, 0x004401C0u, ui_frame_kind_t::image, 0x00000000u },   // Screens/Award (2 loaded)
     { 0x0073B7B0u, 0x00443280u, 0x00443280u, ui_frame_kind_t::button, 0x00000000u },   // Screens/Achievements (104 loaded)
     { 0x0073B86Cu, 0x00627040u, 0x00627C60u, ui_frame_kind_t::text, 0x00443920u },   // Screens/Award (2 loaded)
-    { 0x0073BC5Cu, 0x00627040u, 0x00446670u, ui_frame_kind_t::other, 0x00000000u },   // Screens/Achievements (39 loaded)
+    { 0x0073BC5Cu, 0x00627040u, 0x00446670u, ui_frame_kind_t::info, 0x00446860u },   // Screens/Achievements (39 loaded)
     { 0x0073BC9Cu, 0x00627040u, 0x00627C60u, ui_frame_kind_t::text, 0x00445F00u },   // Screens/Achievements (39 loaded)
     { 0x0073BCDCu, 0x00627040u, 0x00627C60u, ui_frame_kind_t::text, 0x00445DE0u },   // Screens/Achievements (39 loaded)
     { 0x0073BD1Cu, 0x00627040u, 0x00627C60u, ui_frame_kind_t::text, 0x00445C50u },   // Screens/Achievements (12 loaded)
@@ -185,6 +186,8 @@ struct ui_frame_inputs_t
     // UNKNOWN: the font params' bytes 41..59 (retail's 0x626CF0 copies them from stack it never wrote); this
     // may fill them per entity (else they stay 0).
     std::function< void( const entity_t&, std::uint8_t params[ 60 ] ) > m_params_tail;
+    // VuInfoUITextEntity's ticker state +0x12C..+0x13C (its tick is NOT recreated). Null: its leaves stay unrecreated.
+    std::function< ui_info_scroll_t( const entity_t& ) > m_info;
 };
 
 // A loaded entity's own / its first UI draw component's property bits.
@@ -234,7 +237,7 @@ inline bool ui_frame_emit( ui_gfx_sort_t& sort, const ui_impl_t& impl, const ui_
     ui_font_draw_env_t env = in.m_env;
     std::memcpy( env.m_matrix, d.m_matrix.data( ), 64 );
     env.m_top = d.m_top;
-    if ( d.m_kind == ui_frame_kind_t::text )
+    if ( d.m_kind == ui_frame_kind_t::text || d.m_kind == ui_frame_kind_t::info )
     {
         std::uint8_t visible = 1;
         ui_frame_take( e, "Visible", &visible, 1 );   // 0x627040: +0x64
@@ -259,6 +262,8 @@ inline bool ui_frame_emit( ui_gfx_sort_t& sort, const ui_impl_t& impl, const ui_
         ui_frame_params( e, in, t.m_params );
         const ui_text_font_t font = in.m_font ? in.m_font( e ) : ui_text_font_t( );
         const std::string text = in.m_text ? in.m_text( e ) : std::string( );
+        if ( d.m_kind == ui_frame_kind_t::info )
+            return ui_info_text_draw( sort, env, impl.m_crop, in.m_db, t, font, text, in.m_info( e ), d.m_alpha );
         return ui_text_draw( sort, env, impl.m_crop, in.m_db, t, font, text, d.m_alpha );
     }
     if ( d.m_kind == ui_frame_kind_t::image )
@@ -360,7 +365,7 @@ inline ui_frame_t ui_screen_frame( const entity_t& screen, const ui_impl_t& impl
         d.m_depth = depth;
         d.m_kind = target ? target->m_kind : ui_frame_kind_t::other;
         d.m_target = target ? target->m_target : 0u;
-        if ( d.m_kind == ui_frame_kind_t::other )
+        if ( d.m_kind == ui_frame_kind_t::other || ( d.m_kind == ui_frame_kind_t::info && !( inputs && inputs->m_info ) ) )
             ++frame.m_unrecreated;
         else if ( inputs )
         {

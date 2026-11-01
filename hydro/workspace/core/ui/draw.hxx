@@ -462,3 +462,46 @@ inline bool ui_text_draw( ui_gfx_sort_t& sort, const ui_font_draw_env_t& env, co
     const std::uint32_t flags = ui_font_flags( t.m_h_align, t.m_v_align, t.m_no_clip, t.m_single_line, t.m_wordbreak, db );
     return ui_font_draw( sort, env, f, text.c_str( ), t.m_params, rect, flags, alpha, offset, depth );
 }
+
+// VuInfoUITextEntity (ctor 0x446120, vtable 0x73BC5C): the text base's member
+// 0x627040 reaches ITS slot 14 0x446670 (transliterated from the disassembly),
+// a scrolling ticker. It ignores the text it is handed and calls slot 12
+// (0x446860) again - the text is an input here; an empty one (+0x10 == 0) or
+// no font draws nothing. The rect over the screen scale through the anchor
+// (+0xF0); the offset = (+0x138 / scale x, +0x13C / scale y); the alpha = the
+// 2nd arg x +0x108; then a second draw of the same text at offset x + +0x130 /
+// scale x when +0x12C is ordered above Width (+0x78). +0x12C / +0x130 / +0x138
+// / +0x13C are the ticker's runtime state (its tick is NOT recreated): inputs.
+struct ui_info_scroll_t
+{
+    float m_extent = 0.0f;   // +0x12C
+    float m_gap = 0.0f;      // +0x130
+    float m_x = 0.0f;        // +0x138
+    float m_y = 0.0f;        // +0x13C
+};
+
+inline bool ui_info_text_draw( ui_gfx_sort_t& sort, const ui_font_draw_env_t& env, const ui_crop_t& crop, const ui_string_db_t& db,
+                               const ui_text_base_t& t, const ui_text_font_t& font, const std::string& text, const ui_info_scroll_t& s, float factor )
+{
+    if ( text.empty( ) )
+        return true;
+    const std::uint32_t f = font.m_asset ? font.m_asset_font : font.m_default ? font.m_default_font : 0u;
+    if ( !f )
+        return true;
+    const float ix = 1.0f / t.m_screen_scale[ 0 ];
+    const float iy = 1.0f / t.m_screen_scale[ 1 ];
+    float rect[ 4 ] = { ix * t.m_rect[ 0 ], t.m_rect[ 1 ] * iy, t.m_rect[ 2 ] * ix, t.m_rect[ 3 ] * iy };
+    ui_anchor_transform( t.m_anchor, crop, rect, rect );
+    const float ox = s.m_x / t.m_screen_scale[ 0 ];
+    float offset[ 2 ] = { ox, s.m_y / t.m_screen_scale[ 1 ] };
+    const float depth = t.m_depth * 0.005f + 0.5f;   // 0x6F75C4, 0x6F765C
+    const float alpha = factor * t.m_alpha;
+    const std::uint32_t flags = ui_font_flags( t.m_h_align, t.m_v_align, t.m_no_clip, t.m_single_line, t.m_wordbreak, db );
+    bool known = ui_font_draw( sort, env, f, text.c_str( ), t.m_params, rect, flags, alpha, offset, depth );
+    if ( s.m_extent > t.m_rect[ 2 ] )   // comiss / jbe: an unordered compare draws once
+    {
+        offset[ 0 ] = s.m_gap / t.m_screen_scale[ 0 ] + ox;
+        known = ui_font_draw( sort, env, f, text.c_str( ), t.m_params, rect, flags, alpha, offset, depth ) && known;
+    }
+    return known;
+}
