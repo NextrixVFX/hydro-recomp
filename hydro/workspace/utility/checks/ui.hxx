@@ -998,13 +998,71 @@ inline ui_text_base_t ui_text_base_of( const std::vector< std::uint8_t >& b, std
     return t;
 }
 
+// The FontDB documents of the font_params case, parsed once (0: the real one).
+inline const value_t& ui_font_db( std::size_t index )
+{
+    static const std::vector< value_t > dbs = []
+    {
+        std::vector< value_t > out;
+        for ( std::size_t k = 0; k < g_golden_font_dbs_count; ++k )
+        {
+            const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_font_db_words + g_golden_font_db_at[ 2 * k ] );
+            out.push_back( c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_font_db_at[ 2 * k + 1 ] ) ).parse( ) );
+        }
+        return out;
+    }( );
+    return dbs[ index ];
+}
+
+// ui_font_params (core/ui draw.hxx) against retail's VuUIFont reload 0x626CF0
+// (oracle case font_params): every font in the real FontDB, missing / empty /
+// long names, then hand-built FontDBs for the tags the real one never authors -
+// the params' bytes 0..40 (41..59 are retail's stack: indeterminate, not
+// compared), the asset factory's requests (exists, then create when it answers
+// true) and +0x60.
+inline bool verify_ui_font_params( )
+{
+    int failed = 0, bytes = 0;
+    for ( std::size_t k = 0; k < g_golden_font_vectors_count; ++k )
+    {
+        const golden_font_vector_t& v = g_golden_font_vectors[ k ];
+        const std::vector< std::uint8_t > raw = ui_unhex( v.m_name );
+        const std::vector< std::uint8_t > want = ui_unhex( v.m_params );
+        std::uint8_t params[ 60 ];
+        std::memset( params, 0xA5, sizeof( params ) );
+        std::string asset;
+        ui_font_params( ui_font_db( static_cast< std::size_t >( v.m_db ) ), std::string( raw.begin( ), raw.end( ) ), params, asset );
+        // the factory hooks: exists( name ), create( name ) when it answers true; +0x60 = create's answer, else 0
+        std::vector< std::pair< std::string, std::string > > log = { { "exists", asset } };
+        if ( v.m_answer )
+            log.push_back( { "create", asset } );
+        const std::uint32_t held = v.m_answer ? 0x0F0E0D0Cu : 0u;
+        bool same = want.size( ) == 60 && std::memcmp( params, want.data( ), 41 ) == 0 && held == v.m_asset &&
+                    log.size( ) == static_cast< std::size_t >( v.m_logs );
+        for ( int j = 0; same && j < v.m_logs; ++j )
+            same = log[ static_cast< std::size_t >( j ) ].first == g_golden_font_logs[ v.m_first + j ].m_kind &&
+                   log[ static_cast< std::size_t >( j ) ].second == g_golden_font_logs[ v.m_first + j ].m_a;
+        bytes += 41;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "ui font params: vector %d (db %d) differs from retail's 0x626CF0", static_cast< int >( k ), v.m_db );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_font_params matches retail's VuUIFont reload 0x626CF0 (colour read 0x4FDEC0) on %d fonts over %d FontDBs (the real one + "
+                     "hand-built): %d param bytes, the FontAsset requests and +0x60",
+            static_cast< int >( g_golden_font_vectors_count ), static_cast< int >( g_golden_font_dbs_count ), bytes );
+    else
+        LOG_ERROR( "the font params FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 // ui_text_draw (hydro core/ui/draw.hxx) against retail's VuUITextBaseEntity draw
 // 0x627C60 -> font draw 0x536C10 -> VuGfxSort 0x426B80 / 0x429010 (oracle cases
 // text_draw, text_draw_sweep): every new command's 8 words and its record's
 // bytes. For the real entities the property-backed fields come from OUR loaded
-// tree (entity_load_project) and are compared with retail's bytes first; the
-// font params (+0xA0, FontDB - 0x626CF0 not recreated), the offset and the
-// alpha come from retail's bytes.
+// tree (entity_load_project) and are compared with retail's bytes first; so
+// are the font params' bytes 0..40 (ui_font_params = 0x626CF0 over the real
+// FontDB for our loaded "Font"; 41..59 are retail's stack, taken from its
+// bytes). The offset and the alpha come from retail's bytes.
 inline bool verify_ui_text_draw( )
 {
     // the case's stand-ins (TXT_REGION 0x5D000000): the two shader sets, the fonts
@@ -1021,7 +1079,7 @@ inline bool verify_ui_text_draw( )
         for ( auto& b : s.m_buffers )
             b.m_memory.resize( static_cast< std::size_t >( b.m_capacity ) );
     }
-    int failed = 0, commands = 0, fields = 0, real = 0;
+    int failed = 0, commands = 0, fields = 0, real = 0, fonts = 0;
     for ( std::size_t k = 0; k < g_golden_txt_vectors_count; ++k )
     {
         const golden_txt_vector_t& v = g_golden_txt_vectors[ k ];
@@ -1099,6 +1157,18 @@ inline bool verify_ui_text_draw( )
                 take( "Vertical Anchor", &ours.m_anchor.m_vertical, 4, s );
                 take( "Vertical Ratio", &ours.m_anchor.m_v_ratio, 4, s );
                 take( "Depth", &ours.m_depth, 4, draw );
+                // the params: 0x626CF0 over the real FontDB for OUR loaded "Font" (bytes 41..59 stay retail's: its stack)
+                const ui_slot_t* font_name = ui_slot_named( *s, "Font" );
+                if ( !font_name )
+                    same = false;
+                else
+                {
+                    std::string asset;
+                    ui_font_params( ui_font_db( 0 ), font_name->m_text, ours.m_params, asset );
+                    if ( std::memcmp( ours.m_params, t.m_params, 41 ) != 0 )
+                        same = false;
+                    ++fonts;
+                }
             }
             if ( !same && ++failed <= 8 )
                 LOG_ERROR( "ui text draw: %s entity %d (%s): our loaded fields differ from retail's", v.m_project, v.m_index, v.m_text );
@@ -1128,8 +1198,9 @@ inline bool verify_ui_text_draw( )
     }
     if ( failed == 0 )
         LOG_SUCCESS( "ui_text_draw matches retail's VuUITextBaseEntity draw 0x627C60 (anchor 0x6282D0, flags 0x5546B0, font draw 0x536C10, "
-                     "VuGfxSort 0x426B80 / 0x429010) on %d vectors (%d real entities, %d of their loaded fields): %d commands and records byte for byte",
-            static_cast< int >( g_golden_txt_vectors_count ), real, fields, commands );
+                     "VuGfxSort 0x426B80 / 0x429010) on %d vectors (%d real entities, %d of their loaded fields, %d font params from FontDB): %d "
+                     "commands and records byte for byte",
+            static_cast< int >( g_golden_txt_vectors_count ), real, fields, fonts, commands );
     else
         LOG_ERROR( "the UI text draw FAILED %d checks against retail's", failed );
     return failed == 0;
@@ -1728,6 +1799,7 @@ inline bool verify_ui_minimap_draw( )
 inline bool verify_ui_all( )
 {
     bool ok = true;
+    ok = verify_ui_font_params( ) && ok;
     ok = verify_ui_minimap_draw( ) && ok;
     ok = verify_ui_speedometer_draw( ) && ok;
     ok = verify_ui_hud_draw( ) && ok;

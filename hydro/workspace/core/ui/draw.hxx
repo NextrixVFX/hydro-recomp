@@ -1,10 +1,13 @@
 #pragma once
 
+#include <workspace/core/assets/tree.hxx>
+
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <string>
 #include <vector>
+#include <xmmintrin.h>
 
 // The UI's text draws as data: VuUITextBaseEntity's draw (slot 14 0x627C60)
 // through the font draw 0x536C10 into VuGfxSort's command memory (0x426B80)
@@ -311,6 +314,105 @@ inline bool ui_font_draw( ui_gfx_sort_t& sort, const ui_font_draw_env_t& env, st
     r[ 35 ] = static_cast< std::uint8_t >( ui_fistp32( static_cast< float >( r[ 35 ] ) * alpha ) );
     sort.submit( 17, env.m_material[ outline ], env.m_material_key[ outline ], 0, 0, k_ui_font_callback, depth );
     return true;
+}
+
+// The colour read 0x4FDEC0 (container; out*): "R", "G", "B" each 1 an int / 2
+// truncated (cvttss2si) / 7 the low dword, anything else returns false with
+// nothing written; "A" the same, any other tag 0xFF. The four low bytes, R first.
+inline bool ui_json_colour( const value_t& v, std::uint32_t& out )
+{
+    std::int32_t c[ 4 ] = { 0, 0, 0, 0xFF };
+    const char* const keys[ 4 ] = { "R", "G", "B", "A" };
+    for ( int k = 0; k < 4; ++k )
+    {
+        const value_t& part = member( v, keys[ k ] );
+        if ( part.tag == 1 )
+            c[ k ] = part.integer;
+        else if ( part.tag == 2 )
+            c[ k ] = _mm_cvtt_ss2si( _mm_set_ss( part.real ) );
+        else if ( part.tag == 7 )
+            c[ k ] = static_cast< std::int32_t >( static_cast< std::uint64_t >( part.int64 ) & 0xFFFFFFFFu );
+        else if ( k < 3 )
+            return false;
+    }
+    out = ( static_cast< std::uint32_t >( c[ 0 ] ) & 0xFF ) | ( ( static_cast< std::uint32_t >( c[ 1 ] ) & 0xFF ) << 8 ) |
+          ( ( static_cast< std::uint32_t >( c[ 2 ] ) & 0xFF ) << 16 ) | ( static_cast< std::uint32_t >( c[ 3 ] ) << 24 );
+    return true;
+}
+
+// VuUIFont's reload 0x626CF0 (this = the font object, the text base's +0x80:
+// +8 the name, +0x20 the 60 draw params, +0x5C the FontDB asset, +0x60 the font
+// asset) - the params from the FontDB document (the asset's +0x58 tree):
+// the defaults over params[ 0 .. 40 ] (Size 2.25, Weight 100, Softness 1, Color
+// white, OutlineWeight 0, OutlineSoftness 1, OutlineColor black, Slant 0,
+// TabSize 8, Stretch 1, the clip byte 0), then the font's entry in the
+// "VuDBAsset" map (else the null container) field by field: 1 an int to float,
+// 2 the float, 7 the int64 to float (fild / fstp, one rounding); TabSize 1 the
+// int, 2 truncated, 7 the low dword; the colours by 0x4FDEC0. UNKNOWN:
+// params[ 41 .. 59 ] - retail copies 15 dwords from a stack block it wrote only
+// through byte 40, so they are the caller's stack (indeterminate); they are left
+// as they were. `font_asset` gets the entry's "FontAsset" (a string, else "");
+// the asset factory's exists 0x6267A0 / create 0x626850 on it are the caller's
+// (and the old asset's release, factory slot 9).
+inline void ui_font_params( const value_t& fontdb, const std::string& name, std::uint8_t params[ 60 ], std::string& font_asset )
+{
+    const std::uint32_t defaults[ 10 ] = { 0x40100000u, 0x42C80000u, 0x3F800000u, 0xFFFFFFFFu, 0u, 0x3F800000u, 0xFF000000u, 0u, 8u, 0x3F800000u };
+    std::memcpy( params, defaults, 40 );
+    params[ 40 ] = 0;
+    static const value_t null{ };
+    const value_t* entry = &null;
+    const value_t& db = member( fontdb, "VuDBAsset" );
+    if ( db.tag == 6 )
+        for ( const auto& field : db.object )
+            if ( field.first == name )
+            {
+                entry = &field.second;
+                break;
+            }
+    const value_t& asset = member( *entry, "FontAsset" );
+    font_asset = asset.tag == 4 ? asset.text : std::string( );
+    const auto real = [ & ]( const char* key, int offset )
+    {
+        const value_t& v = member( *entry, key );
+        float f;
+        if ( v.tag == 1 )
+            f = static_cast< float >( v.integer );
+        else if ( v.tag == 2 )
+            f = v.real;
+        else if ( v.tag == 7 )
+            f = static_cast< float >( v.int64 );
+        else
+            return;
+        std::memcpy( params + offset, &f, 4 );
+    };
+    const auto colour = [ & ]( const char* key, int offset )
+    {
+        std::uint32_t c = 0;
+        if ( ui_json_colour( member( *entry, key ), c ) )
+            std::memcpy( params + offset, &c, 4 );
+    };
+    real( "Size", 0 );
+    real( "Weight", 4 );
+    real( "Softness", 8 );
+    colour( "Color", 12 );
+    real( "OutlineWeight", 16 );
+    real( "OutlineSoftness", 20 );
+    colour( "OutlineColor", 24 );
+    const value_t& tab = member( *entry, "TabSize" );
+    std::int32_t t = 0;
+    bool set = true;
+    if ( tab.tag == 1 )
+        t = tab.integer;
+    else if ( tab.tag == 2 )
+        t = _mm_cvtt_ss2si( _mm_set_ss( tab.real ) );
+    else if ( tab.tag == 7 )
+        t = static_cast< std::int32_t >( static_cast< std::uint64_t >( tab.int64 ) & 0xFFFFFFFFu );
+    else
+        set = false;
+    if ( set )
+        std::memcpy( params + 32, &t, 4 );
+    real( "Slant", 28 );
+    real( "Stretch", 36 );
 }
 
 // The VuUITextBaseEntity fields the draw reads (ctor 0x627070).
