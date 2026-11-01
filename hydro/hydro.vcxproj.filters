@@ -87,6 +87,9 @@
     <ClInclude Include="workspace\core\boat\construct.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\boat\contact.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\boat\driver.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
@@ -117,6 +120,9 @@
     <ClInclude Include="workspace\core\boat\meshes.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\boat\nuisance.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\boat\parts.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
@@ -127,6 +133,9 @@
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\boat\respawn.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\boat\rtti.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\boat\sections.hxx">
@@ -198,6 +207,9 @@
     <ClInclude Include="workspace\core\ui\flow.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\ui\frame.hxx">
+      <Filter>workspace\core\ui</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\ui\fsm.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
@@ -211,6 +223,9 @@
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\ui\map.hxx">
+      <Filter>workspace\core\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\ui\navigate.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\ui\schema.hxx">
@@ -310,6 +325,9 @@
       <Filter>workspace\core\world</Filter>
     </ClInclude>
     <ClInclude Include="workspace\utility\checks\boat.hxx">
+      <Filter>workspace\utility\checks</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\checks\menu.hxx">
       <Filter>workspace\utility\checks</Filter>
     </ClInclude>
     <ClInclude Include="workspace\utility\checks\pfx.hxx">
