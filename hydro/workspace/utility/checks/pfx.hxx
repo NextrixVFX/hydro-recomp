@@ -1891,9 +1891,82 @@ inline bool verify_water_build_menu( )
     return bad == 0;
 }
 
+// ocean_infinite_vertex (world/wave.hxx) against VuWaterInfiniteOceanWave's slot 3 0x59D900 -> SampleA 0x59E070 and, with
+// ctx+100 set, SampleB 0x59E520 (case ocean_infinite: synthetic fields, wide-magnitude points, the rounding ties). Compared:
+// every displacement / height word bit for bit (the +100 vectors behind the tag test, wanted tag 1).
+inline bool verify_ocean_infinite( )
+{
+    const unsigned* s = g_golden_oin_words;
+    const unsigned n = *s++;
+    int failed = 0, live = 0, points = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned variant = *s++;
+        ocean_patch_t k{};
+        k.shift = static_cast< int >( *s++ );
+        k.mask = ( 1 << k.shift ) - 1;
+        std::memcpy( &k.scale, s++, 4 );
+        std::memcpy( &k.sine, s++, 4 );
+        std::memcpy( &k.cosine, s++, 4 );
+        std::memcpy( &k.now, s, 8 );
+        std::memcpy( &k.time[ 0 ], s + 2, 8 );
+        std::memcpy( &k.time[ 1 ], s + 4, 8 );
+        s += 6;
+        k.current = static_cast< int >( *s++ );
+        k.previous = static_cast< int >( *s++ );
+        const unsigned np = *s++;
+        k.patches[ 0 ] = reinterpret_cast< const float* >( s );
+        k.patches[ 1 ] = reinterpret_cast< const float* >( s + np );
+        s += 2 * np;
+        const unsigned count = *s++;
+        const unsigned* pts = s;
+        const unsigned* tags = s + 2 * count;
+        const unsigned* out = tags + count;
+        s = out + 4 * count;
+        int bad = 0;
+        for ( unsigned i = 0; i < count; ++i )
+        {
+            float disp[ 3 ] = { 0.25f, -0.5f, 1.5f };
+            float height = 2.0f;
+            float x, y;
+            std::memcpy( &x, pts + 2 * i, 4 );
+            std::memcpy( &y, pts + 2 * i + 1, 4 );
+            if ( !variant || tags[ i ] == 1u )
+            {
+                ocean_infinite_vertex( k, x, y, disp, height );
+                ++live;
+            }
+            unsigned w[ 4 ];
+            std::memcpy( w, disp, 12 );
+            std::memcpy( w + 3, &height, 4 );
+            for ( int j = 0; j < 4; ++j )
+                bad += w[ j ] != out[ 4 * i + j ];
+        }
+        points += static_cast< int >( count );
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "ocean_infinite: vector %u (variant %u): %d words differ", v, variant, bad );
+        }
+    }
+    if ( s != g_golden_oin_words + g_golden_oin_size )
+    {
+        ++failed;
+        LOG_ERROR( "ocean_infinite: the golden words were not consumed exactly" );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ocean_infinite_vertex matches VuWaterInfiniteOceanWave 0x59E070 / 0x59E520 (slot 3 0x59D900): %u vectors, %d points, "
+                     "%d evaluated, bit for bit",
+            n, points, live );
+    else
+        LOG_ERROR( "ocean_infinite FAILED %d of %u", failed, n );
+    return failed == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_ocean_infinite( ) && ok;
     ok = verify_water_build_menu( ) && ok;
     ok = verify_water_map_unload( ) && ok;
     ok = verify_water_shutdown( ) && ok;

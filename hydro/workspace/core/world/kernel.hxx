@@ -80,9 +80,10 @@ inline void water_ocean_kernel( water_kind_t kind, const water_words_t& w, const
     k.previous = static_cast< int >( w.word[ 168 / 4 ] );
     std::memcpy( &k.time[ 0 ], &w.word[ 176 / 4 ], 8 );
     std::memcpy( &k.time[ 1 ], &w.word[ 192 / 4 ], 8 );
-    k.centre_x = w.f( 208 );
-    k.centre_y = w.f( 212 );
-    const int shape = kind == water_kind_rectangular ? 4 : 2;
+    // the infinite ocean (0xD0 bytes) has no centre / footprint words
+    k.centre_x = kind == water_kind_infinite ? 0.0f : w.f( 208 );
+    k.centre_y = kind == water_kind_infinite ? 0.0f : w.f( 212 );
+    const int shape = kind == water_kind_rectangular ? 4 : kind == water_kind_circular ? 2 : 0;
     for ( int i = 0; i < shape; ++i )
         k.shape[ i ] = w.f( 224 + 4 * i );
     k.patches[ 0 ] = f.n ? f.patches[ 0 ].data( ) : nullptr;
@@ -238,7 +239,7 @@ inline void water_view_build( const water_built_t& b, water_view_t& v )
         v.water.waves.push_back( q );
         v.kernels.push_back( water_wave_kernel( b.wave_kind[ i ], b.waves[ i ] ) );
         const water_kind_t kind = b.wave_kind[ i ];
-        if ( kind == water_kind_rectangular || kind == water_kind_circular )
+        if ( kind == water_kind_rectangular || kind == water_kind_circular || kind == water_kind_infinite )
             if ( const water_built_t::ocean_t* o = water_ocean_of( b, static_cast< int >( i ) ) )
                 water_ocean_kernel( kind, b.waves[ i ], o->field, v.kernels.back( ).ocean );
     }
@@ -305,6 +306,7 @@ inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
     case water_kind_point: break;
     case water_kind_rectangular:
     case water_kind_circular:
+    case water_kind_infinite:
         if ( !k.ocean.patches[ 0 ] )
             return false;   // no field (complexity 0)
         break;
@@ -317,6 +319,9 @@ inline bool water_view_kernel( void* user, int wave, water_query_t& ctx )
         water_vertex_t& x = ctx.vertices[ i ];
         switch ( k.kind )
         {
+        case water_kind_infinite:   // 0x59E070 / 0x59E520
+            ocean_infinite_vertex( k.ocean, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height );
+            break;
         case water_kind_rectangular:   // 0x59ED30 / 0x59F2B0
         case water_kind_circular:      // 0x59FED0 / 0x5A03F0
             ocean_patch_vertex( k.ocean, k.kind == water_kind_circular, x.pos[ 0 ], x.pos[ 1 ], x.disp, x.height );
