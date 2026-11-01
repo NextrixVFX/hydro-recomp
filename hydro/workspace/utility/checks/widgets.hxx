@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/ui/bind.hxx>
+#include <workspace/core/ui/controls.hxx>
 #include <workspace/core/ui/slider.hxx>
 
 #include <cstdio>
@@ -172,9 +173,208 @@ inline bool verify_ui_slider_draw( )
     return failed == 0;
 }
 
+// verify_ui_hud_controls: retail's HUD control draws - pause 0x4257A0 (slot 15
+// 0x426330), recover 0x425F70 (0x425F50), the on-screen axis / button 0x42A0C0 -
+// on every such entity of the loaded race HUD projects (oracle case
+// hud_controls). The fields from OUR loaded properties (compared with retail's
+// bytes first); the textures, the touch state, the boing scale and the two
+// globals are the run's (inputs). Commands and records byte for byte, one sort
+// per buffer through all runs.
+inline bool verify_ui_hud_controls( )
+{
+    ui_gfx_sort_t sort;
+    sort.m_buffers[ 0 ].m_capacity = 0x300000;
+    sort.m_buffers[ 1 ].m_used = 0x35;
+    sort.m_buffers[ 1 ].m_capacity = 0x100000;
+    for ( auto& b : sort.m_buffers )
+        b.m_memory.resize( static_cast< std::size_t >( b.m_capacity ) );
+    int failed = 0, runs = 0, commands = 0, fields = 0;
+    for ( std::size_t k = 0; k < g_golden_hc_entities_count; ++k )
+    {
+        const golden_hc_entity_t& ge = g_golden_hc_entities[ k ];
+        const entity_t* e = ui_lv_entity( ge.m_project, ge.m_index );
+        const std::vector< std::uint8_t > raw = ui_unhex( ge.m_fields );
+        bool same = e && e->m_ctor && e->m_ctor->m_vtable == ge.m_vtable && raw.size( ) == 0x9C;
+        ui_hud_control_t c;
+        if ( same )
+        {
+            const bool onscreen = ge.m_kind == 2;
+            const int scale = onscreen ? 0x60 : 0x64, image = onscreen ? 0x68 : 0x6C, anchor = onscreen ? 0xB8 : 0xBC;
+            const auto take = [ & ]( const char* name, void* out, std::size_t bytes, int offset )
+            {
+                same = ui_frame_take( *e, name, out, bytes ) && std::memcmp( out, raw.data( ) + ( offset - 0x5C ), bytes ) == 0 && same;
+                ++fields;
+            };
+            take( "Screen Scale", c.m_scale, 8, scale );
+            take( "Image X", &c.m_image[ 0 ], 4, image );
+            take( "Image Y", &c.m_image[ 1 ], 4, image + 4 );
+            take( "Image Width", &c.m_image[ 2 ], 4, image + 8 );
+            take( "Image Height", &c.m_image[ 3 ], 4, image + 12 );
+            take( "Horizontal Anchor", &c.m_anchor.m_horizontal, 4, anchor );
+            take( "Vertical Anchor", &c.m_anchor.m_vertical, 4, anchor + 4 );
+            take( "Horizontal Ratio", &c.m_anchor.m_h_ratio, 4, anchor + 8 );
+            take( "Vertical Ratio", &c.m_anchor.m_v_ratio, 4, anchor + 12 );
+            if ( onscreen )
+            {
+                const char* const names[ 4 ] = { "Enable for Tilt", "Enable for Touch", "Enable for GamePad", "Enable for Keyboard" };
+                for ( int f = 0; f < 4; ++f )
+                    take( names[ f ], &c.m_enable[ f ], 1, 0xC8 + f );
+            }
+            c.m_depth = ui_frame_depth( *e );
+            same = same && ui_lv_bits( c.m_depth ) == ge.m_depth;
+        }
+        if ( !same )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "ui hud controls: %s entity %d: OUR loaded fields differ from retail's", ge.m_project, ge.m_index );
+            continue;
+        }
+        ui_texture_t textures[ 2 ];
+        for ( int t = 0; t < 2; ++t )
+            textures[ t ] = { g_golden_hc_textures[ t ].m_handle, g_golden_hc_textures[ t ].m_width, g_golden_hc_textures[ t ].m_height };
+        const ui_texture_t* by[ 4 ] = { &textures[ 0 ], &textures[ 1 ], nullptr, nullptr };   // 2: an asset without a texture, 3: none
+        for ( int r = 0; r < ge.m_runs; ++r )
+        {
+            const golden_hc_run_t& run = g_golden_hc_runs[ ge.m_first + r ];
+            const golden_txt_env_t& te = g_golden_txt_envs[ run.m_env ];
+            ui_font_draw_env_t env;
+            const std::vector< std::uint8_t > matrix = ui_unhex( run.m_matrix );
+            std::memcpy( env.m_matrix, matrix.data( ), 64 );
+            env.m_texture_material = g_golden_hc_material[ 0 ];
+            env.m_texture_material_key = g_golden_hc_material[ 1 ];
+            ui_crop_t crop;
+            std::memcpy( &crop.m_matrix[ 0 ], &te.m_crop[ 0 ], 4 );
+            std::memcpy( &crop.m_matrix[ 5 ], &te.m_crop[ 1 ], 4 );
+            std::memcpy( &crop.m_matrix[ 12 ], &te.m_crop[ 2 ], 4 );
+            std::memcpy( &crop.m_matrix[ 13 ], &te.m_crop[ 3 ], 4 );
+            ui_hud_control_inputs_t in;
+            in.m_texture = by[ run.m_choice[ 0 ] ];
+            in.m_pressed_texture = by[ run.m_choice[ 1 ] ];
+            in.m_state = run.m_state;
+            std::memcpy( &in.m_boing, &run.m_boing, 4 );
+            in.m_race_present = run.m_race >= 0;
+            in.m_race_28 = static_cast< std::uint32_t >( run.m_race );
+            in.m_method_present = run.m_method >= 0;
+            in.m_method = run.m_method;
+            float alpha;
+            std::memcpy( &alpha, &run.m_alpha, 4 );
+            sort.m_index = te.m_index;
+            sort.m_key_lo = te.m_key_lo;
+            sort.m_key_hi = te.m_key_hi;
+            std::vector< ui_gfx_command_t >& list = sort.m_commands[ te.m_index ];
+            const std::size_t before = list.size( );
+            if ( ge.m_kind == 2 )
+                ui_hud_onscreen_draw( sort, env, crop, c, in, alpha );
+            else
+                ui_hud_button_draw( sort, env, crop, c, in, ge.m_kind == 1, alpha );
+            bool ok = list.size( ) - before == static_cast< std::size_t >( run.m_commands );
+            for ( int q = 0; ok && q < run.m_commands; ++q )
+            {
+                const golden_txt_command_t& want = g_golden_hc_commands[ run.m_first + q ];
+                const ui_gfx_command_t& h = list[ before + static_cast< std::size_t >( q ) ];
+                const std::vector< std::uint8_t > record = ui_unhex( want.m_record );
+                const auto& memory = sort.m_buffers[ te.m_index ].m_memory;
+                ok = std::memcmp( h.m_words, want.m_words, sizeof( h.m_words ) ) == 0 && h.m_words[ 3 ] + record.size( ) <= memory.size( ) &&
+                     std::memcmp( memory.data( ) + h.m_words[ 3 ], record.data( ), record.size( ) ) == 0;
+                ++commands;
+            }
+            ++runs;
+            if ( !ok && ++failed <= 8 )
+                LOG_ERROR( "ui hud controls: %s entity %d run %d: %d commands (retail %d) - or a word / record differs", ge.m_project, ge.m_index, r,
+                    static_cast< int >( list.size( ) - before ), run.m_commands );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_hud_button_draw / ui_hud_onscreen_draw match retail's HUD control draws (pause 0x4257A0 / 0x426330, recover 0x425F70 / "
+                     "0x425F50, on-screen 0x42A0C0) on %d entities x the runs (%d runs; %d of OUR loaded fields): %d commands byte for byte",
+            static_cast< int >( g_golden_hc_entities_count ), runs, fields, commands );
+    else
+        LOG_ERROR( "the UI HUD control draws FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
+// verify_ui_hud_toast: retail's VuHUDHiddenPackageToastEntity OnPackageFound
+// 0x424600 / OnUITick 0x4248E0 through the scripted sequence on every toast of the
+// loaded HUD projects (oracle case hud_toast). The toast starts from OUR loaded
+// Total / Fade Time (compared with retail's state at load); VuStringDB slot 6 is
+// the step's answer (a HOOK). After each step: Visible, alpha, the three times and
+// the text, plus the keys slot 6 was asked.
+inline bool verify_ui_hud_toast( )
+{
+    int failed = 0, steps = 0;
+    const auto state_text = []( const ui_hud_toast_t& t )
+    {
+        const float f[ 4 ] = { t.m_alpha, t.m_total, t.m_fade, t.m_left };
+        char text[ 64 ];
+        std::snprintf( text, sizeof( text ), "%02x", t.m_visible ? 1 : 0 );
+        std::string out = text;
+        for ( float x : f )
+        {
+            std::snprintf( text, sizeof( text ), ".0x%08X", ui_lv_bits( x ) );
+            out += text;
+        }
+        return out + "." + t.m_text;
+    };
+    for ( std::size_t k = 0; k < g_golden_ts_toasts_count; ++k )
+    {
+        const golden_ts_toast_t& gt = g_golden_ts_toasts[ k ];
+        const entity_t* e = ui_lv_entity( gt.m_project, gt.m_index );
+        ui_hud_toast_t t;
+        bool same = e && e->m_type == "VuHUDHiddenPackageToastEntity";
+        if ( same )
+        {
+            same = ui_frame_take( *e, "Total Time", &t.m_total, 4 ) && ui_frame_take( *e, "Fade Time", &t.m_fade, 4 );
+            std::uint8_t visible = 1;
+            if ( ui_frame_take( *e, "Visible", &visible, 1 ) )
+                t.m_visible = visible != 0;
+            same = same && state_text( t ) == gt.m_initial;
+        }
+        if ( !same )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "ui hud toast: %s entity %d: OUR loaded state differs from retail's", gt.m_project, gt.m_index );
+            continue;
+        }
+        for ( int s = 0; s < gt.m_steps; ++s )
+        {
+            const golden_ts_step_t& st = g_golden_ts_steps[ gt.m_first + s ];
+            const std::vector< std::uint8_t > raw = ui_unhex( st.m_params );
+            ui_params_t p;
+            std::memcpy( p.m_bytes, raw.data( ), raw.size( ) < 128 ? raw.size( ) : 128 );
+            p.m_size = static_cast< int >( raw.size( ) );
+            std::string keys;
+            if ( st.m_op == 0 )
+                ui_hud_toast_tick( t, p );
+            else if ( st.m_op == 1 )
+                ui_hud_toast_found( t, p, [ & ]( const char* key )
+                {
+                    keys += keys.empty( ) ? key : std::string( "," ) + key;
+                    return std::string( st.m_template );
+                } );
+            else
+            {
+                std::memcpy( &t.m_total, raw.data( ), 4 );
+                std::memcpy( &t.m_fade, raw.data( ) + 4, 4 );
+            }
+            ++steps;
+            if ( ( state_text( t ) != st.m_state || keys != st.m_keys ) && ++failed <= 8 )
+                LOG_ERROR( "ui hud toast: %s entity %d step %d: %s (retail %s)", gt.m_project, gt.m_index, s, state_text( t ).c_str( ), st.m_state );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_hud_toast_found / ui_hud_toast_tick match retail's VuHUDHiddenPackageToastEntity OnPackageFound 0x424600 / OnUITick "
+                     "0x4248E0 on %d toasts from OUR loaded Total / Fade Time: %d steps (visible, alpha, times, text, the string-DB keys)",
+            static_cast< int >( g_golden_ts_toasts_count ), steps );
+    else
+        LOG_ERROR( "the UI HUD toast FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_widgets_all( )
 {
     bool ok = true;
     ok = verify_ui_slider_draw( ) && ok;
+    ok = verify_ui_hud_controls( ) && ok;
+    ok = verify_ui_hud_toast( ) && ok;
     return ok;
 }
