@@ -156,6 +156,7 @@
     <ClInclude Include="workspace\core\ui\map.hxx" />
     <ClInclude Include="workspace\core\ui\schema.hxx" />
     <ClInclude Include="workspace\core\ui\screen.hxx" />
+    <ClInclude Include="workspace\core\ui\select.hxx" />
     <ClInclude Include="workspace\core\ui\wiring.hxx" />
     <ClInclude Include="workspace\core\world\animate.hxx" />
     <ClInclude Include="workspace\core\world\control.hxx" />
