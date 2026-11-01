@@ -295,7 +295,7 @@ inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb
     io.boat = boat;
     io.boat_address = 0;   // retail's allocation address: read only by the shape (after the mesh - not reached)
     if ( body )
-        std::memcpy( &b.body, body, sizeof( b.body ) );
+        std::memcpy( &b.body, body, 0x2D4 );   // retail's VuRigidBody is 0x2D4 bytes (sizeof is 0x2E0: alignment padding)
     if ( engine )
         std::memcpy( b.engine.object.image, engine, sizeof( b.engine.object.image ) );
     io.body = &b.body;
