@@ -2532,6 +2532,7 @@ inline bool verify_water_template_maps( )
 }
 
 #include <workspace/utility/checks/pfx.hxx>
+#include <workspace/utility/checks/wake.hxx>
 
 inline bool verify_water_all( )
 {
@@ -2546,6 +2547,7 @@ inline bool verify_water_all( )
     ok = verify_water_point( ) && ok;
     ok = verify_wake_kernels96( ) && ok;
     ok = verify_ocean_field( ) && ok;
+    ok = verify_water_wake( ) && ok;
     ok = verify_ocean_kernels96( ) && ok;
     ok = verify_water_built_tick( ) && ok;
     ok = verify_water_query96( ) && ok;
