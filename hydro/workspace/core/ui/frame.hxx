@@ -219,6 +219,10 @@ struct ui_frame_inputs_t
     std::function< ui_text_font_t( const entity_t&, int k ) > m_class_font;
     std::function< void( const entity_t&, int k, std::uint8_t params[ 60 ] ) > m_class_params_tail;
     std::function< std::string( const std::string& id ) > m_string;
+    // Optional (the race HUD, overlay.hxx): a text / image leaf's RUNTIME +0x64 (image +0x6C) Visible and
+    // +0x108 (image +0xB4) alpha - what Show / Hide / SetAlpha left - in place of the loaded Visible / the
+    // ctor's 1.0. false: none (the loaded values stay).
+    std::function< bool( const entity_t&, std::uint8_t& visible, float& alpha ) > m_shown;
 };
 
 // A loaded entity's own / its first UI draw component's property bits.
@@ -320,9 +324,18 @@ inline bool ui_frame_emit( ui_gfx_sort_t& sort, const ui_impl_t& impl, const ui_
     {
         std::uint8_t visible = 1;
         ui_frame_take( e, "Visible", &visible, 1 );   // 0x627040: +0x64
+        float shown_alpha = 1.0f;
+        if ( in.m_shown )
+            in.m_shown( e, visible, shown_alpha );
         if ( !visible )
             return true;
+        // 0x627040: slot 14( slot 12( ), alpha ) - the text getter runs first (VuHUDElementEntity's 0x423F40
+        // writes +0x108 for its wrong-way Type), then the draw reads +0x108.
+        const std::string text = in.m_text ? in.m_text( e ) : std::string( );
+        if ( in.m_shown )
+            in.m_shown( e, visible, shown_alpha );
         ui_text_base_t t;
+        t.m_alpha = shown_alpha;
         ui_frame_take( e, "Screen Scale", t.m_screen_scale, 8 );
         ui_frame_take( e, "X", &t.m_rect[ 0 ], 4 );
         ui_frame_take( e, "Y", &t.m_rect[ 1 ], 4 );
@@ -340,7 +353,6 @@ inline bool ui_frame_emit( ui_gfx_sort_t& sort, const ui_impl_t& impl, const ui_
         t.m_depth = ui_frame_depth( e );
         ui_frame_params( e, in, t.m_params );
         const ui_text_font_t font = in.m_font ? in.m_font( e ) : ui_text_font_t( );
-        const std::string text = in.m_text ? in.m_text( e ) : std::string( );
         if ( d.m_kind == ui_frame_kind_t::info )
             return ui_info_text_draw( sort, env, impl.m_crop, in.m_db, t, font, text, in.m_info( e ), d.m_alpha );
         return ui_text_draw( sort, env, impl.m_crop, in.m_db, t, font, text, d.m_alpha );
@@ -368,6 +380,8 @@ inline bool ui_frame_emit( ui_gfx_sort_t& sort, const ui_impl_t& impl, const ui_
         ui_frame_take( e, "Vertical Anchor", &im.m_anchor.m_vertical, 4 );
         ui_frame_take( e, "Vertical Ratio", &im.m_anchor.m_v_ratio, 4 );
         im.m_depth = ui_frame_depth( e );
+        if ( in.m_shown )
+            in.m_shown( e, im.m_visible, im.m_alpha );
         const ui_texture_t* texture = in.m_texture ? in.m_texture( e, 0 ) : nullptr;
         ui_image_component_draw( sort, env, impl.m_crop, impl.m_aspect, im, texture, d.m_alpha );
         return true;

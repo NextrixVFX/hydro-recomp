@@ -10,6 +10,7 @@
 // taken or not and its three arguments, the motion-state sync taken or not.
 
 #include <workspace/core/dynamics/wrapper.hxx>
+#include <workspace/core/world/collide.hxx>
 #include <workspace/core/world/dynamics.hxx>
 
 #include <deque>
@@ -304,5 +305,268 @@ inline bool verify_simple_mesh( )
         LOG_SUCCESS( "simple_striding_mesh_lock / _parts match VuSimpleStridingMesh 0x527CD0 / 0x527D40 on %u meshes", n );
     else
         LOG_ERROR( "simple_mesh FAILED %d", bad );
+    return bad == 0;
+}
+// VuCollisionManager's contact-added listener 0x4AD540 (world/collide.hxx collision_contact_added, with boat/events.hxx's
+// 0x4AD340 and vu_array_reserve 0x4AE490) against retail (case collision_contact): one manager across the contacts, the
+// bodies' images rebuilt per contact from the golden inputs; per contact the count, capacity and last record, then every
+// record.
+inline bool verify_collision_contact( )
+{
+    const unsigned* s = g_golden_ccn_words;
+    std::vector< std::vector< std::uint8_t > > bodies( 4, std::vector< std::uint8_t >( 0x400, 0 ) ), owners( 4, std::vector< std::uint8_t >( 0x500, 0 ) );
+    collision_manager_t m;
+    const unsigned ns = *s++;
+    m.scrapes.data.resize( ns );
+    m.scrapes.count = m.scrapes.capacity = static_cast< std::int32_t >( ns );
+    for ( unsigned i = 0; i < ns; ++i, s += 4 )
+        m.scrapes.data[ i ] = { bodies[ s[ 0 ] ].data( ), bodies[ s[ 1 ] ].data( ), static_cast< std::int32_t >( s[ 2 ] ), static_cast< std::int32_t >( s[ 3 ] ), {} };
+    m.impacts.data.resize( 2 );
+    m.impacts.capacity = 2;
+    const unsigned n = *s++;
+    int bad = 0;
+    for ( unsigned c = 0; c < n; ++c )
+    {
+        const unsigned ia = *s++, ib = *s++;
+        for ( unsigned side = 0; side < 2; ++side, s += 12 )
+        {
+            std::uint8_t* b = bodies[ side ? ib : ia ].data( );
+            std::uint8_t* o = owners[ side ? ib : ia ].data( );
+            const std::uint16_t group = static_cast< std::uint16_t >( s[ 1 ] );
+            std::memcpy( b + 0xD8, &s[ 0 ], 4 );
+            std::memcpy( b + 0x2CA, &group, 2 );
+            o[ 0x467 ] = static_cast< std::uint8_t >( s[ 2 ] );
+            std::memcpy( b + 0x40, s + 3, 12 );
+            std::memcpy( b + 0x140, s + 6, 12 );
+            std::memcpy( b + 0x150, s + 9, 12 );
+        }
+        float point[ 4 ], normal[ 3 ];
+        std::memcpy( point, s, 16 );
+        std::memcpy( normal, s + 4, 12 );
+        s += 7;
+        const unsigned pa = *s++, pb = *s++;
+        collision_contact_added( m, bodies[ ia ].data( ), bodies[ ib ].data( ), owners[ ia ].data( ), owners[ ib ].data( ), point, normal,
+                                 static_cast< std::uint8_t >( pa ), static_cast< std::uint8_t >( pb ) );
+        bad += static_cast< unsigned >( m.impacts.count ) != *s++;
+        bad += static_cast< unsigned >( m.impacts.capacity ) != *s++;
+        unsigned last[ 7 ] = {};
+        if ( m.impacts.count > 0 )
+            std::memcpy( last, &m.impacts.data[ static_cast< std::size_t >( m.impacts.count - 1 ) ], 28 );
+        bad += std::memcmp( last, s, 28 ) != 0;
+        s += 7;
+    }
+    const unsigned nf = *s++;
+    bad += nf != 7u * static_cast< unsigned >( m.impacts.count );
+    if ( nf == 7u * static_cast< unsigned >( m.impacts.count ) )
+        bad += std::memcmp( m.impacts.data.data( ), s, 4u * nf ) != 0;
+    if ( bad == 0 )
+        LOG_SUCCESS( "collision_contact_added matches VuCollisionManager's listener 0x4AD540 (0x4AD340, 0x4AE490) on %u contacts: %d impact "
+                     "records, capacity %d", n, m.impacts.count, m.impacts.capacity );
+    else
+        LOG_ERROR( "collision_contact FAILED %d", bad );
+    return bad == 0;
+}
+// VuCollisionManager's impact tick 0x4ADA10 (world/collide.hxx collision_impact_tick on pfxmgr.hxx's manager and a pfx_heap_t
+// holding the case's fake instances) against retail (case collision_impact): per tick the hook log (audio, creates, the
+// instance slots) and the count; at the end every process's +0x1C and the manager's entries (flags, serial).
+struct cim_log_t
+{
+    std::vector< unsigned > log;   // length-prefixed entries
+    unsigned entries = 0;
+    std::deque< unsigned > event, param, create;
+    const collision_tables_t* tables = nullptr;
+    void add( std::initializer_list< unsigned > e )
+    {
+        log.push_back( static_cast< unsigned >( e.size( ) ) );
+        log.insert( log.end( ), e );
+        ++entries;
+    }
+};
+
+inline unsigned cim_cell( const vu_array_t< collision_name_t >& names, const char* s )
+{
+    for ( std::size_t c = 0; c < names.data.size( ); ++c )
+        if ( names.data[ c ].data( ) == s )
+            return static_cast< unsigned >( c );
+    return 0xFFFFu;
+}
+
+inline bool verify_collision_impact( )
+{
+    constexpr std::uint32_t arg = 0x30000000u, block0 = arg + 0x1100u;
+    const unsigned* s = g_golden_cim_words;
+    collision_tables_t t;
+    t.types = static_cast< std::int32_t >( *s++ );
+    const unsigned nc = *s++;
+    for ( unsigned c = 0; c < nc; ++c, s += 2 )
+    {
+        const std::string a = s[ 0 ] ? "sfx_" + std::to_string( c ) : "", b = s[ 1 ] ? "Generic/Impact/p" + std::to_string( c ) : "";
+        t.impact_sfx.data.emplace_back( );
+        t.impact_pfx.data.emplace_back( );
+        std::memcpy( t.impact_sfx.data.back( ).data( ), a.c_str( ), a.size( ) + 1 );
+        std::memcpy( t.impact_pfx.data.back( ).data( ), b.c_str( ), b.size( ) + 1 );
+    }
+    pfx_heap_t heap;
+    heap.add( arg + 0x1000u, 0xE000u );
+    const unsigned ni = *s++;
+    for ( unsigned i = 0; i < ni; ++i, s += 2 )
+        heap[ arg + s[ 0 ] ] = s[ 1 ];
+    const unsigned np = *s++;
+    const unsigned* procs = s;
+    s += np;
+    cim_log_t L;
+    L.tables = &t;
+    pfx_manager_ops_t ops;
+    ops.user = &L;
+    ops.create = []( void* u, const char* path ) {
+        cim_log_t& l = *static_cast< cim_log_t* >( u );
+        const std::uint32_t a = l.create.front( );
+        l.create.pop_front( );
+        l.add( { 6u, cim_cell( l.tables->impact_pfx, path ), a ? ( a - block0 ) / 0x280u : 0xFFFFFFFFu } );
+        return a;
+    };
+    pfx_manager_t pm;
+    pfx_manager_init( pm, ops );
+    collision_impact_hooks_t k;
+    k.user = &L;
+    k.get_event = []( void* u, const char* name, std::uint32_t& ev ) {
+        cim_log_t& l = *static_cast< cim_log_t* >( u );
+        const unsigned ok = l.event.front( );
+        l.event.pop_front( );
+        ev = 0xE000u + l.entries;
+        l.add( { 1u, cim_cell( l.tables->impact_sfx, name ), 1u, ok } );
+        return ok != 0u;
+    };
+    k.set_position = []( void* u, std::uint32_t ev, const float* p ) {
+        unsigned w[ 3 ];
+        std::memcpy( w, p, 12 );
+        static_cast< cim_log_t* >( u )->add( { 2u, ev, w[ 0 ], w[ 1 ], w[ 2 ], 0u, 0u } );
+    };
+    k.get_parameter = []( void* u, std::uint32_t ev, const char* name, std::uint32_t& p ) {
+        cim_log_t& l = *static_cast< cim_log_t* >( u );
+        const unsigned ok = l.param.front( );
+        l.param.pop_front( );
+        p = 0xF000u + l.entries;
+        l.add( { 3u, ev, std::strcmp( name, "intensity" ) == 0 ? 1u : 0u, ok } );
+        return ok != 0u;
+    };
+    k.set_value = []( void* u, std::uint32_t p, float v ) {
+        unsigned w;
+        std::memcpy( &w, &v, 4 );
+        static_cast< cim_log_t* >( u )->add( { 4u, p, w } );
+    };
+    k.start = []( void* u, std::uint32_t ev ) { static_cast< cim_log_t* >( u )->add( { 5u, ev } ); };
+    k.pfx_position = []( void* u, std::uint32_t i, const float* p ) {
+        unsigned w[ 3 ];
+        std::memcpy( w, p, 12 );
+        static_cast< cim_log_t* >( u )->add( { 7u, ( i - block0 ) / 0x280u, w[ 0 ], w[ 1 ], w[ 2 ] } );
+    };
+    k.pfx_duration = []( void* u, std::uint32_t i ) { static_cast< cim_log_t* >( u )->add( { 8u, ( i - block0 ) / 0x280u } ); };
+    k.pfx_start = []( void* u, std::uint32_t i ) { static_cast< cim_log_t* >( u )->add( { 9u, ( i - block0 ) / 0x280u } ); };
+    k.pfx_walk = []( void* u, std::uint32_t i ) { static_cast< cim_log_t* >( u )->add( { 10u, ( i - block0 ) / 0x280u } ); };
+    collision_manager_t m;
+    m.impacts.data.resize( 8 );
+    m.impacts.capacity = 8;
+    const unsigned nt = *s++;
+    int bad = 0;
+    for ( unsigned tk = 0; tk < nt; ++tk )
+    {
+        const unsigned nr = *s++;
+        for ( unsigned i = 0; i < nr; ++i, s += 7 )
+            std::memcpy( &m.impacts.data[ i ], s, 28 );
+        m.impacts.count = static_cast< std::int32_t >( nr );
+        L.event.assign( s, s + nr );
+        L.param.assign( s + nr, s + 2 * nr );
+        L.create.clear( );
+        for ( unsigned i = 0; i < nr; ++i )
+            L.create.push_back( s[ 2 * nr + i ] == 0xFFFFFFFFu ? 0u : block0 + 0x280u * s[ 2 * nr + i ] );
+        s += 3 * nr;
+        L.log.clear( );
+        L.entries = 0;
+        collision_impact_tick( m, t, pm, ops, heap, k );
+        const unsigned nl = *s++;
+        bad += L.log != std::vector< unsigned >( s, s + nl );
+        s += nl;
+        bad += static_cast< unsigned >( m.impacts.count ) != *s++;
+    }
+    const unsigned nf = *s++;
+    for ( unsigned i = 0; i < nf && i < np; ++i )
+        bad += heap[ arg + procs[ i ] + 0x1Cu ] != s[ i ];
+    s += nf;
+    const unsigned ne = *s++;
+    for ( unsigned i = 0; i < ne; ++i, s += 2 )
+    {
+        const pfx_manager_entry_t& x = pm.entries[ static_cast< std::size_t >( pm.table[ i ] ) ];
+        bad += ( x.flags != s[ 0 ] ) + ( x.serial != s[ 1 ] );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "collision_impact_tick matches VuCollisionManager's impact tick 0x4ADA10 on a retail VuPfxManager: %u ticks, %u fountain "
+                     "processes, %u entries", nt, np, ne );
+    else
+        LOG_ERROR( "collision_impact FAILED %d", bad );
+    return bad == 0;
+}
+// VuCollisionManager's ctor 0x4ACDF0 / init 0x4AD110 (world/collide.hxx collision_manager_construct / _init, the loads 0x4AD690)
+// against retail (case collision_init) on the pack's SurfaceTableDB, with boat/surface.hxx's table built from SurfaceDB.
+inline bool verify_collision_init( )
+{
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    std::vector< std::uint8_t > sdb, stdb;
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) || !archive.read( "VuDBAsset/SurfaceDB", sdb ) || !archive.read( "VuDBAsset/SurfaceTableDB", stdb ) )
+    {
+        LOG_ERROR( "collision_init: the pack's SurfaceDB / SurfaceTableDB are not readable" );
+        return false;
+    }
+    const value_t surface_db = c_reader( sdb ).parse( );
+    const value_t table_db = c_reader( stdb ).parse( );
+    surface_table_t surfaces;
+    surface_table_build( surfaces, &surface_db );
+    const unsigned* s = g_golden_cin_words;
+    collision_manager_t m;
+    collision_tables_t t;
+    collision_manager_construct( m, t );
+    int bad = 0;
+    const vu_array_t< collision_name_t >* tables[ 4 ] = { &t.impact_sfx, &t.scrape_sfx, &t.impact_pfx, &t.scrape_pfx };
+    for ( int k = 0; k < 4; ++k )   // ctor words +0x18 + 0xC k: data present, count, capacity
+        bad += ( s[ 6 + 3 * k ] != 1u ) + ( s[ 7 + 3 * k ] != static_cast< unsigned >( tables[ k ]->count ) ) +
+               ( s[ 8 + 3 * k ] != static_cast< unsigned >( tables[ k ]->capacity ) );
+    bad += ( s[ 19 ] != static_cast< unsigned >( m.impacts.count ) ) + ( s[ 20 ] != static_cast< unsigned >( m.impacts.capacity ) );
+    bad += ( s[ 22 ] != static_cast< unsigned >( m.scrapes.count ) ) + ( s[ 23 ] != static_cast< unsigned >( m.scrapes.capacity ) );
+    s += 24;
+    struct log_t
+    {
+        const value_t* doc;
+        unsigned listener = 0, asset = 0, tick = 0;
+    } log{ &table_db };
+    collision_init_hooks_t h;
+    h.user = &log;
+    h.add_listener = []( void* u ) { static_cast< log_t* >( u )->listener = 1; };
+    h.asset = []( void* u, const char* name ) -> const value_t* {
+        log_t& l = *static_cast< log_t* >( u );
+        l.asset = std::strcmp( name, "SurfaceTableDB" ) == 0 ? 1u : 0u;
+        return l.doc;
+    };
+    h.register_tick = []( void* u, const char* phase ) { static_cast< log_t* >( u )->tick = std::strcmp( phase, "Decision" ) == 0 ? 1u : 0u; };
+    const bool ok = collision_manager_init( t, surfaces, h );
+    bad += ( ok ? 1u : 0u ) != s[ 0 ];
+    bad += s[ 1 ] != 1u;   // +0x10 = the asset the hook answered
+    bad += static_cast< unsigned >( t.types ) != s[ 2 ];
+    bad += ( log.listener != s[ 3 ] ) + ( log.asset != s[ 4 ] ) + ( log.tick != s[ 5 ] );
+    s += 6;
+    int cells = 0;
+    for ( int k = 0; k < 4; ++k )
+    {
+        const unsigned count = *s++, capacity = *s++;
+        bad += ( count != static_cast< unsigned >( tables[ k ]->count ) ) + ( capacity != static_cast< unsigned >( tables[ k ]->capacity ) );
+        for ( unsigned c = 0; c < count && c < tables[ k ]->data.size( ); ++c, ++cells )
+            bad += std::memcmp( tables[ k ]->data[ c ].data( ), s + 16 * c, 64 ) != 0;
+        s += 16 * count;
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "collision_manager_construct / _init match VuCollisionManager's 0x4ACDF0 / 0x4AD110 (0x4AD690, 0x4AE420) on SurfaceTableDB: "
+                     "%d types, %d cells of 64 bytes", t.types, cells );
+    else
+        LOG_ERROR( "collision_init FAILED %d", bad );
     return bad == 0;
 }
