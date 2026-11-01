@@ -660,10 +660,19 @@ inline water_held_wave_t water_held_from( const std::uint32_t* word )
 // The allocators' common tail (0x528B40 / 0x528C20 / 0x528F40 / 0x528D00 /
 // 0x528910 / 0x528E90 / 0x528D70): a pool node holding the wave pushed at the
 // HEAD of the wave list, then 0x529A90.
+inline int water_hold_wave_at( water_hold_t& w, int wave, const water_held_wave_t& v );
+
 inline int water_hold_wave( water_hold_t& w, const water_held_wave_t& v )
 {
-    const int wave = static_cast< int >( w.waves.size( ) );
-    w.waves.push_back( v );
+    w.waves.emplace_back( );
+    return water_hold_wave_at( w, static_cast< int >( w.waves.size( ) ) - 1, v );
+}
+
+// The same into an index the hold already has (a destroyed wave's, reused:
+// wake.hxx water_create_wake).
+inline int water_hold_wave_at( water_hold_t& w, int wave, const water_held_wave_t& v )
+{
+    w.waves[ static_cast< std::size_t >( wave ) ] = v;
     const int e = w.pool_free;
     w.pool_free = w.pool[ e ].next;
     --w.pool_count;
@@ -775,6 +784,14 @@ struct water_built_t
         int wave = -1;
     };
     std::vector< entity_ref_t > entities;
+    // Destroyed wake / flat wake indices (water_built_destroy), reused by the
+    // next water_create_wake - OUR index bookkeeping, not retail's (retail frees
+    // the 0xC0-byte object; its list / trees / pool are unaffected): without it
+    // every segment ever made stays in `waves` and every view build walks it.
+    // Off by default (the checks compare wave indices in creation order); the
+    // race sets wake_reuse = true after water_build_world.
+    std::vector< int > wake_free;
+    bool wake_reuse = false;
 };
 
 // The field of ocean wave `wave`, or null (not an ocean wave / not built).
@@ -1069,6 +1086,8 @@ inline void water_built_destroy( water_built_t& b, int wave )
     if ( b.waves[ wave ].word[ 2 ] != 0 )
         ++b.unread_dtors;
     b.wave_gone[ static_cast< std::size_t >( wave ) ] = 1;
+    if ( b.wake_reuse && ( kind == water_kind_wake || kind == water_kind_flat_wake ) )
+        b.wake_free.push_back( wave );
 }
 
 // A wave entity's slot 7 (gameRelease): VuBankedTurnWaveEntity 0x5D3690 (its
