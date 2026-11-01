@@ -942,6 +942,15 @@ public:
     // 0x4FDB70): SCAFFOLD, ours - GameData {Level: --race, GameType: --mode (else "Race"), Course: --course}, the
     // inputs the old Games/<track><mode> path took; with Level a bare track name 0x4D3480 names the same projects.
     void load_background( );
+
+    // An entity's graph path: its names below the project root, '/'-joined (the event graph's key).
+    static std::string entity_path( const entity_t& owner )
+    {
+        std::string path;
+        for ( const entity_t* e = &owner; e && e->m_parent; e = e->m_parent )
+            path = path.empty( ) ? e->m_name : e->m_name + "/" + path;
+        return path;
+    }
     void action_start( value_t& game_data, const race_session_dbs_t& dbs, const std::function< void( ) >& level );
 
     void load_scene( const char* track, const char* mode, const char* course = nullptr )
@@ -1053,6 +1062,12 @@ public:
         }
         m_race.world.triggers = [ this ] { race_triggers( ); };
         m_race.world.prop_draw = [ this ]( const entity_t& owner ) { prop_draw( owner ); };
+        m_race.world.prop_drawn = [ this ]( const entity_t& owner, bool on ) {
+            for ( static_draw_item_t& item : m_static_draws )
+                if ( item.owner == &owner )
+                    item.off = !on;
+        };
+        m_race.world.fire = [ this ]( const entity_t& owner, const char* plug ) { fire( entity_path( owner ), plug ); };
         // VuRaceGame's ctor 0x489030 loads its three HUD projects (0x4B4360) - before the boat load.
         load_huds( );
         m_race.world.hud = [ this ]( int project, race_hud_verb_t verb, float step ) { hud( project, verb, step ); };
@@ -1247,6 +1262,12 @@ public:
         m_race.world.water_tick = [ this ]( float step ) { water_frame( step ); };
         m_race.world.triggers = [ this ] { race_triggers( ); };
         m_race.world.prop_draw = [ this ]( const entity_t& owner ) { prop_draw( owner ); };
+        m_race.world.prop_drawn = [ this ]( const entity_t& owner, bool on ) {
+            for ( static_draw_item_t& item : m_static_draws )
+                if ( item.owner == &owner )
+                    item.off = !on;
+        };
+        m_race.world.fire = [ this ]( const entity_t& owner, const char* plug ) { fire( entity_path( owner ), plug ); };
         if ( !m_race.active )
             water_frame( dt );
 
@@ -1499,6 +1520,7 @@ private:
         // node matrix (placed = draw matrix x node, models.hxx place_model).
         const entity_t* owner = nullptr;
         std::vector< std::array< float, 16 > > nodes[ 3 ];
+        bool off = false;   // the component off the 3D draw manager (its +0x1E cleared: a hide 0x545F20)
     };
 
     // One Vu3dDrawAnimatedModelComponent instance. The clip and phase are

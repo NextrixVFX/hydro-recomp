@@ -17,6 +17,7 @@
 #include <workspace/core/world/dynamics.hxx>
 #include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/lens.hxx>
+#include <workspace/core/world/mine.hxx>
 #include <workspace/core/world/pfxmgr.hxx>
 #include <workspace/core/world/pfxsim.hxx>
 #include <workspace/core/world/dynprop.hxx>
@@ -126,6 +127,11 @@ struct race_world_t
     // +0xB0) x world +0x50) and world aabb (0x531D10) re-made and handed to the renderer - the world's static draw of
     // that owner (c_world: the placements moved). Null: not drawn from the bodies (logged).
     std::function< void( const entity_t& owner ) > prop_draw;
+    // The 3D draw manager's add / remove of an owner's static model component (g 0x7590B8 vt+0x28 / +0x2C; the
+    // component's +0x1E) - the renderer's: c_world's static draws. Null: not hidden (logged).
+    std::function< void( const entity_t& owner, bool on ) > prop_drawn;
+    // An entity's output plug fired (VuScriptComponent findPlug 0x504770 + the plug's vt+8 = 0x5023A0): c_world's graph.
+    std::function< void( const entity_t& owner, const char* plug ) > fire;
     std::uint32_t viewports = 1;
     std::int32_t control_method = 0;
     std::int32_t display_w = 1280;
@@ -208,6 +214,9 @@ struct race_session_t
         dynamic_prop_motion_t motion;
         dynamic_prop_init_t init;
         bool buoy = false;
+        bool mine = false;               // VuFloatingMineEntity (world/mine.hxx)
+        std::uint8_t exploded = 0, request = 0;   // the mine's +0x214 / +0x215
+        bool step_added = false;         // the step callback in g_vudynamicsimpl's list (the hide removes it)
         float timer = 0.0f;              // +0x17C (the Decision tick's)
         dynamic_prop_hit_t hit;          // +0x164 / +0x174 / +0x178 (the contact callback 0x437F40's)
         std::uint8_t step_tag = 0;       // the entity's +0xB0 part: the step callback's identity in +0x48
@@ -216,6 +225,10 @@ struct race_session_t
     std::vector< std::unique_ptr< dyn_prop_t > > dyn_props;
     int buoy_hits = 0;                   // dev count (not retail): OnCheckPointBuoyHit broadcasts made
     int prop_hits = 0, prop_splashes = 0;   // dev counts (not retail): 0x437F40 hits taken, dynamic-prop splashes started
+    int mine_explosions = 0, explosion_hits = 0;   // dev counts (not retail)
+    // VuExplosionManagerImpl g 0x759034's listeners (+4 / +8; world/mine.hxx): the human drivers' +0x80 parts, added by
+    // their slot 6 0x40F210 (boat human.hxx human_game_initialize).
+    std::vector< explosion_listener_t > explosion_listeners;
     // The gfx-settings blender g 0x759430 (world/blend.hxx; 0x52F620 at the session's start) and the level's gfx-settings
     // entities' blend views (the zones in its list; the global's not listed - its timer only), made by their gameInitialize.
     gfx_blender_t blender;
@@ -717,6 +730,98 @@ inline void race_session_dyn_prop_build( void* user, float )
         race_unwired( *d.session, "a dynamic prop's Build tick 0x546130 with no renderer hand-off (prop_draw) - not drawn from its body" );
 }
 
+// The mine's hide vt+0x34 0x438220: the step callback out of g_vudynamicsimpl (vt+0x30), then 0x545F20 - shown (+0x8C)
+// -> 0, the draw component off the draw manager (the renderer's prop_drawn), the body out of the world when added.
+inline void race_session_mine_hide( race_session_t::dyn_prop_t& d )
+{
+    race_session_t& s = *d.session;
+    if ( d.step_added )
+    {
+        vu_dynamics_remove_step_callback( s.dynamics->impl, &d.step_tag );
+        d.step_added = false;
+    }
+    if ( !d.init.shown )
+        return;
+    d.init.shown = 0;
+    if ( s.world.prop_drawn )
+        s.world.prop_drawn( *d.entity, false );
+    else
+        race_unwired( s, "the mine's hide 0x545F20: no renderer hand-off (prop_drawn) - still drawn" );
+    if ( d.body->in_world )
+    {
+        vu_dynamics_remove_rigid_body( s.dynamics->impl, d.body->body );
+        d.body->in_world = false;
+    }
+}
+
+// The mine's Decision tick 0x438EA0 (world/mine.hxx mine_tick): the hide; the explosion part 0x547BB0 - its params
+// (+0 the position: the transform's row 3, +0x10 .. +0x30 the nine Explosion floats) to the explosion manager's add
+// 0x510180 (explosion_add over the human listeners), the pfx 0x52BCD0 by "Explosion Pfx System Name" (slot 10 discarded,
+// slot 2 setMatrix( the transform world ), slot 11 start) and FMOD's event (platform); the point wave 0x528E10 on the
+// world's VuWater (its returned reference dropped: 2 -> 1); "OnExplode".
+inline void race_session_mine_tick( void* user, float )
+{
+    race_session_t::dyn_prop_t& d = *static_cast< race_session_t::dyn_prop_t* >( user );
+    race_session_t& s = *d.session;
+    const transform_component_t* t = entity_transform( *d.entity );
+    if ( !t || d.entity->m_world_unknown )
+    {
+        if ( !d.exploded && d.request )
+            race_unwired( s, "a mine's tick 0x438EA0 on an entity whose world is unknown - UNKNOWN, not run" );
+        return;
+    }
+    mine_tick_hooks_t h;
+    h.hide = [ &d ] { race_session_mine_hide( d ); };
+    h.explode = [ &s, &d ]( const float* m ) {
+        std::uint8_t params[ 0x38 ] = { };
+        std::memcpy( params, m + 12, 16 );
+        std::memcpy( params + 0x10, d.p->explosion, 36 );
+        s.explosion_hits += explosion_add( params, s.explosion_listeners, hull_sqrt );
+        if ( !d.p->explosion_pfx.empty( ) && s.world.pfx && s.world.pfx_manager && s.world.pfx_ops )
+        {
+            pfx_manager_t& pm = *s.world.pfx_manager;
+            const int e = pfx_manager_create( pm, d.p->explosion_pfx.c_str( ), *s.world.pfx_ops );
+            if ( e >= 0 )
+            {
+                const boat_pfx_ops_t o = boat_pfx_runtime_ops( *s.world.pfx );
+                const std::uint32_t hd = pfx_manager_handle( pm, e );
+                if ( o.duration )
+                    o.duration( o.user, pm.entries[ static_cast< std::size_t >( e ) ].instance );
+                const int x = hd ? pfx_manager_lookup( pm, hd ) : -1;
+                if ( x >= 0 )
+                {
+                    const std::uint32_t inst = pm.entries[ static_cast< std::size_t >( x ) ].instance;
+                    o.set_matrix( o.user, inst, m );
+                    o.start( o.user, inst );
+                }
+            }
+        }
+        else if ( !d.p->explosion_pfx.empty( ) )
+            race_unwired( s, "a mine's explosion pfx 0x52BCD0 with no VuPfx runtime / manager - UNKNOWN, not run" );
+        if ( !d.p->explosion_audio.empty( ) )
+            race_unwired( s, "audio: a mine's explosion event (FMOD getEvent / set3DAttributes / start - platform)" );
+    };
+    h.point_wave = [ &s ]( const std::uint32_t* desc ) {
+        if ( !s.world.water )
+        {
+            race_unwired( s, "a mine's point wave 0x528E10 with no VuWater - UNKNOWN, not made" );
+            return;
+        }
+        water_create_point_wave( *s.world.water, desc );
+        s.world.water->waves.back( ).set( 4, 1 );   // the mine's reference dropped (dec +4: 2 -> 1, not deleted)
+    };
+    h.on_explode = [ &s, &d ] {
+        if ( s.world.fire )
+            s.world.fire( *d.entity, "OnExplode" );
+    };
+    if ( mine_tick( d.exploded, d.request, t->world, d.p->wave, h ) )
+    {
+        ++s.mine_explosions;
+        LOG_INFO( "race: mine '%s' exploded (sync %d) - %d listener hits so far", d.entity->m_name.c_str( ), s.dynamics ? s.dynamics->syncs : -1,
+                  s.explosion_hits );
+    }
+}
+
 // One dynamic game prop's gameInitialize (world/dynprop.hxx, verified by the cases dynamic_prop_bodies /
 // dynamic_prop_step) made live: postLoad 0x5459F0's component step (retail runs it at load; nothing reads the
 // component in between), 0x437580, the body into the dynamics world (vt+0x3C), the motion state's
@@ -743,6 +848,9 @@ inline bool race_session_dynamic_prop( race_session_t& s, entity_t& e, const bod
     d->session = &s;
     d->p = &static_cast< dynamic_prop_state_t* >( e.m_state.get( ) )->value;
     d->buoy = static_cast< dynamic_prop_state_t* >( e.m_state.get( ) )->buoy;
+    d->mine = static_cast< dynamic_prop_state_t* >( e.m_state.get( ) )->mine;
+    if ( d->mine )
+        d->p->hard_hit = 0;   // the mine's slot 6 0x438CF0 begins with +0x108 = 0, before 0x437580
     d->c = &rs->value;
     dynamic_prop_post_load( *d->p, *d->c );
     const collision_mesh_asset_t* asset = nullptr;
@@ -762,6 +870,11 @@ inline bool race_session_dynamic_prop( race_session_t& s, entity_t& e, const bod
     quat_from_rows( d->live.anchor_q, t->world );
     level_body_t* lb = b.get( );
     race_session_t::dyn_prop_t* dp = d.get( );
+    // The mine's rest of 0x438CF0 (world/mine.hxx): retail sets group 0x80 on the body and its broadphase proxy after
+    // 0x437580 added it; here it is written before the add below, which builds the proxy from the body's +0x2CA - the
+    // same end state (ORDER OURS, flagged).
+    if ( d->mine )
+        mine_game_initialize( *d->c, reinterpret_cast< std::uint8_t* >( &lb->body ), nullptr );
     if ( d->init.added )
     {
         dyn.objects[ &lb->body ] = &lb->collision;
@@ -802,9 +915,15 @@ inline bool race_session_dynamic_prop( race_session_t& s, entity_t& e, const bod
         dyn.callbacks[ tag ] = cb;
         if ( !vu_dynamics_add_step_callback( dyn.impl, tag ) )
             race_unwired( s, "g_vudynamicsimpl vt+0x2C refused a dynamic prop's step callback" );
+        else
+            dp->step_added = true;
     }
+    // The Decision delegate (0x4077E8 -> vt+0x40) reaches the MINE's 0x438EA0 for a mine; the mine then registers it
+    // once more itself (0x438D73) - two registrations when 0x437580 made one.
     if ( d->init.decision_tick )
-        tick_register( s.ticks, { dp, race_session_dyn_prop_decision, dp }, "Decision" );
+        tick_register( s.ticks, { dp, d->mine ? race_session_mine_tick : race_session_dyn_prop_decision, dp }, "Decision" );
+    if ( d->mine )
+        tick_register( s.ticks, { dp, race_session_mine_tick, dp }, "Decision" );
     if ( d->init.build_tick )
         tick_register( s.ticks, { dp, race_session_dyn_prop_build, dp }, "Build" );
     s.level_bodies.push_back( std::move( b ) );
@@ -838,7 +957,7 @@ inline void race_session_level_bodies( race_session_t& s, entity_t& tree, const 
             self( self, *c );
         if ( race_session_gfx_game_initialize( s, e ) )
             return;
-        if ( dynamic_prop_class( e.m_type ) && e.m_type != "VuFloatingMineEntity" )   // the mine's slot 6 0x438CF0: below
+        if ( dynamic_prop_class( e.m_type ) )   // the mine's slot 6 0x438CF0 included (race_session_dynamic_prop)
         {
             if ( race_session_dynamic_prop( s, e, hooks, id ) )
                 ++dynamic;

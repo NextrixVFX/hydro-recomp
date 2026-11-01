@@ -408,7 +408,9 @@ inline void c_world::update_static_draws( )
     int shown[ 4 ]{};   // none, LOD 0, LOD 1, LOD 2
     for ( static_draw_item_t& item : m_static_draws )
     {
-        const static_draw_t pick = static_model_select( item.draw, item.aabb, item.aabb + 4, m_eye, false, false, 1.0f );
+        static_draw_t pick = static_model_select( item.draw, item.aabb, item.aabb + 4, m_eye, false, false, 1.0f );
+        if ( item.off )
+            pick.instance = -1;   // not in the draw manager: its draw 0x5B0730 is never called
         if ( pick.instance == item.shown )
             continue;
         if ( item.shown >= 0 && item.shown < 3 )
