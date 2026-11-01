@@ -178,6 +178,17 @@ public:
         return out;
     }
 
+    // A pause / recover button's touch callback (c_ui_binding::hud_touch: 0
+    // down, 1 up, 2 move) by the entity's long name - the touch device's
+    // dispatch is the caller's (not read). False when no such button.
+    bool touch( const std::string& long_name, int kind, const float point[ 2 ] )
+    {
+        for ( const auto& b : m_binding.m_bound )
+            if ( ui_long_name( *b->m_entity ) == long_name )
+                return m_binding.hud_touch( *b->m_entity, kind, point );
+        return false;
+    }
+
 private:
     ui_bound_t* bound( const entity_t& e )
     {
