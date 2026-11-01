@@ -130,6 +130,18 @@ public:
         m_conditions[ static_cast< std::size_t >( condition_index( name ) ) ].m_value = value ? 1 : 0;
     }
 
+    // The one-evaluate pulse (VuRaceGame slot 15 0x48B180: conditions[0x555C60(
+    // name)] +29 = 1). False when no condition has that name: retail writes the
+    // byte before the vector then - not recreated.
+    bool pulse_condition( const char* name )
+    {
+        const int k = condition_index( name );
+        if ( k < 0 )
+            return false;
+        m_conditions[ static_cast< std::size_t >( k ) ].m_pulse = 1;
+        return true;
+    }
+
     // 0x555AD0: the current state's first transition whose condition is set
     // (value or pulse); while its target carries the +24 flag, move there and
     // look again from the new state (0x555BC0); then every pulse is cleared;

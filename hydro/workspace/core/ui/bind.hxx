@@ -119,9 +119,11 @@ struct ui_trace_t
 
 // The race HUD (batch 16, census case hud_census on Race Pre / Game / PostGameHUD).
 // Bound only when ui_bind_hooks_t::m_hud is set (the HUD driver, core/ui
-// overlay.hxx): case ui_frames runs these inputs STUBBED in retail on the Screens
-// projects (VuTriggerForwarderEntity there), so the Screens binding keeps them
-// unknown. Types, handlers and inputs (all disassembled):
+// overlay.hxx) - except, since batch 18, the inputs that read no game state:
+// the text bases' / images' Show / Hide / SetAlpha / SetStringID and
+// VuTriggerForwarderEntity's Trigger run in every binding (case ui_frames runs
+// them live in retail on the Screens projects). Types, handlers and inputs
+// (all disassembled):
 // - the text base (VuUITextBaseEntity ctor 0x627070) of VuHUDElementEntity
 //   0x738C64, VuUITextEntity 0x6F7434, VuHUDHiddenPackageToastEntity 0x738BDC:
 //   inputs Show 0x446C80 (+0x64 = 1), Hide 0x446FB0 (+0x64 = 0), SetAlpha
@@ -390,19 +392,52 @@ private:
         b.m_methods.push_back( { fsm_hash( event ), method } );
     }
 
+    static bool shown_vtable( std::uint32_t vt )
+    {
+        return vt == k_ui_hud_element_vtable || vt == k_ui_text_vtable || vt == k_ui_hud_toast_vtable || vt == k_ui_image_vtable;
+    }
+
+    static void make_shown( ui_bound_t& b )
+    {
+        b.m_shown = std::make_unique< ui_hud_shown_t >( );
+        if ( const ui_slot_t* s = ui_bind_slot( *b.m_entity, "Visible" ) )
+            b.m_shown->m_visible = ( s->m_bits[ 0 ] & 0xFFu ) != 0;
+        if ( const ui_slot_t* s = ui_bind_slot( *b.m_entity, "String ID" ) )
+            b.m_shown->m_string_id = s->m_text;
+    }
+
+    // Batch 18: outside the race HUD (no m_hud - the Screens) the text bases' /
+    // images' Show / Hide / SetAlpha / SetStringID and VuTriggerForwarderEntity's
+    // Trigger 0x5E0FC0 run too (they read no game state); their event maps hold
+    // nothing. The kinds that read ui_hud_env_t stay HUD-only.
+    bool bind_shown( ui_bound_t& b )
+    {
+        if ( shown_vtable( b.m_vtable ) && b.m_vtable != k_ui_hud_element_vtable && b.m_vtable != k_ui_hud_toast_vtable )
+        {
+            make_shown( b );
+            return true;
+        }
+        return false;
+    }
+
+    static bool shown_input( std::uint32_t vt, const char* plug )
+    {
+        if ( shown_vtable( vt ) )
+            for ( const char* name : { "Show", "Hide", "SetAlpha" } )
+                if ( std::strcmp( plug, name ) == 0 )
+                    return true;
+        if ( vt == k_ui_text_vtable && std::strcmp( plug, "SetStringID" ) == 0 )
+            return true;
+        return vt == k_ui_trigger_forwarder_vtable && std::strcmp( plug, "Trigger" ) == 0;
+    }
+
     // The race HUD's types (see ui_hud_env_t); true when `b` is one of them.
     bool bind_hud( ui_bound_t& b )
     {
         entity_t& e = *b.m_entity;
         const std::uint32_t vt = b.m_vtable;
-        if ( vt == k_ui_hud_element_vtable || vt == k_ui_text_vtable || vt == k_ui_hud_toast_vtable || vt == k_ui_image_vtable )
-        {
-            b.m_shown = std::make_unique< ui_hud_shown_t >( );
-            if ( const ui_slot_t* s = ui_bind_slot( e, "Visible" ) )
-                b.m_shown->m_visible = ( s->m_bits[ 0 ] & 0xFFu ) != 0;
-            if ( const ui_slot_t* s = ui_bind_slot( e, "String ID" ) )
-                b.m_shown->m_string_id = s->m_text;
-        }
+        if ( shown_vtable( vt ) )
+            make_shown( b );
         if ( vt == k_ui_hud_element_vtable )
         {
             b.m_element = std::make_unique< c_ui_hud_element >( m_hud_hooks );
@@ -645,6 +680,8 @@ private:
         entity_t& e = *b.m_entity;
         if ( m_hooks.m_hud && bind_hud( b ) )
             return;
+        if ( !m_hooks.m_hud && bind_shown( b ) )
+            return;
         if ( b.m_vtable == k_ui_container_vtable )
         {
             // 0x62F880 registers OnUITick (0x62F7A0) then OnUIEvent (0x62F7C0).
@@ -778,16 +815,11 @@ private:
     bool bound_input( const entity_t& owner, const char* plug ) const
     {
         const std::uint32_t vt = owner.m_ctor ? owner.m_ctor->m_vtable : 0u;
+        if ( shown_input( vt, plug ) && ( m_hooks.m_hud || ( vt != k_ui_hud_element_vtable && vt != k_ui_hud_toast_vtable ) ) )
+            return true;
         if ( m_hooks.m_hud )
         {
-            if ( vt == k_ui_hud_element_vtable || vt == k_ui_text_vtable || vt == k_ui_hud_toast_vtable || vt == k_ui_image_vtable )
-                for ( const char* name : { "Show", "Hide", "SetAlpha" } )
-                    if ( std::strcmp( plug, name ) == 0 )
-                        return true;
-            if ( vt == k_ui_text_vtable && std::strcmp( plug, "SetStringID" ) == 0 )
-                return true;
-            if ( ( vt == k_ui_trigger_forwarder_vtable || vt == k_ui_control_method_vtable || vt == k_ui_start_lights_vtable ) &&
-                 std::strcmp( plug, "Trigger" ) == 0 )
+            if ( ( vt == k_ui_control_method_vtable || vt == k_ui_start_lights_vtable ) && std::strcmp( plug, "Trigger" ) == 0 )
                 return true;
             if ( vt == k_ui_is_circuit_vtable && std::strcmp( plug, "Get" ) == 0 )
                 return true;
@@ -1016,7 +1048,8 @@ private:
     {
         ui_ret_t out;
         const std::uint32_t vt = owner.m_ctor ? owner.m_ctor->m_vtable : 0u;
-        if ( m_hooks.m_hud && vt != k_ui_if_vtable && vt != k_ui_set_info_vtable && !ui_is_slider_vtable( vt ) && vt != k_ui_button_vtable )
+        if ( ( m_hooks.m_hud && vt != k_ui_if_vtable && vt != k_ui_set_info_vtable && !ui_is_slider_vtable( vt ) && vt != k_ui_button_vtable ) ||
+             shown_input( vt, plug ) )
             return run_hud_input( owner, vt, plug, p );
         if ( vt == k_ui_if_vtable )
         {
