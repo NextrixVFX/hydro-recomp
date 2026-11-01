@@ -189,12 +189,14 @@
     <ClInclude Include="workspace\core\world\blend.hxx" />
     <ClInclude Include="workspace\core\world\bodies.hxx" />
     <ClInclude Include="workspace\core\world\build.hxx" />
+    <ClInclude Include="workspace\core\world\collide.hxx" />
     <ClInclude Include="workspace\core\world\control.hxx" />
     <ClInclude Include="workspace\core\world\drive.hxx" />
     <ClInclude Include="workspace\core\world\dynamics.hxx" />
     <ClInclude Include="workspace\core\world\effects.hxx" />
     <ClInclude Include="workspace\core\world\entities.hxx" />
     <ClInclude Include="workspace\core\world\field.hxx" />
+    <ClInclude Include="workspace\core\world\frontcam.hxx" />
     <ClInclude Include="workspace\core\world\graph.hxx" />
     <ClInclude Include="workspace\core\world\grid.hxx" />
     <ClInclude Include="workspace\core\world\huds.hxx" />
