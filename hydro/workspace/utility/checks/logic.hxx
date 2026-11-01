@@ -1636,3 +1636,90 @@ inline bool verify_voice_over( )
         LOG_ERROR( "voice_over FAILED %d", bad );
     return bad == 0;
 }
+// lens.hxx lens_water_tick / _clear / _add_drops / _set_push against retail's 0x514500 / 0x5142C0 / 0x513600 / 0x513620 /
+// 0x5135D0 (case lens_water_tick): 400 ops on one manager - every manager word, every live drop and the global VuRand
+// after each.
+inline void lwt_rand_load( pfx_rand_t& r, const std::uint32_t* w )
+{
+    r.seed = static_cast< std::int32_t >( w[ 0 ] );
+    r.previous = static_cast< std::int32_t >( w[ 1 ] );
+    for ( int k = 0; k < 32; ++k )
+        r.table[ k ] = static_cast< std::int32_t >( w[ 2 + k ] );
+}
+
+inline bool lwt_state_same( const lens_water_manager_t& m, const pfx_rand_t& r, logic_check_t& c )
+{
+    bool ok = true;
+    const std::uint32_t words[ 9 ] = { m.enabled ? 1u : 0u, control_w( m.half_width ), m.clear ? 1u : 0u, control_w( m.scroll ),
+                                       control_w( m.push ), control_w( m.idle ), m.active ? 1u : 0u, static_cast< std::uint32_t >( m.count ),
+                                       control_w( m.owed ) };
+    for ( std::uint32_t w : words )
+        ok = c.next( ) == w && ok;
+    const unsigned nd = c.next( );
+    ok = nd == 9u * static_cast< unsigned >( m.count ) && ok;
+    for ( unsigned k = 0; k < nd; ++k )
+    {
+        const std::uint32_t want = c.next( );
+        ok = k < 9u * 256u && control_w( m.drops[ k ] ) == want && ok;
+    }
+    std::uint32_t rw[ 34 ];
+    for ( auto& x : rw )
+        x = c.next( );
+    ok = rw[ 0 ] == static_cast< std::uint32_t >( r.seed ) && rw[ 1 ] == static_cast< std::uint32_t >( r.previous ) && ok;
+    for ( int k = 0; k < 32; ++k )
+        ok = rw[ 2 + k ] == static_cast< std::uint32_t >( r.table[ k ] ) && ok;
+    return ok;
+}
+
+inline bool verify_lens_water_tick( )
+{
+    logic_check_t c{ g_golden_lwt_words };
+    const unsigned n = c.next( );
+    lens_water_manager_t m;
+    std::uint32_t start[ 9 ];
+    for ( auto& x : start )
+        x = c.next( );
+    m.enabled = start[ 0 ] != 0;
+    m.half_width = control_f( start[ 1 ] );
+    std::uint32_t rw[ 34 ];
+    for ( auto& x : rw )
+        x = c.next( );
+    pfx_rand_t rand;
+    lwt_rand_load( rand, rw );
+    int bad = 0, peak = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        std::vector< std::uint32_t > op( c.next( ) );
+        for ( auto& x : op )
+            x = c.next( );
+        switch ( op[ 0 ] )
+        {
+        case 0:
+        {
+            const int ne = static_cast< int >( op[ 2 ] );
+            const std::function< float( int ) > rate = [ &op ]( int i ) { return control_f( op[ 3 + i ] ); };
+            lens_water_tick( m, control_f( op[ 1 ] ), ne, rate, rand );
+            break;
+        }
+        case 10: lens_water_add_drops( m, control_f( op[ 1 ] ) ); break;
+        case 11: lens_water_set_push( m, control_f( op[ 1 ] ) ); break;
+        case 6: m.enabled = ( op[ 1 ] & 0xFFu ) != 0; break;   // slot 6 0x5135D0: the byte
+        case 9: lens_water_clear( m ); break;
+        case 1: m.half_width = control_f( op[ 1 ] ); break;
+        }
+        if ( m.count > peak )
+            peak = m.count;
+        if ( !lwt_state_same( m, rand, c ) )
+        {
+            if ( bad < 4 )
+                LOG_ERROR( "lens_water_tick op %u (kind %u) differs", v, op[ 0 ] );
+            ++bad;
+            // resynchronise nothing: every later op compares against our own state
+        }
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuLensWaterManagerImpl's drop tick matches retail (0x514500, slots 6 / 9 / 10 / 11): %u ops, up to %d drops, every drop word and the VuRand", n, peak );
+    else
+        LOG_ERROR( "lens_water_tick FAILED %d", bad );
+    return bad == 0;
+}

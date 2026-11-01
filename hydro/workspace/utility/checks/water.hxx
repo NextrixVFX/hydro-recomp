@@ -2739,6 +2739,7 @@ inline bool verify_water_all( )
     ok = verify_control_entity( ) && ok;
     ok = verify_lens_water( ) && ok;
     ok = verify_lens_drop_fill( ) && ok;
+    ok = verify_lens_water_tick( ) && ok;
     ok = verify_json_access( ) && ok;
     ok = verify_voice_over( ) && ok;
     ok = verify_audio_emitter( ) && ok;
