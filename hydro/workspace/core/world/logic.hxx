@@ -726,3 +726,28 @@ inline const char* control_component_name( )
 {
     return "Control";
 }
+// VuTickManagerImpl's small slots (vtable 0x74BEBC; world/tick.hxx is the world agent's model of the manager - these
+// read its fields, added here, not there). Verified: hydro checks/logic.hxx verify_tick_slots (case tick_slots).
+//   slot 14 0x4F6EA0 isPaused: byte +0x20 != 0, or the pause count +0x24 > 0 (signed: a negative count is not paused).
+//   slot 15 0x4F6EC0 getDeltaTime: fld +0x28 - this frame's capped dt (the race's g 0x759008 vt+0x3C).
+//   slot 16 0x4F6ED0 getRealDeltaTime: fld +0x2C - the raw clock difference.
+//   0x4F6D40 release: g 0x759008 = 0. Slot 0 0x4F7010 (deleting dtor): the phase list's nodes (0x4F77F0) and head
+//   freed, the base vtable 0x736EE8, delete with flags & 1 = std::list's destructor here. The second vtable 0x74BF04's
+//   0x4F74F0 is the dev keyboard callback (key 0x1A toggles +0x20 pause; 0x19 single step when paused, else toggles
+//   +0x21 slow motion) - DEV, STOPPED.
+#include <workspace/core/world/tick.hxx>
+
+inline bool tick_is_paused( const tick_manager_t& tm )
+{
+    return tm.paused || tm.pause_count > 0;
+}
+
+inline float tick_delta( const tick_manager_t& tm )
+{
+    return tm.dt;
+}
+
+inline float tick_real_delta( const tick_manager_t& tm )
+{
+    return tm.raw;
+}

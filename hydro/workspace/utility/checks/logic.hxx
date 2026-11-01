@@ -1457,6 +1457,105 @@ inline bool verify_entity_repository( )
     return bad == 0;
 }
 
+// entity/repository.hxx vu_property_dtor / vu_entity_dtor against retail's 0x405260 / 0x500870 (case entity_dtors): fake
+// objects in one region, the region's words after and every call out in order.
+struct edt_check_memory_t
+{
+    std::uint32_t base = 0;
+    std::vector< std::uint32_t > words;
+    bool outside = false;
+
+    std::uint32_t& operator[]( std::uint32_t a )
+    {
+        static std::uint32_t sink = 0;
+        if ( a < base || ( a - base ) / 4u >= words.size( ) )
+            return outside = true, sink = 0, sink;
+        return words[ ( a - base ) / 4u ];
+    }
+};
+
+inline bool verify_entity_dtors( )
+{
+    logic_check_t c{ g_golden_edt_words };
+    const unsigned n = c.next( );
+    const std::uint32_t base = c.next( );
+    int bad = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        const unsigned kind = c.next( ), self = c.next( ), count = c.next( );
+        edt_check_memory_t m;
+        m.base = base;
+        m.words.resize( count );
+        for ( auto& x : m.words )
+            x = c.next( );
+        std::vector< std::uint32_t > after( count );
+        for ( auto& x : after )
+            x = c.next( );
+        std::vector< std::vector< std::uint32_t > > want( c.next( ) );
+        for ( auto& e : want )
+        {
+            e.resize( c.next( ) );
+            for ( auto& x : e )
+                x = c.next( );
+        }
+        std::vector< std::vector< std::uint32_t > > got;
+        vu_dtor_hooks_t h;
+        h.free = [ & ]( std::uint32_t b ) { got.push_back( { 0u, b } ); };
+        h.call = [ & ]( std::uint32_t o, std::uint32_t slot, std::int64_t arg )
+        {
+            got.push_back( { 1u, o, slot, static_cast< std::uint32_t >( arg ) } );
+            if ( arg < 0 )   // a weak reference's slot 0: unlinked from its target's +8 list (the case's stub does the same)
+                m[ m[ o + 8 ] + 8 ] = m[ o + 4 ];
+        };
+        h.asset_release = [ & ]( std::uint32_t a ) { got.push_back( { 2u, a } ); };
+        h.event_remove = [ & ]( std::uint32_t k, std::uint32_t val ) { got.push_back( { 3u, k, val } ); };
+        if ( kind == 0 )
+            vu_property_dtor( m, self, h );
+        else
+            vu_entity_dtor( m, self, h );
+        const bool same = m.words == after && got == want && !m.outside;
+        if ( !same && bad++ < 6 )
+            LOG_ERROR( "entity_dtors vector %u (%s): memory %s, calls %s (%u, retail %u)", v, kind == 0 ? "0x405260" : "0x500870",
+                       m.words == after ? "ok" : "differs", got == want ? "ok" : "differ", static_cast< unsigned >( got.size( ) ),
+                       static_cast< unsigned >( want.size( ) ) );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuProperty / VuEntity base dtors match retail (0x405260 0x500870 0x500E00 0x500DB0 0x515620 0x43CD80 0x43CD30 0x43CA10): %u vectors", n );
+    else
+        LOG_ERROR( "entity_dtors FAILED %d", bad );
+    return bad == 0;
+}
+
+// world/logic.hxx tick_is_paused / tick_delta / tick_real_delta against VuTickManagerImpl slots 14 / 15 / 16 (case
+// tick_slots: retail's ctor, the four fields poked per vector).
+inline bool verify_tick_slots( )
+{
+    logic_check_t c{ g_golden_tks_words };
+    const unsigned n = c.next( );
+    int bad = 0;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        tick_manager_t tm;
+        tm.paused = c.next( ) != 0;
+        tm.pause_count = static_cast< std::int32_t >( c.next( ) );
+        const std::uint32_t dt = c.next( ), raw = c.next( );
+        std::memcpy( &tm.dt, &dt, 4 );
+        std::memcpy( &tm.raw, &raw, 4 );
+        const unsigned paused = c.next( ), delta = c.next( ), real = c.next( );
+        const float d = tick_delta( tm ), r = tick_real_delta( tm );
+        std::uint32_t db, rb;
+        std::memcpy( &db, &d, 4 );
+        std::memcpy( &rb, &r, 4 );
+        if ( ( ( tick_is_paused( tm ) ? 1u : 0u ) != paused || db != delta || rb != real ) && bad++ < 6 )
+            LOG_ERROR( "tick_slots vector %u differs", v );
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuTickManagerImpl isPaused / getDeltaTime / getRealDeltaTime match retail (0x4F6EA0 0x4F6EC0 0x4F6ED0): %u vectors", n );
+    else
+        LOG_ERROR( "tick_slots FAILED %d", bad );
+    return bad == 0;
+}
+
 // entity/json.hxx json_member against retail's member-or-insert 0x4FC090 (case json_member) on c_reader-built roots
 // whose objects keep the file's (unsorted) key order: per op the returned member, the int written into it, the root.
 inline bool verify_json_member( )
