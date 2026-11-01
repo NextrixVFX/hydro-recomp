@@ -2549,6 +2549,7 @@ inline bool verify_water_all( )
     ok = verify_wake_kernels96( ) && ok;
     ok = verify_ocean_field( ) && ok;
     ok = verify_water_wake( ) && ok;
+    ok = verify_wake_reuse( ) && ok;
     ok = verify_watchers_all( ) && ok;
     ok = verify_ocean_kernels96( ) && ok;
     ok = verify_water_built_tick( ) && ok;

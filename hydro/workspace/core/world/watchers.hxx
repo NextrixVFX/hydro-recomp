@@ -139,6 +139,136 @@ inline void water_directional_control( water_built_t& b, water_entity_state_t& s
 }
 
 // ---------------------------------------------------------------------------
+// THE WAVE ENTITIES' TRANSFORM WATCHERS (each the entity's slot 12, reached
+// through the transform's +0xC0 thunk 0x4077E3 when setWorldTransform 0x5344A0
+// notifies): with the entity's wave, a zeroed descriptor built the way slot 6
+// built it, the wave re-described and re-held (VuWater 0x529B90 then 0x529A90);
+// then, wave or not, the Vu3dLayoutComponent's local box +0x18 .. +0x37 (both w
+// lanes stack words never written: UNKNOWN). `wave` -1 = none.
+//   VuRectangularOceanWaveEntity 0x5D8D70 (wave +0x94, layout +0x88):
+//     buildRegionDesc 0x5D8E20, 0x59D9B0 = Update 0x59CCB0 (ocean_modify + the
+//     field), +208 .. +239 = desc 8 .. 15, bounds 0x59DBF0; box (-0.5, -0.5, 0)
+//     .. (0.5, 0.5, 1.0).
+//   VuCircularOceanWaveEntity 0x5D9390 (wave +0x94, layout +0x88, Radius
+//     +0x8C): 0x5D9440, 0x59DDC0 = Update, +208 .. +231 = desc 8 .. 13, the
+//     bounds inline; box (-R, -R, 0) .. (R, R, 1.0).
+//   VuWhirlpoolWaveEntity 0x5D7E30 (wave +0x78, layout +0x5C): the position
+//     and +0x60 .. +0x77, 0x5A1580 (whirlpool_set; the clock +116 kept); box
+//     (-R, -R, -Depth) .. (R, R, 0), R = +0x60, Depth = +0x68.
+//   VuBankedTurnWaveEntity 0x5D36C0 (wave +0x74, layout +0x5C): the position,
+//     the transform's +0xA8, +0x60 .. +0x73, 0x5A4EF0 (banked_turn_set); box
+//     (-R, -R, 0) .. (R, R, Height), R = +0x60, Height = +0x68.
+// -R is xorps with 0x6F7CD0 (the bits of +R, sign flipped). An ocean whose
+// new Complexity is 0 answers false (ocean_modify: UNKNOWN); every other call
+// true.
+inline bool water_wave_refresh( water_built_t& b, const water_entity_state_t& s, int wave, const transform_component_t& t,
+                                water_layout_box_t& layout )
+{
+    const water_kind_t kind = s.kind;
+    bool known = true;
+    if ( wave >= 0 )
+    {
+        std::uint32_t transform[ k_water_transform_words ];
+        water_transform_words( t, transform );
+        water_input_t in{};
+        in.entity = s.value.word;
+        in.transform = transform;
+        water_words_t& w = b.waves[ static_cast< std::size_t >( wave ) ];
+        wave_image_t image{};
+        for ( int k = 0; k < 64; ++k )
+        {
+            image.word[ k ] = w.word[ k ];
+            image.known[ k ] = w.known[ k ];
+        }
+        std::uint32_t d[ 16 ] = {};
+        if ( kind == water_kind_rectangular || kind == water_kind_circular )
+        {
+            const bool rect = kind == water_kind_rectangular;
+            if ( rect )
+                rectangular_ocean_desc( in.source( ), d );
+            else
+                circular_ocean_desc( in.source( ), d );
+            known = ocean_modify( image, d );
+            for ( int k = 0; k < ( rect ? 8 : 6 ); ++k )
+                image.set( 208 + 4 * k, d[ 8 + k ] );
+            if ( rect )
+                rectangular_ocean_bounds( image );
+            else
+                circular_ocean_bounds( image );
+        }
+        else if ( kind == water_kind_whirlpool )
+        {
+            whirlpool_desc( in.source( ), d );
+            whirlpool_set( image, d );
+        }
+        else if ( kind == water_kind_banked )
+        {
+            banked_turn_desc( in.source( ), d );
+            banked_turn_set( image, d );
+        }
+        else
+            return false;
+        for ( int k = 0; k < 64; ++k )
+        {
+            w.word[ k ] = image.word[ k ];
+            w.known[ k ] = image.known[ k ];
+        }
+        if ( water_built_t::ocean_t* o = ( kind == water_kind_rectangular || kind == water_kind_circular ) ? water_ocean_of( b, wave ) : nullptr )
+        {
+            o->params = ocean_params_of( w.word );
+            double time;
+            std::memcpy( &time, &w.word[ 0x88 / 4 ], 8 );
+            if ( known )
+                ocean_field_update( o->field, o->params, time );
+            else
+                o->field = ocean_field_t{};
+        }
+        water_hold_remove( b.hold, wave );
+        water_hold_resync( b, wave );
+        water_hold_add( b.hold, wave );
+    }
+    std::uint32_t r = 0x3F000000u;
+    std::uint32_t lo_z = 0u;
+    std::uint32_t hi_z = 0x3F800000u;
+    if ( kind == water_kind_circular )
+        r = s.value.word[ ( 0x8C - 0x60 ) / 4 ];
+    else if ( kind == water_kind_whirlpool || kind == water_kind_banked )
+    {
+        r = s.value.word[ 0 ];
+        const std::uint32_t z = s.value.word[ ( 0x68 - 0x60 ) / 4 ];
+        lo_z = kind == water_kind_whirlpool ? z ^ 0x80000000u : 0u;
+        hi_z = kind == water_kind_whirlpool ? 0u : z;
+    }
+    const std::uint32_t box[ 8 ] = { r ^ 0x80000000u, r ^ 0x80000000u, lo_z, 0u, r, r, hi_z, 0u };
+    for ( int k = 0; k < 8; ++k )
+    {
+        layout.word[ k ] = box[ k ];
+        layout.known[ k ] = k != 3 && k != 7;
+    }
+    return known;
+}
+
+// The watcher behind a setWorldTransform of one of those entities (any
+// caller's - an attach, a motion entity, the editor): entity_set_world with
+// notify, then water_wave_refresh. False when entity_set_world refuses or the
+// entity is not one of the four kinds built.
+inline const water_built_t::entity_ref_t* water_entity_of( const water_built_t& b, const entity_t& e );
+inline bool water_wave_motion( water_built_t& b, entity_t& e, const float* matrix, water_layout_box_t& layout )
+{
+    const water_built_t::entity_ref_t* r = water_entity_of( b, e );
+    const water_entity_state_t* s = static_cast< const water_entity_state_t* >( e.m_state.get( ) );
+    if ( !s || ( s->kind != water_kind_rectangular && s->kind != water_kind_circular && s->kind != water_kind_whirlpool && s->kind != water_kind_banked ) )
+        return false;
+    const int wave = r ? r->wave : -1;
+    bool known = true;
+    const bool ran = entity_set_world( e, matrix, true, [ & ]( ) {
+        if ( const transform_component_t* t = entity_transform( e ) )
+            known = water_wave_refresh( b, *s, wave, *t, layout );
+    } );
+    return ran && known;
+}
+
+// ---------------------------------------------------------------------------
 // The built-water slot of an entity water_build_world built (null: not built).
 inline const water_built_t::entity_ref_t* water_entity_of( const water_built_t& b, const entity_t& e )
 {

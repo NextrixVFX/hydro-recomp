@@ -328,3 +328,56 @@ inline pfx_manager_ops_t pfx_manager_runtime_ops( pfx_manager_binding_t& b )
     };
     return o;
 }
+
+// ---------------------------------------------------------------------------
+// VuPfxAsset (create 0x5CAB00: 0x68 bytes, vtable 0x752550, VuAsset base
+// 0x55C2C0): +8 its name (std::string), +0x58 its document (VuJsonContainer),
+// which it KEEPS from the load to the unload. A null `rt` / `lib` stands for
+// g_vupfximpl 0x75904C = 0, a null manager for g_vupfxmanager 0x75905C = 0.
+struct pfx_asset_t
+{
+    std::string name;
+    value_t document;
+};
+
+// Load slot 5 0x5CAB30 into the asset: false when the read 0x5C1270 fails;
+// true with no VuPfxImpl; else addProject 0x51D6C0's answer (false when the
+// name is taken). (pfx_load_asset is the same read on a local document.)
+inline bool pfx_asset_load( pfx_runtime_t* rt, pfx_library_t* lib, pfx_asset_t& a, const std::vector< std::uint8_t >& blob,
+    const pfx_load_hooks_t& k = pfx_load_hooks_t( ) )
+{
+    if ( !pfx_asset_document( blob, a.document ) )
+        return false;
+    if ( rt == nullptr || lib == nullptr )
+        return true;
+    return pfx_add_project( *rt, *lib, a.name, a.document, k ) != 0u;
+}
+
+// Unload slot 6 0x5CAB80: the document cleared (VuJsonContainer clear
+// 0x4FBB10: a string's buffer, an array 0x4FBBB0 or an object's tree 0x4F3180
+// freed, then +0 / +8 / +0xC = 0 - value_t( )), g_vupfxmanager's releaseAll
+// 0x52BB60 - EVERY live fire-and-forget effect, not only this asset's - then
+// g_vupfximpl slot 9 removeProject 0x51D9C0 with the name's c_str.
+inline void pfx_asset_unload( pfx_asset_t& a, pfx_manager_t* m, const pfx_manager_ops_t& ops, pfx_runtime_t* rt, pfx_library_t* lib,
+    const pfx_release_hooks_t& r = pfx_release_hooks_t( ) )
+{
+    a.document = value_t( );
+    if ( m != nullptr )
+        pfx_manager_release_all( *m, ops );
+    if ( rt != nullptr && lib != nullptr )
+        pfx_remove_project( *rt, *lib, std::string( a.name.c_str( ) ), r );
+}
+
+// Slot 0 0x5CAAD0 (flags): the dtor 0x5CAA30 - the unload's body inline (as
+// pfx_asset_unload), the VuGenericDataAsset vtable and its 0x4FBB10 twice
+// more on the (already empty) document, then VuAsset's dtor 0x515D00 (the
+// engine's asset base: `asset_base`, the caller's); operator delete when
+// flags & 1 (the caller owns the object here).
+inline void pfx_asset_destroy( pfx_asset_t& a, pfx_manager_t* m, const pfx_manager_ops_t& ops, pfx_runtime_t* rt, pfx_library_t* lib,
+    const pfx_release_hooks_t& r = pfx_release_hooks_t( ), void ( *asset_base )( void* user ) = nullptr, void* user = nullptr )
+{
+    pfx_asset_unload( a, m, ops, rt, lib, r );
+    a.document = value_t( );
+    if ( asset_base != nullptr )
+        asset_base( user );
+}

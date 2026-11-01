@@ -132,11 +132,24 @@ inline int water_create_wake( water_built_t& b, const std::uint32_t* desc, const
         w.set( 0x8C + 4 * k, record[ k ] );
     }
     water_wake_bounds( w );
-    b.waves.push_back( w );
-    b.wave_kind.push_back( flat ? water_kind_flat_wake : water_kind_wake );
     water_held_wave_t h = water_held_from( w.word );
     h.wake = !flat;
     h.wake_data = water_wake_of( w );
+    // A destroyed wake's index is taken again (b.wake_free: our bookkeeping;
+    // the list node, the trees and the refcount are exactly as for a new one).
+    while ( !b.wake_free.empty( ) )
+    {
+        const int at = b.wake_free.back( );
+        b.wake_free.pop_back( );
+        if ( at < 0 || static_cast< std::size_t >( at ) >= b.waves.size( ) || at >= static_cast< int >( b.wave_gone.size( ) ) || !b.wave_gone[ static_cast< std::size_t >( at ) ] )
+            continue;
+        b.waves[ static_cast< std::size_t >( at ) ] = w;
+        b.wave_kind[ static_cast< std::size_t >( at ) ] = flat ? water_kind_flat_wake : water_kind_wake;
+        b.wave_gone[ static_cast< std::size_t >( at ) ] = 0;
+        return water_hold_wave_at( b.hold, at, h );
+    }
+    b.waves.push_back( w );
+    b.wave_kind.push_back( flat ? water_kind_flat_wake : water_kind_wake );
     return water_hold_wave( b.hold, h );
 }
 
@@ -179,4 +192,14 @@ inline int water_wake_update( water_built_t& b, const std::uint32_t* desc, const
     slots.previous = slots.current;
     slots.current = made;
     return flat ? 0 : 1;
+}
+
+// Live (not destroyed) wake / flat wake waves - what the race trace should count
+// (b.waves also keeps every destroyed record unless wake_reuse is on).
+inline int water_live_wakes( const water_built_t& b )
+{
+    int n = 0;
+    for ( std::size_t k = 0; k < b.wave_kind.size( ); ++k )
+        n += ( b.wave_kind[ k ] == water_kind_wake || b.wave_kind[ k ] == water_kind_flat_wake ) && !( k < b.wave_gone.size( ) && b.wave_gone[ k ] ) ? 1 : 0;
+    return n;
 }
