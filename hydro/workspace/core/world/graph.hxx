@@ -453,6 +453,7 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
         logic_hooks_t hooks;
         hooks.user = &ctx;
         hooks.rand = &ctx.rand;
+        hooks.game = &m_logic_game;
         hooks.fire = []( void* user, logic_entity_t&, const char* out_plug, const ui_params_t& p ) -> logic_retval_t {
             context_t& c = *static_cast< context_t* >( user );
             std::memcpy( &c.world->m_vurandom, &c.rand, sizeof( c.rand ) );
@@ -479,7 +480,8 @@ inline c_world::retval_t c_world::dispatch( const std::string& entity, const std
         }
         ++m_fired;
         ++m_logic_fired;
-        LOG_VERBOSE( "event: %s . %s ran (logic %s)", entity.c_str( ), plug.c_str( ), logic->second->m_type.c_str( ) );
+        LOG_VERBOSE( "event: %s . %s ran (logic %s; %d unrecreated game-environment reads so far)", entity.c_str( ), plug.c_str( ),
+                     logic->second->m_type.c_str( ), m_logic_unrecreated );
         retval_t answer{};
         answer.type = static_cast< int >( out.type );
         answer.word = out.value;

@@ -128,6 +128,10 @@ inline void logic_load_properties( entity_t& e, const value_t& p )
     }
     else if ( c == "VuSetStringEntity" || c == "VuStringEntity" )
         property_string( p, "Value", v.text, d.text );
+    else if ( c == "VuIsSkuEntity" )   // ctor 0x42CD60: "SKU" VuStringProperty (0x406B70) on the VuString +0x60
+        property_string( p, "SKU", v.text, d.text );
+    else if ( c == "VuIsEventTypeEntity" )   // ctor 0x42C850: "Type" (vt 0x74C394: the string loads 0x406C20 / 0x406CD0 / 0x406AB0), "AttractEvent"
+        property_string( p, "Type", v.text, d.text );
     else if ( c == "VuRandomTriggerEntity" )
     {
         static const char* names[ 8 ] = { "Weight 1", "Weight 2", "Weight 3", "Weight 4", "Weight 5", "Weight 6", "Weight 7", "Weight 8" };

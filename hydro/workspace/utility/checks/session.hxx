@@ -36,6 +36,7 @@ inline bool verify_logic_properties( )
             continue;
         }
         const std::string type = want.m_type;
+        const bool text = type == "VuSetStringEntity" || type == "VuStringEntity" || type == "VuIsSkuEntity" || type == "VuIsEventTypeEntity";
         std::vector< std::uint32_t > ours;
         if ( type == "VuSetBooleanEntity" )
             ours = { s->value.words[ 0 ] & 0xFFu };
@@ -43,10 +44,10 @@ inline bool verify_logic_properties( )
             ours.assign( s->value.words, s->value.words + 8 );
         else if ( type == "VuCounterEntity" )
             ours = { s->value.words[ 0 ], s->value.words[ 1 ] };
-        else if ( type != "VuSetStringEntity" && type != "VuStringEntity" )
+        else if ( !text )
             ours = { s->value.words[ 0 ] };
         world_check_words( "logic properties", want, ours, failed, compared );
-        if ( type == "VuSetStringEntity" || type == "VuStringEntity" )
+        if ( text )
         {
             ++compared;
             if ( s->value.text != want.m_texts[ 0 ] && ++failed <= 8 )

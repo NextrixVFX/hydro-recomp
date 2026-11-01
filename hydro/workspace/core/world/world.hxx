@@ -954,6 +954,10 @@ public:
         m_authored_far = 500.0f;
         // A race defers OnProjectInitialized to retail's place (0x4BA060: after the boats' load and the project's
         // gameInitialize, before begin - race_session_start's callback); otherwise it goes out at the end of the load.
+        // g_vugameutil +0x50 as the game-tier logic filters read it (world/logic.hxx logic_game_t).
+        m_game_util = util;
+        m_logic_game.game_data = &m_game_util;
+        m_logic_game.unrecreated = &m_logic_unrecreated;
         m_defer_project_initialized = race && front_end && race_game_kind( race_game_data_text( util, nullptr, "GameType" ) ) == race_game_kind_t::race;
         m_project_initialized = false;
         load_project( path.c_str( ) );
@@ -1596,6 +1600,11 @@ private:
     // by graph.hxx; m_logic_fired counts their handlers run.
     std::map< std::string, entity_t* > m_logic;
     int m_logic_fired = 0;
+    // Their game environment: the gameutil +0x50 root (load_scene's), no SKU (the asset manager's vt+0x7C: a platform
+    // answer, not supplied) and no entity repository (find / word: not wired) - those filters count unrecreated.
+    value_t m_game_util;
+    logic_game_t m_logic_game;
+    int m_logic_unrecreated = 0;
     // UpdateBranchProbabilities events reached without their VuParams (UNKNOWN, graph.hxx).
     int m_waypoint_params_unknown = 0;
     // Assets already scored by the extent test, so it reports once each.
