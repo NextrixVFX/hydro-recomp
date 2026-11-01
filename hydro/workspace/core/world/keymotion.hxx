@@ -18,17 +18,18 @@
 // +0x88 the duration, +0x8C the clock; +0x90 .. +0xDC the spline curves of types 1 / 2 / 3; outputs "OnLoop", "OnDone".
 // Slots 6 0x5CE9E0, 7 0x5CEA40, 12 0x5CFE50 (clock = 0), 13 nullsub, 14 0x5CFE60 (the update).
 //
-// Curve Type (table 0x752C18: 0 "Linear", 1 "Cubic", 2 "Cubic Euler", 3 "Spline"): 1 is recreated - the position curve
-// 0x5CEC60 -> 0x61A7A0 -> 0x61AE50 and 0x5D0440's cubic branch (verify_key_curve, case key_curve). Every shipped project's
-// VuKeyframeMotionEntity authors Linear or Cubic (census: 33 Cubic in 9 levels, none in Hydroelectric; no 2 or 3 anywhere).
-// NOT RECREATED (counted in `unrecreated`, nothing done): Curve Types 2 / 3 - their set-up (0x5CEF20, the euler curve +0xA0;
-// 0x5CF800 with 0x5133B0 / 0x61B120 / 0x61B9E0, +0xB0 / +0xD0) and their branches of 0x5D0440 (VuMatrix_fromEuler; 0x61B600
-// / 0x61C550).
+// Curve Type (table 0x752C18: 0 "Linear", 1 "Cubic", 2 "Cubic Euler", 3 "Spline"): 1 and 2 are recreated - the position curve
+// 0x5CEC60 -> 0x61A7A0 -> 0x61AE50, type 2's euler curve 0x5CEF20, and 0x5D0440's cubic branches (verify_key_curve, case
+// key_curve). Every shipped project's VuKeyframeMotionEntity authors Linear or Cubic (census: 33 Cubic in 9 levels, none in
+// Hydroelectric; no 2 or 3 anywhere). NOT RECREATED (counted in `unrecreated`, nothing done): Curve Type 3 - its set-up
+// 0x5CF800 (0x5133B0 / 0x61B120 / 0x61B9E0 / 0x61B970, the +0xB0 position and +0xD0 rotation splines) and its branch of
+// 0x5D0440 (0x61B600 / 0x61C550 / 0x5316C0).
 // UNKNOWN (counted): the update's key search when the clock is below every key (a stack word retail never wrote when not
 // looping) - and the velocities' w lanes (stack words; the hook gets 0).
 // SUBSTITUTION: the qsort import (keyframe.hxx control_qsort); __libm_sse2_atan2 / asinf in the angular velocity
 // (transform.hxx transform_euler's CRT double narrowed).
 
+#include <workspace/core/boat/hull.hxx>
 #include <workspace/core/boat/math.hxx>
 #include <workspace/core/world/frontcam.hxx>
 #include <workspace/core/world/keyframe.hxx>
@@ -70,6 +71,12 @@ struct key_motion_t
     std::vector< std::array< std::uint32_t, 9 > > cubic;
     std::int32_t cubic_capacity = 0;
     std::uint8_t cubic_valid = 0;
+    // +0xA0 the Curve Type 2 rotation curve (0x5CEF20): the same records over the keys' unwrapped eulers {x y z, +0xC a stack
+    // word retail never wrote (UNKNOWN, held 0), the second derivatives, +0x1C UNKNOWN, the time}; +0xA4 count, +0xA8
+    // capacity, +0xAC valid.
+    std::vector< std::array< std::uint32_t, 9 > > euler;
+    std::int32_t euler_capacity = 0;
+    std::uint8_t euler_valid = 0;
 };
 
 // One VuKeyframeEntity child as slot 6 reads it: its +0x60 Time and its transform's +0x50 matrix (+0x80 .. +0x8C).
@@ -219,23 +226,25 @@ inline void key_motion_spline( const float* x, const float* y, int n, float yp1,
 // 0x61A7A0 (thiscall on the curve +0x90; start / end slopes, 3 floats each): fewer than 2 records -> false; per lane x / y / z
 // the times (record +0x20) and the lane's values through 0x61AE50 (scratch = the static 0x759898: times, u, values, y2 -
 // four runs of n floats), y2 into the record's +0x10 / +0x14 / +0x18; +0xC (the valid byte) = 1.
-inline bool key_motion_cubic_fit( key_motion_t& e, const float* start, const float* end )
+using key_motion_curve_t = std::vector< std::array< std::uint32_t, 9 > >;
+
+inline bool key_motion_cubic_fit( key_motion_curve_t& curve, std::uint8_t& valid, const float* start, const float* end )
 {
-    const int n = static_cast< int >( e.cubic.size( ) );
+    const int n = static_cast< int >( curve.size( ) );
     if ( n < 2 )
         return false;
     std::vector< float > x( n ), y( n ), y2( n ), u( n );
     for ( int i = 0; i < n; ++i )
-        x[ i ] = control_f( e.cubic[ i ][ 8 ] );
+        x[ i ] = control_f( curve[ i ][ 8 ] );
     for ( int lane = 0; lane < 3; ++lane )
     {
         for ( int i = 0; i < n; ++i )
-            y[ i ] = control_f( e.cubic[ i ][ lane ] );
+            y[ i ] = control_f( curve[ i ][ lane ] );
         key_motion_spline( x.data( ), y.data( ), n, start[ lane ], end[ lane ], y2.data( ), u.data( ) );
         for ( int i = 0; i < n; ++i )
-            e.cubic[ i ][ 4 + lane ] = control_w( y2[ i ] );
+            curve[ i ][ 4 + lane ] = control_w( y2[ i ] );
     }
-    e.cubic_valid = 1;
+    valid = 1;
     return true;
 }
 
@@ -271,59 +280,142 @@ inline void key_motion_cubic_setup( key_motion_t& e )
         slope( 0, 1, start );
         slope( n - 2, n - 1, end );
     }
-    key_motion_cubic_fit( e, start, end );
+    key_motion_cubic_fit( e.cubic, e.cubic_valid, start, end );
 }
 
-// 0x5D0440 (keys a, b, time t): u = (t - T_a) / (T_b - T_a); the rotation = the matrix of slerp( q_a, q_b, u ) (0x5314C0,
-// 0x531180; identity first: VuMatrix_identity 0x410A40) for Curve Types 0 and 1. The translation: type 0 P_a (1 - u) + P_b u
-// per lane; type 1 Numerical Recipes' `splint` on the +0x90 curve: h = its T_b - T_a, r = 1 - u, A = (r r) r - r,
-// B = (u u) u - u, lane = ((h h) (A y2_a + B y2_b)) (1/6) + (P_a r + P_b u).
+// A key's euler as 0x5CEF20 takes it: the matrix of its quaternion (0x531180), then x = atan2( m6, m10 ), y = asin( maxss( -1,
+// minss( 1, -m2 ) ) ), z = atan2( m1, m0 ) - transform_euler's (0x5344A0's) arithmetic. The per-key eulers use x87 fpatan for
+// the atan2s and the slopes __libm_sse2_atan2: both the host double narrowed once here (SUBSTITUTION, as Unicorn computes
+// fpatan and the oracle serves the import).
+inline void key_motion_key_euler( const std::array< std::uint32_t, 9 >& k, float* e )
+{
+    float q[ 4 ], m[ 16 ];
+    for ( int j = 0; j < 4; ++j )
+        q[ j ] = control_f( k[ 5 + j ] );
+    front_rig_matrix( q, m );
+    transform_euler( m, e );
+}
+
+// 0x5CEF20 (Curve Type 2: the rotation curve +0xA0): count 0, valid 0; with 2 keys or more: each key's euler into a scratch
+// VuArray (16-byte entries, 0x51C1F0; lane 3 the stack word esp+0x2C - UNKNOWN), unwrapped in key order per lane:
+// d = ((e_i - e_i-1) + pi) x 1/2pi (0x6F7750 / 0x6F7618), k = fistp( d - 0.5 ) (x87: the float d less 0.5, round to nearest
+// even), e_i = (((d - (float) k) x 2pi) - pi) + e_i-1 (0x6F7778); the capacity raised to n; one record per key (the unwrapped
+// euler, the time); slopes with Ease In/Out off: start = (E_0 - E_1) (1 / (T_1 - T_0)), end = (E_n-2 - E_n-1) (1 / (T_n-1 -
+// T_n-2)) - the RAW eulers (not unwrapped), earlier minus later, each 0 unless the later time is above (comiss / jbe); then
+// 0x61A7A0 on +0xA0.
+inline void key_motion_euler_setup( key_motion_t& e )
+{
+    e.euler.clear( );
+    e.euler_valid = 0;
+    const int n = static_cast< int >( e.keys.size( ) );
+    if ( n < 2 )
+        return;
+    std::vector< std::array< float, 3 > > eu( n );
+    for ( int i = 0; i < n; ++i )
+        key_motion_key_euler( e.keys[ static_cast< std::size_t >( i ) ], eu[ i ].data( ) );
+    const float pi = control_f( 0x40490FDBu ), inv2pi = control_f( 0x3E22F983u ), twopi = control_f( 0x40C90FDBu );
+    for ( int i = 1; i < n; ++i )
+        for ( int j = 0; j < 3; ++j )
+        {
+            const float d = ( ( eu[ i ][ j ] - eu[ i - 1 ][ j ] ) + pi ) * inv2pi;
+            const double r = std::nearbyint( static_cast< double >( d ) - 0.5 );
+            const std::int32_t k = r >= -2147483648.0 && r < 2147483648.0 ? static_cast< std::int32_t >( r ) : INT32_MIN;
+            eu[ i ][ j ] = ( ( ( d - static_cast< float >( k ) ) * twopi ) - pi ) + eu[ i - 1 ][ j ];
+        }
+    if ( n > e.euler_capacity )
+        e.euler_capacity = n;
+    for ( int i = 0; i < n; ++i )
+        e.euler.push_back( { control_w( eu[ i ][ 0 ] ), control_w( eu[ i ][ 1 ] ), control_w( eu[ i ][ 2 ] ), 0u, 0u, 0u, 0u, 0u,
+                             e.keys[ static_cast< std::size_t >( i ) ][ 0 ] } );
+    float start[ 3 ] = { 0.0f, 0.0f, 0.0f }, end[ 3 ] = { 0.0f, 0.0f, 0.0f };
+    if ( !e.ease )
+    {
+        auto slope = [ & ]( int a, int b, float* out )
+        {
+            const auto& ka = e.keys[ static_cast< std::size_t >( a ) ];
+            const auto& kb = e.keys[ static_cast< std::size_t >( b ) ];
+            const float ta = control_f( ka[ 0 ] ), tb = control_f( kb[ 0 ] );
+            if ( !_mm_comigt_ss( _mm_set_ss( tb ), _mm_set_ss( ta ) ) )
+                return;
+            float ea[ 3 ], eb[ 3 ];
+            key_motion_key_euler( ka, ea );
+            key_motion_key_euler( kb, eb );
+            const float inv = 1.0f / ( tb - ta );
+            for ( int j = 0; j < 3; ++j )
+                out[ j ] = ( ea[ j ] - eb[ j ] ) * inv;
+        };
+        slope( 0, 1, start );
+        slope( n - 2, n - 1, end );
+    }
+    key_motion_cubic_fit( e.euler, e.euler_valid, start, end );
+}
+
+// Numerical Recipes' `splint` on a +0x90 / +0xA0 curve, 0x5D0440's operand order (types 1 and 2 alike).
+inline void key_motion_splint( const key_motion_curve_t& c, int a, int b, float u, float* out )
+{
+    const auto& ca = c[ static_cast< std::size_t >( a ) ];
+    const auto& cb = c[ static_cast< std::size_t >( b ) ];
+    const float r = 1.0f - u;
+    const float h = control_f( cb[ 8 ] ) - control_f( ca[ 8 ] );
+    const float h2 = h * h;
+    const float wb = ( u * u ) * u - u, wa = ( r * r ) * r - r;
+    const float sixth = control_f( 0x3E2AAAABu );   // 0x6F761C
+    for ( int j = 0; j < 3; ++j )
+    {
+        const float curv = wa * control_f( ca[ 4 + j ] ) + wb * control_f( cb[ 4 + j ] );
+        const float line = control_f( ca[ j ] ) * r + control_f( cb[ j ] ) * u;
+        out[ j ] = ( h2 * curv ) * sixth + line;
+    }
+}
+
+// 0x5D0440 (keys a, b, time t): u = (t - T_a) / (T_b - T_a) (identity first: VuMatrix_identity 0x410A40). Curve Types 0 / 1:
+// the rotation = the matrix of slerp( q_a, q_b, u ) (0x5314C0, 0x531180); the translation: type 0 P_a (1 - u) + P_b u per
+// lane, type 1 key_motion_splint on the +0x90 curve. Type 2: the translation the same splint on +0x90, the rotation
+// VuMatrix_multiply( identity, VuMatrix_fromEuler( splint on +0xA0 ) ) (0x4078C0, 0x435640) - the product kept (its zeros'
+// signs are the multiply's).
 inline bool key_motion_pose( const key_motion_t& e, int a, int b, float t, float* m )
 {
     const auto& ka = e.keys[ static_cast< std::size_t >( a ) ];
     const auto& kb = e.keys[ static_cast< std::size_t >( b ) ];
     const float u = ( t - control_f( ka[ 0 ] ) ) / ( control_f( kb[ 0 ] ) - control_f( ka[ 0 ] ) );
-    if ( e.curve != 0 && e.curve != 1 )
+    if ( e.curve != 0 && e.curve != 1 && e.curve != 2 )
         return false;
-    if ( e.curve == 1 && ( static_cast< std::size_t >( b ) >= e.cubic.size( ) ) )
+    if ( e.curve != 0 && static_cast< std::size_t >( b ) >= e.cubic.size( ) )
         return false;   // retail reads past the +0x90 array (fewer than 2 keys never reaches here)
+    if ( e.curve == 2 && static_cast< std::size_t >( b ) >= e.euler.size( ) )
+        return false;
     const float r = 1.0f - u;
-    float x, y, z;
+    float p[ 3 ];
     if ( e.curve == 0 )
     {
-        x = control_f( ka[ 1 ] ) * r + control_f( kb[ 1 ] ) * u;
-        y = control_f( ka[ 2 ] ) * r + control_f( kb[ 2 ] ) * u;
-        z = control_f( ka[ 3 ] ) * r + control_f( kb[ 3 ] ) * u;
+        p[ 0 ] = control_f( ka[ 1 ] ) * r + control_f( kb[ 1 ] ) * u;
+        p[ 1 ] = control_f( ka[ 2 ] ) * r + control_f( kb[ 2 ] ) * u;
+        p[ 2 ] = control_f( ka[ 3 ] ) * r + control_f( kb[ 3 ] ) * u;
+    }
+    else
+        key_motion_splint( e.cubic, a, b, u, p );
+    if ( e.curve == 2 )
+    {
+        float angles[ 3 ], id[ 16 ], rot[ 16 ];
+        key_motion_splint( e.euler, a, b, u, angles );
+        vu_identity( id );
+        vu_matrix_from_euler( rot, angles );
+        hull_multiply( id, m, rot );
     }
     else
     {
-        const auto& ca = e.cubic[ static_cast< std::size_t >( a ) ];
-        const auto& cb = e.cubic[ static_cast< std::size_t >( b ) ];
-        const float h = control_f( cb[ 8 ] ) - control_f( ca[ 8 ] );
-        const float h2 = h * h;
-        const float wb = ( u * u ) * u - u, wa = ( r * r ) * r - r;
-        const float sixth = control_f( 0x3E2AAAABu );   // 0x6F761C
-        auto lane = [ & ]( int j )
+        float qa[ 4 ], qb[ 4 ], q[ 4 ];
+        for ( int j = 0; j < 4; ++j )
         {
-            const float curv = wa * control_f( ca[ 4 + j ] ) + wb * control_f( cb[ 4 + j ] );
-            const float line = control_f( ca[ j ] ) * r + control_f( cb[ j ] ) * u;
-            return ( h2 * curv ) * sixth + line;
-        };
-        x = lane( 0 );
-        y = lane( 1 );
-        z = lane( 2 );
+            qa[ j ] = control_f( ka[ 5 + j ] );
+            qb[ j ] = control_f( kb[ 5 + j ] );
+        }
+        front_rig_slerp( q, qa, qb, u );
+        front_rig_matrix( q, m );
     }
-    float qa[ 4 ], qb[ 4 ], q[ 4 ];
-    for ( int j = 0; j < 4; ++j )
-    {
-        qa[ j ] = control_f( ka[ 5 + j ] );
-        qb[ j ] = control_f( kb[ 5 + j ] );
-    }
-    front_rig_slerp( q, qa, qb, u );
-    front_rig_matrix( q, m );
-    m[ 12 ] = x;
-    m[ 13 ] = y;
-    m[ 14 ] = z;
+    m[ 12 ] = p[ 0 ];
+    m[ 13 ] = p[ 1 ];
+    m[ 14 ] = p[ 2 ];
     return true;
 }
 
@@ -477,7 +569,9 @@ inline void key_motion_game_init( key_motion_t& e, const std::vector< key_motion
     key_motion_gather( e, children );
     if ( e.curve == 1 || e.curve == 2 )
         key_motion_cubic_setup( e );
-    if ( e.curve == 2 || e.curve == 3 )
+    if ( e.curve == 2 )
+        key_motion_euler_setup( e );
+    if ( e.curve == 3 )
         key_motion_unrecreated( h );
     if ( h.tick_register )
         h.tick_register( h.user, e, true );
@@ -495,7 +589,7 @@ inline void key_motion_game_release( key_motion_t& e, const key_motion_hooks_t& 
         h.tick_register( h.user, e, false );
     e.keys.clear( );
     e.cubic.clear( );     // +0x94 = 0
-    e.cubic_valid = 0;    // +0x9C = 0
+    e.cubic_valid = 0;    // +0x9C = 0 (+0xA4 / +0xAC are left as they are)
 }
 
 // Slot 8 0x61A4E0 (reset): the one-shot latch cleared.

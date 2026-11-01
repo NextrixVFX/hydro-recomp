@@ -901,6 +901,11 @@ inline int key_motion_replay( const unsigned* words, bool curves, const char* ta
                 for ( const auto& r : e.cubic )
                     for ( int j : { 0, 1, 2, 3, 4, 5, 6, 8 } )
                         st.push_back( r[ static_cast< std::size_t >( j ) ] );
+                st.insert( st.end( ), { static_cast< std::uint32_t >( e.euler.size( ) ), static_cast< std::uint32_t >( e.euler_capacity ),
+                                        e.euler_valid } );
+                for ( const auto& r : e.euler )
+                    for ( int j : { 0, 1, 2, 4, 5, 6, 8 } )
+                        st.push_back( r[ static_cast< std::size_t >( j ) ] );
             }
             const int diff = ( ( op == 1 || op == 2 ) && ret != arg ? 1 : 0 ) + ( env.log == want ? 0 : 1 ) + ( st == want_state ? 0 : 1 )
                              + ( unrecreated != before ? 1 : 0 );
@@ -929,16 +934,18 @@ inline bool verify_key_motion( )
     return true;
 }
 
-// Curve Type 1 (case key_curve): slot 6's position curve (0x5CEC60 -> 0x61A7A0 -> 0x61AE50: every record word but +0x1C, the
-// count, capacity and valid byte) and the update's cubic branch of 0x5D0440, through the same replay.
+// Curve Types 1 / 2 (case key_curve): slot 6's position curve (0x5CEC60 -> 0x61A7A0 -> 0x61AE50: every record word but +0x1C,
+// the count, capacity and valid byte), type 2's euler curve (0x5CEF20: every record word but +0xC / +0x1C) and the update's
+// cubic branches of 0x5D0440, through the same replay.
 inline bool verify_key_curve( )
 {
     unsigned n = 0;
     int steps = 0;
     if ( key_motion_replay( g_golden_kcv_words, true, "key_curve", n, steps ) )
         return false;
-    LOG_SUCCESS( "VuKeyframeMotionEntity Curve Type 1 (Cubic) matches retail: %u scenarios, %d steps (the +0x90 spline - 0x5CEC60 / 0x61A7A0 / "
-                 "0x61AE50 - and 0x5D0440's cubic branch: the target's matrix and velocities)", n, steps );
+    LOG_SUCCESS( "VuKeyframeMotionEntity Curve Types 1 / 2 (Cubic, Cubic Euler) match retail: %u scenarios, %d steps (the +0x90 / +0xA0 "
+                 "splines - 0x5CEC60 / 0x5CEF20 / 0x61A7A0 / 0x61AE50 - and 0x5D0440's cubic branches: the target's matrix and velocities)",
+                 n, steps );
     return true;
 }
 
