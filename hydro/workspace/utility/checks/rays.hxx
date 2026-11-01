@@ -2182,6 +2182,61 @@ inline bool verify_bt_rows9( )
                 bt_convex_project( io, self, args[ 0 ], args[ 1 ], args[ 2 ], args[ 3 ] );
             return 0;
         } );
+}
+
+// verify_bt_rows10 (boat batch 22): cases/boat.py bt_rows10 - btCompoundShape::
+// setLocalScaling 0x5276D0 (updateChildTransform 0x526F40 and btDbvt::update
+// 0x594960 inside), updateChildTransform 0x526F40 (its transform's words read
+// from the arena), btDbvt::update 0x594960 (this = the tree, the volume's words
+// from the arena) and btCompoundShape::serialize 0x5278B0. eax = the row's
+// gNumAlignedAlloc count (0x5278B0: its answer).
+inline bool verify_bt_rows10( )
+{
+    return bt_rows_verify( g_golden_bt_rows10_words, "bt_rows10",
+        "four Bullet rows 0x5276D0 / 0x526F40 / 0x594960 / 0x5278B0 (collision/arena.hxx: the compound's setLocalScaling, "
+        "updateChildTransform, btDbvt::update with removeleaf / insertleaf, the compound's serialize)",
+        []( unsigned kind, const bt_mem_t& m, const bt_io_t& io, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            const std::uint32_t before = *m.num_aligned_alloc;
+            std::uint32_t w[ 16 ];
+            switch ( kind )
+            {
+                case 1: bt_compound_set_local_scaling( io, self, args[ 0 ] ); break;
+                case 2:
+                    for ( std::uint32_t k = 0; k < 16; ++k )
+                        w[ k ] = m.rd( m.user, args[ 1 ] + 4 * k );
+                    bt_compound_update_child_transform( io, self, args[ 0 ], w );
+                    break;
+                case 3:
+                    for ( std::uint32_t k = 0; k < 8; ++k )
+                        w[ k ] = m.rd( m.user, args[ 1 ] + 4 * k );
+                    bt_dbvt_update( m, self, args[ 0 ], w );
+                    break;
+                default: return bt_compound_serialize( m, self, args[ 0 ], args[ 1 ] );
+            }
+            return *m.num_aligned_alloc - before;
+        } );
+}
+
+// verify_bt_rows11 (boat batch 22): cases/boat.py bt_rows11 - btQuantizedBvh's
+// setQuantizationValues 0x586350, assignInternalNodeFromLeafNode 0x588870,
+// setInternalNodeAabbMin 0x58A570 / Max 0x58A4B0, mergeInternalNodeAabb
+// 0x58A290 (quantized and plain).
+inline bool verify_bt_rows11( )
+{
+    return bt_rows_verify( g_golden_bt_rows11_words, "bt_rows11",
+        "five Bullet rows 0x586350 / 0x588870 / 0x58A570 / 0x58A4B0 / 0x58A290 (collision/arena.hxx: btQuantizedBvh's quantization "
+        "values and internal-node helpers)",
+        []( unsigned kind, const bt_mem_t& m, const bt_io_t&, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            switch ( kind )
+            {
+                case 1: bt_qbvh_set_quantization( m, self, args[ 0 ], args[ 1 ] ); break;
+                case 2: bt_qbvh_assign_from_leaf( m, self, args[ 0 ], args[ 1 ] ); break;
+                case 3: bt_qbvh_set_node_bound( m, self, args[ 0 ], args[ 1 ], false ); break;
+                case 4: bt_qbvh_set_node_bound( m, self, args[ 0 ], args[ 1 ], true ); break;
+                default: bt_qbvh_merge_node( m, self, args[ 0 ], args[ 1 ], args[ 2 ] ); break;
+            }
+            return 0;
+        } );
 }// verify_mesh_scaling (boat batch 20): cases/boat.py mesh_scaling -
 // btTriangleMeshShape::setLocalScaling 0x60C1C0 (concave.hxx mesh_shape_set
 // _local_scaling: under the BVH vtable the BVH-walk recalc, under the plain
