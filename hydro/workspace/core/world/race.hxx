@@ -626,6 +626,8 @@ struct race_boat_init_hooks_t
     std::function< void( ) > slot17;
     // VuInstigatorComponent's gameInitialize 0x531F50 on +0x70 (trigger/volume.hxx, the session's trigger manager); null: the row only.
     std::function< void( ) > instigator;
+    // 0x419FF0 on the pfx controller +0x234 (boat effects.hxx boat_pfx_create); null: the row only.
+    std::function< void( ) > pfx_create;
 };
 
 inline void race_boat_game_initialize( const void* boat, tick_manager_t& tm, const tick_handler_t& decision, const tick_handler_t& build,
@@ -653,6 +655,8 @@ inline void race_boat_game_initialize( const void* boat, tick_manager_t& tm, con
         call( "FMOD start engine+0xC4 0xE7E7" );
     call( "0x410610 anim" );
     call( "0x419FF0 part234" );
+    if ( hooks.pfx_create )
+        hooks.pfx_create( );
     call( "0x4AAF60 boatm boat" );
     if ( hooks.manager )
         boat_manager_add( *hooks.manager, hooks.entry, hooks.kind );

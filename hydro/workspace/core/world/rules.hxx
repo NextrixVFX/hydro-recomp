@@ -678,7 +678,8 @@ inline void race_rules_cheat_finish( const std::vector< std::uint8_t* >& humans,
 // ---- VuGame's release 0x482D50 (world batch 26; case vugame_release) -------
 //
 // thiscall(game), from VuActionGameMode's exit 0x4B97E0: the game's vt+0x18 (VuRaceGame slot 6 0x489A10: the +0x6F8
-// machine's current state's exit (vt+8, when there is one), the AI manager g 0x758F8C vt+0x20 then vt+0x24); a local
+// machine's current state's exit (vt+8, when there is one), the AI manager g 0x758F8C vt+0x20 then vt+0x24 - the other
+// modes' slot 6 differ past the exit: vugame_release_hooks_t::slot6); a local
 // container - with a human (the boat manager g 0x758FB8 +0x28 non-zero) ["Finished"] = tag 3 the first human's +0x32F
 // byte, ["TotalTime"] = tag 2 its +0x4B4 - handed to the analytics g 0x758F9C vt+0x18("LevelExit", container) (a
 // PLATFORM service) and cleared; the +0x0C machine's current state's exit, then the +0x67C machine's; 0x500B80
@@ -693,6 +694,14 @@ struct vugame_release_hooks_t
     std::function< void( const char* name, const value_t& data ) > analytics;
     std::function< void( std::size_t boat ) > release;     // 0x500B80
     std::function< void( const char* what ) > call;        // "track28", "collision", "cameras", "lens24", "listener", "db"
+    // The game's slot 6 (vt+0x18), read for each mode (world batch 30): every one first runs its machine's current state's
+    // exit (+0x6F8, the ghost's +0x700: [machine] +0x24's vt+8, when there is one); then VuRaceGame 0x489A10 the AI manager
+    // g 0x758F8C vt+0x20 / vt+0x24; VuTimeTrialGame 0x48F330 nothing more; VuSlalomGame 0x48C880 the draw manager g
+    // 0x7590B8 vt+0x2C( +0x744 ) when its +0x1E is set, then +0x1E = 0 (draw_remove); VuGhostGame 0x485360 0x4AF490 on
+    // the ghost manager g 0x758FC8 (ghost_release - not recreated: a hook).
+    std::uint32_t slot6 = 0x489A10u;
+    std::function< void( ) > draw_remove;
+    std::function< void( ) > ghost_release;
 };
 
 inline void vugame_release( race_rules_t& r, const std::vector< std::uint32_t >& boat_flags, const vugame_release_hooks_t& h )
@@ -701,9 +710,13 @@ inline void vugame_release( race_rules_t& r, const std::vector< std::uint32_t >&
         if ( f.current( ) && h.exit )
             h.exit( machine );
     };
-    exit( 2, r.fsm );                     // 0x489A10
-    if ( h.ai )
+    exit( 2, r.fsm );                     // the game's slot 6 (vt+0x18): its machine's exit, then its own tail
+    if ( h.slot6 == 0x489A10u && h.ai )
         h.ai( 8 ), h.ai( 9 );
+    else if ( h.slot6 == 0x48C880u && h.draw_remove )
+        h.draw_remove( );
+    else if ( h.slot6 == 0x485360u && h.ghost_release )
+        h.ghost_release( );
     value_t data;
     if ( !r.humans.empty( ) )
     {

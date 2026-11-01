@@ -1124,7 +1124,7 @@ inline bool verify_water_grid( )
         q.wave_root = -1;
         view.water.surfaces.push_back( q );
         water_grid_frame_t out{};
-        water_grid_build( g, fr, s, 0, &view, out, false );
+        water_grid_build( g, fr, s, 0, &view, out );   // the sort on: the harness runs the real qsort (boat batch 27)
         bool same = ( out.draws.size( ) == 1 ) == ( r.m_built != 0 ) && out.failed == 0;
         if ( same && r.m_built )
         {
@@ -1232,7 +1232,7 @@ inline bool verify_water_grid_maps( )
         view.water.surfaces.push_back( q );
         g.clip_maps = r.m_clip != 0;
         water_grid_frame_t out{};
-        water_grid_build( g, fr, s, 0, &view, out, false );
+        water_grid_build( g, fr, s, 0, &view, out );   // the sort on: the harness runs the real qsort (boat batch 27)
         if ( !what && ( ( out.draws.size( ) == 1 ) != ( r.m_built != 0 ) || out.failed != 0 ) )
             what = "built or not / a failed patch";
         if ( !what && r.m_built )

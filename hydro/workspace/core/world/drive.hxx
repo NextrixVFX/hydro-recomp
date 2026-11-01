@@ -102,8 +102,8 @@ struct race_drive_t
     boat_respawn_t respawn{};
     boat_respawn_hooks_t respawn_hooks{};
     // Build step 5's pfx controller (boat effects.hxx): its on bytes / aabb, read from the image once, written back.
-    boat_pfx_t pfx;
     bool pfx_read = false;
+    int pfx_ticks = 0;   // ours: Build step 5 runs (the dev census below)
 };
 
 inline void race_drive_contact_setup( race_session_t& s );
@@ -615,24 +615,17 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         // VuParams, 0x505690) - NO SUBSCRIBER exists: the string's one reference is that broadcaster and no asset names it -
         // so it changes nothing; VuAiDriver / VuAiUiDriver / VuAiNuisanceDriver's slot 20 is the nullsub 0x401560.
         r->respawn_hooks.driver_50 = []( void* ) { };
-        // "OnBoatRecovered" (0x41D790's broadcast): its only subscriber is VuSlalomGame (ctor 0x48BEC0 - the string's other
-        // reference); no asset names it. In a Race nothing answers: nothing to run. In a Slalom its 0x48DB70 (world/slalom.hxx
-        // slalom_recovered) on the broadcasting boat - the params' entity, a VuBoatEntity: its +0x4DC, the gate to pass, +0x310.
-        r->respawn_hooks.recovered = []( void* u, std::uint32_t ) {
+        // "OnBoatRecovered" (0x41D790's broadcast): the params 0x505150 = one entity record {11, the boat's entity id 0x500D50
+        // - FNV-1a of its long name, its name (no parent)}, size 8, then the bus by hash. Its only subscriber is VuSlalomGame
+        // (ctor 0x48BEC0 - the string's other reference): session.hxx race_session_game_events. No asset names it.
+        r->respawn_hooks.recovered = []( void* u, std::uint32_t ) {   // the hash is FNV-1a("OnBoatRecovered")
             race_drive_t& d = race_drive_of( u );
-            race_session_t& s = *d.session;
-            if ( !s.start.slalom )
-                return;
-            race_session_boat_t& b = race_drive_boat( d );
-            const std::uint8_t* t = race_session_image( b, 0, 0x50 );
-            if ( !t )
-            {
-                race_unwired( s, "OnBoatRecovered 0x48DB70: the boat's transform image is missing - not run (UNKNOWN)" );
-                return;
-            }
-            slalom_recovered( s.slalom, b.graph.objects[ 0 ].image.data( ), reinterpret_cast< const float* >( t + 0x50 ) );
-            LOG_INFO( "race: OnBoatRecovered (VuSlalomGame 0x48DB70) - %s, next gate %d", b.name.c_str( ),
-                      s.slalom.current ? static_cast< int >( s.slalom.current - s.slalom_gates.data( ) ) : -1 );
+            ui_params_t p;
+            const std::uint32_t tag = 11, id = event_hash( race_drive_boat( d ).name.c_str( ) );
+            std::memcpy( p.m_bytes, &tag, 4 );
+            std::memcpy( p.m_bytes + 4, &id, 4 );
+            p.m_size = 8;
+            race_session_post( *d.session, "OnBoatRecovered", &p );
         };
         // The Decision tick's hooks.
         boat_decision_hooks_t& h = r->hooks;
@@ -923,8 +916,7 @@ inline void race_contact_added( void* user, solver_contact_point_t& cp, solver_r
                         ++s.buoy_hits;
                         LOG_INFO( "race: OnCheckPointBuoyHit (buoy '%s', index %d, sync %d)", d->entity->m_name.c_str( ), bc.index,
                                   s.dynamics ? s.dynamics->syncs : -1 );
-                        if ( s.world.broadcast )
-                            s.world.broadcast( k_buoy_hit_event, &p );
+                        race_session_post( s, k_buoy_hit_event, &p );
                     }
                 };
             }
@@ -1073,15 +1065,17 @@ inline void race_drive_effects( race_session_t& s, race_drive_t& r, float dt )
     {
         if ( !r.pfx_read )
         {
-            std::memcpy( r.pfx.on, pc + 0x8C, 5 );
-            std::memcpy( r.pfx.aabb, pc + 0x98, 32 );
+            std::memcpy( b.pfx.on, pc + 0x8C, 5 );
+            std::memcpy( b.pfx.aabb, pc + 0x98, 32 );
             r.pfx_read = true;
             LOG_INFO( "race: boat %d Build step 5 runs - 0x419700 on an empty controller (on bytes %d%d%d%d%d), 0x411A50", static_cast< int >( r.index ),
-                      r.pfx.on[ 0 ], r.pfx.on[ 1 ], r.pfx.on[ 2 ], r.pfx.on[ 3 ], r.pfx.on[ 4 ] );
+                      b.pfx.on[ 0 ], b.pfx.on[ 1 ], b.pfx.on[ 2 ], b.pfx.on[ 3 ], b.pfx.on[ 4 ] );
         }
-        race_unwired( s, "Build step 5: the pfx controller's seven record lists are empty in the boat image - the fill (its ctor / "
-                         "load) is not read, so the systems retail places and ticks are absent (UNKNOWN); 0x419700's on / off "
-                         "machine, raises and aabb reset run" );
+        if ( !b.pfx_filled )
+            race_unwired( s, "Build step 5: postLoad's Pfx fill did not run / stopped - the seven record lists are empty (UNKNOWN); 0x419700's "
+                             "on / off machine, raises and aabb reset run" );
+        else if ( b.pfx_unknown_bones )
+            race_unwired( s, "Build step 5: pfx records whose bone findNodeByName could not answer (no skeleton) tick at bone -1 - UNKNOWN placement" );
         boat_pfx_boat_t pb;
         pb.throttle = throttle;
         pb.d570 = driver_entity_throttle( r.d.boat, r.d.transform, r.d.engine, r.d.body );   // 0x41D570 itself
@@ -1099,13 +1093,31 @@ inline void race_drive_effects( race_session_t& s, race_drive_t& r, float dt )
                 boat_driver_raise( d->d.driver, d->d.human, a, c );
         };
         g_race_drive_raising = &r;
-        const bool ran = boat_pfx_tick( r.pfx, pb, dt, o );
+        const bool ran = boat_pfx_tick( b.pfx, pb, dt, o );
         g_race_drive_raising = nullptr;
         if ( !ran )
             race_unwired( s, "Build step 5: a pfx record's bone outside the model's palette - UNKNOWN" );
-        std::memcpy( pc + 0x8C, r.pfx.on, 5 );
-        std::memcpy( pc + 0x98, r.pfx.aabb, 32 );
-        if ( r.pfx.aabb_w_stale )
+        if ( s.world.pfx && b.pfx_filled && r.index == 0 && ( ++r.pfx_ticks % 240 ) == 0 )
+        {
+            // Ours (a dev census, not retail): what boat 0's systems hold - per list the live particle count (+0xA0).
+            std::string by;
+            int live = 0;
+            for ( int l = 0; l < 7; ++l )
+                for ( const boat_pfx_record_t& rec : b.pfx.list[ l ] )
+                    if ( const std::uint32_t* w = s.world.pfx->heap.find( rec.system ) )
+                    {
+                        const int n = static_cast< int >( pfx_system_count( w ) );
+                        live += n;
+                        by += " L" + std::to_string( l ) + " " + rec.name + " state " + std::to_string( pfx_system_state( w ) ) + " x" + std::to_string( n );
+                    }
+            const std::uint32_t* x = b.pfx.extra ? s.world.pfx->heap.find( b.pfx.extra ) : nullptr;
+            LOG_INFO( "race: boat 0 pfx at Build tick %d: %d live particles in its records (%s ), the hull effect state %d x%d, on %d%d%d%d%d",
+                      r.pfx_ticks, live, by.c_str( ), x ? static_cast< int >( pfx_system_state( x ) ) : -1, x ? static_cast< int >( pfx_system_count( x ) ) : -1,
+                      b.pfx.on[ 0 ], b.pfx.on[ 1 ], b.pfx.on[ 2 ], b.pfx.on[ 3 ], b.pfx.on[ 4 ] );
+        }
+        std::memcpy( pc + 0x8C, b.pfx.on, 5 );
+        std::memcpy( pc + 0x98, b.pfx.aabb, 32 );
+        if ( b.pfx.aabb_w_stale )
             race_unwired( s, "Build step 5: 0x41A790's aabb merge left +0xA4 / +0xB4 = a stale stack word - UNKNOWN" );
     }
     std::uint8_t* db = r.d.debris;
@@ -1428,16 +1440,8 @@ inline void race_session_game_mode( void* user, float dt )
         static const char* cheat = c_engine::option( "cheat-finish" );
         if ( cheat && cheat[ 0 ] && s.rules_frames == std::atoi( cheat ) )
         {
-            std::vector< std::uint8_t* > humans;
-            for ( const void* b : s.manager.lists.humans.boats )
-                humans.push_back( const_cast< std::uint8_t* >( static_cast< const std::uint8_t* >( b ) ) );
-            race_rules_cheat_finish( humans, [ & ]( std::size_t h )
-            {
-                for ( std::size_t k = 0; k < s.rules_boats.size( ); ++k )
-                    if ( s.rules_boats[ k ].boat == humans[ h ] )
-                        fleet_remove_driver( s.fleet, static_cast< int >( k ) );   // the AI manager's slot 12 0x4036C0
-            } );
-            LOG_INFO( "race: OnCheatFinish (--cheat-finish %d): %d human boats finished", s.rules_frames, static_cast< int >( humans.size( ) ) );
+            LOG_INFO( "race: --cheat-finish %d: OnCheatFinish broadcast (an empty VuParams)", s.rules_frames );
+            race_session_post( s, "OnCheatFinish" );   // VuGame's subscriber 0x483190 (session.hxx race_session_game_events)
         }
     }
     const track_manager_t& tm = *s.track;

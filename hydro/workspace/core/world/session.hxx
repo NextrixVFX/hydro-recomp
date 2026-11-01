@@ -13,6 +13,7 @@
 #include <workspace/core/ui/config.hxx>
 #include <workspace/core/world/blend.hxx>
 #include <workspace/core/world/bodies.hxx>
+#include <workspace/core/world/bus.hxx>
 #include <workspace/core/world/collide.hxx>
 #include <workspace/core/world/dynamics.hxx>
 #include <workspace/core/world/kernel.hxx>
@@ -78,6 +79,12 @@ struct race_session_boat_t
     collision_object_t collision{};   // the body's collision object in the race's dynamics world (world/dynamics.hxx)
     boat_engine_t engine{};
     boat_load_t io{};
+    // The pfx controller (boat +0x234, boat effects.hxx boat_pfx_t): filled by postLoad's Pfx step (the boat agent's
+    // boat_pfx_fill through io.pfx_fill - race_session_sections), ticked by Build step 5 (world/drive.hxx).
+    boat_pfx_t pfx;
+    bool pfx_filled = false;
+    int pfx_unknown_bones = 0;   // findNodeByName calls answered UNKNOWN (no skeleton here)
+    std::uint8_t* pfx_fluids = nullptr;   // the controller's +0x34 VuFluidsObject image
     bool sections = false;    // 0x420A70 ran to its end
     std::string stop;         // where it stopped (UNKNOWN), when it did
     std::string name, boat, skin;
@@ -179,6 +186,8 @@ struct race_session_t
     std::vector< std::unique_ptr< race_session_boat_t > > boats;
     std::vector< race_start_boat_t > start_boats;
     tick_manager_t ticks;
+    // VuEventManager g 0x759028 and the handlers the session's objects registered (world/bus.hxx).
+    race_bus_t bus;
     double clock = 0.0;
     const track_manager_t* track = nullptr;
     fleet_manager_t fleet;
@@ -378,6 +387,19 @@ inline std::string race_entity_path( const entity_t* e )
 
 // The Decision tick 0x41EFF0 and the Viewports tick 0x4AB0A0 composed on the
 // session (world/drive.hxx).
+// A broadcast the race's code makes (0x505650 / 0x505690): the world's (c_world::race_broadcast - the session's bus, then
+// the live HUDs) when there is a world, else the bus alone.
+inline void race_session_post( race_session_t& s, const char* name, const ui_params_t* params = nullptr )
+{
+    if ( s.world.broadcast )
+    {
+        s.world.broadcast( name, params );
+        return;
+    }
+    const ui_params_t none{ };
+    race_bus_broadcast( s.bus, event_hash( name ), params ? *params : none );
+}
+
 inline void race_drive_setup( race_session_t& s, const value_t* constant_db );
 inline void race_drive_decision( race_session_t& s, std::size_t boat, float dt );
 inline void race_drive_viewports( race_session_t& s );
@@ -500,6 +522,134 @@ inline std::uint8_t* race_session_image( race_session_boat_t& b, int object, int
 // factory's doesAssetExist answers from the pack's directory (as the oracle's
 // factory does); create hands a handle; the collision mesh / fluids count
 // readers are absent - UNKNOWN, the load stops (b.stop says where).
+inline void race_unwired( race_session_t& s, const std::string& what );
+
+// The fill's hooks on a session boat (bound once per boat; used by postLoad's fill and the gameInitialize's 0x419FF0).
+inline boat_pfx_fill_hooks_t race_session_pfx_hooks( race_session_boat_t& rb )
+{
+    boat_pfx_fill_hooks_t h;
+    h.user = &rb;
+    h.manager = true;
+    h.create = []( void* v, const char* name ) {
+        race_session_t& x = *static_cast< race_session_boat_t* >( v )->owner;
+        return x.world.pfx_ops->create( x.world.pfx_ops->user, name );
+    };
+    h.release = []( void* v, std::uint32_t sys ) {
+        race_session_t& x = *static_cast< race_session_boat_t* >( v )->owner;
+        x.world.pfx_ops->release( x.world.pfx_ops->user, sys );
+    };
+    h.start = []( void* v, std::uint32_t sys ) {
+        race_session_t& x = *static_cast< race_session_boat_t* >( v )->owner;
+        const boat_pfx_ops_t o = boat_pfx_runtime_ops( *x.world.pfx );
+        o.start( o.user, sys );
+    };
+    h.root = []( void*, std::uint32_t sys ) { return sys; };   // 0x401DA0
+    h.type_of = []( void* v, std::uint32_t object ) -> std::uint32_t {
+        race_session_t& x = *static_cast< race_session_boat_t* >( v )->owner;
+        const std::uint32_t vt = x.world.pfx->heap[ object ];
+        for ( const pfx_class_t& c : g_pfx_classes )
+            if ( c.vtable == vt )
+                return c.descriptor;
+        race_unwired( x, "postLoad's Pfx step: a pfx object's vtable outside world/pfxclass.hxx's table - its getType UNKNOWN (answered 0)" );
+        return 0u;
+    };
+    h.find_bone = []( void* v, const char* name ) -> std::int32_t {
+        race_session_boat_t& x = *static_cast< race_session_boat_t* >( v );
+        if ( name && name[ 0 ] )
+        {
+            ++x.pfx_unknown_bones;
+            race_unwired( *x.owner, "postLoad's Pfx step: VuSkeleton_findNodeByName 0x52F3C0 on the model instance +0x2A4 (the renderer's - no "
+                                    "skeleton in the race session): the record's bone UNKNOWN, -1 here" );
+        }
+        return -1;
+    };
+    h.fluids_set = []( void* v, const std::string& name ) {
+        race_session_boat_t& x = *static_cast< race_session_boat_t* >( v );
+        // 0x5243A0 on the controller's own VuFluidsObject (its ctor's 0x5240C0 - not the hull's +0x1CC): boat load.hxx
+        // load_fluid_mesh on that image with the load's factory hooks. SUBSTITUTION: its two record arrays' retail
+        // allocation addresses are not known - the hull solver's (io.array_address) are written as the data words.
+        boat_load_t f{ };
+        f.solver = x.pfx_fluids;
+        f.hooks = x.io.hooks;
+        f.array_address[ 0 ] = x.io.array_address[ 0 ];
+        f.array_address[ 1 ] = x.io.array_address[ 1 ];
+        if ( !load_fluid_mesh( f, name ) )
+            race_unwired( *x.owner, "postLoad's Pfx step: 0x5243A0 on the solver stopped (a factory hook) - UNKNOWN" );
+    };
+    h.word = []( void* v, std::uint32_t a ) -> std::uint32_t {
+        race_session_boat_t& x = *static_cast< race_session_boat_t* >( v );
+        if ( a >= x.pfx.fluids && a - x.pfx.fluids < 0x104u )
+            return load_word( x.pfx_fluids, static_cast< int >( a - x.pfx.fluids ) );
+        for ( const pfx_class_t& c : g_pfx_classes )   // a descriptor's +4: its parent (the next name of its chain)
+            if ( a == c.descriptor + 4u )
+            {
+                const char* bar = std::strchr( c.chain, '|' );
+                if ( !bar )
+                    return 0u;
+                const std::string parent( bar + 1, std::strcspn( bar + 1, "|" ) );
+                for ( const pfx_class_t& p : g_pfx_classes )
+                    if ( parent == p.name )
+                        return p.descriptor;
+                return 0u;
+            }
+        return x.owner->world.pfx->heap[ a ];
+    };
+    h.put = []( void* v, std::uint32_t a, std::uint32_t value ) {
+        race_session_boat_t& x = *static_cast< race_session_boat_t* >( v );
+        if ( std::uint32_t* w = x.owner->world.pfx->heap.find( a ) )
+            *w = value;
+        else
+            race_unwired( *x.owner, "postLoad's Pfx step: a bind write outside the pfx runtime's heap - UNKNOWN, not written" );
+    };
+    return h;
+}
+
+// postLoad's Pfx step (boat load.hxx io.pfx_fill -> boat effects.hxx boat_pfx_fill, the boat agent's 0x419EF0 / 0x419D70 /
+// 0x41A1A0 / 0x419FF0) bound to the race (world batch 30). The controller +0x30 / +0x34 are retail heap addresses written
+// into bound processes and compared by the pfx frame: SUBSTITUTION - tokens here, 0xB0A70000 + 0x1000 x the boat's index
+// (the boat) and 0xF1D00000 + the same (the controller's own VuFluidsObject +0x34, made by its ctor 0x4192E0's 0x5240C0;
+// 0x104 words read from its image). Hooks:
+//   create / release   g_vupfx 0x75904C vt+0x28 / +0x2C = the world's VuPfx manager ops (world/pfxmgr.hxx, the water agent's)
+//   start              the system's vt+0x2C (slot 11) = boat_pfx_runtime_ops's start
+//   root               the system's vt+0x40 = 0x401DA0 (mov eax, ecx; ret - read): the system itself
+//   type_of            the object's vt+4: world/pfxclass.hxx g_pfx_classes (vtable -> getType's descriptor); its +4 parents
+//                      from the rows' chains (read from the image: 0x7367D0 -> 0x7369B4 -> 0x7369BC -> 0x7369D4 -> 0x7369CC,
+//                      0x7367D8 -> 0x7369D4); a vtable outside the table answers 0 (logged UNKNOWN)
+//   find_bone          0x52F3C0 on the model instance (+0x2A4, the renderer's) +0x10: NO SKELETON HERE - answered -1 and
+//                      counted / logged UNKNOWN for every non-empty name
+//   fluids_set         0x5243A0 on that object = boat load.hxx load_fluid_mesh (the boat agent's, 1:1)
+//   word / put         the pfx runtime's heap; the fluids token's words = the solver image's
+inline void race_session_bind_pfx_fill( race_session_boat_t& b )
+{
+    b.pfx = boat_pfx_t{ };
+    b.pfx_filled = false;
+    b.pfx_unknown_bones = 0;
+    race_session_t& s = *b.owner;
+    if ( !s.world.pfx || !s.world.pfx_ops || !s.world.pfx_ops->create || !s.world.pfx_ops->release )
+    {
+        race_unwired( s, "postLoad's Pfx step with no VuPfx runtime / manager ops - the fill not bound (UNKNOWN)" );
+        return;
+    }
+    const int pfx = race_session_ref( b.graph, 0, 0x234 );
+    const int fluids = pfx < 0 ? -1 : race_session_ref( b.graph, pfx, 0x34 );
+    if ( fluids < 0 )
+    {
+        race_unwired( s, "postLoad's Pfx step: the controller (0x4192E0) has no +0x34 VuFluidsObject in the boat graph - the fill not bound (UNKNOWN)" );
+        return;
+    }
+    b.pfx_fluids = b.graph.objects[ static_cast< std::size_t >( fluids ) ].image.data( );
+    b.pfx.boat = 0xB0A70000u + 0x1000u * static_cast< std::uint32_t >( b.index );
+    b.pfx.fluids = 0xF1D00000u + 0x1000u * static_cast< std::uint32_t >( b.index );
+    b.io.pfx_user = &b;
+    b.io.pfx_fill = []( void* u, const value_t& fallback, const value_t& own, const boat_driver_t& driver, bool create ) {
+        race_session_boat_t& rb = *static_cast< race_session_boat_t* >( u );
+        const boat_pfx_fill_hooks_t h = race_session_pfx_hooks( rb );
+        const bool ok = boat_pfx_fill( rb.pfx, fallback, own, driver, create, h );
+        rb.pfx_filled = ok;
+        return ok;
+    };
+}
+
 inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb, const c_archive& archive, const surface_table_t* surfaces )
 {
     std::uint8_t* boat = b.graph.objects[ 0 ].image.data( );
@@ -608,6 +758,7 @@ inline bool race_session_sections( race_session_boat_t& b, const value_t& boatdb
         boat_mesh_hooks( static_cast< ctx_t* >( u )->b->meshes, lib );
         return lib.fluid_aabb( lib.user, a, box );
     };
+    race_session_bind_pfx_fill( b );
     const bool ok = boat_load_sections( io );
     if ( !ok && b.stop.empty( ) )
         b.stop = io.hooks.surface == nullptr
@@ -2099,6 +2250,15 @@ inline void race_session_end( race_session_t& s )
         (void)s;
     };
     h.release = [ &s ]( std::size_t ) { race_unwired( s, "VuGame release: 0x500B80 (gameRelease) on a game boat - not recreated" ); };
+    // The game's slot 6 by mode (rules.hxx vugame_release_hooks_t::slot6).
+    h.slot6 = s.start.slalom ? 0x48C880u : s.start.timetrial ? 0x48F330u : s.mode == "Ghost" ? 0x485360u : 0x489A10u;
+    h.draw_remove = [ &s ] {
+        if ( !s.slalom_draw )
+            return;
+        s.slalom_draw = false;   // +0x744's +0x1E = 0 after the draw manager's remove (g 0x7590B8 vt+0x2C - the renderer's)
+        race_unwired( s, "VuSlalomGame slot 6 0x48C880: the draw manager's remove (g 0x7590B8 vt+0x2C) of +0x744 - the renderer's (a hook)" );
+    };
+    h.ghost_release = [ &s ] { race_unwired( s, "VuGhostGame slot 6 0x485360: 0x4AF490 on the ghost manager g 0x758FC8 - not recreated (UNKNOWN)" ); };
     h.call = [ &s ]( const char* what ) {
         const std::string w( what );
         if ( w == "cameras" )
@@ -2131,6 +2291,17 @@ inline void race_session_end( race_session_t& s )
     }
     LOG_INFO( "race: session end - VuGame release 0x482D50 run, %d bodies through VuRigidBody's dtor 0x50FAF0 (gNumAlignedFree +%u)", bodies,
               s.aligned_frees );
+    // The game's / boats' / drivers' deletion: their VuEventMap dtors 0x515620 - each registration's 0x5057E0.
+    const std::size_t registrations = s.bus.registrations.size( );
+    std::map< std::string, int > by_owner;
+    for ( const auto& h : s.bus.handlers )
+        ++by_owner[ h.second.owner.substr( 0, h.second.owner.find( ' ' ) ) ];   // the class
+    std::string owners;
+    for ( const auto& o : by_owner )
+        owners += ( owners.empty( ) ? "" : ", " ) + o.first + " x" + std::to_string( o.second );
+    race_bus_release( s.bus );
+    LOG_INFO( "race: VuEventManager - %d registrations removed (0x5057E0: %s); %d handler calls, %d broadcasts nobody in the race's code heard",
+              static_cast< int >( registrations ), owners.c_str( ), s.bus.fired, s.bus.unheard );
     s.active = false;
 }
 
@@ -2187,6 +2358,8 @@ inline void race_session_slalom( race_session_t& s, entity_t& tree, const race_s
         g.world = entity_transform( *chain[ k ] )->world;
         g.diameter = p.value.diameter;
         g.allow_recovery = p.value.allow_recovery;
+        g.model = p.value.model;            // the draw's instances (slalom.hxx slalom_draw_gates - the renderer's list)
+        g.reflection = p.value.reflection;
         g.next = k + 1 < s.slalom_gates.size( ) ? &s.slalom_gates[ k + 1 ] : nullptr;
     }
     s.slalom = slalom_course_t{ };
@@ -2202,8 +2375,7 @@ inline void race_session_slalom( race_session_t& s, entity_t& tree, const race_s
         h.broadcast = []( void* u, const char* name ) {
             race_session_t& rs = *static_cast< race_session_t* >( u );
             ui_params_t p;
-            if ( rs.world.broadcast )
-                rs.world.broadcast( name, &p );
+            race_session_post( rs, name, &p );
         };
         const slalom_gate_t* before = s.slalom.current;
         const int r = slalom_gates_tick( s.slalom, s.slalom_human, s.slalom_world, h );
@@ -2248,6 +2420,125 @@ inline void race_session_slalom_start( race_session_t& s, const race_session_dbs
     }
 }
 
+// The game's registrations into the bus (0x5156E0), in its ctor's order: VuGame's base 0x480BA0 - "OnUserNext" 0x483170,
+// "OnCheatFinish" 0x483190 (VuMethod1 vtable 0x73F65C) - then the mode's own (rules.hxx k_race_rules_events /
+// game_mode_defs: VuRaceGame 0x489030 "OnStartLightsOut" 0x48A780 + "OnCheckPointBuoyHit" 0x48A7B0; VuTimeTrialGame
+// 0x490540; VuSlalomGame 0x48DB40 + "OnBoatRecovered" 0x48DB70; VuGhostGame 0x485860). The handlers, read:
+//   0x483170: the +0xC machine's condition "OnUserNext" (0x555C60) +0x1D = 1 - the pulse (c_fsm::pulse_condition);
+//   0x483190: 0x4848C0 (rules.hxx race_rules_cheat_finish; its AI-manager slot 12 0x4036C0 = fleet_remove_driver);
+//   0x48A780 / 0x490540 / 0x48DB40 / 0x485860: the mode's machine (+0x6F8; the ghost's +0x700) condition
+//     "StartLightsOut" +0x1C = 1 (the four are byte-identical but for the machine offset and the string's copy);
+//   0x48A7B0: rules.hxx race_rules_on_buoy_hit;  0x48DB70: slalom.hxx slalom_recovered (below).
+inline void race_session_game_events( race_session_t& s, const std::string& mode )
+{
+    s.bus.ticks = &s.ticks;
+    race_bus_subscribe( s.bus, "OnUserNext", 0x483170u, "VuGame", [ &s ]( const ui_params_t& ) {
+        s.rules.event.pulse_condition( "OnUserNext" );
+    } );
+    race_bus_subscribe( s.bus, "OnCheatFinish", 0x483190u, "VuGame", [ &s ]( const ui_params_t& ) {
+        std::vector< std::uint8_t* > humans;
+        for ( const void* b : s.manager.lists.humans.boats )
+            humans.push_back( const_cast< std::uint8_t* >( static_cast< const std::uint8_t* >( b ) ) );
+        race_rules_cheat_finish( humans, [ & ]( std::size_t h )
+        {
+            for ( std::size_t k = 0; k < s.rules_boats.size( ); ++k )
+                if ( s.rules_boats[ k ].boat == humans[ h ] )
+                    fleet_remove_driver( s.fleet, static_cast< int >( k ) );   // the AI manager's slot 12 0x4036C0
+        } );
+        LOG_INFO( "race: OnCheatFinish (VuGame 0x483190): %d human boats finished", static_cast< int >( humans.size( ) ) );
+    } );
+    const game_mode_def_t* def = nullptr;
+    for ( const game_mode_def_t& d : game_mode_defs( ) )
+        if ( std::string( d.rtti ) == ".?AVVu" + mode + "Game@@" )
+            def = &d;
+    std::vector< race_rules_event_t > events;
+    if ( def )
+        events = def->events;
+    else
+        events.assign( std::begin( k_race_rules_events ), std::end( k_race_rules_events ) );
+    const std::string owner = def ? std::string( def->rtti ) : std::string( ".?AVVuRaceGame@@" );
+    for ( const race_rules_event_t& e : events )
+    {
+        const std::string name( e.name );
+        std::function< void( const ui_params_t& ) > fn;
+        if ( name == "OnStartLightsOut" )
+            fn = [ &s, e ]( const ui_params_t& ) {
+                race_rules_on_start_lights_out( s.rules );
+                LOG_INFO( "race: OnStartLightsOut (0x%X) - the race starts on the next game tick", e.method );
+            };
+        else if ( name == "OnCheckPointBuoyHit" )
+            fn = [ &s ]( const ui_params_t& p ) { race_rules_on_buoy_hit( s.rules, p.m_bytes, p.m_size ); };
+        else if ( name == "OnBoatRecovered" )
+            fn = [ &s ]( const ui_params_t& p ) {
+                // 0x505370: the first record, when the size is above 0, its tag 11 (an entity) then its id; else 0. The
+                // repository g 0x759080 vt+0x28( id ) - not recreated: a session boat whose entity id (0x500D50: FNV-1a of
+                // the long name - a race boat has no parent, so its name) is it (a HOOK standing for the lookup).
+                std::uint32_t tag = 0xFFFFFFFFu, id = 0;
+                if ( p.m_size > 0 )
+                {
+                    std::memcpy( &tag, p.m_bytes, 4 );
+                    if ( tag == 11 )
+                        std::memcpy( &id, p.m_bytes + 4, 4 );
+                }
+                race_session_boat_t* boat = nullptr;
+                for ( const auto& b : s.boats )
+                    if ( id != 0 && event_hash( b->name.c_str( ) ) == id )
+                        boat = b.get( );
+                if ( !boat )
+                    return;   // 0x48DB70: no entity / not a VuBoatEntity - nothing
+                const std::uint8_t* t = race_session_image( *boat, 0, 0x50 );
+                if ( !t )
+                {
+                    race_unwired( s, "OnBoatRecovered 0x48DB70: the boat's transform image is missing - not run (UNKNOWN)" );
+                    return;
+                }
+                slalom_recovered( s.slalom, boat->graph.objects[ 0 ].image.data( ), reinterpret_cast< const float* >( t + 0x50 ) );
+                LOG_INFO( "race: OnBoatRecovered (VuSlalomGame 0x48DB70) - %s, next gate %d", boat->name.c_str( ),
+                          s.slalom.current ? static_cast< int >( s.slalom.current - s.slalom_gates.data( ) ) : -1 );
+            };
+        else
+            fn = [ &s, e ]( const ui_params_t& ) {
+                char text[ 128 ];
+                std::snprintf( text, sizeof( text ), "the game's event %s 0x%X - not recreated, not run (UNKNOWN)", e.name, e.method );
+                race_unwired( s, text );
+            };
+        race_bus_subscribe( s.bus, e.name, e.method, owner, std::move( fn ) );
+    }
+}
+
+// The boats' and drivers' registrations, in the boat load's order (0x481CE0: each boat's ctor 0x41B850 - "OnCameraShake"
+// 0x41E7B0, "OnRumble" 0x41E950 (boat construct.hxx) - then its postLoad's driver: a VuHumanDriver's ctor 0x40ED50
+// "OnStartLightsOut" 0x40F680 = driver +0xC0 = 0x3E800000 (0.25), read whole). The boat handlers are boat events.hxx's
+// (boat_on_camera_shake on the camera, boat_on_rumble on the driver). No code in a race broadcasts OnCameraShake /
+// OnRumble (their three name copies: 0x41B850's registration, 0x434A20 and 0x438260 - both into the TARGET's own map),
+// so those two never run from the bus; they are registered because 0x5156E0 does both.
+inline void race_session_boat_events( race_session_t& s )
+{
+    for ( std::size_t k = 0; k < s.boats.size( ); ++k )
+    {
+        race_session_boat_t* b = s.boats[ k ].get( );
+        race_bus_subscribe( s.bus, "OnCameraShake", 0x41E7B0u, "VuBoatEntity " + b->name, [ b ]( const ui_params_t& p ) {
+            if ( b->io.camera )
+                boat_on_camera_shake( b->io.camera, p.m_bytes );
+        } );
+        race_bus_subscribe( s.bus, "OnRumble", 0x41E950u, "VuBoatEntity " + b->name, [ b ]( const ui_params_t& p ) {
+            if ( b->driver && !b->driver->graph.empty( ) )
+            {
+                std::uint8_t* drv = b->driver->graph[ 0 ].image.data( );
+                boat_on_rumble( drv, load_word( drv, 0 ), p.m_bytes );
+            }
+        } );
+        if ( k < s.start_boats.size( ) && s.start_boats[ k ].driver && load_word( s.start_boats[ k ].driver, 0 ) == 0x737F44u )
+        {
+            std::uint8_t* driver = s.start_boats[ k ].driver;
+            race_bus_subscribe( s.bus, "OnStartLightsOut", 0x40F680u, "VuHumanDriver " + b->name, [ driver ]( const ui_params_t& ) {
+                const std::uint32_t quarter = 0x3E800000u;
+                std::memcpy( driver + 0xC0, &quarter, 4 );
+            } );
+        }
+    }
+}
+
 inline bool race_session_start( race_session_t& s, const std::string& mode, const value_t& game_data, const race_session_dbs_t& db,
                                 const c_archive& archive, entity_t& tree, const track_manager_t* track, fleet_random_t& random,
                                 const std::function< void( ) >& project_initialized = { } )
@@ -2261,6 +2552,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     s.random = &random;
     s.game_data = game_data;
     race_game_construct( s.game );   // the VuRaceGame ctor 0x489030 (its base 0x480BA0's values)
+    race_session_game_events( s, mode );   // the ctor's 0x5156E0 registrations (before the boat load, as the ctor runs)
     {
         std::vector< std::uint8_t > bytes;
         if ( archive.read( "VuDBAsset/SurfaceDB", bytes ) )
@@ -2332,6 +2624,18 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
     }
     for ( const auto& b : s.boats )
     {
+        {
+            int records = 0, systems = 0;
+            for ( const auto& l : b->pfx.list )
+                for ( const boat_pfx_record_t& r : l )
+                    records += 1, systems += r.system ? 1 : 0;
+            LOG_INFO( "race: %s postLoad Pfx fill %s - %d records (lists %d/%d/%d/%d/%d/%d/%d), %d systems, hull effect '%s' system 0x%X, fluids '%s', "
+                      "%d bone lookups UNKNOWN", b->name.c_str( ), b->pfx_filled ? "ran" : "NOT RUN", records,
+                      static_cast< int >( b->pfx.list[ 0 ].size( ) ), static_cast< int >( b->pfx.list[ 1 ].size( ) ), static_cast< int >( b->pfx.list[ 2 ].size( ) ),
+                      static_cast< int >( b->pfx.list[ 3 ].size( ) ), static_cast< int >( b->pfx.list[ 4 ].size( ) ), static_cast< int >( b->pfx.list[ 5 ].size( ) ),
+                      static_cast< int >( b->pfx.list[ 6 ].size( ) ), systems, b->pfx.hull_effect.c_str( ), b->pfx.extra, b->pfx.fluids_asset.c_str( ),
+                      b->pfx_unknown_bones );
+        }
         if ( b->sections )
             LOG_SUCCESS( "race: %s (%s, skin %s): sections load 0x420A70 complete", b->name.c_str( ), b->boat.c_str( ), b->skin.c_str( ) );
         else
@@ -2343,6 +2647,9 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
                      s.stopped_transform );
     // The tick manager (ctor 0x4F6F60, slot 5 0x4F7050) and the AI manager's tick.
     tick_manager_init( s.ticks );
+    // VuEventManager's init slot 5 0x5055C0: its Decision tick 0x505950 - the engine init 0x566230 makes and inits it
+    // (0x5663DD) before every system with a Decision tick (world/bus.hxx).
+    tick_register( s.ticks, { &s.bus, race_bus_tick, &s.bus }, "Decision" );
     tick_register( s.ticks, { s.dynamics.get( ), race_session_dynamics_sync, &s }, "DynamicsSync" );   // 0x4F8050's registrations
     tick_register( s.ticks, { s.dynamics.get( ), race_session_dynamics_kick, &s }, "DynamicsKick" );
     // VuLensWaterManagerImpl's tick 0x514500 in "Build" (its init 0x513B90 at 0x513C0A - an engine system, made before the
@@ -2442,6 +2749,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         s.start_boats.push_back( sb );
         s.fleet_boats.push_back( { reinterpret_cast< const float* >( sb.transform + 0x50 ), 0.0f, 0.0f } );
     }
+    race_session_boat_events( s );
     if ( !track )
     {
         LOG_WARNING( "race: the world's track did not build; begin 0x4829A0 not run" );
@@ -2472,6 +2780,18 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         race_session_tick_t* user = tick_users[ static_cast< std::size_t >( k ) ].get( );
         ih.slot17 = [ &s, &b ] { race_session_enable( s, b, true ); };
         ih.instigator = [ &s, &b ] { race_session_register_instigator( s, b ); };
+        // 0x419FF0 on +0x234 (boat effects.hxx boat_pfx_create, the boat agent's) when the Pfx fill was bound and ran.
+        ih.pfx_create = [ &s, &b ] {
+            if ( !b.pfx_filled )
+                return;
+            if ( !boat_pfx_create( b.pfx, race_session_pfx_hooks( b ) ) )
+                race_unwired( s, "gameInitialize 0x419FF0: a pfx hook missing - UNKNOWN" );
+            int systems = 0, records = 0;
+            for ( const auto& l : b.pfx.list )
+                for ( const boat_pfx_record_t& r : l )
+                    ++records, systems += r.system ? 1 : 0;
+            LOG_INFO( "race: %s gameInitialize 0x419FF0 - %d of %d records kept with a system, hull effect system 0x%X", b.name.c_str( ), systems, records, b.pfx.extra );
+        };
         race_boat_game_initialize( &b, s.ticks, { &b, race_session_decision, user }, { &b, race_session_build, user }, b.draw_added, ih );
     };
     sh.add_driver = [ &s ]( int k )
@@ -2529,8 +2849,7 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
         // The VuParams 0x48AB70 builds: one bool (0x4051A0: type 3, the byte - 5 bytes).
         ui_params_t p;
         ui_params_add_bool( p, value );
-        if ( s.world.broadcast )
-            s.world.broadcast( name, &p );
+        race_session_post( s, name, &p );
     };
     s.rules.hooks.platform = [ &s ]( const std::string& call ) {
         // The voice-over lines (vt+0x1C "vo", vt+0x20 "vo20") on the human (+0x24 [0]) go to the manager (world/voice.hxx).
@@ -2779,6 +3098,13 @@ inline bool race_session_start( race_session_t& s, const std::string& mode, cons
                 race_session_tick_t* user = tick_users.back( ).get( );
                 ih.slot17 = [ &s, &b ] { race_session_enable( s, b, true ); };
                 ih.instigator = [ &s, &b ] { race_session_register_instigator( s, b ); };
+                // 0x419FF0 on +0x234 (boat effects.hxx boat_pfx_create, the boat agent's) when the Pfx fill was bound and ran.
+                ih.pfx_create = [ &s, &b ] {
+                    if ( !b.pfx_filled )
+                        return;
+                    if ( !boat_pfx_create( b.pfx, race_session_pfx_hooks( b ) ) )
+                        race_unwired( s, "gameInitialize 0x419FF0: a pfx hook missing - UNKNOWN" );
+                };
                 race_boat_game_initialize( &b, s.ticks, { &b, race_session_decision, user }, { &b, race_session_build, user }, b.draw_added, ih );
             };
             nuisance_start_game_initialize( start->m_name, *static_cast< const nuisance_start_t* >( start->m_state.get( ) ), nh );
