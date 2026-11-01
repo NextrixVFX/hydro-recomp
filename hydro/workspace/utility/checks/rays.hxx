@@ -2166,6 +2166,22 @@ inline bool verify_bt_rows8( )
                 default: return bt_convex_plane_create( m, self, args[ 0 ], args[ 1 ], args[ 2 ] );
             }
         } );
+}// verify_bt_rows9 (boat batch 21): cases/boat.py bt_rows9 - btConvexShape::
+// getAabbSlow 0x552F90 (vt+0x28 = retail's leaf 0x43D5C0 in the case: fld
+// [this + 0x30]) and btConvexShape::project 0x553610; the support calls'
+// directions compared as their arguments.
+inline bool verify_bt_rows9( )
+{
+    return bt_rows_verify( g_golden_bt_rows9_words, "bt_rows9",
+        "two Bullet rows 0x552F90 / 0x553610 (collision/arena.hxx: btConvexShape::getAabbSlow and project)",
+        []( unsigned kind, const bt_mem_t&, const bt_io_t& io, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            if ( kind == 1 )
+                bt_convex_aabb_slow( io, self, args[ 0 ], args[ 1 ], args[ 2 ],
+                    []( const bt_mem_t& q, std::uint32_t s ) -> std::uint32_t { return q.rd( q.user, s + 0x30 ); } );   // 0x43D5C0
+            else
+                bt_convex_project( io, self, args[ 0 ], args[ 1 ], args[ 2 ], args[ 3 ] );
+            return 0;
+        } );
 }// verify_mesh_scaling (boat batch 20): cases/boat.py mesh_scaling -
 // btTriangleMeshShape::setLocalScaling 0x60C1C0 (concave.hxx mesh_shape_set
 // _local_scaling: under the BVH vtable the BVH-walk recalc, under the plain

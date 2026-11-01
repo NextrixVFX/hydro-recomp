@@ -1192,3 +1192,95 @@ inline std::uint32_t bt_convex_plane_create( const bt_mem_t& m, std::uint32_t se
     }
     return mem;
 }
+// The transform products of btConvexShape's getAabbSlow / project (a
+// btTransform: basis rows +0 / +0x10 / +0x20, origin +0x30): every sum in
+// retail's grouping (the x and y terms first, then z, then the origin).
+// dir * basis (column k):
+inline float bt_basis_column_dot( const bt_mem_t& m, std::uint32_t trans, std::uint32_t k, const float* v )
+{
+    return ( bt_rdf( m, trans + 4 * k ) * v[ 0 ] + bt_rdf( m, trans + 0x10 + 4 * k ) * v[ 1 ] ) + bt_rdf( m, trans + 0x20 + 4 * k ) * v[ 2 ];
+}
+
+// trans( s ) row r:
+inline float bt_transform_row( const bt_mem_t& m, std::uint32_t trans, std::uint32_t r, const float* s )
+{
+    const std::uint32_t row = trans + 0x10 * r;
+    return ( ( bt_rdf( m, row ) * s[ 0 ] + bt_rdf( m, row + 4 ) * s[ 1 ] ) + bt_rdf( m, row + 8 ) * s[ 2 ] ) + bt_rdf( m, trans + 0x30 + 4 * r );
+}
+
+// localGetSupportingVertex vt+0x38( out*, dir* ) through io: the direction's
+// four words go as the call's arguments (the w lane 0), the vertex comes back
+// through out (retail reads it from out, or through the returned out).
+inline void bt_convex_support_call( const bt_io_t& io, std::uint32_t self, const float* dir, float* out )
+{
+    std::uint32_t d[ 4 ] = { 0, 0, 0, 0 };
+    std::memcpy( d, dir, 12 );
+    std::uint32_t o[ 4 ] = { };
+    io.vcall_out( io.m->user, self, 0x38, d, 4, o, 4 );
+    std::memcpy( out, o, 12 );
+}
+
+// btConvexShape::getAabbSlow 0x552F90 (trans*, min*, max*; retn 0Ch): margin
+// = getMargin (vt+0x28, `margin` answers it) once; per axis i: the unit
+// vector e_i (the others 0) through the basis, its supporting vertex
+// transformed, max[ i ] = that + margin; then -e_i the same, min[ i ] = that
+// - margin.
+inline void bt_convex_aabb_slow( const bt_io_t& io, std::uint32_t self, std::uint32_t trans, std::uint32_t mn, std::uint32_t mx,
+                                 std::uint32_t ( *margin )( const bt_mem_t& m, std::uint32_t self ) )
+{
+    const bt_mem_t& m = *io.m;
+    const std::uint32_t mb = margin( m, self );
+    float mf;
+    std::memcpy( &mf, &mb, 4 );
+    for ( std::uint32_t i = 0; i < 3; ++i )
+    {
+        for ( int sign = 0; sign < 2; ++sign )
+        {
+            float vec[ 3 ] = { 0.0f, 0.0f, 0.0f };
+            vec[ i ] = sign == 0 ? 1.0f : -1.0f;
+            const float dir[ 3 ] = { bt_basis_column_dot( m, trans, 0, vec ), bt_basis_column_dot( m, trans, 1, vec ),
+                                     bt_basis_column_dot( m, trans, 2, vec ) };
+            float s[ 3 ];
+            bt_convex_support_call( io, self, dir, s );
+            const float t = bt_transform_row( m, trans, i, s );
+            if ( sign == 0 )
+                bt_wrf( m, mx + 4 * i, t + mf );
+            else
+                bt_wrf( m, mn + 4 * i, t - mf );
+        }
+    }
+}
+
+// btConvexShape::project 0x553610 (trans*, dir*, min*, max*; retn 10h): the
+// local axis dir * basis; the supporting vertices along it and along its
+// negation (sign bits flipped), each transformed; min = vertex1 . dir, max =
+// vertex2 . dir ((y, x first) then z); min > max (ordered) -> swapped.
+inline void bt_convex_project( const bt_io_t& io, std::uint32_t self, std::uint32_t trans, std::uint32_t dir, std::uint32_t mn, std::uint32_t mx )
+{
+    const bt_mem_t& m = *io.m;
+    const float d[ 3 ] = { bt_rdf( m, dir ), bt_rdf( m, dir + 4 ), bt_rdf( m, dir + 8 ) };
+    const float axis[ 3 ] = { bt_basis_column_dot( m, trans, 0, d ), bt_basis_column_dot( m, trans, 1, d ), bt_basis_column_dot( m, trans, 2, d ) };
+    float s[ 3 ];
+    bt_convex_support_call( io, self, axis, s );
+    const float v1[ 3 ] = { bt_transform_row( m, trans, 0, s ), bt_transform_row( m, trans, 1, s ), bt_transform_row( m, trans, 2, s ) };
+    float neg[ 3 ];
+    for ( int k = 0; k < 3; ++k )
+    {
+        std::uint32_t w;
+        std::memcpy( &w, &axis[ k ], 4 );
+        w ^= 0x80000000u;
+        std::memcpy( &neg[ k ], &w, 4 );
+    }
+    bt_convex_support_call( io, self, neg, s );
+    const float v2[ 3 ] = { bt_transform_row( m, trans, 0, s ), bt_transform_row( m, trans, 1, s ), bt_transform_row( m, trans, 2, s ) };
+    const float lo = ( bt_rdf( m, dir + 4 ) * v1[ 1 ] + bt_rdf( m, dir ) * v1[ 0 ] ) + bt_rdf( m, dir + 8 ) * v1[ 2 ];
+    bt_wrf( m, mn, lo );
+    const float hi = ( bt_rdf( m, dir + 4 ) * v2[ 1 ] + bt_rdf( m, dir ) * v2[ 0 ] ) + bt_rdf( m, dir + 8 ) * v2[ 2 ];
+    bt_wrf( m, mx, hi );
+    const float kept = bt_rdf( m, mn );
+    if ( kept > hi )
+    {
+        bt_wrf( m, mn, hi );
+        bt_wrf( m, mx, kept );
+    }
+}
