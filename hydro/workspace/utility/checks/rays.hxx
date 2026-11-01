@@ -2163,3 +2163,62 @@ inline bool verify_compound_remove( )
             static_cast< int >( g_golden_compound_remove_count ), removed );
     return failed == 0;
 }
+// verify_hull_scaling (boat batch 20): cases/boat.py hull_scaling -
+// btPolyhedralConvexAabbCachingShape::setLocalScaling 0x54B5E0 (support.hxx
+// shape_set_aabb_caching_scaling) on the hull built by the
+// btConvexTriangleMeshShape ctor under a mesh scaling, the margin set: the
+// shape's scaling and cached aabb before and after, the mesh scaling, exact.
+inline bool verify_hull_scaling( )
+{
+    const golden_bvh_asset_t& ha = g_golden_bvh_assets[ 0 ];
+    int failed = 0, nan_lanes = 0;
+    for ( std::size_t index = 0; index < g_golden_hull_scaling_count; ++index )
+    {
+        const golden_hull_scaling_t& g = g_golden_hull_scaling[ index ];
+        striding_mesh_t mesh{};
+        std::memcpy( mesh.scaling, g.m_s0, 16 );
+        mesh.vertices = reinterpret_cast< const float( * )[ 4 ] >( ha.m_verts );
+        mesh.num_vertices = ha.m_nverts;
+        mesh.indices = ha.m_indices;
+        mesh.index_count = ha.m_nindices;
+        convex_shape_t s;
+        shape_init_triangle_mesh_hull( s, &mesh );
+        std::memcpy( &s.margin, &g.m_margin, 4 );
+        unsigned w[ 12 ];
+        const auto snap = [ & ]( ) {
+            std::memcpy( w, s.local_scaling, 16 );
+            std::memcpy( w + 4, s.local_aabb_min, 16 );
+            std::memcpy( w + 8, s.local_aabb_max, 16 );
+        };
+        snap( );
+        const char* what = nullptr;
+        if ( std::memcmp( w, g.m_before, 48 ) != 0 )
+            what = "the hull before the row";
+        if ( !what )
+        {
+            float s1[ 4 ];
+            std::memcpy( s1, g.m_s1, 16 );
+            for ( int k = 0; k < 3; ++k )
+                nan_lanes += std::isnan( s1[ k ] ) ? 1 : 0;
+            if ( shape_set_aabb_caching_scaling( s, s1 ) != 1 )
+                what = "the row reached unrecreated code";
+            snap( );
+            if ( !what && std::memcmp( w, g.m_scaling, 16 ) != 0 )
+                what = "the shape's scaling";
+            if ( !what && std::memcmp( w + 4, g.m_aabb, 32 ) != 0 )
+                what = "the cached aabb";
+            if ( !what && std::memcmp( mesh.scaling, g.m_mesh_scaling, 16 ) != 0 )
+                what = "the mesh scaling";
+        }
+        if ( what )
+        {
+            ++failed;
+            LOG_ERROR( "hull scaling vector %d: %s", static_cast< int >( index ), what );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "btPolyhedralConvexAabbCachingShape::setLocalScaling 0x54B5E0 (+ recalcLocalAabb 0x54B700) matches retail over %d hulls, "
+                     "exact (%d NaN scaling lanes)",
+            static_cast< int >( g_golden_hull_scaling_count ), nan_lanes );
+    return failed == 0;
+}
