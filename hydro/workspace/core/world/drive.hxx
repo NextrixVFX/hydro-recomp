@@ -102,8 +102,8 @@ struct race_drive_t
     boat_respawn_t respawn{};
     boat_respawn_hooks_t respawn_hooks{};
     // Build step 5's pfx controller (boat effects.hxx): its on bytes / aabb, read from the image once, written back.
-    boat_pfx_t pfx;
     bool pfx_read = false;
+    int pfx_ticks = 0;   // ours: Build step 5 runs (the dev census below)
 };
 
 inline void race_drive_contact_setup( race_session_t& s );
@@ -1065,15 +1065,17 @@ inline void race_drive_effects( race_session_t& s, race_drive_t& r, float dt )
     {
         if ( !r.pfx_read )
         {
-            std::memcpy( r.pfx.on, pc + 0x8C, 5 );
-            std::memcpy( r.pfx.aabb, pc + 0x98, 32 );
+            std::memcpy( b.pfx.on, pc + 0x8C, 5 );
+            std::memcpy( b.pfx.aabb, pc + 0x98, 32 );
             r.pfx_read = true;
             LOG_INFO( "race: boat %d Build step 5 runs - 0x419700 on an empty controller (on bytes %d%d%d%d%d), 0x411A50", static_cast< int >( r.index ),
-                      r.pfx.on[ 0 ], r.pfx.on[ 1 ], r.pfx.on[ 2 ], r.pfx.on[ 3 ], r.pfx.on[ 4 ] );
+                      b.pfx.on[ 0 ], b.pfx.on[ 1 ], b.pfx.on[ 2 ], b.pfx.on[ 3 ], b.pfx.on[ 4 ] );
         }
-        race_unwired( s, "Build step 5: the pfx controller's seven record lists are empty in the boat image - the fill (its ctor / "
-                         "load) is not read, so the systems retail places and ticks are absent (UNKNOWN); 0x419700's on / off "
-                         "machine, raises and aabb reset run" );
+        if ( !b.pfx_filled )
+            race_unwired( s, "Build step 5: postLoad's Pfx fill did not run / stopped - the seven record lists are empty (UNKNOWN); 0x419700's "
+                             "on / off machine, raises and aabb reset run" );
+        else if ( b.pfx_unknown_bones )
+            race_unwired( s, "Build step 5: pfx records whose bone findNodeByName could not answer (no skeleton) tick at bone -1 - UNKNOWN placement" );
         boat_pfx_boat_t pb;
         pb.throttle = throttle;
         pb.d570 = driver_entity_throttle( r.d.boat, r.d.transform, r.d.engine, r.d.body );   // 0x41D570 itself
@@ -1091,13 +1093,31 @@ inline void race_drive_effects( race_session_t& s, race_drive_t& r, float dt )
                 boat_driver_raise( d->d.driver, d->d.human, a, c );
         };
         g_race_drive_raising = &r;
-        const bool ran = boat_pfx_tick( r.pfx, pb, dt, o );
+        const bool ran = boat_pfx_tick( b.pfx, pb, dt, o );
         g_race_drive_raising = nullptr;
         if ( !ran )
             race_unwired( s, "Build step 5: a pfx record's bone outside the model's palette - UNKNOWN" );
-        std::memcpy( pc + 0x8C, r.pfx.on, 5 );
-        std::memcpy( pc + 0x98, r.pfx.aabb, 32 );
-        if ( r.pfx.aabb_w_stale )
+        if ( s.world.pfx && b.pfx_filled && r.index == 0 && ( ++r.pfx_ticks % 240 ) == 0 )
+        {
+            // Ours (a dev census, not retail): what boat 0's systems hold - per list the live particle count (+0xA0).
+            std::string by;
+            int live = 0;
+            for ( int l = 0; l < 7; ++l )
+                for ( const boat_pfx_record_t& rec : b.pfx.list[ l ] )
+                    if ( const std::uint32_t* w = s.world.pfx->heap.find( rec.system ) )
+                    {
+                        const int n = static_cast< int >( pfx_system_count( w ) );
+                        live += n;
+                        by += " L" + std::to_string( l ) + " " + rec.name + " state " + std::to_string( pfx_system_state( w ) ) + " x" + std::to_string( n );
+                    }
+            const std::uint32_t* x = b.pfx.extra ? s.world.pfx->heap.find( b.pfx.extra ) : nullptr;
+            LOG_INFO( "race: boat 0 pfx at Build tick %d: %d live particles in its records (%s ), the hull effect state %d x%d, on %d%d%d%d%d",
+                      r.pfx_ticks, live, by.c_str( ), x ? static_cast< int >( pfx_system_state( x ) ) : -1, x ? static_cast< int >( pfx_system_count( x ) ) : -1,
+                      b.pfx.on[ 0 ], b.pfx.on[ 1 ], b.pfx.on[ 2 ], b.pfx.on[ 3 ], b.pfx.on[ 4 ] );
+        }
+        std::memcpy( pc + 0x8C, b.pfx.on, 5 );
+        std::memcpy( pc + 0x98, b.pfx.aabb, 32 );
+        if ( b.pfx.aabb_w_stale )
             race_unwired( s, "Build step 5: 0x41A790's aabb merge left +0xA4 / +0xB4 = a stale stack word - UNKNOWN" );
     }
     std::uint8_t* db = r.d.debris;
