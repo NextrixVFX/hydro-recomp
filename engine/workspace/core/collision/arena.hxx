@@ -1569,3 +1569,122 @@ inline std::uint32_t bt_compound_serialize( const bt_mem_t& m, std::uint32_t sel
     m.vcall( m.user, serializer, 0x10, e, 4 );
     return 0x6CDCF4u;
 }
+
+// --- btQuantizedBvh's node helpers on retail memory (boat batch 22; the
+// pieces btOptimizedBvh::build 0x582CB0 / buildTree 0x586640 call): +0x10
+// m_bvhAabbMin, +0x20 m_bvhAabbMax, +0x30 m_bvhQuantization, +0x48
+// m_useQuantization (a byte), +0x58 m_leafNodes data, +0x6C m_contiguousNodes
+// data (64-byte nodes: +0 min, +0x10 max), +0x80 m_quantizedLeafNodes data,
+// +0x94 m_quantizedContiguousNodes data (16-byte nodes: +0 min[ 3 ], +6 max[ 3 ]
+// as u16). The quantize is inlined without a clamp: (p - bvhMin) * quant
+// truncated (cvttss2si: out of range / NaN -> 0x80000000), min & 0xFFFE, max
+// (+ 1.0 first) | 1.
+inline std::uint32_t bt_cvtt( float f )
+{
+    return static_cast< std::uint32_t >( _mm_cvtt_ss2si( _mm_set_ss( f ) ) );
+}
+
+inline std::uint32_t bt_quantize_lane( const bt_mem_t& m, std::uint32_t self, std::uint32_t point, std::uint32_t k, bool is_max )
+{
+    const float q = bt_rdf( m, self + 0x30 + 4 * k ) * ( bt_rdf( m, point + 4 * k ) - bt_rdf( m, self + 0x10 + 4 * k ) );
+    return is_max ? bt_cvtt( q + 1.0f ) | 1u : bt_cvtt( q ) & 0xFFFEu;
+}
+
+inline void bt_wr16( const bt_mem_t& m, std::uint32_t a, std::uint32_t v )
+{
+    m.wr8( m.user, a, static_cast< std::uint8_t >( v ) );
+    m.wr8( m.user, a + 1, static_cast< std::uint8_t >( v >> 8 ) );
+}
+
+inline std::uint32_t bt_rd16( const bt_mem_t& m, std::uint32_t a )
+{
+    return static_cast< std::uint32_t >( m.rd8( m.user, a ) ) | static_cast< std::uint32_t >( m.rd8( m.user, a + 1 ) ) << 8;
+}
+
+// setQuantizationValues @0x586350 (thiscall bvhMin*, bvhMax*; retn 8 - the
+// quantizationMargin default inlined): m_bvhAabbMin = min - 1.0 (0x6F76B8),
+// m_bvhAabbMax = max + 1.0, lanes x y z, w 0; m_bvhQuantization = 65533.0
+// (0x6F7844) / (bvhMax - bvhMin) per lane (the stored values re-read), w 0;
+// m_useQuantization = 1.
+inline void bt_qbvh_set_quantization( const bt_mem_t& m, std::uint32_t self, std::uint32_t mn, std::uint32_t mx )
+{
+    for ( std::uint32_t k = 0; k < 3; ++k )
+        bt_wrf( m, self + 0x10 + 4 * k, bt_rdf( m, mn + 4 * k ) - 1.0f );
+    m.wr( m.user, self + 0x1C, 0 );
+    for ( std::uint32_t k = 0; k < 3; ++k )
+        bt_wrf( m, self + 0x20 + 4 * k, bt_rdf( m, mx + 4 * k ) + 1.0f );
+    m.wr( m.user, self + 0x2C, 0 );
+    const float d[ 3 ] = { bt_rdf( m, self + 0x20 ) - bt_rdf( m, self + 0x10 ), bt_rdf( m, self + 0x24 ) - bt_rdf( m, self + 0x14 ),
+                           bt_rdf( m, self + 0x28 ) - bt_rdf( m, self + 0x18 ) };
+    for ( std::uint32_t k = 0; k < 3; ++k )
+        bt_wrf( m, self + 0x30 + 4 * k, support_bits( 0x477FFD00u ) / d[ k ] );
+    m.wr( m.user, self + 0x3C, 0 );
+    m.wr8( m.user, self + 0x48, 1 );
+}
+
+// assignInternalNodeFromLeafNode @0x588870 (thiscall internal, leaf; retn 8):
+// quantized - the 16-byte leaf node into the contiguous node; else the
+// 64-byte one (rep movsd).
+inline void bt_qbvh_assign_from_leaf( const bt_mem_t& m, std::uint32_t self, std::uint32_t internal, std::uint32_t leaf )
+{
+    if ( m.rd8( m.user, self + 0x48 ) != 0 )
+    {
+        const std::uint32_t from = m.rd( m.user, self + 0x80 ) + 16u * leaf, to = m.rd( m.user, self + 0x94 ) + 16u * internal;
+        for ( std::uint32_t k = 0; k < 16; k += 4 )
+            m.wr( m.user, to + k, m.rd( m.user, from + k ) );
+        return;
+    }
+    const std::uint32_t from = m.rd( m.user, self + 0x58 ) + 64u * leaf, to = m.rd( m.user, self + 0x6C ) + 64u * internal;
+    for ( std::uint32_t k = 0; k < 64; k += 4 )
+        m.wr( m.user, to + k, m.rd( m.user, from + k ) );
+}
+
+// setInternalNodeAabbMin @0x58A570 / setInternalNodeAabbMax @0x58A4B0
+// (thiscall node, point*; retn 8): quantized - the three u16 lanes (min at
+// +0, max at +6); else the 16 bytes at +0 / +0x10 of the 64-byte node.
+inline void bt_qbvh_set_node_bound( const bt_mem_t& m, std::uint32_t self, std::uint32_t node, std::uint32_t point, bool is_max )
+{
+    if ( m.rd8( m.user, self + 0x48 ) != 0 )
+    {
+        const std::uint32_t at = m.rd( m.user, self + 0x94 ) + 16u * node + ( is_max ? 6u : 0u );
+        for ( std::uint32_t k = 0; k < 3; ++k )
+            bt_wr16( m, at + 2 * k, bt_quantize_lane( m, self, point, k, is_max ) );
+        return;
+    }
+    bt_copy16( m, m.rd( m.user, self + 0x6C ) + 64u * node + ( is_max ? 0x10u : 0u ), point );
+}
+
+// mergeInternalNodeAabb @0x58A290 (thiscall node, newMin*, newMax*; retn
+// 0Ch): quantized - both points quantized first, then per lane x, y, z the
+// min (unsigned u16 `>`) then the max (`<`); else per lane of all FOUR the
+// node's min when it is > newMin (`comiss`, ordered), then the max when newMax
+// > it.
+inline void bt_qbvh_merge_node( const bt_mem_t& m, std::uint32_t self, std::uint32_t node, std::uint32_t mn, std::uint32_t mx )
+{
+    if ( m.rd8( m.user, self + 0x48 ) != 0 )
+    {
+        std::uint32_t qlo[ 3 ], qhi[ 3 ];
+        for ( std::uint32_t k = 0; k < 3; ++k )
+            qlo[ k ] = bt_quantize_lane( m, self, mn, k, false ) & 0xFFFFu;
+        for ( std::uint32_t k = 0; k < 3; ++k )
+            qhi[ k ] = bt_quantize_lane( m, self, mx, k, true ) & 0xFFFFu;
+        for ( std::uint32_t k = 0; k < 3; ++k )
+        {
+            const std::uint32_t at = m.rd( m.user, self + 0x94 ) + 16u * node + 2 * k;
+            if ( bt_rd16( m, at ) > qlo[ k ] )
+                bt_wr16( m, at, qlo[ k ] );
+            const std::uint32_t top = m.rd( m.user, self + 0x94 ) + 16u * node + 6 + 2 * k;
+            if ( bt_rd16( m, top ) < qhi[ k ] )
+                bt_wr16( m, top, qhi[ k ] );
+        }
+        return;
+    }
+    const std::uint32_t at = m.rd( m.user, self + 0x6C ) + 64u * node;
+    for ( std::uint32_t k = 0; k < 4; ++k )
+        if ( bt_rdf( m, at + 4 * k ) > bt_rdf( m, mn + 4 * k ) )
+            bt_wrf( m, at + 4 * k, bt_rdf( m, mn + 4 * k ) );
+    const std::uint32_t top = m.rd( m.user, self + 0x6C ) + 64u * node;
+    for ( std::uint32_t k = 0; k < 4; ++k )
+        if ( bt_rdf( m, mx + 4 * k ) > bt_rdf( m, top + 0x10 + 4 * k ) )
+            bt_wrf( m, top + 0x10 + 4 * k, bt_rdf( m, mx + 4 * k ) );
+}

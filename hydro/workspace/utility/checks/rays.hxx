@@ -2215,6 +2215,28 @@ inline bool verify_bt_rows10( )
             }
             return *m.num_aligned_alloc - before;
         } );
+}
+
+// verify_bt_rows11 (boat batch 22): cases/boat.py bt_rows11 - btQuantizedBvh's
+// setQuantizationValues 0x586350, assignInternalNodeFromLeafNode 0x588870,
+// setInternalNodeAabbMin 0x58A570 / Max 0x58A4B0, mergeInternalNodeAabb
+// 0x58A290 (quantized and plain).
+inline bool verify_bt_rows11( )
+{
+    return bt_rows_verify( g_golden_bt_rows11_words, "bt_rows11",
+        "five Bullet rows 0x586350 / 0x588870 / 0x58A570 / 0x58A4B0 / 0x58A290 (collision/arena.hxx: btQuantizedBvh's quantization "
+        "values and internal-node helpers)",
+        []( unsigned kind, const bt_mem_t& m, const bt_io_t&, std::uint32_t self, const unsigned* args ) -> std::uint32_t {
+            switch ( kind )
+            {
+                case 1: bt_qbvh_set_quantization( m, self, args[ 0 ], args[ 1 ] ); break;
+                case 2: bt_qbvh_assign_from_leaf( m, self, args[ 0 ], args[ 1 ] ); break;
+                case 3: bt_qbvh_set_node_bound( m, self, args[ 0 ], args[ 1 ], false ); break;
+                case 4: bt_qbvh_set_node_bound( m, self, args[ 0 ], args[ 1 ], true ); break;
+                default: bt_qbvh_merge_node( m, self, args[ 0 ], args[ 1 ], args[ 2 ] ); break;
+            }
+            return 0;
+        } );
 }// verify_mesh_scaling (boat batch 20): cases/boat.py mesh_scaling -
 // btTriangleMeshShape::setLocalScaling 0x60C1C0 (concave.hxx mesh_shape_set
 // _local_scaling: under the BVH vtable the BVH-walk recalc, under the plain
