@@ -142,6 +142,7 @@
     <ClInclude Include="workspace\core\ui\action.hxx" />
     <ClInclude Include="workspace\core\ui\button.hxx" />
     <ClInclude Include="workspace\core\ui\compose.hxx" />
+    <ClInclude Include="workspace\core\ui\config.hxx" />
     <ClInclude Include="workspace\core\ui\draw.hxx" />
     <ClInclude Include="workspace\core\ui\entity.hxx" />
     <ClInclude Include="workspace\core\ui\flow.hxx" />
