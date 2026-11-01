@@ -2,6 +2,7 @@
 
 #include <workspace/core/ui/frame.hxx>
 #include <workspace/core/ui/navigate.hxx>
+#include <workspace/core/ui/ticker.hxx>
 
 #include <cstdio>
 #include <cstring>
@@ -267,6 +268,214 @@ inline bool verify_ui_config_nav( )
             static_cast< int >( g_golden_cn_entities_count ), runs, steps, calls );
     else
         LOG_ERROR( "the config navigation FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
+// The same navigation on each BoatConfig* screen's VuBoatConfigEntity (oracle
+// case boat_nav): the base functions over the BOAT class virtuals (dock.hxx
+// ui_dock_class: slots 17..26 and slot 12 0x44E2B0 in the change path 0x449830),
+// setup = OUR slot 4 (ui_dock_build) + slot 6 0x44CD10 (ui_dock_initialize).
+inline bool verify_ui_boat_nav( )
+{
+    const ui_loaded_t& loaded = ui_loaded( );
+    int failed = 0, runs = 0, steps = 0, calls = 0;
+    auto bad = [ &failed ]( const char* what, int k )
+    {
+        if ( ++failed <= 8 )
+            LOG_ERROR( "ui boat nav: %s differs from retail (step %d)", what, k );
+    };
+    const value_t boat_db = ui_cx_document( 0 ), skin_db = ui_cx_document( 1 ), champ_db = ui_cx_document( 3 ), option_db = ui_cx_document( 4 );
+    static const float inverse[ 16 ] = { 1.25f, 0.03125f, 0, 0, -0.0625f, 0.875f, 0, 0, 0, 0, 1, 0, -0.1f, 0.05f, 0, 1 };
+    for ( std::size_t k = 0; k < g_golden_bn_entities_count; ++k )
+    {
+        const golden_cn_entity_t& want = g_golden_bn_entities[ k ];
+        const entity_t* have = nullptr;
+        for ( std::size_t p = 0; p < g_golden_ui_projects_count; ++p )
+            if ( std::strcmp( g_golden_ui_projects[ p ].m_asset, want.m_project ) == 0 && want.m_index >= 0 &&
+                 static_cast< std::size_t >( want.m_index ) < loaded.trees[ p ].size( ) )
+                have = loaded.trees[ p ][ static_cast< std::size_t >( want.m_index ) ].second;
+        if ( !have || have->m_type != "VuBoatConfigEntity" || have->m_name != want.m_name )
+        {
+            bad( "the authored entity", static_cast< int >( k ) );
+            continue;
+        }
+        ui_config_nav_t nav0;
+        std::uint32_t bits[ 14 ] = { };
+        auto take = [ & ]( const char* name, int words, int at )
+        {
+            if ( const ui_slot_t* v = ui_property_value( *have, name ) )
+                for ( int w = 0; w < words; ++w )
+                    bits[ at + w ] = v->m_bits[ w ];
+            else
+                bad( "a nav property (missing)", static_cast< int >( k ) );
+        };
+        take( "Screen Scale", 2, 0 );
+        take( "Position X", 1, 2 );
+        take( "Position Y", 1, 3 );
+        take( "Spacing", 1, 4 );
+        std::memcpy( &bits[ 5 ], &nav0.m_scroll_time, 4 );
+        const char* const rects[ ] = { "TouchLeft X", "TouchLeft Y", "TouchLeft Width", "TouchLeft Height",
+                                       "TouchRight X", "TouchRight Y", "TouchRight Width", "TouchRight Height" };
+        for ( int r = 0; r < 8; ++r )
+            take( rects[ r ], 1, 6 + r );
+        for ( int w = 0; w < 14; ++w )
+            if ( bits[ w ] != want.m_floats[ w ] )
+                bad( "a nav float", static_cast< int >( k ) );
+        nav0.m_scale[ 0 ] = ui_cn_float( bits[ 0 ] );
+        nav0.m_scale[ 1 ] = ui_cn_float( bits[ 1 ] );
+        nav0.m_position[ 0 ] = ui_cn_float( bits[ 2 ] );
+        nav0.m_position[ 1 ] = ui_cn_float( bits[ 3 ] );
+        nav0.m_spacing = ui_cn_float( bits[ 4 ] );
+        for ( int r = 0; r < 4; ++r )
+        {
+            nav0.m_left[ r ] = ui_cn_float( bits[ 6 + r ] );
+            nav0.m_right[ r ] = ui_cn_float( bits[ 10 + r ] );
+        }
+        if ( ui_cn_nav_hex( nav0 ) != want.m_initial )
+            bad( "the ctor's nav bytes", static_cast< int >( k ) );
+        const ui_front_end_screen_t screen = ui_front_end_screen( *have, want.m_flags );
+        const std::vector< std::uint8_t > authored = ui_unhex( want.m_authored );
+        if ( screen.m_option_type != want.m_option_type || authored.size( ) < 3 || screen.m_single_player != ( authored[ 0 ] != 0 ) ||
+             screen.m_force_online != ( authored[ 1 ] != 0 ) || screen.m_allow_special != ( authored[ 2 ] != 0 ) )
+            bad( "the authored properties", static_cast< int >( k ) );
+        for ( int r = 0; r < want.m_runs; ++r )
+        {
+            const golden_cn_run_t& run = g_golden_bn_runs[ want.m_first + r ];
+            value_t root = c_reader( ui_unhex( run.m_root ) ).parse( );
+            ui_config_env_t env;
+            env.m_root = &root;
+            const golden_cn_step_t* step = nullptr;
+            int at = 0;
+            bool hooks_same = true;
+            auto next = [ & ]( int kind ) -> const golden_bci_log_t*
+            {
+                if ( !step || at >= step->m_logs || g_golden_bn_logs[ step->m_first_log + at ].m_kind != kind )
+                {
+                    hooks_same = false;
+                    return nullptr;
+                }
+                ++calls;
+                return &g_golden_bn_logs[ step->m_first_log + at++ ];
+            };
+            ui_profile_t p;
+            p.unlock = [ & ]( int slot, const std::string& a, const std::string& b, const std::string& c )
+            {
+                const golden_bci_log_t* g = next( 0 );
+                hooks_same = hooks_same && g && g->m_slot == slot && a == g->m_a && b == g->m_b && c == g->m_c;
+                return g && g->m_answer != 0;
+            };
+            p.license = [ & ]( ) { const golden_bci_log_t* g = next( 1 ); return g && g->m_answer != 0; };
+            p.progress = [ & ]( const std::string& value )
+            {
+                const golden_bci_log_t* g = next( 2 );
+                hooks_same = hooks_same && g && value == g->m_a;
+                return g && g->m_answer != 0;
+            };
+            p.store_beta = [ & ]( ) { const golden_bci_log_t* g = next( 3 ); return g && g->m_answer != 0; };
+            p.package = [ & ]( const std::string& asset )
+            {
+                const golden_bci_log_t* g = next( 8 );
+                hooks_same = hooks_same && g && asset == g->m_a;
+                return g && g->m_answer != 0;
+            };
+            ui_config_hooks_t h;
+            h.touch = [ & ]( ) { next( 4 ); };
+            h.draw_add = [ & ]( ) { next( 13 ); };
+            h.fire = [ & ]( const std::string& plug, const ui_params_t& params )
+            {
+                const golden_bci_log_t* g = next( 5 );
+                hooks_same = hooks_same && g && plug == g->m_a && ui_bci_hex( params ) == g->m_b;
+                return g != nullptr;
+            };
+            h.broadcast = [ & ]( std::uint32_t hash, const ui_params_t& params )
+            {
+                const golden_bci_log_t* g = next( 6 );
+                char text[ 16 ];
+                std::snprintf( text, sizeof( text ), "0x%08X", hash );
+                hooks_same = hooks_same && g && std::strcmp( g->m_a, text ) == 0 && ui_bci_hex( params ) == g->m_b;
+            };
+            h.sound = [ & ]( const char* event )
+            {
+                const golden_bci_log_t* g = next( 7 );
+                hooks_same = hooks_same && g && std::strcmp( g->m_a, event ) == 0;
+            };
+            ui_dock_t d;
+            d.m_base.m_single_player = screen.m_single_player;
+            d.m_base.m_force_online = screen.m_force_online;
+            d.m_allow_special = screen.m_allow_special;
+            d.m_boat_db = &boat_db;
+            d.m_skin_db = &skin_db;
+            d.m_champ_db = &champ_db;
+            ui_config_nav_t n = nav0;
+            value_t doc;
+            ui_config_class_t cls;
+            ui_dock_class( cls, d, env, p, h );
+            ++runs;
+            for ( int s = 0; s < run.m_steps; ++s )
+            {
+                step = &g_golden_bn_steps[ run.m_first + s ];
+                const int row = run.m_first + s;
+                at = 0;
+                hooks_same = true;
+                bool done = true;
+                switch ( step->m_op )
+                {
+                case 5:
+                    done = ui_dock_build( d, env, doc, &option_db, screen.m_option_type, screen.m_flags, p, h ) && ui_dock_initialize( d, env, doc, p, h );
+                    break;
+                case 0:
+                {
+                    ui_params_t params;
+                    if ( step->m_has_text )
+                        params.add_string( step->m_text );
+                    done = ui_config_input( d.m_base, env, doc, params, cls, p, h );
+                    break;
+                }
+                case 1:
+                    done = ui_config_tick( d.m_base, n, env, doc, ui_cn_float( step->m_a ), cls, p, h );
+                    break;
+                case 2:
+                {
+                    const float point[ 2 ] = { ui_cn_float( step->m_a ), ui_cn_float( step->m_b ) };
+                    ui_config_touch_down( n, inverse, point );
+                    break;
+                }
+                case 3:
+                {
+                    next( 15 );
+                    const float point[ 2 ] = { ui_cn_float( step->m_a ), ui_cn_float( step->m_b ) };
+                    ui_config_touch_move( n, inverse, point );
+                    break;
+                }
+                default:
+                    ui_config_touch_up( n );
+                    break;
+                }
+                ++steps;
+                std::string after;
+                vujb_dump( root, after );
+                if ( !done )
+                    bad( "the step (a path not recreated)", row );
+                if ( after != step->m_after )
+                    bad( "the root after", row );
+                if ( ui_cx_combo_text( d.m_base.m_combos ) != step->m_combos )
+                    bad( "the combo records", row );
+                if ( d.m_base.m_focus != step->m_focus )
+                    bad( "the focus", row );
+                if ( ui_cn_nav_hex( n ) != step->m_nav )
+                    bad( "the nav bytes", row );
+                if ( !hooks_same || at != step->m_logs )
+                    bad( "the hook calls", row );
+            }
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "ui_config_input / touch / tick match retail's VuBaseConfigEntity navigation over the BOAT class virtuals (slot 12 "
+                     "0x44E2B0 in the change path) on %d BoatConfig entities from our loaded properties: %d runs, %d steps (root, combos, "
+                     "focus, nav bytes), %d hook calls",
+            static_cast< int >( g_golden_bn_entities_count ), runs, steps, calls );
+    else
+        LOG_ERROR( "the boat config navigation FAILED %d checks against retail's", failed );
     return failed == 0;
 }
 
@@ -851,6 +1060,12 @@ inline bool verify_ui_button_draw( )
 // inputs mirror the case's hooks: a text's text = its name, a button's String
 // ID answer = its name, the asset font everywhere, an image's texture A when its
 // name length is odd, a button's A / B / none; params 41..59 retail's.
+// Batch 13: the Info / config selector / settings combo / boat stat / progress
+// bar leaves run live in retail too (case screen_frame EXTENDED) and are emitted
+// here: Info / stat / bar from OUR ctor state (compared with retail's loaded
+// bits), the selectors' option ComboBoxIDs + records (after retail's slot 4)
+// and the settings combos' record are retail's; the combos' asset properties A /
+// B by parity, both fonts the asset, VuStringDB "<id>~".
 inline bool verify_ui_screen_frame_records( )
 {
     const ui_loaded_t& loaded = ui_loaded( );
@@ -862,7 +1077,7 @@ inline bool verify_ui_screen_frame_records( )
         b.m_memory.resize( static_cast< std::size_t >( b.m_capacity ) );
     const ui_texture_t texture_a = { g_golden_frm_textures[ 0 ].m_handle, g_golden_frm_textures[ 0 ].m_width, g_golden_frm_textures[ 0 ].m_height };
     const ui_texture_t texture_b = { g_golden_frm_textures[ 1 ].m_handle, g_golden_frm_textures[ 1 ].m_width, g_golden_frm_textures[ 1 ].m_height };
-    int failed = 0, runs = 0, commands = 0, stubs = 0, emitted = 0;
+    int failed = 0, runs = 0, commands = 0, stubs = 0, emitted = 0, live = 0;
     for ( std::size_t r = 0; r < g_golden_frm_runs_count; ++r )
     {
         const golden_frm_run_t& run = g_golden_frm_runs[ r ];
@@ -907,16 +1122,148 @@ inline bool verify_ui_screen_frame_records( )
                 return who.m_name.size( ) % 2 ? &texture_a : nullptr;
             return which == 0 ? &texture_a : which == 1 ? &texture_b : nullptr;
         };
-        in.m_params_tail = [ & ]( const entity_t& who, std::uint8_t params[ 60 ] )
+        const auto tail_of = [ & ]( const entity_t& who, int kind, std::uint8_t params[ 60 ] )
         {
             const int at = index_of( &who );
             for ( int t = 0; t < run.m_tails; ++t )
-                if ( g_golden_frm_tails[ run.m_first_tail + t ].m_index == at )
+            {
+                const golden_frm_tail_t& g = g_golden_frm_tails[ run.m_first_tail + t ];
+                if ( g.m_index == at && ( kind < 0 ? g.m_kind <= 1 : g.m_kind == kind ) )
                 {
-                    const std::vector< std::uint8_t > tail = ui_unhex( g_golden_frm_tails[ run.m_first_tail + t ].m_tail );
+                    const std::vector< std::uint8_t > tail = ui_unhex( g.m_tail );
                     std::memcpy( params + 41, tail.data( ), 19 );
                 }
+            }
         };
+        in.m_params_tail = [ & ]( const entity_t& who, std::uint8_t params[ 60 ] ) { tail_of( who, -1, params ); };
+        in.m_combo_params_tail = [ & ]( const entity_t& who, int which, std::uint8_t params[ 60 ] ) { tail_of( who, 2 + which, params ); };
+        // The live leaves (batch 13): Info / stat / bar from OUR ctor state (compared with retail's bits as loaded);
+        // the config selectors' option vector + records and the settings combos' record are retail's (slot 4 and
+        // the combo's own code build them - verified by verify_ui_config_expand / verify_ui_combo_draw).
+        bool state_same = true;
+        const auto bits = []( float f )
+        {
+            std::uint32_t b;
+            std::memcpy( &b, &f, 4 );
+            return b;
+        };
+        std::vector< const golden_frm_leaf_t* > leaf_of( tree.size( ), nullptr );
+        std::vector< ui_config_entity_t > configs( tree.size( ) );
+        std::vector< std::vector< value_t > > options( tree.size( ) );
+        for ( int l = 0; l < run.m_leaves; ++l )
+        {
+            const golden_frm_leaf_t& g = g_golden_frm_leaves[ run.m_first_leaf + l ];
+            if ( g.m_index < 0 || g.m_index >= static_cast< int >( tree.size( ) ) )
+            {
+                state_same = false;
+                continue;
+            }
+            const std::size_t k = static_cast< std::size_t >( g.m_index );
+            const entity_t& who = *tree[ k ].second;
+            leaf_of[ k ] = &g;
+            if ( g.m_kind == 0 )
+            {
+                const ui_info_ticker_t t = ui_info_ticker_of( who );
+                const ui_text_base_t base;
+                const std::uint32_t ours[ 5 ] = { bits( base.m_alpha ), bits( t.m_scroll.m_extent ), bits( t.m_scroll.m_gap ), bits( t.m_scroll.m_x ),
+                                                  bits( t.m_scroll.m_y ) };
+                state_same = state_same && who.m_type == "VuInfoUITextEntity" && std::memcmp( ours, g.m_words, sizeof( ours ) ) == 0;
+            }
+            else if ( g.m_kind == 3 )
+                state_same = state_same && who.m_type == "VuBoatStatEntity" && static_cast< std::uint32_t >( ui_boat_stat_t( ).m_value ) == g.m_words[ 0 ];
+            else if ( g.m_kind == 4 )
+            {
+                const ui_progress_bar_t b;
+                state_same = state_same && who.m_type == "VuLoadingProgressBarEntity" && bits( b.m_progress ) == g.m_words[ 0 ] && b.m_visible == g.m_words[ 1 ];
+            }
+            else
+            {
+                ui_config_entity_t& ce = configs[ k ];
+                for ( int r = 0; r < g.m_records; ++r )
+                {
+                    const golden_frm_record_t& gr = g_golden_frm_records[ g.m_first_record + r ];
+                    const std::vector< std::uint8_t > head = ui_unhex( gr.m_head );
+                    ui_config_combo_t c;
+                    c.m_focused = head[ 0 ];
+                    c.m_b41 = head[ 1 ];
+                    c.m_b42 = head[ 2 ];
+                    std::memcpy( &c.m_index, head.data( ) + 4, 4 );
+                    std::memcpy( &c.m_shown, head.data( ) + 8, 4 );
+                    c.m_string_id = gr.m_id;
+                    for ( int j = 0; j < gr.m_choices; ++j )
+                    {
+                        c.m_choice_ids.push_back( g_golden_frm_choices[ gr.m_first + j ].m_id );
+                        c.m_locked.push_back( static_cast< std::uint8_t >( g_golden_frm_choices[ gr.m_first + j ].m_locked ) );
+                    }
+                    ce.m_combos.push_back( c );
+                }
+                options[ k ].resize( static_cast< std::size_t >( g.m_ids ) );
+                for ( int i = 0; i < g.m_ids; ++i )
+                {
+                    value_t id;
+                    id.kind = value_t::kind_t::integer;
+                    id.tag = 1;
+                    id.integer = g_golden_frm_ids[ g.m_first_id + i ];
+                    value_t& o = options[ k ][ static_cast< std::size_t >( i ) ];
+                    o.kind = value_t::kind_t::object;
+                    o.tag = 6;
+                    o.object.push_back( { "ComboBoxID", id } );
+                }
+                for ( const value_t& o : options[ k ] )
+                    ce.m_options.push_back( &o );
+                state_same = state_same && ( g.m_kind == 1 ? ui_frame_kind_of( who ) == ui_frame_kind_t::config : ui_frame_kind_of( who ) == ui_frame_kind_t::combo_box ) &&
+                             ( g.m_kind == 1 || g.m_records == 1 );
+            }
+        }
+        const auto leaf = [ & ]( const entity_t& who ) -> const golden_frm_leaf_t*
+        {
+            const int at = index_of( &who );
+            return at >= 0 ? leaf_of[ static_cast< std::size_t >( at ) ] : nullptr;
+        };
+        in.m_info = [ & ]( const entity_t& who ) { return ui_info_ticker_of( who ).m_scroll; };
+        in.m_stat = []( const entity_t& ) { return ui_boat_stat_t( ); };
+        in.m_bar = []( const entity_t& ) { return ui_progress_bar_t( ); };
+        in.m_config = [ & ]( const entity_t& who ) -> const ui_config_entity_t*
+        {
+            const int at = index_of( &who );
+            return at >= 0 && leaf( who ) ? &configs[ static_cast< std::size_t >( at ) ] : nullptr;
+        };
+        in.m_combo = [ & ]( const entity_t& who ) -> const ui_config_combo_t*
+        {
+            const int at = index_of( &who );
+            return at >= 0 && leaf( who ) && !configs[ static_cast< std::size_t >( at ) ].m_combos.empty( ) ? &configs[ static_cast< std::size_t >( at ) ].m_combos[ 0 ]
+                                                                                                           : nullptr;
+        };
+        in.m_combo_inputs = [ & ]( const entity_t& who )
+        {
+            ui_combo_inputs_t ci;
+            ci.m_label_font = ci.m_value_font = 0x0F0E0D0Cu;   // TXT_FONT, the stand-in asset font
+            ci.m_string = []( const std::string& id ) { return id + "~"; };   // the case's VuStringDB answer
+            const golden_frm_leaf_t* g = leaf( who );
+            ci.m_texture = [ g, &texture_a, &texture_b ]( int which ) -> const ui_texture_t*
+            {
+                if ( !g || which < 0 || which >= 7 || g->m_textures[ which ] < 0 )
+                    return nullptr;
+                return g->m_textures[ which ] ? &texture_b : &texture_a;
+            };
+            return ci;
+        };
+        // The difficulty leaves (batch 13): the case's gameutil root over the real BoatDB / ChampDB, no dev
+        // config, the round an empty container; Texture Asset C -> B, B / A -> A; every Font the asset.
+        const std::vector< std::uint8_t > groot = ui_unhex( run.m_groot );
+        const value_t diff_root = groot.empty( ) ? value_t( ) : c_reader( groot ).parse( );
+        static const value_t boat_db = ui_fr_document( 0 ), champ_db = ui_fr_document( 3 ), empty_round{ };
+        ui_difficulty_env_t de;
+        de.m_root = &diff_root;
+        de.m_boat_db = &boat_db;
+        de.m_champ_db = &champ_db;
+        de.m_round = []( ) -> const value_t& { return empty_round; };
+        if ( !groot.empty( ) )
+            in.m_difficulty = &de;
+        in.m_class_texture = [ & ]( const entity_t&, int k ) -> const ui_texture_t* { return k == 0 ? &texture_b : &texture_a; };
+        in.m_class_font = []( const entity_t&, int ) { ui_text_font_t f; f.m_asset = true; f.m_asset_font = 0x0F0E0D0Cu; return f; };
+        in.m_class_params_tail = [ & ]( const entity_t& who, int k, std::uint8_t params[ 60 ] ) { tail_of( who, 4 + k, params ); };
+        in.m_string = []( const std::string& id ) { return id + "~"; };   // the case's VuStringDB answer
         ui_impl_t impl;
         const std::vector< std::uint8_t > crop = ui_unhex( run.m_crop );
         std::memcpy( impl.m_crop.m_matrix, crop.data( ), 64 );
@@ -930,7 +1277,8 @@ inline bool verify_ui_screen_frame_records( )
         std::vector< ui_gfx_command_t >& list = sort.m_commands[ e.m_index ];
         const std::size_t before = list.size( );
         const ui_frame_t frame = ui_screen_frame( *tree[ 0 ].second, impl, sort, alpha, 4, &in );
-        bool same = frame.m_unknown == 0 && list.size( ) - before == static_cast< std::size_t >( run.m_commands ) &&
+        live += run.m_leaves;
+        bool same = state_same && frame.m_unknown == 0 && list.size( ) - before == static_cast< std::size_t >( run.m_commands ) &&
                     sort.m_key_lo == run.m_key[ 0 ] && sort.m_key_hi == run.m_key[ 1 ];
         for ( int c = 0; same && c < run.m_commands; ++c )
         {
@@ -962,9 +1310,10 @@ inline bool verify_ui_screen_frame_records( )
                        "leaf / key differs", run.m_project, run.m_env, static_cast< int >( list.size( ) - before ), run.m_commands, s, run.m_stubs, frame.m_unknown );
     }
     if ( failed == 0 )
-        LOG_SUCCESS( "ui_screen_frame's records (the export with inputs) match retail's screen draw 0x629D60 with the text / image / button draws live "
-                     "on %d runs over the Screens/* roots: %d leaf draws emitted, %d commands and records byte for byte, %d unrecreated leaves in order",
-            runs, emitted, commands, stubs );
+        LOG_SUCCESS( "ui_screen_frame's records (the export with inputs) match retail's screen draw 0x629D60 with the text / image / button / Info / "
+                     "config / combo box / stat / bar draws live on %d runs over the Screens/* roots: %d leaf draws emitted (%d of them Info / config / "
+                     "combo / stat / bar, their state checked), %d commands and records byte for byte, %d unrecreated leaves in order",
+            runs, emitted, live, commands, stubs );
     else
         LOG_ERROR( "the screen frame's records FAILED %d checks against retail's", failed );
     return failed == 0;
@@ -1110,5 +1459,6 @@ inline bool verify_ui_menu_all( )
     ok = verify_ui_screen_draw( ) && ok;
     ok = verify_ui_config_next( ) && ok;
     ok = verify_ui_config_nav( ) && ok;
+    ok = verify_ui_boat_nav( ) && ok;
     return ok;
 }

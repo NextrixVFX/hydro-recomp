@@ -138,6 +138,9 @@
     <ClInclude Include="workspace\core\boat\powerup.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\boat\rays.hxx">
+      <Filter>workspace\core\boat</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\boat\respawn.hxx">
       <Filter>workspace\core\boat</Filter>
     </ClInclude>
@@ -204,6 +207,9 @@
     <ClInclude Include="workspace\core\ui\config.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\ui\difficulty.hxx">
+      <Filter>workspace\core\ui</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\ui\dock.hxx">
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
@@ -262,6 +268,9 @@
       <Filter>workspace\core\ui</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\world\animate.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\core\world\blend.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
     <ClInclude Include="workspace\core\world\bodies.hxx">
@@ -379,6 +388,9 @@
       <Filter>workspace\utility\checks</Filter>
     </ClInclude>
     <ClInclude Include="workspace\utility\checks\race.hxx">
+      <Filter>workspace\utility\checks</Filter>
+    </ClInclude>
+    <ClInclude Include="workspace\utility\checks\rays.hxx">
       <Filter>workspace\utility\checks</Filter>
     </ClInclude>
     <ClInclude Include="workspace\utility\checks\ui.hxx">

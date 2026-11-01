@@ -147,6 +147,7 @@ copy /Y "$(ProjectDir)impl\engine.hxx" "$(ProjectDir)..\hydro\impl\engine\engine
     <ClInclude Include="workspace\core\collision\leaves.hxx" />
     <ClInclude Include="workspace\core\collision\pairs.hxx" />
     <ClInclude Include="workspace\core\collision\polytope.hxx" />
+    <ClInclude Include="workspace\core\collision\raytest.hxx" />
     <ClInclude Include="workspace\core\collision\simplex.hxx" />
     <ClInclude Include="workspace\core\collision\sphere.hxx" />
     <ClInclude Include="workspace\core\collision\support.hxx" />

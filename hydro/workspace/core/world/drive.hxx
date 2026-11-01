@@ -7,15 +7,18 @@
 #include <workspace/core/boat/human.hxx>
 #include <workspace/core/boat/manager.hxx>
 #include <workspace/core/boat/pilots.hxx>
+#include <workspace/core/boat/rays.hxx>
 #include <workspace/core/boat/respawn.hxx>
 #include <workspace/core/boat/state.hxx>
 #include <workspace/core/game/input.hxx>
+#include <workspace/core/world/blend.hxx>
 #include <workspace/core/world/build.hxx>
 #include <workspace/core/world/dynamics.hxx>
 #include <workspace/core/world/kernel.hxx>
 #include <workspace/core/world/query.hxx>
 #include <workspace/core/world/session.hxx>
 #include <workspace/core/world/tree.hxx>
+#include <workspace/core/world/wake.hxx>
 #include <workspace/utility/logger.hxx>
 
 #include <cstdint>
@@ -35,7 +38,9 @@
 //                    (fleet_driver_tick); the camera 0x409900
 //                    (boat_camera_tick); the respawn 0x41D790 (boat_respawn);
 //                    VuWater's wake lookup 0x5296C0 (water_best_wake); the
-//                    water under a point 0x529140 (water_point_height).
+//                    water under a point 0x529140 (water_point_height); the
+//                    hull's wake update 0x417D80 (race_drive_hull_wake:
+//                    0x417F80 + world/wake.hxx water_wake_update).
 //   NOT RECREATED / NOT WIRED (counted, each logged once by name - never a
 //   stand-in): the animation tick 0x40FFF0 (recreated as boat_anim_tick, but
 //   its three controls at anim +0x08 / +0x0C / +0x10 come from the asset
@@ -43,8 +48,7 @@
 //   - so its inputs are UNKNOWN and it does not run); 0x410FF0, 0x41E240, the
 //   debris pieces' follow / removal; the driver tick of a UI / nuisance /
 //   ghost driver (none in a Race roster - their ticks are the boat agent's);
-//   the hull's splash pfx 0x52BCD0, the lens-water manager g 0x759048, the
-//   wake update 0x417D80; the driver's vt+0x50, the trigger manager 0x536350,
+//   the hull's splash pfx 0x52BCD0, the lens-water manager g 0x759048; the driver's vt+0x50, the trigger manager 0x536350,
 //   the transform's child walk 0x534C00(0) on the boat and the
 //   "OnBoatRecovered" broadcast inside the respawn.
 //   PLATFORM HOOKS (not copied - BRIEF): FMOD (every get_event answers false:
@@ -161,13 +165,27 @@ inline race_session_boat_t& race_drive_boat( race_drive_t& r )
     return *r.session->boats[ r.index ];
 }
 
-// The dynamics world's ray test: not wired (see the head).
-inline int race_drive_ray( void* user, const float*, const float*, const ai_ray_hit_t** hits )
+// The dynamics world's ray test (g_vudynamicsimpl vt+0x6C's collision world vt+0x18): the boat agent's
+// boat_ray_hits (boat/rays.hxx, engine collision/raytest.hxx) on the race's collision world; a hit object's
+// image is its VuRigidBody (the solver_rigid_t starts it). A ray that reached a path not recreated (rw.unknown:
+// e.g. the BVH ray path of the level's triangle meshes) is logged UNKNOWN.
+inline int race_drive_ray( void* user, const float* from, const float* to, const ai_ray_hit_t** hits )
 {
-    race_unwired( *static_cast< race_session_t* >( user ), "the dynamics world's ray test (g_vudynamicsimpl vt+0x6C, vt+0x18) is NOT WIRED - "
-                                                          "camera / AI rays answer no hit (UNKNOWN)" );
+    race_session_t& s = *static_cast< race_session_t* >( user );
     *hits = nullptr;
-    return 0;
+    if ( !s.dynamics )
+    {
+        race_unwired( s, "the dynamics world's ray test with no dynamics world - no hit (UNKNOWN)" );
+        return 0;
+    }
+    boat_ray_world_t& rw = s.rays;
+    rw.world = &s.dynamics->collision;
+    rw.image = []( void*, const collision_object_t& o ) { return reinterpret_cast< const std::uint8_t* >( o.body.object ); };
+    rw.unknown = false;
+    const int n = boat_ray_hits( &rw, from, to, hits );
+    if ( rw.unknown )
+        race_unwired( s, "the dynamics world's ray test reached a path not recreated (boat rays.hxx: rw.unknown) - its hits are retail's only up to there (UNKNOWN)" );
+    return n;
 }
 
 // 0x5296C0 on the probe point with the callback {vtable, point x, y,
@@ -188,6 +206,81 @@ inline float race_drive_wake( void* user, const boat_probe_io_t& io )
     f.best = 0.0f;
     water_best_wake( w.water->hold, false, io.point, f );
     return f.best;
+}
+
+// The hull's wake update 0x417D80 (thiscall hull; the boat state tick's last
+// call): the 0x34-byte record memset to 0, then 0x417F80 (boat anim.hxx
+// boat_wake_params: the hull, the boat's transform world, the body boat
+// +0x21C, the solver hull +0x1CC) into it; then on VuWater g 0x759058 with
+// the descriptor hull +0x1D0 (3 words) and the record's 13 words: hull
+// +0x1EC set - the flat wake on slots +0x1E4 / +0x1E8, else the wake on
+// +0x1DC / +0x1E0 (world/wake.hxx water_wake_update, the water half). When
+// the plain wake made a new segment (1): solver +0x30 = 2 and its +0x34 array
+// [0] = +0x1DC, [1] = +0x1E0 (the slots after the swap). The slots hold
+// race_wave_token words. UNKNOWN (false, `why`, nothing written): a slot word
+// that is no token; the plain wake with no solver / +0x34 array of 8 bytes
+// (retail writes through them). The part after 0x417F80, on its record:
+inline bool race_hull_wake_apply( water_built_t& water, std::uint8_t* hull, std::uint8_t* solver, std::uint8_t* array, const std::uint32_t* record,
+                                  std::string& why )
+{
+    std::uint32_t desc[ 3 ];
+    std::memcpy( desc, hull + 0x1D0, 12 );
+    const bool flat = hull[ 0x1EC ] != 0;
+    const int at = flat ? 0x1E4 : 0x1DC;
+    water_wake_slots_t slots;
+    slots.current = race_wave_of( &water, load_word( hull, at ) );
+    slots.previous = race_wave_of( &water, load_word( hull, at + 4 ) );
+    if ( slots.current == -2 || slots.previous == -2 )
+    {
+        why = "a wake slot word that names no wave";
+        return false;
+    }
+    if ( !flat && ( !solver || !array ) )
+    {
+        why = "the plain wake with no solver (hull +0x1CC) / +0x34 array of 8 bytes in the boat's graph";
+        return false;
+    }
+    const int made = water_wake_update( water, desc, record, flat, slots );
+    image_put32( hull, at, race_wave_token( slots.current ) );
+    image_put32( hull, at + 4, race_wave_token( slots.previous ) );
+    if ( made == 1 )
+    {
+        image_put32( solver, 0x30, 2 );
+        image_put32( array, 0, load_word( hull, 0x1DC ) );
+        image_put32( array, 4, load_word( hull, 0x1E0 ) );
+    }
+    return true;
+}
+
+inline void race_drive_hull_wake( void* user )
+{
+    race_drive_t& r = race_drive_of( user );
+    race_session_t& s = *r.session;
+    race_session_boat_t& b = race_drive_boat( r );
+    if ( !s.world.water )
+    {
+        race_unwired( s, "the hull's wake update 0x417D80 with no VuWater (g 0x759058 null) - UNKNOWN, not run" );
+        return;
+    }
+    std::uint8_t* hull = r.d.hull;
+    std::uint8_t out[ 0x34 ] = { };
+    float world[ 16 ];
+    std::memcpy( world, r.d.transform + 0x50, 64 );
+    boat_wake_params( hull, world, r.d.body, r.d.solver, out );
+    std::uint32_t record[ 13 ];
+    std::memcpy( record, out, 52 );
+    const int hull_k = race_session_ref( b.graph, 0, 0x228 );
+    std::uint8_t* solver = race_session_image( b, hull_k, 0x1CC );   // r.d.solver's bytes, writable
+    const int solver_k = race_session_ref( b.graph, hull_k, 0x1CC );
+    std::uint8_t* array = race_session_image( b, solver_k, 0x34 );
+    if ( array )
+        for ( const image_ref_t& ref : b.graph.objects[ static_cast< std::size_t >( solver_k ) ].refs )
+            if ( ref.slot == 0x34 && ref.object >= 0 &&
+                 b.graph.objects[ static_cast< std::size_t >( ref.object ) ].image.size( ) < static_cast< std::size_t >( ref.offset ) + 8 )
+                array = nullptr;
+    std::string why;
+    if ( !race_hull_wake_apply( *s.world.water, hull, solver, array, record, why ) )
+        race_unwired( s, "the hull's wake update 0x417D80: " + why + " - UNKNOWN, not run" );
 }
 
 // 0x529140's out +0x20 under a point (respawn.hxx's water hook).
@@ -445,7 +538,7 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         };
         h.hull.splash = []( void* u, const std::string& ) { race_unwired( *race_drive_of( u ).session, "the hull's splash pfx 0x52BCD0 (not wired)" ); };
         h.hull.lens = []( void* u, float ) { race_unwired( *race_drive_of( u ).session, "the lens-water manager g 0x759048 (not wired)" ); };
-        h.hull.wake = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the hull's wake update 0x417D80 (not recreated)" ); };
+        h.hull.wake = race_drive_hull_wake;
         s.drives[ k ] = r;
     }
     race_drive_contact_setup( s );
@@ -480,6 +573,7 @@ struct race_contact_t
 {
     race_session_t* session = nullptr;
     std::function< const collision_mesh_asset_t*( const solver_rigid_t* object, bool& known ) > mesh;
+    int calls = 0, ran = 0, meshes = 0;   // dev counts (not retail): callbacks, 0x5751F0 runs, runs with obj1's mesh
 };
 
 inline void race_contact_added( void* user, solver_contact_point_t& cp, solver_rigid_t* object0, int, int, solver_rigid_t* object1, int,
@@ -487,6 +581,7 @@ inline void race_contact_added( void* user, solver_contact_point_t& cp, solver_r
 {
     race_contact_t& c = *static_cast< race_contact_t* >( user );
     race_session_t& s = *c.session;
+    ++c.calls;
     if ( !s.surfaces_built )
     {
         race_unwired( s, "the contact-added callback 0x574E90 with no surface-type table - UNKNOWN" );
@@ -511,8 +606,24 @@ inline void race_contact_added( void* user, solver_contact_point_t& cp, solver_r
     o0.handle = static_cast< std::uint32_t >( reinterpret_cast< std::uintptr_t >( object0 ) );
     o1.handle = static_cast< std::uint32_t >( reinterpret_cast< std::uintptr_t >( object1 ) );
     contact_hooks_t h;
+    ++c.ran;
+    c.meshes += o1.mesh ? 1 : 0;
     if ( !contact_added( s.surfaces, reinterpret_cast< std::uint8_t* >( &cp ), o0, o1, index1, h ) )
         race_unwired( s, "the contact-added callback 0x5751F0 read past the surface table / mesh materials - UNKNOWN" );
+}
+
+// A level body's shape +8 (createRigidBody 0x544100): the collision mesh asset for the triangle mesh 7
+// (0x5445C0), null for the convex hull 6 (0x5444D5) - the only two types built (bodies.hxx).
+inline const collision_mesh_asset_t* race_contact_level_mesh( const level_body_t& lb )
+{
+    return lb.type == 7 ? lb.asset : nullptr;
+}
+
+inline void race_contact_counts( const race_session_t& s, int& calls, int& ran, int& meshes )
+{
+    calls = s.contact_user ? s.contact_user->calls : 0;
+    ran = s.contact_user ? s.contact_user->ran : 0;
+    meshes = s.contact_user ? s.contact_user->meshes : 0;
 }
 
 // The callbacks a race's dynamics world installs (0x574EC0's gContactAddedCallback).
@@ -528,6 +639,22 @@ inline void race_drive_contact_setup( race_session_t& s )
 {
     s.contact_user = std::make_shared< race_contact_t >( );
     s.contact_user->session = &s;
+    // The object's shape (+0xD4) +8, btCollisionShape's user pointer: a boat's shape is its compound (0x420A70:
+    // +0xD4 = the compound; the compound ctor 0x5269C0 writes +8 = 0, nothing in 0x420A70 sets it after) - no
+    // mesh; a level body's (createRigidBody 0x544100) is 0 for the convex hull 6 (+8 = 0 before 0x526380) and the
+    // collision mesh asset for the triangle mesh 7 (0x5445C0: +8 = the asset property's +0x4C, the asset +0xC0
+    // also holds). Any other object: not known (UNKNOWN).
+    s.contact_user->mesh = [ &s ]( const solver_rigid_t* object, bool& known ) -> const collision_mesh_asset_t* {
+        known = true;
+        for ( const auto& b : s.boats )
+            if ( &b->body.body == object )
+                return nullptr;
+        for ( const auto& lb : s.level_bodies )
+            if ( &lb->body.body == object )
+                return race_contact_level_mesh( *lb );
+        known = false;
+        return nullptr;
+    };
     s.contact = race_contact_callbacks( *s.contact_user );
 }
 
@@ -553,8 +680,20 @@ inline void race_drive_decision( race_session_t& s, std::size_t boat, float dt )
 inline void race_drive_build( race_session_t& s, std::size_t boat, float dt )
 {
     race_drive_t& r = *s.drives[ boat ];
-    race_unwired( s, "the Build tick 0x41F330's step 1 (gfx settings 0x52F690 -> +0x408) and steps 3 - 6 (the driver's vt+0x4C, the "
-                     "animation / model instances, the pfx 0x419700, the debris 0x411A50, the draw aabb) - NOT recreated" );
+    // Step 3, the driver's vt+0x4C(dt): 0x4021A0 (ret 4) in every driver vtable - VuHumanDriver 0x737F44, VuAiDriver
+    // 0x737B5C, VuAiNuisanceDriver 0x737C4C, the UI driver 0x737CDC, VuGhostDriver 0x737DDC (read from the image): nothing.
+    race_unwired( s, "the Build tick 0x41F330's steps 4 - 6 (the animation 0x5169E0 / 0x516CF0 and model instances 0x532720 / 0x532990, the "
+                     "pfx 0x419700, the debris 0x411A50, the draw aabb + g_vu3ddrawmanager vt+0x30) - NOT recreated" );
+    // Step 1: 0x52F690 on the blender g 0x759430 (world/blend.hxx) with the position (transform +0x80, copied first)
+    // into boat +0x408 (the 22-word record: +0x408 the far plane the race camera reads, +0x454 / +0x458 the pfx
+    // colours step 2 lerps).
+    {
+        float position[ 4 ];
+        std::memcpy( position, r.d.transform + 0x80, 16 );
+        std::uint32_t out[ 22 ];
+        gfx_blend( s.blender, position, out );
+        std::memcpy( r.d.boat + 0x408, out, sizeof( out ) );
+    }
     // Step 2: the surface under the position (0x52ACB0) and the colour lerp (world/build.hxx boat_build_water). It
     // reads the position copied before step 1 and writes only +0x2B4 .. +0x2C4, which step 1 does not touch.
     {

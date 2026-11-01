@@ -1257,6 +1257,17 @@ struct gfx_settings_state_t
     gfx_settings_t defaults;
 };
 
+// VuRectangularGfxSettingsEntity (ctor 0x5D1FB0) / VuEllipticalGfxSettingsEntity (ctor 0x5D2580): the base
+// VuGfxSettingsEntity set (engine entity/gfx.hxx - the same base ctor 0x5A6520) then their VuPercentageProperty
+// Inner Radius X % / Y % (+0xD0 / +0xD4, 0.5 each) - the elliptical one only Inner Radius % (+0xD0).
+struct gfx_zone_state_t
+{
+    gfx_settings_t value;
+    gfx_settings_t defaults;
+    float inner[ 2 ] = { 0.5f, 0.5f };
+    float inner_defaults[ 2 ] = { 0.5f, 0.5f };
+};
+
 // VuTriggerPlaneEntity / VuTriggerBoxEntity (engine entity/trigger.hxx).
 struct trigger_state_t
 {
@@ -1388,6 +1399,13 @@ inline std::shared_ptr< void > entity_state_for( const std::string& cls )
         gfx_settings_construct( s->defaults );
         return s;
     }
+    if ( cls == "VuRectangularGfxSettingsEntity" || cls == "VuEllipticalGfxSettingsEntity" )
+    {
+        auto s = std::make_shared< gfx_zone_state_t >( );
+        gfx_settings_construct( s->value );
+        gfx_settings_construct( s->defaults );
+        return s;
+    }
     if ( entity_is_trigger( cls ) )
     {
         auto s = std::make_shared< trigger_state_t >( );
@@ -1443,6 +1461,18 @@ inline void entity_load_properties( entity_t& entity, const value_t& properties 
         gfx_settings_state_t* s = static_cast< gfx_settings_state_t* >( entity.m_state.get( ) );
         gfx_settings_load( s->value, properties, s->defaults );
     }
+    else if ( ( entity.m_type == "VuRectangularGfxSettingsEntity" || entity.m_type == "VuEllipticalGfxSettingsEntity" ) && entity.m_state )
+    {
+        gfx_zone_state_t* s = static_cast< gfx_zone_state_t* >( entity.m_state.get( ) );
+        gfx_settings_load( s->value, properties, s->defaults );
+        if ( entity.m_type == "VuRectangularGfxSettingsEntity" )
+        {
+            property_percentage( properties, "Inner Radius X %", s->inner[ 0 ], s->inner_defaults[ 0 ] );
+            property_percentage( properties, "Inner Radius Y %", s->inner[ 1 ], s->inner_defaults[ 1 ] );
+        }
+        else
+            property_percentage( properties, "Inner Radius %", s->inner[ 0 ], s->inner_defaults[ 0 ] );
+    }
     else if ( entity_is_trigger( entity.m_type ) && entity.m_state )
     {
         trigger_state_t* s = static_cast< trigger_state_t* >( entity.m_state.get( ) );
@@ -1490,6 +1520,13 @@ inline void entity_mark_properties( entity_t& entity )
     {
         gfx_settings_state_t* s = static_cast< gfx_settings_state_t* >( entity.m_state.get( ) );
         s->defaults = s->value;
+    }
+    else if ( ( entity.m_type == "VuRectangularGfxSettingsEntity" || entity.m_type == "VuEllipticalGfxSettingsEntity" ) && entity.m_state )
+    {
+        gfx_zone_state_t* s = static_cast< gfx_zone_state_t* >( entity.m_state.get( ) );
+        s->defaults = s->value;
+        s->inner_defaults[ 0 ] = s->inner[ 0 ];
+        s->inner_defaults[ 1 ] = s->inner[ 1 ];
     }
     else if ( entity_is_trigger( entity.m_type ) && entity.m_state )
     {

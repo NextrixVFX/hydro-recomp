@@ -164,6 +164,48 @@ inline bool verify_gfx_settings( )
     return failed == 0;
 }
 
+// The gfx-settings zones' blend views (world/blend.hxx gfx_zone_view on hydro's game/types.hxx zone state: the
+// base set + the VuPercentageProperty inner radii) against retail's VuEntity::load on every
+// VuRectangularGfxSettingsEntity / VuEllipticalGfxSettingsEntity of the level templates and projects plus four
+// hand-built ones (oracle case load_gfx_zones): +0x60 Always Active, the times, the +0x70 record, the +0xC8 timer,
+// the inner radii - every word the blend 0x52F690 and the weights read - bit for bit.
+inline bool verify_gfx_zones( )
+{
+    std::map< std::string, entity_t* > by_name;
+    const std::unique_ptr< entity_t > tree = world_check_tree( g_golden_gfx_zones_document, g_golden_gfx_zones_document_bytes, by_name );
+    int failed = 0;
+    int compared = 0;
+    for ( std::size_t k = 0; k < g_golden_gfx_zones_count; ++k )
+    {
+        const golden_entity_targets_t& want = g_golden_gfx_zones[ k ];
+        const auto found = by_name.find( want.m_child );
+        if ( found == by_name.end( ) || !found->second->m_state || found->second->m_type != want.m_type )
+        {
+            LOG_ERROR( "gfx zones: '%s' (%s) missing or without state", want.m_source, want.m_child );
+            ++failed;
+            continue;
+        }
+        const bool rect = found->second->m_type == "VuRectangularGfxSettingsEntity";
+        const gfx_zone_state_t& st = *static_cast< const gfx_zone_state_t* >( found->second->m_state.get( ) );
+        gfx_zone_t z;
+        gfx_zone_view( z, st.value, rect ? gfx_zone_kind_t::rectangular : gfx_zone_kind_t::elliptical, st.inner, nullptr );
+        std::vector< std::uint32_t > ours = { z.always_active, gfx_w( z.ramp_up ), gfx_w( z.duration ), gfx_w( z.ramp_down ) };
+        ours.insert( ours.end( ), z.record, z.record + 22 );
+        ours.push_back( gfx_w( z.timer ) );
+        ours.push_back( gfx_w( z.inner[ 0 ] ) );
+        if ( rect )
+            ours.push_back( gfx_w( z.inner[ 1 ] ) );
+        world_check_words( "gfx zones", want, ours, failed, compared );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "The gfx-settings zones' blend views match retail's loads (ctors 0x5D1FB0 / 0x5D2580 on the base 0x5A6520) on %d "
+                     "entities: %d values, bit for bit",
+                     static_cast< int >( g_golden_gfx_zones_count ), compared );
+    else
+        LOG_ERROR( "the gfx zones' loads FAILED %d checks", failed );
+    return failed == 0;
+}
+
 // VuTriggerEntity's two property loads (engine entity/trigger.hxx through the
 // tree's entity_load_properties) against retail's VuEntity::load on the
 // VuTriggerPlaneEntity / VuTriggerBoxEntity of the templates plus five
@@ -2423,7 +2465,7 @@ inline bool verify_prop_rigid_bodies( )
         g[ 0 ] = g[ 1 ] = 0.0f;
         std::memcpy( &g[ 2 ], &z, 4 );
     };
-    int failed = 0, bodies = 0, words = 0;
+    int failed = 0, bodies = 0, words = 0, contacts = 0;
     for ( std::size_t k = 0; k < g_golden_prop_bodies_count && tree; ++k )
     {
         const golden_prop_body_t& g = g_golden_prop_bodies[ k ];
@@ -2521,6 +2563,13 @@ inline bool verify_prop_rigid_bodies( )
             for ( int i = 0; i < 8 && bad < 0; ++i )
                 if ( shape[ i ] != p[ i ] )
                     bad = 200 + i;
+            // The contact-added callback's collision mesh (world/drive.hxx race_contact_level_mesh) against retail's
+            // shape +8 (1 null, 2 the asset) with the body's +0xD4 = the shape.
+            const collision_mesh_asset_t* user = race_contact_level_mesh( b );
+            const unsigned char want_user = g_golden_prop_bodies_shape_user[ k ];
+            if ( bad < 0 && ( g_golden_prop_bodies_d4_shape[ k ] != 1 || !( want_user == 1 ? user == nullptr : want_user == 2 && user && user == asset ) ) )
+                bad = 103;
+            ++contacts;
             const unsigned* mask = p + 8;
             const unsigned* want = p + 8 + 181;
             for ( int i = 0; i < 181 && bad < 0; ++i )
@@ -2542,16 +2591,169 @@ inline bool verify_prop_rigid_bodies( )
     }
     if ( failed == 0 )
         LOG_SUCCESS( "VuPropEntity gameInitialize 0x546910 / createRigidBody 0x544100 match retail on all %d Hydroelectric props (%d bodies: "
-                     "the component loads, shape aabbs and %d body words bit for bit)",
-                     static_cast< int >( g_golden_prop_bodies_count ), bodies, words );
+                     "the component loads, shape aabbs and %d body words bit for bit; the contact callback's shape +8 mesh on %d)",
+                     static_cast< int >( g_golden_prop_bodies_count ), bodies, words, contacts );
     else
         LOG_ERROR( "prop rigid bodies FAILED on %d of %d props", failed, static_cast< int >( g_golden_prop_bodies_count ) );
+    return failed == 0;
+}
+
+// The race's hull wake composition (world/drive.hxx race_hull_wake_apply: 0x417D80 after 0x417F80 - the +0x1EC
+// dispatch, the hull's slot words, the plain wake's solver +0x30 and +0x34 array writes) against retail's own 0x417D80
+// run in the water agent's case water_wake (its golden g_golden_wwk_*: 0x417F80 handed the planned records): two hull
+// images (+0x1D0 the case's descriptors, +0x1EC 0 / 1), a solver image and its 8-byte array each, on Hydroelectric's
+// built water, the Water tick 0x529E30 between frames. Compared per frame: each hull's four slot words (as wave
+// indices) and the solver's +0x30 / array [0] / [1].
+inline std::unique_ptr< entity_t > water_build_document_tree( );   // checks/water.hxx (included after this file)
+inline bool verify_race_hull_wake( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "race hull wake: the document did not load" );
+        return false;
+    }
+    water_built_t b{};
+    water_build_world( *tree, b, []( entity_t& e ) { return entity_transform( e ); } );
+    int failed = 0, compared = 0;
+    auto cmp = [ & ]( const char* what, int a, int c, std::uint32_t ours, std::uint32_t theirs ) {
+        ++compared;
+        if ( ours != theirs && ++failed <= 12 )
+            LOG_ERROR( "race hull wake %s %d / %d: ours 0x%08X retail 0x%08X", what, a, c, ours, theirs );
+    };
+    auto ix = [ & ]( std::uint32_t word ) { return static_cast< std::uint32_t >( race_wave_of( &b, word ) ); };
+    const unsigned* s = g_golden_wwk_words;
+    const unsigned frames = *s++;
+    ++s;   // the built wave count
+    const unsigned n0 = *s++, n1 = *s++;
+    s += n0 + n1;   // the type chains
+    std::uint8_t hull[ 2 ][ 0x200 ] = { }, solver[ 2 ][ 0x80 ] = { }, array[ 2 ][ 8 ] = { };
+    const float desc[ 2 ][ 3 ] = { { 0.35f, 0.8f, 1.25f }, { 0.2f, 0.6f, 0.9f } };
+    for ( int k = 0; k < 2; ++k )
+    {
+        std::memcpy( hull[ k ] + 0x1D0, desc[ k ], 12 );
+        hull[ k ][ 0x1EC ] = static_cast< std::uint8_t >( k );
+    }
+    water_built_hooks_t hooks{};
+    hooks.render = []( void* ) {};
+    const float dt = 1.0f / 30.0f;
+    for ( unsigned f = 0; f < frames; ++f )
+    {
+        const int fi = static_cast< int >( f );
+        for ( int k = 0; k < 2; ++k )
+        {
+            std::string why;
+            if ( !race_hull_wake_apply( b, hull[ k ], solver[ k ], array[ k ], s + 13 * k, why ) )
+                cmp( why.c_str( ), fi, k, 0u, 1u );
+        }
+        s += 26;
+        water_built_tick( b, dt, hooks );
+        for ( int k = 0; k < 2; ++k )
+            for ( int j = 0; j < 4; ++j )
+                cmp( "slot", fi, 4 * k + j, ix( load_word( hull[ k ], 0x1DC + 4 * j ) ), *s++ );
+        for ( int k = 0; k < 2; ++k )
+        {
+            cmp( "solver +0x30", fi, k, load_word( solver[ k ], 0x30 ), *s++ );
+            cmp( "solver array [0]", fi, k, ix( load_word( array[ k ], 0 ) ), *s++ );
+            cmp( "solver array [1]", fi, k, ix( load_word( array[ k ], 4 ) ), *s++ );
+        }
+        // the rest of the frame (the water agent's check compares it): dtors, listed wakes and words, the list, the pool, entries
+        const unsigned nd = *s++;
+        s += nd;
+        const unsigned nl = *s++;
+        s += nl * ( 1 + 48 );
+        const unsigned n_list = *s++;
+        s += 2 * n_list;
+        s += 2;
+        for ( unsigned i = 0; i < nl; ++i )
+        {
+            const unsigned n = *s++;
+            s += 2 * n;
+        }
+    }
+    cmp( "golden consumed", 0, 0, s == g_golden_wwk_words + g_golden_wwk_size ? 1u : 0u, 1u );
+    if ( failed == 0 )
+        LOG_SUCCESS( "The race's hull wake composition (0x417D80 after 0x417F80: the +0x1EC dispatch, the hull's slot words, the "
+                     "solver +0x30 / +0x34 writes) matches retail on Hydroelectric's built water: %u frames, %d values",
+                     frames, compared );
+    else
+        LOG_ERROR( "race hull wake FAILED %d of %d values", failed, compared );
+    return failed == 0;
+}
+
+// The gfx-settings blend (world/blend.hxx gfx_blend: 0x52F690 with 0x52F7E0 / 0x52FFE0 / 0x530450 and the zone weights
+// 0x5D2380 / 0x5D2850) against retail's 0x52F690 (case gfx_blend): per vector the blender's record, 0..4 zones (their
+// kind from the vtable, transform rows / origin / scale, Always Active, times, timer, inner radii, record) and the
+// position; compared: the 22 words written.
+inline bool verify_gfx_blend( )
+{
+    const unsigned* s = g_golden_gfx_blend_words;
+    int failed = 0, words = 0, blended = 0;
+    for ( std::size_t v = 0; v < g_golden_gfx_blend_count; ++v )
+    {
+        gfx_blender_t b;
+        std::memcpy( b.record, s, 88 );
+        s += 22;
+        float position[ 4 ];
+        std::memcpy( position, s, 16 );
+        s += 4;
+        const unsigned n = *s++;
+        std::vector< gfx_zone_t > zones( n );
+        std::vector< transform_component_t > transforms( n );
+        for ( unsigned k = 0; k < n; ++k )
+        {
+            gfx_zone_t& z = zones[ k ];
+            transform_component_t& t = transforms[ k ];
+            transform_construct( t );
+            z.kind = s[ 0 ] == 0x752F4Cu ? gfx_zone_kind_t::elliptical : gfx_zone_kind_t::rectangular;
+            std::memcpy( t.world, s + 1, 32 );
+            std::memcpy( t.world + 12, s + 9, 12 );
+            std::memcpy( t.scale, s + 12, 8 );
+            z.transform = &t;
+            z.always_active = static_cast< std::uint8_t >( s[ 14 ] );
+            z.ramp_up = gfx_f( s[ 15 ] );
+            z.duration = gfx_f( s[ 16 ] );
+            z.ramp_down = gfx_f( s[ 17 ] );
+            z.timer = gfx_f( s[ 18 ] );
+            z.inner[ 0 ] = gfx_f( s[ 19 ] );
+            z.inner[ 1 ] = gfx_f( s[ 20 ] );
+            std::memcpy( z.record, s + 21, 88 );
+            s += 43;
+            b.zones.push_back( &z );
+        }
+        std::uint32_t out[ 22 ];
+        gfx_blend( b, position, out );
+        bool same_as_base = true;
+        for ( int k = 0; k < 22; ++k )
+        {
+            ++words;
+            same_as_base = same_as_base && s[ k ] == b.record[ k ];
+            if ( out[ k ] != s[ k ] && ++failed <= 8 )
+                LOG_ERROR( "gfx blend vector %d word %d: ours 0x%08X retail 0x%08X", static_cast< int >( v ), k, out[ k ], s[ k ] );
+        }
+        blended += same_as_base ? 0 : 1;
+        s += 22;
+    }
+    if ( s != g_golden_gfx_blend_words + g_golden_gfx_blend_size )
+    {
+        LOG_ERROR( "gfx blend: the golden stream was not consumed exactly" );
+        ++failed;
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "The gfx-settings blend 0x52F690 (0x52F7E0 / 0x52FFE0 / 0x530450, weights 0x5D2380 / 0x5D2850) matches retail: %d vectors "
+                     "(%d with a zone blended in), %d words bit for bit",
+                     static_cast< int >( g_golden_gfx_blend_count ), blended, words );
+    else
+        LOG_ERROR( "gfx blend FAILED %d of %d words", failed, words );
     return failed == 0;
 }
 
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_gfx_blend( ) && ok;
+    ok = verify_gfx_zones( ) && ok;
+    ok = verify_race_hull_wake( ) && ok;
     ok = verify_prop_rigid_bodies( ) && ok;
     ok = verify_water_surface_under( ) && ok;
     ok = verify_boat_motion_set( ) && ok;

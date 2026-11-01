@@ -134,6 +134,7 @@
     <ClInclude Include="workspace\core\boat\parts.hxx" />
     <ClInclude Include="workspace\core\boat\pilots.hxx" />
     <ClInclude Include="workspace\core\boat\powerup.hxx" />
+    <ClInclude Include="workspace\core\boat\rays.hxx" />
     <ClInclude Include="workspace\core\boat\respawn.hxx" />
     <ClInclude Include="workspace\core\boat\rtti.hxx" />
     <ClInclude Include="workspace\core\boat\sections.hxx" />
@@ -156,6 +157,7 @@
     <ClInclude Include="workspace\core\ui\combo.hxx" />
     <ClInclude Include="workspace\core\ui\compose.hxx" />
     <ClInclude Include="workspace\core\ui\config.hxx" />
+    <ClInclude Include="workspace\core\ui\difficulty.hxx" />
     <ClInclude Include="workspace\core\ui\dock.hxx" />
     <ClInclude Include="workspace\core\ui\draw.hxx" />
     <ClInclude Include="workspace\core\ui\entity.hxx" />
@@ -176,6 +178,7 @@
     <ClInclude Include="workspace\core\ui\ticker.hxx" />
     <ClInclude Include="workspace\core\ui\wiring.hxx" />
     <ClInclude Include="workspace\core\world\animate.hxx" />
+    <ClInclude Include="workspace\core\world\blend.hxx" />
     <ClInclude Include="workspace\core\world\bodies.hxx" />
     <ClInclude Include="workspace\core\world\build.hxx" />
     <ClInclude Include="workspace\core\world\control.hxx" />
@@ -215,6 +218,7 @@
     <ClInclude Include="workspace\utility\checks\menu.hxx" />
     <ClInclude Include="workspace\utility\checks\pfx.hxx" />
     <ClInclude Include="workspace\utility\checks\race.hxx" />
+    <ClInclude Include="workspace\utility\checks\rays.hxx" />
     <ClInclude Include="workspace\utility\checks\ui.hxx" />
     <ClInclude Include="workspace\utility\checks\wake.hxx" />
     <ClInclude Include="workspace\utility\checks\watchers.hxx" />

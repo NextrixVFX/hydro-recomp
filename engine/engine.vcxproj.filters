@@ -188,6 +188,9 @@
     <ClInclude Include="workspace\core\collision\polytope.hxx">
       <Filter>workspace\core\collision</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\collision\raytest.hxx">
+      <Filter>workspace\core\collision</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\collision\simplex.hxx">
       <Filter>workspace\core\collision</Filter>
     </ClInclude>
