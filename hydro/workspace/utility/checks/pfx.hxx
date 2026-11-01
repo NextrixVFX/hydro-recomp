@@ -1464,9 +1464,135 @@ inline bool verify_water_surface_release( )
     return failed == 0;
 }
 
+// water_point_entity_init / _tick / _release (world/surface.hxx) against VuPointWaveEntity's slot 6 0x5D4A90, tick 0x5D4C50
+// and slot 7 0x5D4AF0 on Hydroelectric's built water (case point_entity): eight entities, pending on all but every third,
+// entity 4's wave refcount forced to 1 before its release. Compared: the tick registration's phase (and the functor's
+// recorded words: vtable 0x753414, the entity, 0x5D4C50, 0), the descriptor / pending byte / wave after each of two ticks,
+// the new wave's words, the release's unregistration and dtor in order, the wave list, the pool, every point wave's +4.
+inline bool verify_point_entity( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "point_entity: the document did not load" );
+        return false;
+    }
+    water_built_t b{};
+    water_build_world( *tree, b, []( entity_t& e ) { return entity_transform( e ); } );
+    const int nb = static_cast< int >( b.waves.size( ) );
+    struct log_t
+    {
+        std::vector< std::string > registered;
+        int unregistered = 0;
+    } log;
+    water_point_entity_hooks_t hk;
+    hk.user = &log;
+    hk.tick_register = []( void* u, const char* phase ) { static_cast< log_t* >( u )->registered.push_back( phase ); };
+    hk.tick_unregister = []( void* u ) { ++static_cast< log_t* >( u )->unregistered; };
+    auto index = [ & ]( int w ) { return w < 0 ? 0xFFFFFFFFu : w < nb ? static_cast< unsigned >( w ) : static_cast< unsigned >( 100 + w - nb ); };
+    const unsigned* s = g_golden_pen_words;
+    const unsigned n = *s++;
+    int failed = 0, compared = 0;
+    for ( unsigned r = 0; r < n; ++r )
+    {
+        int bad = 0;
+        log = log_t{};
+        water_point_entity_t e{};
+        bad += water_point_entity_init( hk );
+        const unsigned nreg = *s++;
+        bad += nreg != log.registered.size( );
+        for ( unsigned k = 0; k < nreg; ++k, s += 5 )
+            bad += s[ 0 ] != 0x753414u || s[ 1 ] != 1u || s[ 2 ] != 0x5D4C50u || s[ 3 ] != 0u || s[ 4 ] != 1u ||
+                   ( k < log.registered.size( ) && log.registered[ k ] != "Decision" );
+        std::uint32_t position[ 4 ];
+        std::memcpy( position, s, 16 );
+        s += 4;
+        std::memcpy( e.desc + 4, s, 28 );
+        s += 7;
+        const bool pending = *s++ != 0;
+        e.pending = pending;
+        for ( int t = 0; t < 2; ++t, s += 14 )
+        {
+            water_point_entity_tick( b, e, position );
+            for ( int k = pending ? 0 : 4; k < 11; ++k, ++compared )
+                bad += e.desc[ k ] != s[ k ];
+            bad += ( s[ 12 ] != 0u ) != e.pending || s[ 13 ] != ( e.wave < 0 ? 0xFFFFFFFFu : static_cast< unsigned >( e.wave - nb ) );
+        }
+        if ( *s++ )
+        {
+            const water_words_t& w = b.waves[ static_cast< std::size_t >( e.wave < 0 ? 0 : e.wave ) ];
+            bad += e.wave < 0;
+            for ( int k = 0; k < 37; ++k )
+                if ( k != 16 && k != 35 && w.known[ k ] )
+                {
+                    bad += w.word[ k ] != s[ k ];
+                    ++compared;
+                }
+            bad += s[ 37 ] != 1u || w.word[ 35 ] == 0u;
+            s += 38;
+        }
+        else
+            bad += e.wave >= 0;
+        const int wave = e.wave;
+        if ( *s++ && wave >= 0 )
+            b.waves[ static_cast< std::size_t >( wave ) ].word[ 1 ] = 1u;
+        std::vector< std::uint8_t > before = b.wave_gone;
+        before.resize( b.waves.size( ), 0 );
+        bad += water_point_entity_release( b, e, hk );
+        b.wave_gone.resize( b.waves.size( ), 0 );
+        std::vector< std::array< unsigned, 2 > > ours = { { 0u, 1u } };
+        for ( std::size_t k = 0; k < b.waves.size( ); ++k )
+            if ( b.wave_gone[ k ] && !before[ k ] )
+                ours.push_back( { 1u, static_cast< unsigned >( static_cast< int >( k ) - nb ) } );
+        const unsigned ne = *s++;
+        std::vector< std::array< unsigned, 2 > > want;
+        for ( unsigned k = 0; k < ne; ++k, s += 2 )
+            want.push_back( { s[ 0 ], s[ 1 ] } );
+        bad += want != ours || log.unregistered != 1;
+        bad += *s++ != 0u || e.wave != -1;   // +0xA0 after
+        const unsigned nl = *s++;
+        int at = b.hold.list;
+        for ( unsigned k = 0; k < nl; ++k, s += 2 )
+        {
+            bad += static_cast< unsigned >( at ) != s[ 0 ];
+            if ( at < 0 )
+                break;
+            bad += index( b.hold.pool[ at ].leaf ) != s[ 1 ];
+            at = b.hold.pool[ at ].next;
+        }
+        bad += at != -1;
+        bad += static_cast< unsigned >( b.hold.pool_count ) != *s++;
+        bad += static_cast< unsigned >( b.hold.pool_free ) != *s++;
+        const unsigned nr = *s++;
+        for ( unsigned k = 0; k < nr; ++k, ++s )
+        {
+            const std::size_t w = static_cast< std::size_t >( nb ) + k;
+            bad += w >= b.waves.size( ) || ( *s == 0xFFFFFFFFu ? !b.wave_gone[ w ] : ( b.wave_gone[ w ] || b.waves[ w ].word[ 1 ] != *s ) );
+        }
+        if ( bad )
+        {
+            ++failed;
+            LOG_ERROR( "point_entity: entity %u: %d differences", r, bad );
+        }
+    }
+    if ( s != g_golden_pen_words + g_golden_pen_size )
+    {
+        ++failed;
+        LOG_ERROR( "point_entity: the golden words were not consumed exactly" );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "water_point_entity_init / _tick / _release match VuPointWaveEntity 0x5D4A90 / 0x5D4C50 / 0x5D4AF0 on Hydroelectric's "
+                     "built water: %u entities, %d words, the registration, the release order, the list, pool and refcounts after each",
+            n, compared );
+    else
+        LOG_ERROR( "point_entity FAILED %d of %u", failed, n );
+    return failed == 0;
+}
+
 inline bool verify_pfx_all( )
 {
     bool ok = true;
+    ok = verify_point_entity( ) && ok;
     ok = verify_water_surface_release( ) && ok;
     ok = verify_water_release( ) && ok;
     ok = verify_pfx_reload( ) && ok;

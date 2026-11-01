@@ -997,8 +997,7 @@ inline void water_built_destroy( water_built_t& b, int wave )
 // no-op when the dtor already unlinked it), then the entity's word = 0 (the
 // caller's). VuWaterRampEntity's 0x5D7030 releases its surface (+0x128) first
 // and then its wave (+0x140) the same way: water_ramp_entity_release below.
-// VuPointWaveEntity's slot 7 0x5D4AF0 (read, not measured): its tick unregistered (g 0x759008 vt+0x28: the caller's), then, when +0xA0
-// is set, this same body on it.
+// VuPointWaveEntity's slot 7 0x5D4AF0: water_point_entity_release below.
 inline void water_entity_release( water_built_t& b, int wave )
 {
     if ( --b.waves[ static_cast< std::size_t >( wave ) ].word[ 1 ] == 0u )
@@ -1162,6 +1161,74 @@ inline int water_ramp_entity_release( water_built_t& b, int surface, int wave, b
 {
     const int unrecreated = water_surface_entity_release( b, surface, drawn, hooks );
     water_entity_release( b, wave );
+    return unrecreated;
+}
+
+// ---------------------------------------------------------------------------
+// VuPointWaveEntity (vtable 0x75344C; slot 0 0x405000 = VuEntity's dtor
+// 0x500870 + operator delete): the words its slot 6 / tick / slot 7 use.
+struct water_point_entity_t
+{
+    // +0x70: the descriptor - the position (the tick's copy of the transform's
+    // +0x80 .. +0x8F), then +0x80 .. +0x9B the properties the ctor 0x5D43B0
+    // binds (Falloff Time, Magnitude, Range Start, Range End, Speed,
+    // Frequency, Foaminess).
+    std::uint32_t desc[ 11 ]{};
+    bool pending = false;   // +0x9C, set by the Emit input (its handler: not read here)
+    int wave = -1;          // +0xA0, -1 = null
+};
+
+// g_vutickmanager 0x759008 - the engine's tick manager, a hook here.
+struct water_point_entity_hooks_t
+{
+    void* user = nullptr;
+    // slot 6: vt+0x20( functor, "Decision" 0x6DFA50 ), the functor a new
+    // 16 bytes {0x753414, entity, 0x5D4C50 (the tick), 0} (a failed new
+    // registers null - not modelled).
+    void ( *tick_register )( void* user, const char* phase ) = nullptr;
+    // slot 7: vt+0x28( entity ) - the entity's ticks unregistered.
+    void ( *tick_unregister )( void* user ) = nullptr;
+};
+
+// Slot 6 (gameInitialize) 0x5D4A90: the tick registered. Returns 1 when the
+// hook is missing (counted), else 0.
+inline int water_point_entity_init( const water_point_entity_hooks_t& hooks )
+{
+    if ( !hooks.tick_register )
+        return 1;
+    hooks.tick_register( hooks.user, "Decision" );
+    return 0;
+}
+
+// The tick 0x5D4C50 (thiscall entity; float dt - unread): when +0x9C is set
+// it is cleared, the transform's position copied to +0x70, 0x528E10 on the
+// descriptor, +0xA0 = the wave, wave +0x8C = entity + 0x5C
+// (water_point_wave_emit's body). `position` = the transform's +0x80 words.
+inline void water_point_entity_tick( water_built_t& b, water_point_entity_t& e, const std::uint32_t* position )
+{
+    if ( !e.pending )
+        return;
+    e.pending = false;
+    for ( int k = 0; k < 4; ++k )
+        e.desc[ k ] = position[ k ];
+    e.wave = water_point_wave_emit( b, e.desc, e.desc + 4 );
+}
+
+// Slot 7 (gameRelease) 0x5D4AF0: the tick unregistered, then when +0xA0 is
+// set water_entity_release's body on it and +0xA0 = 0. Returns 1 when the
+// hook is missing (counted), else 0.
+inline int water_point_entity_release( water_built_t& b, water_point_entity_t& e, const water_point_entity_hooks_t& hooks )
+{
+    int unrecreated = 0;
+    if ( hooks.tick_unregister )
+        hooks.tick_unregister( hooks.user );
+    else
+        ++unrecreated;
+    if ( e.wave >= 0 )
+    {
+        water_entity_release( b, e.wave );
+        e.wave = -1;
+    }
     return unrecreated;
 }
 
