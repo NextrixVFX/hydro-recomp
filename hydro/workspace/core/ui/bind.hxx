@@ -1,8 +1,10 @@
 #pragma once
 
 #include <workspace/core/ui/screen.hxx>
+#include <workspace/core/ui/ticker.hxx>
 #include <workspace/core/ui/wiring.hxx>
 
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -39,6 +41,14 @@
 //   fire "True" when the value's LOW BYTE (+4) is non-zero else "False", both
 //   with the Trigger's own params; the handler writes only +0 = 0 of its
 //   VuRetVal (+4 is the caller's: UNKNOWN - m_known false).
+// - VuInfoUITextEntity (0x73BC5C): the ticker (ticker.hxx: OnSetInfoStringID
+//   0x446480, OnClearInfoStringID 0x446450, OnUITick 0x446580 - its delta is the
+//   tick manager's, a hook), Screen Scale / Width from OUR loaded properties, the
+//   font (0x626B80's answer) an input.
+// - VuSetInfoStringUIAction (0x73E818): Trigger -> slot 12 0x471E30
+//   (disassembled): a VuParams with the "Info String ID" string record (only
+//   while strlen + 1 + 4 <= 0x80) broadcast as "OnSetInfoStringID"; its VuRetVal
+//   +0 = 0 (+4 the caller's).
 // - the screen actions and VuSetGameModeUIAction (wiring.hxx / action.hxx).
 // Anything else: an input plug reached is UNKNOWN (counted; its VuRetVal is
 // the m_answer hook's - e.g. VuLicenseEntity's IsFullVersion, a platform
@@ -57,9 +67,6 @@ struct ui_event_fact_t
 
 inline constexpr ui_event_fact_t k_ui_event_facts[] = {
     { 0x738614u, 0x407F5DB0u, 0x4232B0u },  // VuSysNotifyEntity
-    { 0x73BC5Cu, 0x120E6E48u, 0x446480u },  // VuInfoUITextEntity OnSetInfoStringID (ticker.hxx - not bound yet)
-    { 0x73BC5Cu, 0x3683B89Du, 0x446450u },  // VuInfoUITextEntity OnClearInfoStringID
-    { 0x73BC5Cu, 0x5E798927u, 0x446580u },  // VuInfoUITextEntity OnUITick
     { 0x756828u, 0xD5127E2Du, 0x5EFA60u },  // VuOnProjectInitializedEntity
 };
 
@@ -68,6 +75,8 @@ inline constexpr std::uint32_t k_ui_container_vtable = 0x6F74F0u;
 inline constexpr std::uint32_t k_ui_button_vtable = 0x73B7B0u;
 inline constexpr std::uint32_t k_ui_event_vtable = 0x6F7308u;
 inline constexpr std::uint32_t k_ui_if_vtable = 0x754CD4u;
+inline constexpr std::uint32_t k_ui_info_vtable = 0x73BC5Cu;
+inline constexpr std::uint32_t k_ui_set_info_vtable = 0x73E818u;
 
 // One step of the frame's trace, at the points retail's case logs them.
 enum class ui_trace_kind_t
@@ -77,6 +86,8 @@ enum class ui_trace_kind_t
     broadcast,  // 0x505690 entered: hash, params
     sound,      // FMOD getEvent: the name
     event,      // a registered handler not recreated: owner, its method
+    string,     // VuStringDB slot 7 (the ticker's hook): the id
+    measure,    // the font measure 0x5373D0 (the ticker's hook): the text, xmm3 bits, the font
 };
 
 struct ui_trace_t
@@ -87,6 +98,7 @@ struct ui_trace_t
     std::uint32_t m_word = 0;  // broadcast hash / event method
     ui_params_t m_params;
     bool m_known = true;
+    std::uint32_t m_font = 0;  // measure: the font
 };
 
 struct ui_bound_t
@@ -99,6 +111,7 @@ struct ui_bound_t
     ui_button_hooks_t m_button_hooks;
     std::unique_ptr< c_ui_button > m_button;
     std::unique_ptr< c_ui_event > m_event;
+    std::unique_ptr< ui_info_ticker_t > m_ticker;
 };
 
 struct ui_bind_hooks_t
@@ -108,6 +121,12 @@ struct ui_bind_hooks_t
     // HOOK: an input plug not recreated - its VuRetVal (default { 0, 0 }).
     std::function< ui_ret_t( const entity_t&, const char* ) > m_answer;
     value_t* m_root = nullptr;  // gameutil +80
+    // The ticker's: VuStringDB slot 7 and the font measure 0x5373D0 (HOOKS, ticker.hxx),
+    // the tick manager's delta (g 0x759008 slot 15, a HOOK) and the font 0x626B80
+    // answers for an entity (an input: the fonts are the rendering layer's).
+    ui_info_hooks_t m_info;
+    std::function< float( ) > m_delta;
+    std::function< std::uint32_t( const entity_t& ) > m_font;
 };
 
 // An entity's own property slot (its loaded ui_state_t), or null.
@@ -161,6 +180,19 @@ public:
         m_wiring.m_bound_run = [ this ]( entity_t& owner, const char* plug, const ui_params_t& p ) { return run_input( owner, plug, p ); };
         m_wiring.m_answer = m_hooks.m_answer;
         m_screen.m_input = m_hooks.m_input;
+        m_info.m_string = [ this ]( const std::string& id )
+        {
+            trace( ui_trace_kind_t::string, -1, id, 0u, ui_params_t( ), true );
+            return m_hooks.m_info.m_string ? m_hooks.m_info.m_string( id ) : std::string( );
+        };
+        m_info.m_measure = [ this ]( std::uint32_t font, const std::string& text, float aspect )
+        {
+            std::uint32_t bits;
+            std::memcpy( &bits, &aspect, 4 );
+            trace( ui_trace_kind_t::measure, -1, text, bits, ui_params_t( ), true );
+            m_trace.back( ).m_font = font;
+            return m_hooks.m_info.m_measure ? m_hooks.m_info.m_measure( font, text, aspect ) : 0.0f;
+        };
         for ( auto& child : root.m_children )
             m_screen.m_children.push_back( &m_bound[ static_cast< std::size_t >( m_index[ child.get( ) ] ) ]->m_map );
     }
@@ -271,6 +303,29 @@ private:
             ev.m_fire = [ this, &e ]( const ui_params_t& p ) { fire_named( e, "Trigger", p ); };
             add( b, "OnUIEvent", 0x62E950u, [ &ev ]( const ui_params_t& p ) { ev.on_ui_event( p ); } );
         }
+        else if ( b.m_vtable == k_ui_info_vtable )
+        {
+            b.m_ticker = std::make_unique< ui_info_ticker_t >( ui_info_ticker_of( e ) );
+            ui_info_ticker_t& t = *b.m_ticker;
+            std::array< float, 2 > scale = { 0.0f, 0.0f };
+            float width = 0.0f;
+            if ( const ui_slot_t* s = ui_bind_slot( e, "Screen Scale" ) )
+                std::memcpy( scale.data( ), s->m_bits, 8 );
+            if ( const ui_slot_t* s = ui_bind_slot( e, "Width" ) )
+                std::memcpy( &width, s->m_bits, 4 );
+            const std::uint32_t font = m_hooks.m_font ? m_hooks.m_font( e ) : 0u;
+            // 0x446120 registers OnClearInfoStringID, OnSetInfoStringID, OnUITick.
+            add( b, "OnClearInfoStringID", 0x446450u, [ &t ]( const ui_params_t& ) { ui_info_clear( t ); } );
+            add( b, "OnSetInfoStringID", 0x446480u, [ this, &t, scale, width, font ]( const ui_params_t& p )
+            {
+                ui_params_reader_t r( p );
+                ui_info_set( t, r.read_string( ), scale.data( ), width, font, m_info );
+            } );
+            add( b, "OnUITick", 0x446580u, [ this, &t, width ]( const ui_params_t& )
+            {
+                ui_info_tick( t, width, m_hooks.m_delta ? m_hooks.m_delta( ) : 0.0f );
+            } );
+        }
         else
         {
             for ( const ui_event_fact_t& f : k_ui_event_facts )
@@ -303,7 +358,7 @@ private:
             for ( const char* name : { "SetFocus", "SetStringID", "Enable", "Disable", "IsEnabled" } )
                 if ( std::strcmp( plug, name ) == 0 )
                     return true;
-        return vt == k_ui_if_vtable && std::strcmp( plug, "Trigger" ) == 0;
+        return ( vt == k_ui_if_vtable || vt == k_ui_set_info_vtable ) && std::strcmp( plug, "Trigger" ) == 0;
     }
 
     ui_ret_t run_input( entity_t& owner, const char* plug, const ui_params_t& p )
@@ -316,6 +371,16 @@ private:
             const ui_ret_t answer = fire_named( owner, "Operand", ui_params_t( ) );
             if ( answer.m_words[ 0 ] == 3u )
                 fire_named( owner, ( answer.m_words[ 1 ] & 0xFFu ) != 0 ? "True" : "False", p );
+            out.m_known = false;  // +4 left as the caller's
+            return out;
+        }
+        if ( vt == k_ui_set_info_vtable )
+        {
+            // 0x471E30.
+            const ui_slot_t* id = ui_bind_slot( owner, "Info String ID" );
+            ui_params_t q;
+            q.add_string( id ? id->m_text.c_str( ) : "" );
+            broadcast( fsm_hash( "OnSetInfoStringID" ), q );
             out.m_known = false;  // +4 left as the caller's
             return out;
         }
@@ -338,5 +403,6 @@ private:
     }
 
     ui_bind_hooks_t m_hooks;
+    ui_info_hooks_t m_info;  // m_hooks.m_info with the trace
     std::map< const entity_t*, int > m_index;
 };

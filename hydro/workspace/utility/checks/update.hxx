@@ -30,7 +30,7 @@ inline bool verify_ui_frames( )
         const auto found = templates->find( "VuTemplateAsset/" + name );
         return found == templates->end( ) ? nullptr : &found->second;
     } );
-    int failed = 0, steps = 0, traces = 0, buttons = 0, rows = 0, entities = 0, unknown_inputs = 0, unknown_events = 0;
+    int failed = 0, steps = 0, traces = 0, buttons = 0, tickers = 0, rows = 0, entities = 0, unknown_inputs = 0, unknown_events = 0;
     auto bad = [ &failed ]( const char* what, const char* project, int step )
     {
         if ( ++failed <= 8 )
@@ -73,6 +73,19 @@ inline bool verify_ui_frames( )
             return r;
         };
         hooks.m_root = &game_root;
+        // the case's ticker environment: VuStringDB answers "<id>|text", the measure FRM_MEASURE x the text's
+        // length, the tick manager's delta FRM_DELTA, the font TxtWorld's
+        float measure, delta;
+        std::memcpy( &measure, &g_golden_frm_measure, 4 );
+        std::memcpy( &delta, &g_golden_frm_delta, 4 );
+        hooks.m_info.m_string = []( const std::string& id ) { return id + "|text"; };
+        hooks.m_info.m_measure = [ measure ]( std::uint32_t, const std::string& text, float )
+        {
+            return static_cast< float >( static_cast< double >( measure ) * static_cast< double >( text.size( ) ) );
+        };
+        hooks.m_delta = [ delta ] { return delta; };
+        const std::uint32_t font = gp.m_font;
+        hooks.m_font = [ font ]( const entity_t& ) { return font; };
         c_ui_binding bind( *root, hooks );
         // the tree and the event maps
         bool same = bind.m_bound.size( ) == static_cast< std::size_t >( gp.m_entities );
@@ -131,8 +144,36 @@ inline bool verify_ui_frames( )
             buttons += count;
             return ok;
         };
+        const auto same_tickers = [ &bind, &tickers ]( int first, int count )
+        {
+            std::vector< std::pair< int, std::string > > have;
+            for ( const auto& b : bind.m_bound )
+                if ( b->m_ticker )
+                {
+                    const ui_info_ticker_t& t = *b->m_ticker;
+                    const float f[ 7 ] = { t.m_delay, t.m_speed, t.m_scroll.m_extent, t.m_scroll.m_gap, t.m_time, t.m_scroll.m_x, t.m_scroll.m_y };
+                    std::string text;
+                    for ( float x : f )
+                    {
+                        char word[ 16 ];
+                        std::uint32_t bits;
+                        std::memcpy( &bits, &x, 4 );
+                        std::snprintf( word, sizeof( word ), "0x%08X.", bits );
+                        text += word;
+                    }
+                    have.push_back( { b->m_index, text + t.m_id } );
+                }
+            bool ok = have.size( ) == static_cast< std::size_t >( count );
+            for ( int k = 0; ok && k < count; ++k )
+                ok = have[ static_cast< std::size_t >( k ) ].first == g_golden_frm_tickers[ first + k ].m_index &&
+                     have[ static_cast< std::size_t >( k ) ].second == g_golden_frm_tickers[ first + k ].m_state;
+            tickers += count;
+            return ok;
+        };
         if ( !same_buttons( gp.m_first_button, gp.m_buttons ) )
             bad( "the buttons' loaded state", gp.m_asset, -1 );
+        if ( !same_tickers( gp.m_first_ticker, gp.m_tickers ) )
+            bad( "the tickers' loaded state", gp.m_asset, -1 );
         for ( int s = 0; s < gp.m_steps; ++s )
         {
             const golden_frm_step_t& st = g_golden_frm_steps[ gp.m_first_step + s ];
@@ -155,8 +196,13 @@ inline bool verify_ui_frames( )
             {
                 const ui_trace_t& t = bind.m_trace[ static_cast< std::size_t >( k ) ];
                 const golden_frm_log_t& g = g_golden_frm_logs[ st.m_first_log + k ];
-                ok = static_cast< int >( t.m_kind ) == g.m_kind && t.m_index == g.m_index && t.m_name == g.m_name && t.m_word == g.m_word &&
-                     ( t.m_kind == ui_trace_kind_t::sound || t.m_kind == ui_trace_kind_t::event || ui_hex( t.m_params ) == g.m_params ) &&
+                char font[ 16 ];
+                std::snprintf( font, sizeof( font ), "0x%08X", t.m_font );
+                const bool params = t.m_kind == ui_trace_kind_t::measure ? std::strcmp( font, g.m_params ) == 0
+                                    : t.m_kind == ui_trace_kind_t::sound || t.m_kind == ui_trace_kind_t::event || t.m_kind == ui_trace_kind_t::string
+                                        ? true
+                                        : ui_hex( t.m_params ) == g.m_params;
+                ok = static_cast< int >( t.m_kind ) == g.m_kind && t.m_index == g.m_index && t.m_name == g.m_name && t.m_word == g.m_word && params &&
                      ( t.m_known ? 1 : 0 ) == g.m_known;
                 if ( !t.m_known && t.m_kind == ui_trace_kind_t::input )
                     ++unknown_inputs;
@@ -168,6 +214,8 @@ inline bool verify_ui_frames( )
             traces += st.m_logs;
             if ( !same_buttons( st.m_first_button, st.m_buttons ) )
                 bad( "the button states", gp.m_asset, s );
+            if ( !same_tickers( st.m_first_ticker, st.m_tickers ) )
+                bad( "the ticker states", gp.m_asset, s );
             std::string after;
             vujb_dump( game_root, after );
             if ( after != st.m_root )
@@ -177,10 +225,10 @@ inline bool verify_ui_frames( )
     }
     if ( failed == 0 )
         LOG_SUCCESS( "c_ui_binding matches retail's frames over %d real Screens projects (VuUIScreenEntity 0x629A70 / 0x629B90 / 0x629B00, "
-                     "containers 0x62F7A0 / 0x62F7C0, buttons, VuUIEventEntity, VuIfEntity 0x5DDE60, the actions; graph 0x5023A0 / 0x404BE0, "
-                     "broadcast 0x505690): %d entities and %d event-map rows, %d steps, %d trace entries in order (%d unrecreated inputs, %d "
-                     "unrecreated handlers - hooks), %d button states, the game-data root",
-            static_cast< int >( g_golden_frm_projects_count ), entities, rows, steps, traces, unknown_inputs, unknown_events, buttons );
+                     "containers 0x62F7A0 / 0x62F7C0, buttons, VuUIEventEntity, VuIfEntity 0x5DDE60, the Info ticker, SetInfoString 0x471E30, "
+                     "the actions; graph 0x5023A0 / 0x404BE0, broadcast 0x505690): %d entities and %d event-map rows, %d steps, %d trace entries "
+                     "in order (%d unrecreated inputs, %d unrecreated handlers - hooks), %d button states, %d ticker states, the game-data root",
+            static_cast< int >( g_golden_frm_projects_count ), entities, rows, steps, traces, unknown_inputs, unknown_events, buttons, tickers );
     else
         LOG_ERROR( "the UI per-frame binding FAILED %d checks against retail's", failed );
     return failed == 0;
