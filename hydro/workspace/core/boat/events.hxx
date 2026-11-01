@@ -93,10 +93,7 @@ inline void boat_on_camera_shake( std::uint8_t* cam, const std::uint8_t* params 
 // maxss(+0xC8, a), +0xCC = maxss(+0xCC, b).
 inline void boat_rumble( std::uint8_t* drv, std::uint32_t drv_vtable, float a, float b )
 {
-    if ( !boat_rtti_is( drv_vtable, 0x73623Cu ) )
-        return;
-    state_put_f( drv, 0xC8, ai_maxss( state_f( drv, 0xC8 ), a ) );
-    state_put_f( drv, 0xCC, ai_maxss( state_f( drv, 0xCC ), b ) );
+    boat_driver_raise( drv, boat_rtti_is( drv_vtable, 0x73623Cu ), a, b );   // the one recreation of 0x41E2E0 (state.hxx)
 }
 
 // OnRumble 0x41E950: two floats, then 0x41E2E0 with them.
@@ -154,3 +151,131 @@ inline void body_apply_impulse( std::uint8_t* b, const float* impulse, const flo
 // VuBoatEntity's btMotionState::setWorldTransform 0x41E460 (vtable 0x7383C4
 // slot 2; the get is construct.hxx's boat_motion_get) is world/dynamics.hxx's
 // boat_motion_set - one recreation; it performs 0x534830 instead of hooking it.
+// ---- VuBoatEntity's contact handler 0x41E620 and the two body functions it
+// calls, on the bodies' images (solver_rigid_t's offsets: +0xD8 flags, +0x40
+// the origin, +0x110 .. +0x138 the inverse world inertia rows, +0x140 the
+// linear / +0x150 the angular velocity, +0x160 the inverse mass; then +0x2CA
+// the short and +0x2D0 the flags VuRigidBody adds). Each operation in its
+// disassembly's operand order (sse_mul / sse_add / sse_sub: dst first). ----
+
+// 0x4AD340 (ecx body A, edx body B; point*, normal* - cdecl, the caller pops;
+// result in xmm0): 0 when either body's flags +0xD8 & 4; else v = the
+// velocity at the point of A minus B's (w x r + v, r = p - origin), x =
+// (-(n.y v.y + v.x n.x) + n.z v.z) - 5 (0x6F7768)) x 0.022222223
+// (0x6F75E8), then minss(1, x) and maxss(0, that).
+inline float body_contact_strength( const std::uint8_t* a, const std::uint8_t* b, const float* p, const float* n )
+{
+    std::uint32_t fa, fb;
+    std::memcpy( &fa, a + 0xD8, 4 );
+    std::memcpy( &fb, b + 0xD8, 4 );
+    if ( ( fa & 4 ) || ( fb & 4 ) )
+        return 0.0f;
+    const float bx = state_f( b, 0x150 ), by = state_f( b, 0x154 ), bz = state_f( b, 0x158 );
+    const float rby = sse_sub( p[ 1 ], state_f( b, 0x44 ) ), rbx = sse_sub( p[ 0 ], state_f( b, 0x40 ) ), rbz = sse_sub( p[ 2 ], state_f( b, 0x48 ) );
+    const float raz = sse_sub( p[ 2 ], state_f( a, 0x48 ) );
+    const float vbx = sse_add( sse_sub( sse_mul( rbz, by ), sse_mul( rby, bz ) ), state_f( b, 0x140 ) );
+    const float vbz = sse_add( sse_sub( sse_mul( rby, bx ), sse_mul( rbx, by ) ), state_f( b, 0x148 ) );
+    const float vby = sse_add( sse_sub( sse_mul( rbx, bz ), sse_mul( rbz, bx ) ), state_f( b, 0x144 ) );
+    const float ax = state_f( a, 0x150 ), ay = state_f( a, 0x154 ), az = state_f( a, 0x158 );
+    const float rax = sse_sub( p[ 0 ], state_f( a, 0x40 ) ), ray = sse_sub( p[ 1 ], state_f( a, 0x44 ) );
+    const float vax = sse_add( sse_sub( sse_mul( raz, ay ), sse_mul( ray, az ) ), state_f( a, 0x140 ) );
+    const float vay = sse_add( sse_sub( sse_mul( rax, az ), sse_mul( raz, ax ) ), state_f( a, 0x144 ) );
+    const float vaz = sse_add( sse_sub( sse_mul( ray, ax ), sse_mul( rax, ay ) ), state_f( a, 0x148 ) );
+    const float dx = sse_sub( vax, vbx ), dy = sse_sub( vay, vby ), dz = sse_sub( vaz, vbz );
+    float x = sse_add( sse_add( sse_mul( n[ 1 ], dy ), sse_mul( dx, n[ 0 ] ) ), sse_mul( n[ 2 ], dz ) );
+    x = sse_mul( sse_sub( support_negate( x ), 5.0f ), support_bits( 0x3CB60B61u ) );
+    const float lo = _mm_cvtss_f32( _mm_min_ss( _mm_set_ss( 1.0f ), _mm_set_ss( x ) ) );
+    return _mm_cvtss_f32( _mm_max_ss( _mm_set_ss( 0.0f ), _mm_set_ss( lo ) ) );
+}
+
+// 0x534DA0 (ecx body A, edx body B; point*, normal*; xmm0): 0 when either
+// flags +0xD8 & 4; vn = (A's velocity at the point - B's) . n (the same
+// terms as above in this function's own order); 0 unless 0 > vn (`comiss;
+// jbe`); else -vn / ((B's ((I_B (rB x n)) x rB) . n + 1/m_B) + (A's (same) +
+// 1/m_A)) - the impulse that stops the approach (no restitution).
+inline float body_contact_impulse( const std::uint8_t* a, const std::uint8_t* b, const float* p, const float* n )
+{
+    std::uint32_t fa, fb;
+    std::memcpy( &fa, a + 0xD8, 4 );
+    std::memcpy( &fb, b + 0xD8, 4 );
+    if ( ( fa & 4 ) || ( fb & 4 ) )
+        return 0.0f;
+    const float bx = state_f( b, 0x150 ), by = state_f( b, 0x154 ), bz = state_f( b, 0x158 );
+    const float rby = sse_sub( p[ 1 ], state_f( b, 0x44 ) ), rbx = sse_sub( p[ 0 ], state_f( b, 0x40 ) ), rbz = sse_sub( p[ 2 ], state_f( b, 0x48 ) );
+    const float vbx = sse_add( state_f( b, 0x140 ), sse_sub( sse_mul( rbz, by ), sse_mul( rby, bz ) ) );
+    const float vby = sse_add( state_f( b, 0x144 ), sse_sub( sse_mul( rbx, bz ), sse_mul( rbz, bx ) ) );
+    const float vbz = sse_add( state_f( b, 0x148 ), sse_sub( sse_mul( rby, bx ), sse_mul( rbx, by ) ) );
+    const float ax = state_f( a, 0x150 ), ay = state_f( a, 0x154 ), az = state_f( a, 0x158 );
+    const float ray = sse_sub( p[ 1 ], state_f( a, 0x44 ) ), rax = sse_sub( p[ 0 ], state_f( a, 0x40 ) ), raz = sse_sub( p[ 2 ], state_f( a, 0x48 ) );
+    const float vax = sse_add( state_f( a, 0x140 ), sse_sub( sse_mul( raz, ay ), sse_mul( ray, az ) ) );
+    const float vay = sse_add( state_f( a, 0x144 ), sse_sub( sse_mul( rax, az ), sse_mul( raz, ax ) ) );
+    const float vaz = sse_add( state_f( a, 0x148 ), sse_sub( sse_mul( ray, ax ), sse_mul( rax, ay ) ) );
+    const float vn = sse_add( sse_add( sse_mul( sse_sub( vax, vbx ), n[ 0 ] ), sse_mul( sse_sub( vay, vby ), n[ 1 ] ) ),
+                              sse_mul( sse_sub( vaz, vbz ), n[ 2 ] ) );
+    if ( !( 0.0f > vn ) )
+        return 0.0f;
+    // A: k = rA x n, t = I_A k (rows +0x110 / +0x120 / +0x130), u = t x rA.
+    const float kx = sse_sub( sse_mul( ray, n[ 2 ] ), sse_mul( raz, n[ 1 ] ) );
+    const float ky = sse_sub( sse_mul( raz, n[ 0 ] ), sse_mul( rax, n[ 2 ] ) );
+    const float kz = sse_sub( sse_mul( rax, n[ 1 ] ), sse_mul( ray, n[ 0 ] ) );
+    const float t0 = sse_add( sse_add( sse_mul( state_f( a, 0x114 ), ky ), sse_mul( kx, state_f( a, 0x110 ) ) ), sse_mul( state_f( a, 0x118 ), kz ) );
+    const float t1 = sse_add( sse_add( sse_mul( state_f( a, 0x124 ), ky ), sse_mul( kx, state_f( a, 0x120 ) ) ), sse_mul( state_f( a, 0x128 ), kz ) );
+    const float t2 = sse_add( sse_add( sse_mul( state_f( a, 0x134 ), ky ), sse_mul( kx, state_f( a, 0x130 ) ) ), sse_mul( state_f( a, 0x138 ), kz ) );
+    const float ux = sse_sub( sse_mul( t1, raz ), sse_mul( t2, ray ) );
+    const float uz = sse_sub( sse_mul( t0, ray ), sse_mul( t1, rax ) );
+    const float uy = sse_sub( sse_mul( t2, rax ), sse_mul( t0, raz ) );
+    // B: j = rB x n, s = I_B j, w = s x rB.
+    const float jx = sse_sub( sse_mul( rby, n[ 2 ] ), sse_mul( rbz, n[ 1 ] ) );
+    const float jy = sse_sub( sse_mul( rbz, n[ 0 ] ), sse_mul( rbx, n[ 2 ] ) );
+    const float jz = sse_sub( sse_mul( rbx, n[ 1 ] ), sse_mul( rby, n[ 0 ] ) );
+    const float s0 = sse_add( sse_add( sse_mul( state_f( b, 0x114 ), jy ), sse_mul( jx, state_f( b, 0x110 ) ) ), sse_mul( state_f( b, 0x118 ), jz ) );
+    const float s1 = sse_add( sse_add( sse_mul( state_f( b, 0x124 ), jy ), sse_mul( state_f( b, 0x120 ), jx ) ), sse_mul( state_f( b, 0x128 ), jz ) );
+    const float s2 = sse_add( sse_add( sse_mul( state_f( b, 0x134 ), jy ), sse_mul( state_f( b, 0x130 ), jx ) ), sse_mul( state_f( b, 0x138 ), jz ) );
+    const float wx = sse_sub( sse_mul( s1, rbz ), sse_mul( s2, rby ) );
+    const float wy = sse_sub( sse_mul( s2, rbx ), sse_mul( s0, rbz ) );
+    const float wz = sse_sub( sse_mul( s0, rby ), sse_mul( s1, rbx ) );
+    const float db = sse_add( sse_add( sse_add( sse_mul( wy, n[ 1 ] ), sse_mul( wx, n[ 0 ] ) ), sse_mul( wz, n[ 2 ] ) ), state_f( b, 0x160 ) );
+    const float da = sse_add( sse_add( sse_add( sse_mul( uy, n[ 1 ] ), sse_mul( ux, n[ 0 ] ) ), sse_mul( uz, n[ 2 ] ) ), state_f( a, 0x160 ) );
+    return support_negate( vn ) / sse_add( db, da );
+}
+
+// The contact handler 0x41E620 (VuBoatEntity's btCollisionObject contact
+// interface; thiscall this = boat +0x64; the contact*; retn 4): contact +8 the
+// other body, +0xC the point, +0x1C the normal. Nothing when the other's
+// flags +0xD8 & 4. s = 0x4AD340(the boat's body, the other); 0 < s (`comiss;
+// jbe`) -> 0x41E2E0(boat, 2 s (0x6F76F8), 0). When the driver's (boat +0x220)
+// vt+0x34 answers true and the other's +0x2D0 & 0x40: j = 0x534DA0 and
+// applyImpulse 0x4221C0(n j, point - the body's origin) on the boat's body.
+// Then boat +0x468 = 1 when the other's +0x2CA == 128 or (!(+0x2D0 & 1) and
+// 0x534DA0 / boat +0x134 > boat +0x140 x 0.44704 (0x6F7654), `comiss; jbe`);
+// boat +0x389 = 1 always.
+inline void boat_contact_handler( std::uint8_t* boat, std::uint8_t* body, const std::uint8_t* other, const float* point, const float* normal,
+                                  bool driver_34, bool human, std::uint8_t* driver )
+{
+    std::uint32_t of;
+    std::memcpy( &of, other + 0xD8, 4 );
+    if ( of & 4 )
+        return;
+    const float s = body_contact_strength( body, other, point, normal );
+    if ( s > 0.0f )
+        boat_driver_raise( driver, human, sse_mul( s, 2.0f ), 0.0f );
+    if ( driver_34 && ( other[ 0x2D0 ] & 0x40 ) )
+    {
+        const float j = body_contact_impulse( body, other, point, normal );
+        const float impulse[ 4 ] = { sse_mul( normal[ 0 ], j ), sse_mul( normal[ 1 ], j ), sse_mul( normal[ 2 ], j ), 0.0f };
+        const float rel[ 4 ] = { sse_sub( point[ 0 ], state_f( body, 0x40 ) ), sse_sub( point[ 1 ], state_f( body, 0x44 ) ),
+                                 sse_sub( point[ 2 ], state_f( body, 0x48 ) ), 0.0f };
+        body_apply_impulse( body, impulse, rel );
+    }
+    std::int16_t group;
+    std::memcpy( &group, other + 0x2CA, 2 );
+    bool hit = group == 128;
+    if ( !hit && !( other[ 0x2D0 ] & 1 ) )
+    {
+        const float j = body_contact_impulse( body, other, point, normal );
+        hit = j / state_f( boat, 0x134 ) > sse_mul( state_f( boat, 0x140 ), support_bits( 0x3EE4E26Du ) );
+    }
+    if ( hit )
+        boat[ 0x468 ] = 1;
+    boat[ 0x389 ] = 1;
+}

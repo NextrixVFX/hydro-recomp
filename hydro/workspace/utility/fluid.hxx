@@ -976,14 +976,21 @@ inline bool verify_qaxis( )
 template < class Offsets >
 inline bool verify_boat_records( const unsigned* words, const Offsets* offsets, std::size_t count, int mode )
 {
-    const bool tick = mode >= 1, thunk = mode >= 2, via = mode == 3;
-    const char* name = via ? "boat_thunk_build + tickThunk 0x41E5E0 (the 4 vectors whose Drives span is not a multiple of 32 bytes skipped)" : thunk ? "tickThunk 0x41E5E0" : tick ? "0x414010" : "0x414760";
+    const bool tick = mode >= 1, thunk = mode >= 2, via = mode >= 3, excl = mode == 4;
+    const char* name = excl ? "boat_thunk_build + tickThunk 0x41E5E0 with the solver's excluded waves (+0x30 = 2, +0x34; the 4 vectors whose Drives span is not a multiple of 32 bytes skipped)" : via ? "boat_thunk_build + tickThunk 0x41E5E0 (the 4 vectors whose Drives span is not a multiple of 32 bytes skipped)" : thunk ? "tickThunk 0x41E5E0" : tick ? "0x414010" : "0x414760";
     int failed = 0, records = 0, submerged = 0, calls = 0, branch[ 3 ] = { }, gated = 0, skipped = 0;
     for ( std::size_t index = 0; index < count; ++index )
     {
         const unsigned* s = words + offsets[ index ];
         auto u = [ & ]( ) { return *s++; };
         auto f = [ & ]( ) { return water_bits( *s++ ); };
+        std::uint32_t sx[ 2 ] = { 0u, 0u };   // mode 4: the solver's +0x34 array's words (wave k = 0x1000 + k, null 0)
+        if ( excl )
+            for ( std::uint32_t& w : sx )
+            {
+                const std::int32_t e = static_cast< std::int32_t >( u( ) );
+                w = e >= 0 ? 0x1000u + static_cast< std::uint32_t >( e ) : 0u;
+            }
         const unsigned nbytes = u( );
         std::vector< uint8_t > points( 4 * u( ) + 32 );
         std::memcpy( points.data( ), s, points.size( ) - 32 );
@@ -1192,7 +1199,7 @@ inline bool verify_boat_records( const unsigned* words, const Offsets* offsets, 
             pf( ih, 0x15C, f15C ); pf( ih, 0x160, f160 ); pf( ih, 0x164, f164 ); ih[ 0x174 ] = f174; pf( ih, 0x178, f178 );
             pu( ih, 0x1DC, ex0 >= 0 ? 0x1000u + static_cast< std::uint32_t >( ex0 ) : 0u );
             pu( ih, 0x1E0, ex1 >= 0 ? 0x1000u + static_cast< std::uint32_t >( ex1 ) : 0u );
-            pu( isv, 0x30, 0 ); pu( isv, 0x34, 0 ); pf( isv, 0x100, 0.0f );
+            pu( isv, 0x30, excl ? 2u : 0u ); pu( isv, 0x34, excl ? 0x30003FC0u : 0u ); pf( isv, 0x100, 0.0f );
             ib[ 0x3D4 ] = b374;
             pf( ib, 0x134, g19[ 0 ] ); pf( ib, 0x3D8, g19[ 1 ] ); pf( ib, 0x3DC, g19[ 2 ] );
             pf( ib, 0x3E8, g19[ 3 ] ); pf( ib, 0x3EC, g19[ 4 ] ); pf( ib, 0x3F0, g19[ 5 ] );
@@ -1212,12 +1219,15 @@ inline bool verify_boat_records( const unsigned* words, const Offsets* offsets, 
             boat_thunk_in_t in;
             in.boat = ib; in.hull = ih; in.solver = isv; in.transform = itr; in.engine = &eng; in.body = &b; in.fluids = &asset;
             in.water = &water; in.kernel = fluid_fake_kernel; in.kernel_user = &fake; in.gravity = fluid_fake_gravity; in.gravity_user = gravity;
+            in.solver_excluded = excl ? sx : nullptr;
             in.wave_index = [ ]( std::uint32_t w ) { return w >= 0x1000u && w < 0x1100u ? static_cast< int >( w - 0x1000u ) : -2; };
+            // Built once, then MOVED into the persistent object before the step (as a relocating container would
+            // move it between steps): the step must not read the moved-from one.
+            boat_thunk_t first{ };
             static boat_thunk_t bt;
-            bt = boat_thunk_t{ };
             if ( nbytes % 32 != 0 )
                 skip_vector = true, ++skipped;
-            else if ( !boat_thunk_build( bt, in ) )
+            else if ( !boat_thunk_build( first, in ) || ( bt = std::move( first ), !boat_thunk_build( bt, in ) ) )
                 what = "the builder refused";
             else
             {
@@ -1326,6 +1336,13 @@ inline bool verify_tick_thunk( )
 inline bool verify_thunk_build( )
 {
     return verify_boat_records( g_golden_tick_thunk_words, g_golden_tick_thunk_offsets, g_golden_tick_thunk_count, 3 );
+}
+
+// The same through the builder with the solver's OWN excluded waves set (+0x30 = 2, +0x34 -> two wave pointers or null:
+// case thunk_exclude) - boat_thunk_in_t::solver_excluded mapped through wave_index into the solver's exclusions.
+inline bool verify_thunk_exclude( )
+{
+    return verify_boat_records( g_golden_thunk_exclude_words, g_golden_thunk_exclude_offsets, g_golden_thunk_exclude_count, 4 );
 }
 
 // VuBoatEntity slot 17 0x421980 with VuDynamicsImpl slots 15 / 11 / 25
