@@ -41,7 +41,14 @@
 // tile offsets (+0x54 / +0x58), colour (+0x28 .. +0x34) x the system tint (+0xAC); the pattern's Texture / Tile
 // Texture (+0x3C / +0x54), Near Fade Min / Max (+0x78 / +0x7C), Tile Scroll U / V (+0x80 / +0x84), Tile Scale
 // (+0x8C). A GEOM particle as its model (+0x3C) at pfx_geom_draw_matrix with pfx_geom_draw_colour (0x5906A0 /
-// 0x5903A0, verified). TRAIL patterns are not drawn (no renderer for 0x58D030's ribbons yet): counted, logged once.
+// 0x5903A0, verified). TRAIL patterns are not drawn: counted, logged once. READ (world batch 13): the trail
+// renderer 0x58D030 (from the pattern's slot 2 0x58F9C0 while +0x28 is non-zero) only PACKS - with >= 2 particles
+// (+0x28) - a sort-command payload: 108 header bytes (the renderer, the node, the system matrix +0x1C when Space
+// +0x34 is Object else the identity 0x7593B0, the pattern's +0x2C .. +0x4B box, min(count, 5461)) and per particle
+// 44 bytes (position +0x08 16 b, +0x44 / +0x4C 16 b, +0x54, the colour +0x28 .. +0x34 x the system tint +0xAC ..
+// x 255 as four bytes, scale +0x38 x 0.5), sorted by the eye distance to the box centre / [+0x17C] (minss 1.0).
+// The ribbon GEOMETRY is built by the draw callback 0x58CE30 the command names - NOT READ: the trails stay
+// undrawn until it is.
 // VuRand: retail's emitters draw from THE global VuRandom 0x736810, the one the AI plans and the front end's roster
 // picks draw from (core/boat fleet.hxx) - the engine init 0x566230 seeds it from the platform clock (c_world owns it,
 // bind_random). The runtime keeps its own copy of the 34 words (pfx_runtime_t::rand, the verified emitters' operand),
