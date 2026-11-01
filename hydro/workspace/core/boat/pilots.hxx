@@ -142,3 +142,213 @@ inline void ui_driver_tick( const track_manager_t& tm, ui_pilot_t& p, ai_tick_t 
     }
     ai_controls( drv, t.boat, t.animation, dt, steer, throttle, 0, hooks.controls );
 }
+
+// ---- VuAiNuisanceDriver (vtable 0x737C4C; 0x104) ----
+// A VuAiDriver that harasses another boat: +0xE4 a VuWeakRef<VuBoatEntity>
+// (vtable 0x737C44; +0xE8 / +0xEC its list links, +0xF0 the target boat),
+// +0xF4 the target's sector, +0xF8 / +0xFC the audio line's event holder
+// (0x50FBF0's object: +0xFC the FMOD event), +0x100 the last line played. Its
+// tick does not call 0x40B940: it steers itself to its own target +0xD4.
+
+// What it reaches that is not recreated: the boat's DB 0x41D500 (the boat's
+// BoatDB entry) and its "Nuisance" / "AudioLines" members (the asset system:
+// `line_count` = the list's size, -1 when not a list; `line` = element k's
+// text, "" when not a string), the FMOD event holder 0x50FBF0 (the old event
+// stopped, getEvent, the finish callback 0x50FBB0 - `line_event` returns the
+// handle written to +0xFC, 0 on failure), FMOD start / set3DAttributes /
+// setCallback + release, and the weak reference's release 0x40E4D0 (its list
+// links in the target - `release_target`; the image's +0xE8 / +0xEC / +0xF0
+// are zeroed here).
+struct nuisance_hooks_t
+{
+    ai_tick_hooks_t ai;
+    void* user = nullptr;
+    int ( *line_count )( void* user ) = nullptr;
+    const char* ( *line )( void* user, int k ) = nullptr;
+    std::uint32_t ( *line_event )( void* user, const char* name ) = nullptr;
+    void ( *start )( void* user, std::uint32_t event ) = nullptr;
+    void ( *attributes )( void* user, std::uint32_t event, const float* pos, const float* vel ) = nullptr;
+    void ( *stop )( void* user, std::uint32_t event ) = nullptr;
+    void ( *release_target )( void* user ) = nullptr;
+};
+
+struct nuisance_pilot_t
+{
+    std::uint8_t* driver = nullptr;     // 0x104
+    fleet_plan_t plan;                  // +0x84
+    bool target = false;                // +0xF0 set (the boat is the caller's: its images in nuisance_target_t)
+    int target_sector = -1;             // +0xF4
+};
+
+struct nuisance_target_t
+{
+    const std::uint8_t* transform = nullptr;   // the target's +0x50
+    const std::uint8_t* body = nullptr;        // the target's +0x21C
+};
+
+// 0x40E060 (thiscall, the driver; the target's component; retn 4): with no
+// sector, slot 21 (the target's position, -1). Else, once the target's
+// fraction along it is ordered above 1, the first of its next sectors that
+// holds the position (least plane >= 0, ordered) - or the last one tried
+// (none without next sectors). No sector after: the weak reference's
+// release (vt+0 0x40E4D0).
+inline void nuisance_target_sector( const track_manager_t& tm, nuisance_pilot_t& p, const std::uint8_t* target_transform,
+    const nuisance_hooks_t& hooks )
+{
+    const float* tp = reinterpret_cast< const float* >( target_transform + 0x80 );
+    if ( p.target_sector < 0 )
+        p.target_sector = track_nearest( tm, tp, -1, false );
+    else if ( pilot_fraction( tm.sectors[ p.target_sector ].image, tp ) > 1.0f )
+    {
+        int last = -1;
+        int found = -1;
+        for ( int n : tm.sectors[ p.target_sector ].next )
+        {
+            last = n;
+            if ( human_ge( pilot_inside( tm.sectors[ n ].image, tp ), 0.0f ) )
+            {
+                found = n;
+                break;
+            }
+        }
+        p.target_sector = found >= 0 ? found : last;
+    }
+    if ( p.target_sector < 0 )
+    {
+        for ( int at : { 0xE8, 0xEC, 0xF0 } )
+            image_put32( p.driver, at, 0 );
+        p.target = false;
+        if ( hooks.release_target )
+            hooks.release_target( hooks.user );
+    }
+}
+
+// 0x40E280 (thiscall, the driver; the component; retn 4): the plan starts
+// (slot 1) from slot 21's sector for the position and +0x78 when it has no
+// first point or the position is outside it (least plane below 0, or a NaN);
+// then, with a first point whose fraction is ordered above 1, it advances.
+inline void nuisance_plan_update( const track_manager_t& tm, fleet_plan_t& plan, const std::uint8_t* transform, std::int32_t checkpoint,
+    fleet_random_t& rng )
+{
+    const float* pos = reinterpret_cast< const float* >( transform + 0x80 );
+    const bool first = !plan.sectors.empty( ) && plan.sectors[ 0 ] >= 0;
+    if ( !first || !human_ge( pilot_inside( tm.sectors[ plan.sectors[ 0 ] ].image, pos ), 0.0f ) )
+    {
+        const int s = track_nearest( tm, pos, checkpoint, false );
+        if ( s >= 0 )
+            fleet_plan_start( plan, tm, s, rng );
+    }
+    if ( !plan.sectors.empty( ) && plan.sectors[ 0 ] >= 0 && pilot_fraction( tm.sectors[ plan.sectors[ 0 ] ].image, pos ) > 1.0f )
+        fleet_plan_advance( plan, tm, rng );
+}
+
+// Slot 18 0x40DA90 (thiscall, the driver; dt; retn 4). +0xA0 = the speed
+// signed by the forward row (ordered >= 0: +1) as 0x40B940's. With a target:
+// its speed v, 0x40E060, 0x40E280, +0x9C = 0 and, with a first point and the
+// target's sector: c = the unit direction to the target dotted with point 0's
+// direction; +0x9C = the boat's own top ((engine +0xC x +4) x 0.44704) when c
+// > 0, v when c >= -0.8660254 (or a NaN), else ((1 - (|c| - 0.8660254) x
+// 7.4641008) x (maxss(v, top) - v / 2)) + v / 2; the path follow into +0xD4,
+// the avoidance, +0xB8 = minss(+0x9C, (owner +0x470 x (engine +0xC x +4)) x
+// 0.44704), 0x40D110. 0x40D5A0 (no boost). Then the audio line: with no event
+// (+0xFC), a target and the boat's +0x46B clear, the DB's lines: with more
+// than one, VuRandom (the global) draws until the pick differs from +0x100 -
+// pick = clamp(fistp(fistp(r x n - 0.5)), 0, n - 1) (x87, round to nearest) -
+// else line 0; a non-empty line's event is made and started; +0x100 = the
+// pick. An event's 3D attributes follow the boat (component +0x80, the body's
+// velocity); with +0x46B it is stopped and +0xFC = 0.
+inline void nuisance_driver_tick( const track_manager_t& tm, nuisance_pilot_t& p, ai_tick_t t, const nuisance_target_t& target,
+    fleet_random_t& rng, float dt, const nuisance_hooks_t& hooks )
+{
+    std::uint8_t* drv = p.driver;
+    std::uint8_t* boat = t.boat;
+    const float vx = state_f( t.body, 0x140 ), vy = state_f( t.body, 0x144 ), vz = state_f( t.body, 0x148 );
+    const float* fwd = reinterpret_cast< const float* >( t.transform + 0x60 );
+    const float d = ( fwd[ 1 ] * vy + fwd[ 0 ] * vx ) + fwd[ 2 ] * vz;
+    const float sign = human_ge( d, 0.0f ) ? 1.0f : -1.0f;
+    state_put_f( drv, 0xA0, hull_sqrt( ( vx * vx + vy * vy ) + vz * vz ) * sign );
+    const float* pos = reinterpret_cast< const float* >( t.transform + 0x80 );
+    const float mph = ai_bits( 0x3EE4E26Du );
+    const float own = ( state_f( t.engine, 0xC ) * state_f( t.engine, 4 ) ) * mph;
+    float steer = 0.0f, throttle = 0.0f;
+    if ( p.target )
+    {
+        const float tx = state_f( target.body, 0x140 ), ty = state_f( target.body, 0x144 ), tz = state_f( target.body, 0x148 );
+        const float tv = hull_sqrt( ( tx * tx + ty * ty ) + tz * tz );
+        nuisance_target_sector( tm, p, target.transform, hooks );
+        nuisance_plan_update( tm, p.plan, t.transform, human_i32( drv, 0x78 ), rng );
+        state_put_f( drv, 0x9C, 0.0f );
+        const std::vector< const std::uint8_t* > points = pilot_points( tm, p.plan );
+        if ( !points.empty( ) && points[ 0 ] && p.target_sector >= 0 && target.transform )
+        {
+            const std::uint8_t* q = points[ 0 ];
+            const float dx = state_f( target.transform, 0x80 ) - pos[ 0 ];
+            const float dy = state_f( target.transform, 0x84 ) - pos[ 1 ];
+            const float dz = state_f( target.transform, 0x88 ) - pos[ 2 ];
+            const float inv = 1.0f / hull_sqrt( ( dy * dy + dx * dx ) + dz * dz );
+            const float c = ( state_f( q, 0xA4 ) * ( dy * inv ) + ( dx * inv ) * state_f( q, 0xA0 ) ) + state_f( q, 0xA8 ) * ( dz * inv );
+            if ( human_gt( c, 0.0f ) )
+                state_put_f( drv, 0x9C, own );
+            else if ( human_gt( ai_bits( 0xBF5DB3D7u ), c ) )
+            {
+                const float half = tv * 0.5f;
+                const float m = ai_maxss( tv, own );
+                state_put_f( drv, 0x9C, ( 1.0f - ( std::fabs( c ) - ai_bits( 0x3F5DB3D7u ) ) * ai_bits( 0x40EED9EAu ) ) * ( m - half ) + half );
+            }
+            else
+                state_put_f( drv, 0x9C, tv );
+            float* aim = reinterpret_cast< float* >( drv + 0xD4 );
+            float direction[ 4 ];
+            ai_path_follow( points.data( ), static_cast< std::int32_t >( points.size( ) ), pos, aim, direction );
+            ai_avoid( state_f( drv, 0x98 ), t.body, pos, aim, hooks.ai.avoid );
+            const float top = ( state_f( t.owner, 0x470 ) * ( state_f( t.engine, 0xC ) * state_f( t.engine, 4 ) ) ) * mph;
+            const float wanted = ai_minss( state_f( drv, 0x9C ), top );
+            state_put_f( drv, 0xB8, wanted );
+            ai_steer( t.body, t.solver, pos, fwd, aim, state_f( drv, 0xA0 ), wanted, dt, &steer, &throttle );
+        }
+    }
+    ai_controls( drv, boat, t.animation, dt, steer, throttle, 0, hooks.ai.controls );
+    if ( human_i32( drv, 0xFC ) == 0 && p.target && !boat[ 0x46B ] )
+    {
+        const int n = hooks.line_count ? hooks.line_count( hooks.user ) : -1;
+        if ( n > 0 )
+        {
+            int pick = 0;
+            if ( n > 1 )
+            {
+                do
+                {
+                    const float x = rng.draw( ) * static_cast< float >( n );
+                    const int i = static_cast< int >( std::nearbyint( static_cast< double >( x ) - 0.5 ) );   // fld; fsub; fistp
+                    pick = static_cast< int >( std::nearbyint( static_cast< double >( static_cast< float >( i ) ) ) );
+                    if ( n - 1 < pick )
+                        pick = n - 1;
+                    if ( pick < 0 )
+                        pick = 0;
+                } while ( pick == human_i32( drv, 0x100 ) );
+            }
+            const char* name = hooks.line ? hooks.line( hooks.user, pick ) : "";
+            if ( name && *name && hooks.line_event )
+            {
+                const std::uint32_t e = hooks.line_event( hooks.user, name );
+                image_put32( drv, 0xFC, e );
+                if ( e != 0 && hooks.start )
+                    hooks.start( hooks.user, e );
+            }
+            image_put32( drv, 0x100, static_cast< std::uint32_t >( pick ) );
+        }
+    }
+    const std::uint32_t e = static_cast< std::uint32_t >( human_i32( drv, 0xFC ) );
+    if ( e != 0 )
+    {
+        const float vel[ 4 ] = { vx, vy, vz, state_f( t.body, 0x14C ) };
+        if ( hooks.attributes )
+            hooks.attributes( hooks.user, e, pos, vel );
+        if ( boat[ 0x46B ] )
+        {
+            if ( hooks.stop )
+                hooks.stop( hooks.user, e );
+            image_put32( drv, 0xFC, 0 );
+        }
+    }
+}

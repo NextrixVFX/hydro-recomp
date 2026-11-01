@@ -865,6 +865,161 @@ inline bool verify_boat_drivers( )
     return false;
 }
 
+// VuAiNuisanceDriver's tick 0x40DA90 against retail on Hydroelectric's track (oracle case nuisance_tick): each
+// tick's blocks, plan, target sector and VuRandom fed to nuisance_driver_tick with the scripted line list; the
+// driver (but its pointer words: the boat, the plan's, the weak reference's - those by being cleared or not - and
+// the target's sector, compared as an index; +0xE0 the aim's w lane, a dead stack word) and boat words, the plan,
+// VuRandom and the hook stream compared.
+inline bool verify_nuisance_tick( )
+{
+    const std::unique_ptr< entity_t > tree = track_document_tree( );
+    track_manager_t tm;
+    if ( !tree || !track_build_from_tree( *tree, tm ) )
+    {
+        LOG_ERROR( "nuisance_tick: the track did not build" );
+        return false;
+    }
+    static const int sizes[ 9 ] = { 0x104, 0x520, 0xC8, 0x2D4, 0x40, 0x80, 0x60, 0xC8, 0x2D4 };
+    struct run_t
+    {
+        int kind = 0, lines = 0;
+        std::vector< unsigned > log;
+        std::vector< unsigned > handles;
+        std::size_t next = 0;
+        char names[ 8 ][ 8 ] = { };
+    };
+    static run_t run;
+    nuisance_hooks_t hooks;
+    hooks.user = &run;
+    hooks.ai.controls.misfire = []( void* ) { run.log.push_back( 1 ); };
+    hooks.ai.controls.voice = []( void*, const char* ) { run.log.push_back( 2 ); };
+    hooks.release_target = []( void* ) { run.log.push_back( 9 ); };
+    hooks.line_count = []( void* ) {
+        run.log.push_back( 3 );
+        return run.kind == 5 ? run.lines : -1;
+    };
+    // the case's list: "Line<k>", element 2 not a string, element 4 an empty one
+    hooks.line = []( void*, int k ) -> const char* { return k == 2 || k == 4 ? "" : run.names[ k ]; };
+    hooks.line_event = []( void*, const char* name ) -> std::uint32_t {
+        const std::uint32_t h = run.next < run.handles.size( ) ? run.handles[ run.next++ ] : 0u;
+        run.log.insert( run.log.end( ), { 4u, static_cast< unsigned >( name[ 4 ] - '0' ), h } );
+        return h;
+    };
+    hooks.start = []( void*, std::uint32_t e ) { run.log.insert( run.log.end( ), { 5u, e } ); };
+    hooks.attributes = []( void*, std::uint32_t e, const float* pos, const float* vel ) {
+        run.log.insert( run.log.end( ), { 6u, e } );
+        for ( const float* v : { pos, vel } )
+            for ( int k = 0; k < 3; ++k )
+            {
+                std::uint32_t w;
+                std::memcpy( &w, v + k, 4 );
+                run.log.push_back( w );
+            }
+    };
+    hooks.stop = []( void*, std::uint32_t e ) { run.log.insert( run.log.end( ), { 8u, e } ); };
+    for ( int k = 0; k < 8; ++k )
+        std::snprintf( run.names[ k ], 8, "Line%d", k );
+    const unsigned* g = g_golden_nuisance_tick_words;
+    int compared = 0, failed = 0, bad = 0, ticks = 0;
+    const unsigned ns = *g++;
+    for ( unsigned s = 0; s < ns; ++s )
+    {
+        const unsigned nt = *g++;
+        run.kind = static_cast< int >( *g++ );
+        run.lines = static_cast< int >( *g++ );
+        for ( unsigned t = 0; t < nt; ++t, ++ticks )
+        {
+            float dt;
+            std::memcpy( &dt, g++, 4 );
+            fleet_random_t rng;
+            std::memcpy( &rng, g, 136 );
+            g += 34;
+            nuisance_pilot_t p;
+            const unsigned np = *g++;
+            for ( unsigned j = 0; j < np; ++j )
+                p.plan.sectors.push_back( static_cast< std::int32_t >( *g++ ) );
+            p.target_sector = static_cast< std::int32_t >( *g++ );
+            std::vector< std::uint8_t > blocks[ 9 ];
+            for ( int k = 0; k < 9; ++k )
+            {
+                blocks[ k ].assign( reinterpret_cast< const std::uint8_t* >( g ), reinterpret_cast< const std::uint8_t* >( g ) + sizes[ k ] );
+                g += sizes[ k ] / 4;
+            }
+            p.driver = blocks[ 0 ].data( );
+            p.target = human_i32( p.driver, 0xF0 ) != 0;
+            const std::uint8_t* boats[ 1 ] = { blocks[ 1 ].data( ) };
+            ai_tick_t tick;
+            tick.boat = blocks[ 1 ].data( );
+            tick.transform = blocks[ 2 ].data( );
+            tick.body = blocks[ 3 ].data( );
+            tick.engine = blocks[ 4 ].data( );
+            tick.owner = blocks[ 1 ].data( );
+            tick.animation = blocks[ 5 ].data( );
+            tick.solver = blocks[ 6 ].data( );
+            tick.boats = boats;
+            tick.boat_count = 1;
+            nuisance_target_t target;
+            target.transform = blocks[ 7 ].data( );
+            target.body = blocks[ 8 ].data( );
+            const unsigned* after[ 2 ] = { g, g + sizes[ 0 ] / 4 };
+            g += ( sizes[ 0 ] + sizes[ 1 ] ) / 4;
+            std::vector< int > plan;
+            const unsigned na = *g++;
+            for ( unsigned j = 0; j < na; ++j )
+                plan.push_back( static_cast< std::int32_t >( *g++ ) );
+            const int target_sector = static_cast< std::int32_t >( *g++ );
+            const unsigned* rng_after = g;
+            g += 34;
+            const unsigned nl = *g++;
+            const std::vector< unsigned > expect( g, g + nl );
+            g += nl;
+            run.log.clear( );
+            run.handles.clear( );
+            run.next = 0;
+            for ( std::size_t j = 0; j < expect.size( ); )
+            {
+                const unsigned c = expect[ j ];
+                if ( c == 4 )
+                    run.handles.push_back( expect[ j + 2 ] );
+                j += c == 4 ? 3 : c == 5 || c == 8 ? 2 : c == 6 ? 8 : 1;
+            }
+            nuisance_driver_tick( tm, p, tick, target, rng, dt, hooks );
+            const int failed_before = failed;
+            for ( int k = 0; k < 2; ++k )
+            {
+                for ( int w = 0; w < sizes[ k ] / 4; ++w )
+                {
+                    const int at = 4 * w;
+                    if ( k == 0 && ( at == 0x5C || ( at >= 0x84 && at <= 0x94 ) || at == 0xE0 || at == 0xF4 ||
+                                     ( ( at == 0xE8 || at == 0xEC || at == 0xF0 ) && after[ 0 ][ w ] != 0 ) ) )
+                        continue;
+                    std::uint32_t mine;
+                    std::memcpy( &mine, blocks[ k ].data( ) + at, 4 );
+                    ++compared;
+                    if ( mine != after[ k ][ w ] && ++failed <= 8 )
+                        LOG_ERROR( "nuisance_tick %u/%u block %d +0x%X: 0x%08X, retail 0x%08X", s, t, k, at, mine, after[ k ][ w ] );
+                }
+            }
+            compared += 4;
+            if ( ( plan != p.plan.sectors || target_sector != p.target_sector || p.target != ( after[ 0 ][ 0xF0 / 4 ] != 0 ) ) && ++failed <= 8 )
+                LOG_ERROR( "nuisance_tick %u/%u: plan / target sector %d (retail %d) / target differ", s, t, p.target_sector, target_sector );
+            if ( std::memcmp( &rng, rng_after, 136 ) != 0 && ++failed <= 8 )
+                LOG_ERROR( "nuisance_tick %u/%u: VuRandom differs", s, t );
+            if ( expect != run.log && ++failed <= 8 )
+                LOG_ERROR( "nuisance_tick %u/%u: the hook stream differs (%zu words vs retail %zu)", s, t, run.log.size( ), expect.size( ) );
+            bad += failed != failed_before ? 1 : 0;
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuAiNuisanceDriver's tick 0x40DA90 (0x40E060, 0x40E280, the line pick) matches retail on Hydroelectric's track: "
+                     "%d ticks, %d values, bit for bit", ticks, compared );
+        return true;
+    }
+    LOG_ERROR( "nuisance_tick FAILED %d of %d values (%d of %d ticks)", failed, compared, bad, ticks );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -875,5 +1030,6 @@ inline bool verify_race_all( )
     ok = verify_ghost_tick( ) && ok;
     ok = verify_ui_tick( ) && ok;
     ok = verify_boat_drivers( ) && ok;
+    ok = verify_nuisance_tick( ) && ok;
     return ok;
 }
