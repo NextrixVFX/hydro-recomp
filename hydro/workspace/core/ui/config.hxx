@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workspace/core/assets/tree.hxx>
+#include <workspace/core/entity/json.hxx>
 #include <workspace/core/boat/fleet.hxx>
 
 #include <algorithm>
@@ -35,8 +36,9 @@
 // ---------------------------------------------------------------------------
 // VuJsonContainer mutation over value_t (+0 tag, +8 payload in retail).
 
-// 0x4FBB10: the payload freed, tag 0 (+8 / +0xC zeroed).
-inline void ui_json_clear( value_t& v ) { v = value_t{ }; }
+// 0x4FBB10: the payload freed, tag 0 (+8 / +0xC zeroed). Batch 25: one copy -
+// forwards to engine entity/json.hxx (verified there on retail's containers).
+inline void ui_json_clear( value_t& v ) { json_clear( v ); }
 
 // 0x4FC6B0: anything that is not a map is cleared and becomes an empty one.
 inline value_t& ui_json_make_map( value_t& v )
@@ -53,6 +55,10 @@ inline value_t& ui_json_make_map( value_t& v )
 // 0x4FC090 (the key through strlen) -> 0x4FC6B0, then the map's operator[]
 // 0x4FC970: the member, a fresh null one inserted when absent. The reference
 // lives until the parent map's next insertion.
+// NOT forwarded to json.hxx json_member (batch 25): that one inserts at the
+// sorted position by a scan that assumes the object vector is sorted - a value_t
+// parsed from VUJB keeps the file's order, so on an unsorted object it can miss
+// the existing key and insert a duplicate (forwarding failed 10 ui checks).
 inline value_t& ui_json_child( value_t& v, const char* key )
 {
     ui_json_make_map( v );

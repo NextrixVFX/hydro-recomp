@@ -197,7 +197,12 @@ inline bool verify_ui_race_results( )
 // byte, the VuRetVal of SetFocus, the hook log in order.
 inline bool verify_ui_subtitles_combo( )
 {
-    int failed = 0, steps = 0, logs = 0;
+    int failed = 0, steps = 0, logs = 0, dispatched = 0;
+    // Batch 25: pass 1 again with the touch ops through the device's dispatch (controls.hxx
+    // ui_touch_dispatch_down / _up / _move; the move's point in the device's touch 0, as the
+    // platform's pointer-moved 0x4DB100 leaves it) reaching the combo through OUR handlers
+    // (ui_touch_handlers - the binding's glue): every step must come out the same.
+    for ( int pass = 0; pass < 2; ++pass )
     for ( std::size_t k = 0; k < g_golden_sc_entities_count; ++k )
     {
         const golden_sc_entity_t& ge = g_golden_sc_entities[ k ];
@@ -206,6 +211,8 @@ inline bool verify_ui_subtitles_combo( )
         std::vector< std::string > log;
         ui_settings_t settings;
         ui_touch_device_t device;
+        float inverse_now[ 16 ] = { };
+        int faults = 0;
         ui_combo_box_hooks_t hooks;
         char line[ 160 ];
         hooks.m_broadcast = [ & ]( std::uint32_t hash, const ui_params_t& p )
@@ -227,6 +234,8 @@ inline bool verify_ui_subtitles_combo( )
         hooks.m_delta = [ ] { return ui_lv_float( g_golden_sc_delta ); };
         hooks.m_apply = [ & ]( std::uint32_t, int current ) { settings.m_subtitles = current != 0; };
         c_ui_combo_box c( 0u, k_ui_subtitles_vtable, hooks );
+        if ( pass )
+            ui_touch_handlers( device, &c, [ &inverse_now ] { return static_cast< const float* >( inverse_now ); }, faults );
         bool same = e && e->m_ctor && e->m_ctor->m_vtable == k_ui_subtitles_vtable && raw.size( ) == 0x260;
         if ( same )
         {
@@ -247,9 +256,27 @@ inline bool verify_ui_subtitles_combo( )
             const std::vector< std::uint8_t > inverse_raw = ui_unhex( g_golden_sc_inverses[ st.m_env ] );
             float inverse[ 16 ];
             std::memcpy( inverse, inverse_raw.data( ), 64 );
+            std::memcpy( inverse_now, inverse, 64 );
             const float point[ 2 ] = { ui_lv_float( st.m_point[ 0 ] ), ui_lv_float( st.m_point[ 1 ] ) };
             log.clear( );
             std::uint32_t ret[ 2 ] = { 0xCCCCCCCCu, 0xCCCCCCCCu };
+            const int touch_op = pass ? st.m_op : -1;
+            if ( touch_op == 4 )
+                ui_touch_dispatch_down( device, 1u, point[ 0 ], point[ 1 ] );
+            else if ( touch_op == 5 )
+                ui_touch_dispatch_up( device, 1u, 0.0f, 0.0f );
+            else if ( touch_op == 6 )
+            {
+                log.push_back( "touch|0" );   // the device's slot 7 (0, out)
+                if ( device.m_touches.empty( ) )
+                    device.m_touches.resize( 1 );
+                device.m_touches[ 0 ].m_point[ 0 ] = point[ 0 ];
+                device.m_touches[ 0 ].m_point[ 1 ] = point[ 1 ];
+                ui_touch_dispatch_move( device );
+            }
+            if ( touch_op >= 4 && touch_op <= 6 )
+                ++dispatched;
+            else
             switch ( st.m_op )
             {
             case 0:
@@ -310,6 +337,7 @@ inline bool verify_ui_subtitles_combo( )
             ok = ok && static_cast< int >( device.m_callbacks.size( ) ) == st.m_entries && device.m_priority == st.m_priority;
             if ( ok && st.m_entries )
                 ok = device.m_callbacks[ 0 ].first == &c && st.m_entry_offset == 0x5C && device.m_callbacks[ 0 ].second == st.m_entry_priority;
+            ok = ok && device.m_unhandled == 0 && faults == 0;
             ok = ok && ( settings.m_subtitles ? 1 : 0 ) == st.m_settings && ret[ 0 ] == st.m_ret[ 0 ] && static_cast< int >( log.size( ) ) == st.m_logs;
             for ( int q = 0; ok && q < st.m_logs; ++q )
             {
@@ -318,14 +346,15 @@ inline bool verify_ui_subtitles_combo( )
             }
             ++steps;
             if ( !ok && ++failed <= 8 )
-                LOG_ERROR( "ui subtitles combo: %s entity %d step %d (op %d): the state / choices / touch entries / settings / log differ (log %d, retail %d)",
-                    ge.m_project, ge.m_index, s, st.m_op, static_cast< int >( log.size( ) ), st.m_logs );
+                LOG_ERROR( "ui subtitles combo: %s entity %d step %d (op %d, pass %d): the state / choices / touch entries / settings / log differ (log %d, retail %d)",
+                    ge.m_project, ge.m_index, s, st.m_op, pass, static_cast< int >( log.size( ) ), st.m_logs );
         }
     }
     if ( failed == 0 )
         LOG_SUCCESS( "c_ui_combo_box initialize / touch_down / touch_up / touch_move / release (+ the tick, SetFocus, events, change) match retail's "
-                     "VuUISubtitlesSettingEntity 0x46D7A0 / 0x474F80 / 0x475080 / 0x475090 / 0x4253D0 on %d entities: %d steps, %d hook calls in order",
-            static_cast< int >( g_golden_sc_entities_count ), steps, logs );
+                     "VuUISubtitlesSettingEntity 0x46D7A0 / 0x474F80 / 0x475080 / 0x475090 / 0x4253D0 on %d entities: %d steps (both passes; the "
+                     "second's %d touch ops through the device's dispatch 0x5393E0 / 0x5394A0 / 0x53FB40 and OUR handlers), %d hook calls in order",
+            static_cast< int >( g_golden_sc_entities_count ), steps, dispatched, logs );
     else
         LOG_ERROR( "the UI subtitles combo box FAILED %d checks against retail's", failed );
     return failed == 0;
@@ -1428,9 +1457,148 @@ inline bool verify_ui_leaderboard_tick( )
     return failed == 0;
 }
 
+// verify_ui_button_touch (batch 25): c_ui_button's touch half (core/ui button.hxx: the callbacks
+// 0x442740 / 0x4427D0 / 0x4427E0, OnUITick 0x442A90's hit test) against retail's on every authored
+// button of Screens/Main / SinglePlayer / Settings (oracle case button_touch) under two VuUIImpl
+// blocks. The touch fields from OUR loaded entity (bind.hxx ui_button_touch_of; compared with
+// retail's bytes first), the entity id from OUR long name; the device point, the crop / inverse and
+// the hooks (broadcast, the plugs' fire) are the case's. Per step: +0x68, +0x188..+0x18C, the
+// point, the press state and the hook log in order.
+inline bool verify_ui_button_touch( )
+{
+    int failed = 0, steps = 0, logs = 0, fields = 0;
+    const auto hex = []( const std::uint8_t* p, std::size_t n )
+    {
+        static const char* const digits = "0123456789abcdef";
+        std::string t;
+        for ( std::size_t k = 0; k < n; ++k )
+        {
+            t += digits[ p[ k ] >> 4 ];
+            t += digits[ p[ k ] & 15 ];
+        }
+        return t;
+    };
+    for ( std::size_t k = 0; k < g_golden_btt_entities_count; ++k )
+    {
+        const golden_btt_entity_t& ge = g_golden_btt_entities[ k ];
+        const entity_t* e = ui_lv_entity( ge.m_project, ge.m_index );
+        const std::vector< std::uint8_t > raw = ui_unhex( ge.m_fields );
+        bool same = e && e->m_ctor && e->m_ctor->m_vtable == k_ui_button_vtable && raw.size( ) == 0x140;
+        ui_button_touch_t t;
+        std::uint8_t flags[ 3 ] = { 1, 1, 1 };
+        if ( same )
+        {
+            t = ui_button_touch_of( *e );
+            const auto against = [ & ]( const void* ours, int offset, std::size_t bytes )
+            {
+                if ( std::memcmp( ours, raw.data( ) + ( offset - 0x60 ), bytes ) != 0 )
+                    same = false;
+                ++fields;
+            };
+            against( t.m_scale, 0x88, 8 );
+            against( t.m_xy, 0x90, 8 );
+            against( t.m_touch, 0x110, 16 );
+            against( &t.m_anchor, 0x168, 16 );
+            const char* const names[ 3 ] = { "Enabled", "Label", "Can Have Focus" };
+            for ( int f = 0; f < 3; ++f )
+                if ( const ui_slot_t* s = ui_bind_slot( *e, names[ f ] ) )
+                    flags[ f ] = static_cast< std::uint8_t >( s->m_bits[ 0 ] & 0xFFu );
+            against( flags, 0x68, 3 );
+            const std::uint8_t zero[ 0x14 ] = { };
+            against( zero, 0x188, 5 );   // focus / touch bytes, +0x190 / +0x194, +0x198 as the ctor leaves them
+            against( zero, 0x190, 12 );
+            same = same && ui_entity_id( ui_long_name( *e ) ) == ge.m_id;
+        }
+        if ( !same )
+        {
+            if ( ++failed <= 8 )
+                LOG_ERROR( "ui button touch: %s entity %d: OUR loaded fields / id differ from retail's", ge.m_project, ge.m_index );
+            continue;
+        }
+        for ( int r = 0; r < ge.m_runs; ++r )
+        {
+            const golden_btt_run_t& run = g_golden_btt_runs[ ge.m_first + r ];
+            ui_crop_t crop;
+            float inverse[ 16 ];
+            const std::vector< std::uint8_t > c = ui_unhex( run.m_crop ), inv = ui_unhex( run.m_inverse );
+            std::memcpy( crop.m_matrix, c.data( ), 64 );
+            std::memcpy( inverse, inv.data( ), 64 );
+            std::vector< std::string > log;
+            ui_button_hooks_t hooks;
+            hooks.m_broadcast = [ & ]( std::uint32_t hash, const ui_params_t& p )
+            {
+                char word[ 24 ];
+                std::snprintf( word, sizeof word, "0x%08X", hash );
+                log.push_back( std::string( "broadcast|" ) + word + "|" + hex( p.m_bytes, static_cast< std::size_t >( p.m_size ) ) );
+            };
+            hooks.m_fire = [ & ]( const char* plug, const ui_params_t& p )
+            {
+                log.push_back( std::string( "fire|" ) + plug + "|" + hex( p.m_bytes, static_cast< std::size_t >( p.m_size ) ) );
+            };
+            c_ui_button b( ge.m_id, hooks );
+            b.m_enabled = flags[ 0 ] != 0;
+            b.m_label = flags[ 1 ] != 0;
+            b.m_can_focus = flags[ 2 ] != 0;
+            b.m_touch_fields = t;
+            b.m_crop = &crop;
+            for ( int s = 0; s < run.m_steps; ++s )
+            {
+                const golden_btt_step_t& st = g_golden_btt_steps[ run.m_first + s ];
+                log.clear( );
+                float device[ 2 ];
+                std::memcpy( device, st.m_device, 8 );
+                switch ( st.m_op )
+                {
+                case 0:
+                    b.on_tick( );
+                    break;
+                case 1:
+                    b.touch_down( inverse, device );
+                    break;
+                case 2:
+                    b.touch_up( );
+                    break;
+                case 3:
+                    log.push_back( "point|0" );   // the device's slot 7 (index 0)
+                    b.touch_move( inverse, device );
+                    break;
+                default:
+                    b.m_enabled = st.m_arg != 0;
+                    break;
+                }
+                const std::uint8_t bytes[ 6 ] = { static_cast< std::uint8_t >( b.m_enabled ), static_cast< std::uint8_t >( b.m_focused ),
+                                                  static_cast< std::uint8_t >( b.m_want_focus ), static_cast< std::uint8_t >( b.m_touched ),
+                                                  static_cast< std::uint8_t >( b.m_touch_press ), static_cast< std::uint8_t >( b.m_touch_release ) };
+                const std::string state = hex( bytes, 1 ) + "." + hex( bytes + 1, 5 );
+                bool ok = state == st.m_state && std::memcmp( b.m_touch_point, st.m_point, 8 ) == 0 && b.m_press == st.m_press &&
+                          static_cast< int >( log.size( ) ) == st.m_logs;
+                for ( int q = 0; ok && q < st.m_logs; ++q )
+                {
+                    ok = log[ static_cast< std::size_t >( q ) ] == g_golden_btt_logs[ st.m_first_log + q ];
+                    ++logs;
+                }
+                ++steps;
+                if ( !ok && ++failed <= 8 )
+                    LOG_ERROR( "ui button touch: %s entity %d run %d step %d (op %d): state %s (retail %s), press %u (retail %u), %d log lines (retail %d)",
+                               ge.m_project, ge.m_index, r, s, st.m_op, state.c_str( ), st.m_state, b.m_press, st.m_press, static_cast< int >( log.size( ) ),
+                               st.m_logs );
+            }
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "c_ui_button's touch half matches retail's VuBarracudaUIButtonEntity callbacks 0x442740 / 0x4427D0 / 0x4427E0 and OnUITick "
+                     "0x442A90 (the rect through the anchor 0x6282D0, SetFocus 0x4428E0, Pressed / OnFocus) on %d authored buttons (%d of OUR loaded "
+                     "fields): %d steps, %d hook calls in order, the state after each",
+            static_cast< int >( g_golden_btt_entities_count ), fields, steps, logs );
+    else
+        LOG_ERROR( "the UI button touch half FAILED %d checks against retail's", failed );
+    return failed == 0;
+}
+
 inline bool verify_ui_results_all( )
 {
     bool ok = true;
+    ok = verify_ui_button_touch( ) && ok;
     ok = verify_ui_leaderboard_draw( ) && ok;
     ok = verify_ui_leaderboard_tick( ) && ok;
     ok = verify_ui_race_results( ) && ok;

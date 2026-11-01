@@ -1,5 +1,6 @@
 #pragma once
 
+#include <workspace/core/ui/draw.hxx>
 #include <workspace/core/ui/flow.hxx>
 
 #include <cstdint>
@@ -64,10 +65,54 @@ struct ui_button_hooks_t
     std::function< void( const char* ) > m_sound;
 };
 
+// Batch 25: the fields the touch hit test of 0x442A90 reads (ctor 0x441170's
+// defaults): +0x88 Screen Scale (100, 100), +0x90 X / +0x94 Y (0, 0), +0x110
+// TouchX / +0x114 TouchY (0, 0), +0x118 TouchWidth (20) / +0x11C TouchHeight
+// (10), +0x168 the anchor block (Horizontal / Vertical Anchor 0, the ratios 1).
+struct ui_button_touch_t
+{
+    float m_scale[ 2 ] = { 100.0f, 100.0f };
+    float m_xy[ 2 ] = { 0.0f, 0.0f };
+    float m_touch[ 4 ] = { 0.0f, 0.0f, 20.0f, 10.0f };
+    ui_anchor_t m_anchor;
+};
+
+// The VuTouchCallback (vtable 0x73B79C, at entity +0x5C) maps a device point
+// through VuUIImpl +0x4C (0x81A144, the inverse crop matrix - an input):
+// x = m4 y + m0 x + m12, y = m1 x + m5 y + m13 (that operand order).
+inline void ui_button_touch_map( const float inverse[ 16 ], const float in[ 2 ], float out[ 2 ] )
+{
+    out[ 0 ] = inverse[ 4 ] * in[ 1 ] + inverse[ 0 ] * in[ 0 ] + inverse[ 12 ];
+    out[ 1 ] = inverse[ 1 ] * in[ 0 ] + inverse[ 5 ] * in[ 1 ] + inverse[ 13 ];
+}
+
 class c_ui_button
 {
 public:
     c_ui_button( std::uint32_t id, ui_button_hooks_t& hooks ) : m_id( id ), m_hooks( hooks ) { }
+
+    // The touch callbacks (vtable 0x73B79C; thiscall entity + 0x5C):
+    // slot 0 0x442740 (const VuVector2&): Enabled and not +395 -> +394 = +395 =
+    // 1 (one WORD store) and the mapped point -> +0x190; slot 1 0x4427D0:
+    // Enabled -> +396 = 1; slot 2 0x4427E0: the device's touch 0 (g 0x759070
+    // vt+0x1C - the caller's point) mapped -> +0x190, always (VuUIImpl's guard
+    // 0x81A0F0 runs first: no effect on the values).
+    void touch_down( const float inverse[ 16 ], const float point[ 2 ] )
+    {
+        if ( !m_enabled || m_touch_press )
+            return;
+        m_touched = true;
+        m_touch_press = true;
+        ui_button_touch_map( inverse, point, m_touch_point );
+    }
+
+    void touch_up( )
+    {
+        if ( m_enabled )
+            m_touch_release = true;
+    }
+
+    void touch_move( const float inverse[ 16 ], const float point[ 2 ] ) { ui_button_touch_map( inverse, point, m_touch_point ); }
 
     // 0x4428E0: a button that can have focus broadcasts "OnUISetFocus" with
     // its id (every button's 0x442A40 runs then, this one's included), then
@@ -111,11 +156,15 @@ public:
     }
 
     // 0x442A90: an enabled button takes the wanted focus (and fires OnFocus
-    // when it gains it), then the touch test and the touch bytes' reset.
-    // NOT RECREATED: the touch hit test - its rect goes through 0x6282D0
-    // (unread) and +394 / +396 / +400 / +404 are written only by the VuTouch
-    // callback (vtable 0x73B79C, unread). With those never set it is never
-    // entered; reaching it sets m_touch_unknown.
+    // when it gains it), then the touch test (batch 25, disassembled): the rect
+    // ( (TouchX + X) x 1 / scale x, (TouchY + Y) x 1 / scale y, TouchWidth x
+    // 1 / scale x, TouchHeight x 1 / scale y ) through the anchor 0x6282D0
+    // (+0x168, over VuUIImpl's crop - m_crop, null: the identity) in place;
+    // touched (+394) with the point (+0x190) inside - px >= x, w + x >= px,
+    // py >= y, h + y >= py, comiss (a NaN fails) - SetFocus 0x4428E0 and press
+    // (+0x198) = 1. With press 1: a release (+396) fires "Pressed" with one int
+    // record 0 and press = 0; then the point outside the rect (the same test,
+    // re-read) -> press = 0. A release clears +395 / +396 (one WORD); +394 = 0.
     void on_tick( )
     {
         if ( !m_enabled )
@@ -126,8 +175,35 @@ public:
             if ( m_focused && m_hooks.m_fire )
                 m_hooks.m_fire( "OnFocus", ui_params_t( ) );
         }
-        if ( m_touched || m_press == 1 )
-            m_touch_unknown = true;
+        const float ix = 1.0f / m_touch_fields.m_scale[ 0 ];   // 0x6F76B8 = 1.0
+        const float iy = 1.0f / m_touch_fields.m_scale[ 1 ];
+        float r[ 4 ] = { ix * ( m_touch_fields.m_touch[ 0 ] + m_touch_fields.m_xy[ 0 ] ), iy * ( m_touch_fields.m_touch[ 1 ] + m_touch_fields.m_xy[ 1 ] ),
+                         ix * m_touch_fields.m_touch[ 2 ], iy * m_touch_fields.m_touch[ 3 ] };
+        static const ui_crop_t k_identity;
+        ui_anchor_transform( m_touch_fields.m_anchor, m_crop ? *m_crop : k_identity, r, r );
+        const auto inside = [ this, &r ]
+        {
+            const float px = m_touch_point[ 0 ], py = m_touch_point[ 1 ];
+            return px >= r[ 0 ] && r[ 2 ] + r[ 0 ] >= px && py >= r[ 1 ] && r[ 3 ] + r[ 1 ] >= py;
+        };
+        if ( m_touched && inside( ) )
+        {
+            set_focus( );
+            m_press = 1;
+        }
+        if ( m_press == 1 )
+        {
+            if ( m_touch_release )
+            {
+                ui_params_t p;
+                ui_params_add( p, 0, 0u );   // 0x434E50
+                if ( m_hooks.m_fire )
+                    m_hooks.m_fire( "Pressed", p );
+                m_press = 0;
+            }
+            if ( !inside( ) )
+                m_press = 0;
+        }
         if ( m_touch_release )
         {
             m_touch_press = false;
@@ -172,7 +248,12 @@ public:
     bool m_touch_press = false;    // +395
     bool m_touch_release = false;  // +396
     std::uint32_t m_press = 0;     // +408
-    bool m_touch_unknown = false;
+    bool m_touch_unknown = false;  // (batch 25: the touch half is recreated - never set)
+    // batch 25: the hit test's fields (the owner fills them from the loaded
+    // properties), the touch point +0x190 / +0x194, VuUIImpl's crop (null: identity).
+    ui_button_touch_t m_touch_fields;
+    float m_touch_point[ 2 ] = { 0.0f, 0.0f };
+    const ui_crop_t* m_crop = nullptr;
 
 private:
     void fire_with_int( const char* plug, ui_params_reader_t& r )

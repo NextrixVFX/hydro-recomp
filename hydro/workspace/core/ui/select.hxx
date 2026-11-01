@@ -44,14 +44,8 @@ inline int ui_params_read_int( ui_params_reader_t& r )
     return value;
 }
 
-// An int member: 0x4FBB10 clear, tag 1, the value (+8).
-inline void ui_json_set_int( value_t& v, int value )
-{
-    ui_json_clear( v );
-    v.tag = 1;
-    v.kind = value_t::kind_t::integer;
-    v.integer = value;
-}
+// An int member: 0x4FBB10 clear, tag 1, the value (+8). Batch 25: json.hxx.
+inline void ui_json_set_int( value_t& v, int value ) { json_set_int( v, value ); }
 
 // A bool member: 0x4FBB10 clear, tag 3, the byte (+8).
 inline void ui_json_set_bool( value_t& v, bool value )
@@ -133,7 +127,7 @@ inline int ui_json_size( const value_t& v )
 
 // 0x4FCAB0 (a map's member by a VuString key, the whole string; inserted null
 // when absent) after 0x4FC6B0.
-inline value_t& ui_json_child_s( value_t& v, const std::string& key )
+inline value_t& ui_json_child_s( value_t& v, const std::string& key )   // (not forwarded: see ui_json_child)
 {
     ui_json_make_map( v );
     for ( auto& field : v.object )

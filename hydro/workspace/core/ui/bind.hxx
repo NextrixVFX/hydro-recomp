@@ -436,6 +436,30 @@ inline const ui_slot_t* ui_bind_slot( const entity_t& e, const char* name )
     return nullptr;
 }
 
+// Batch 25: VuBarracudaUIButtonEntity's touch rect fields (button.hxx
+// ui_button_touch_t) from OUR loaded properties (the ctor's defaults otherwise).
+inline ui_button_touch_t ui_button_touch_of( const entity_t& e )
+{
+    ui_button_touch_t t;
+    const auto bits = [ &e ]( const char* name, void* out, std::size_t n )
+    {
+        if ( const ui_slot_t* s = ui_bind_slot( e, name ) )
+            std::memcpy( out, s->m_bits, n );
+    };
+    bits( "Screen Scale", t.m_scale, 8 );
+    bits( "X", &t.m_xy[ 0 ], 4 );
+    bits( "Y", &t.m_xy[ 1 ], 4 );
+    bits( "TouchX", &t.m_touch[ 0 ], 4 );
+    bits( "TouchY", &t.m_touch[ 1 ], 4 );
+    bits( "TouchWidth", &t.m_touch[ 2 ], 4 );
+    bits( "TouchHeight", &t.m_touch[ 3 ], 4 );
+    bits( "Horizontal Anchor", &t.m_anchor.m_horizontal, 4 );
+    bits( "Vertical Anchor", &t.m_anchor.m_vertical, 4 );
+    bits( "Horizontal Ratio", &t.m_anchor.m_h_ratio, 4 );
+    bits( "Vertical Ratio", &t.m_anchor.m_v_ratio, 4 );
+    return t;
+}
+
 // 0x500BF0: the ancestors' names and its own, root first, joined by "/".
 inline std::string ui_long_name( const entity_t& e )
 {
@@ -993,6 +1017,8 @@ private:
                 button.m_can_focus = ( s->m_bits[ 0 ] & 0xFFu ) != 0;
             if ( const ui_slot_t* s = ui_bind_slot( e, "String ID" ) )
                 button.m_string_id = s->m_text;
+            button.m_touch_fields = ui_button_touch_of( e );   // batch 25: the touch hit test's fields
+            button.m_crop = m_hooks.m_crop;
             // 0x443800: OnUISetFocus, OnUITick, OnUIEvent.
             add( b, "OnUISetFocus", 0x442A40u, [ &button ]( const ui_params_t& p ) { button.on_set_focus( p ); } );
             add( b, "OnUITick", 0x442A90u, [ &button ]( const ui_params_t& ) { button.on_tick( ); } );
@@ -1374,7 +1400,21 @@ private:
             trace( ui_trace_kind_t::hook, index_of( e ), "touch_add", 0u, ui_params_t( ), true );        // 0x425390 -> 0x53FB90
             ui_bound_t& b = *m_bound[ static_cast< std::size_t >( index_of( e ) ) ];
             if ( m_hooks.m_touch_device && b.m_hud_button )
+            {
                 ui_touch_add( *m_hooks.m_touch_device, b.m_hud_button.get( ), 0u );
+                // batch 25: the device's dispatch reaches its callback vtable 0x738B80 (hud_touch: 0x425400 /
+                // 0x425490 / 0x4254B0)
+                entity_t* owner = &e;
+                ui_touch_handler_t h;
+                h.m_down = [ this, owner ]( const float p[ 2 ] ) { hud_touch( *owner, 0, p ); };
+                h.m_up = [ this, owner ]( const float p[ 2 ] ) { hud_touch( *owner, 1, p ); };
+                h.m_move = [ this, owner ]
+                {
+                    const float none[ 2 ] = { 0.0f, 0.0f };
+                    hud_touch( *owner, 2, none );
+                };
+                m_hooks.m_touch_device->m_handlers[ b.m_hud_button.get( ) ] = h;
+            }
         }
         else if ( vt == k_ui_hud_toast_vtable && m_hooks.m_hud )
             m_bound[ static_cast< std::size_t >( index_of( e ) ) ]->m_shown->m_visible = false;            // 0x4245F0
@@ -1414,19 +1454,7 @@ private:
             device.m_handlers.erase( object );
             return;
         }
-        T* o = const_cast< T* >( object );
-        ui_touch_handler_t h;
-        h.m_down = [ this, o ]( const float p[ 2 ] ) { o->touch_down( touch_inverse( ), p ); };
-        h.m_up = [ o ]( const float* ) { o->touch_up( ); };
-        h.m_move = [ this, o, &device ]
-        {
-            float p[ 2 ];
-            if ( ui_touch_point( device, 0u, p ) )
-                o->touch_move( touch_inverse( ), p );
-            else
-                ++m_config_faults;
-        };
-        device.m_handlers[ object ] = h;
+        ui_touch_handlers( device, const_cast< T* >( object ), [ this ] { return touch_inverse( ); }, m_config_faults );
     }
 
     const float* touch_inverse( ) const
@@ -1487,6 +1515,7 @@ private:
             }
             else
                 ui_touch_remove( *m_hooks.m_touch_device, b->m_button.get( ) );
+            touch_handlers( b->m_button.get( ), init );   // batch 25: its callback vtable 0x73B79C (button.hxx)
         }
         else if ( vt == k_ui_mini_board_vtable )
         {
@@ -1526,7 +1555,10 @@ private:
             trace( ui_trace_kind_t::hook, index_of( e ), "touch_remove", 0u, ui_params_t( ), true );        // 0x4253D0 -> 0x53FA60
             ui_bound_t& b = *m_bound[ static_cast< std::size_t >( index_of( e ) ) ];
             if ( m_hooks.m_touch_device && b.m_hud_button )
+            {
                 ui_touch_remove( *m_hooks.m_touch_device, b.m_hud_button.get( ) );
+                m_hooks.m_touch_device->m_handlers.erase( b.m_hud_button.get( ) );
+            }
         }
         else if ( vt == k_ui_multi_delay_vtable )
             trace( ui_trace_kind_t::hook, index_of( e ), "multi_delay_release", 0u, ui_params_t( ), true ); // 0x43A420 (the world's)

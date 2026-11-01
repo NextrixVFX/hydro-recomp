@@ -160,8 +160,11 @@ struct ui_touch_device_t
     std::vector< std::pair< const void*, std::uint32_t > > m_callbacks;   // +4..+0xC
     std::uint32_t m_priority = 0;                                         // +0x1C
     // batch 24 (additive): the second callback list +0x10..+0x18 (dispatched with no
-    // priority test; its filler - 0x4C6AB0's two 0x53FC00 pushes - is NOT read: data
-    // here), the touches (+0x20 storage, +0x24 count; entries past the count keep
+    // priority test). Batch 25: its filler is VuControlMethodManager (vtable 0x745538)
+    // slot 5 0x4AE890 - 0x53FB90 { manager + 4, 0 } on device + 0x10 (slot 3 0x4AE980
+    // erases it) - not recreated: data here. (0x4C6AB0's two 0x53FC00 calls are ONE
+    // inlined push_back - the aliasing branch and the plain one - of VuTitleSequence
+    // GameMode's callback { this + 4, 0 } onto the FIRST list +4.) The touches (+0x20 storage, +0x24 count; entries past the count keep
     // their old bytes - m_touches holds every entry ever written), the handlers.
     std::vector< std::pair< const void*, std::uint32_t > > m_low_level;
     std::vector< ui_touch_entry_t > m_touches;
@@ -282,6 +285,29 @@ inline bool ui_touch_point( const ui_touch_device_t& d, std::uint32_t index, flo
     out[ 0 ] = d.m_touches[ index ].m_point[ 0 ];
     out[ 1 ] = d.m_touches[ index ].m_point[ 1 ];
     return true;
+}
+
+// Batch 25: OUR dispatch target for an object whose VuTouchCallback is the
+// shared shape (the settings combos 0x73DF24, the leaderboard 0x73F2B4, the
+// front-end button 0x73B79C: slot 0 down (inverse, the dispatched point), slot
+// 1 up, slot 2 move = the device's touch 0 (slot 7 0x539230 - ui_touch_point;
+// an entry never written is indeterminate in retail: `faults` + 1, nothing
+// run)). `inverse` answers VuUIImpl +0x4C at the time of the call.
+template < typename T >
+inline void ui_touch_handlers( ui_touch_device_t& device, T* o, std::function< const float*( ) > inverse, int& faults )
+{
+    ui_touch_handler_t h;
+    h.m_down = [ o, inverse ]( const float p[ 2 ] ) { o->touch_down( inverse( ), p ); };
+    h.m_up = [ o ]( const float* ) { o->touch_up( ); };
+    h.m_move = [ o, inverse, &device, &faults ]
+    {
+        float p[ 2 ];
+        if ( ui_touch_point( device, 0u, p ) )
+            o->touch_move( inverse( ), p );
+        else
+            ++faults;
+    };
+    device.m_handlers[ o ] = h;
 }
 
 // 0x53FB90 (thiscall device + 4, const pair&): push_back.
