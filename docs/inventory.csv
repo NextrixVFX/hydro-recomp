@@ -1287,7 +1287,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x455360,297,VuDBAsset_load_Class,,,unattributed,absent,,False,False,game
 0x455490,333,sub_455490,,,unattributed,absent,,False,False,game
 0x4555E0,67,sub_4555E0,,,unattributed,absent,,False,False,race
-0x455630,150,sub_455630,,,unattributed,absent,,False,False,race
+0x455630,150,sub_455630,,,unattributed,callee,,False,False,race
 0x4556D0,48,sub_4556D0,,,unattributed,callee,,False,False,race
 0x455700,274,sub_455700,,,unattributed,verified,hydro/workspace/core/world/race.hxx,False,False,race
 0x455820,281,sub_455820,,,unattributed,verified,hydro/workspace/core/ui/config.hxx; hydro/workspace/core/world/race.hxx,False,False,race
@@ -1967,7 +1967,7 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x48F3E0,34,sub_48F3E0,VuTimeTrialGame,VuTimeTrialGame+9,game modes / race,absent,,False,False,race
 0x48F410,301,sub_48F410,VuTimeTrialGame,VuTimeTrialGame+10,game modes / race,absent,,False,False,race
 0x48F540,21,sub_48F540,VuTimeTrialGame,VuTimeTrialGame+11,game modes / race,absent,,False,False,race
-0x48F560,3877,?$VuMethod1@VVuTimeTrialGame@@XM_load_Boat,VuTimeTrialGame,VuTimeTrialGame+12,game modes / race,cited,hydro/workspace/core/world/modes.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/utility/checks/session.hxx,False,False,race
+0x48F560,3877,?$VuMethod1@VVuTimeTrialGame@@XM_load_Boat,VuTimeTrialGame,VuTimeTrialGame+12,game modes / race,verified,hydro/workspace/core/world/modes.hxx; hydro/workspace/core/world/session.hxx; hydro/workspace/utility/checks/session.hxx,False,False,race
 0x490490,172,loader_00490490_load_TotalTime,,,unattributed,cited,hydro/workspace/core/world/modes.hxx,False,False,race
 0x490570,111,sub_490570,,,unattributed,verified,hydro/workspace/core/world/rules.hxx,False,False,race
 0x490630,93,sub_490630,,,unattributed,verified,hydro/workspace/core/world/rules.hxx,False,False,race
@@ -1977,8 +1977,8 @@ address,size,ida_name,classes,vtable_slots,subsystem,status,cited_in,thunk,libra
 0x4909B0,535,sub_4909B0,,,unattributed,verified,hydro/workspace/core/world/rules.hxx,False,False,race
 0x490BD0,43,sub_490BD0,,,unattributed,verified,hydro/workspace/core/world/rules.hxx,False,False,race
 0x490C00,145,sub_490C00,,,unattributed,verified,hydro/workspace/core/world/rules.hxx,False,False,race
-0x490CA0,203,?$VuMethod1@VVuTimeTrialGame@@XM_load_InitialBoostEnergy,VuTimeTrialGame,VuTimeTrialGame+13,game modes / race,cited,hydro/workspace/core/world/start.hxx; hydro/workspace/utility/checks/session.hxx,False,False,race
-0x490D70,271,sub_490D70,VuTimeTrialGame,VuTimeTrialGame+15,game modes / race,cited,hydro/workspace/core/world/drive.hxx; hydro/workspace/utility/checks/session.hxx,False,False,race
+0x490CA0,203,?$VuMethod1@VVuTimeTrialGame@@XM_load_InitialBoostEnergy,VuTimeTrialGame,VuTimeTrialGame+13,game modes / race,verified,hydro/workspace/core/world/start.hxx; hydro/workspace/utility/checks/session.hxx,False,False,race
+0x490D70,271,sub_490D70,VuTimeTrialGame,VuTimeTrialGame+15,game modes / race,verified,hydro/workspace/core/world/drive.hxx; hydro/workspace/utility/checks/session.hxx,False,False,race
 0x490E80,61,sub_490E80,,,game modes / race (by address),callee,,False,False,race
 0x490EC0,61,sub_490EC0,,,game modes / race (by address),callee,,False,False,race
 0x490F00,5,sub_490F00,P$AAUISto::V?$Agile::V?$allocator::Platform::$00::Windows::Storage::P$AAUIStorageItem::V?$Agile::V?$vector::.?AV?$_Ref_count_obj; V?$allocat::Platform::$0A::Microsoft::Xbox::Leaderboards::P$AAVLeaderboardAttribute::V?$Agile::V?$vector::.?AV?$_Ref_count_obj; VuBarracudaMetroGfxComposer; VuD3d11Gfx; VuDefaultGfxComposer; VuDevStat; VuMetroD3d11Gfx; _Ref_count<...>; _Ref_count_obj<...>; btDynamicsWorld; std::_Ref_count_base,VuBarracudaMetroGfxComposer+5; V?$allocat::Platform::$0A::Microsoft::Xbox::Leaderboards::P$AAVLeaderboardAttribute::V?$Agile::V?$vector::.?AV?$_Ref_count_obj+3; _Ref_count_obj<...>+3; _Ref_count_obj<...>+3; _Ref_count_obj<...>+3; std::_Ref_count_base+3,physics (Bullet),verified,engine/workspace/core/collision/leaves.hxx,False,False,race
