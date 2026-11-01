@@ -48,9 +48,9 @@
 //   - so its inputs are UNKNOWN and it does not run); 0x410FF0, 0x41E240, the
 //   debris pieces' follow / removal; the driver tick of a UI / nuisance /
 //   ghost driver (none in a Race roster - their ticks are the boat agent's);
-//   the hull's splash pfx 0x52BCD0, the lens-water manager g 0x759048; the driver's vt+0x50, the trigger manager 0x536350,
-//   the transform's child walk 0x534C00(0) on the boat and the
-//   "OnBoatRecovered" broadcast inside the respawn.
+//   the hull's splash pfx 0x52BCD0, the lens-water manager g 0x759048; the driver's vt+0x50 and the
+//   "OnBoatRecovered" broadcast inside the respawn. WIRED (world batch 18): the trigger manager's 0x536350
+//   (trigger/volume.hxx) and the respawn's 0x534C00(0) (no children: nothing).
 //   PLATFORM HOOKS (not copied - BRIEF): FMOD (every get_event answers false:
 //   no event is made, so no audio calls follow), the stats / voice-over
 //   service g 0x758FEC, the gamepad rumble, the accelerometer, the input
@@ -510,7 +510,9 @@ inline void race_drive_setup( race_session_t& s, const value_t* constant_db )
         r->respawn.instigator = b.io.instigator;
         r->respawn_hooks.user = r.get( );
         r->respawn_hooks.water = race_drive_water;
-        r->respawn_hooks.transform_children = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the respawn's 0x534C00(0) on the boat's transform (not wired)" ); };
+        // The respawn's 0x534C00(0): the walk over the boat entity's +0x38 children (game/types.hxx transform_walk_children) -
+        // a race's VuBoatEntity has none (its ctor 0x41B850 makes no child entity and nothing adds one), so it does nothing.
+        r->respawn_hooks.transform_children = []( void* ) {};
         r->respawn_hooks.instigator = []( void* u ) { race_drive_t& d = race_drive_of( u ); trigger_instigator_update( d.session->triggers, race_drive_boat( d ).io.instigator ); };
         r->respawn_hooks.enable = []( void* u ) { race_session_enable( *race_drive_of( u ).session, race_drive_boat( race_drive_of( u ) ), true ); };
         r->respawn_hooks.driver_50 = []( void* u ) { race_unwired( *race_drive_of( u ).session, "the driver's vt+0x50 after a respawn (not recreated)" ); };
