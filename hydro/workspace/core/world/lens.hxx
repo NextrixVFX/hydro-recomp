@@ -15,6 +15,8 @@
 #include <xmmintrin.h>
 #include <cmath>
 #include <functional>
+#include <utility>
+#include <vector>
 
 #include <workspace/core/world/pfx.hxx>
 
@@ -152,7 +154,59 @@ struct lens_water_manager_t
     float drops[ 256 * 9 ]{};     // +0x74
     std::int32_t count = 0;       // +0x2474
     float owed = 0.0f;            // +0x2490
+    // +0x2484 / +0x2488 / +0x248C the emitters: VuArray< emitter interface * > (data, count, capacity). `emitters` holds
+    // `emitter_capacity` words (the block); those past the count are whatever the block last held (0 here when it grew -
+    // retail's _aligned_malloc block is uninitialised there: never compared).
+    std::vector< std::uint32_t > emitters;
+    std::int32_t emitter_count = 0;
+    std::int32_t emitter_capacity = 0;
 };
+
+// VuArray<4-byte>::resize 0x415690 (thiscall n; retn 4) on the emitter list: n past the capacity grows the block to
+// max( capacity + capacity / 2 (cdq / sar: toward zero), n ), copying the count's words; the count becomes n either way.
+inline void lens_water_emitters_resize( lens_water_manager_t& m, std::int32_t n )
+{
+    const std::int32_t cap = m.emitter_capacity;
+    if ( n > cap )
+    {
+        std::int32_t grown = cap + cap / 2;
+        if ( n > grown )
+            grown = n;
+        if ( grown > cap )
+        {
+            std::vector< std::uint32_t > block( static_cast< std::size_t >( grown ), 0u );
+            for ( std::int32_t i = 0; i < m.emitter_count; ++i )
+                block[ static_cast< std::size_t >( i ) ] = m.emitters[ static_cast< std::size_t >( i ) ];
+            m.emitters.swap( block );
+            m.emitter_capacity = grown;
+        }
+    }
+    m.emitter_count = n;
+}
+
+// Slot 14 0x513640 (thiscall emitter; retn 4): resize( count + 1 ), then the last word = the emitter.
+inline void lens_water_add_emitter( lens_water_manager_t& m, std::uint32_t emitter )
+{
+    lens_water_emitters_resize( m, m.emitter_count + 1 );
+    m.emitters[ static_cast< std::size_t >( m.emitter_count - 1 ) ] = emitter;
+}
+
+// Slot 15 0x513670 -> 0x5154A0 (VuArray remove-swap, thiscall &emitter; retn 4): the FIRST word equal to the emitter,
+// when it is not the last, SWAPS with the last (the removed pointer stays in the block just past the new count); then
+// 0x415690's body inline with count - 1. Not found / empty: nothing.
+inline void lens_water_remove_emitter( lens_water_manager_t& m, std::uint32_t emitter )
+{
+    const std::int32_t n = m.emitter_count;
+    if ( n <= 0 )
+        return;
+    std::int32_t i = 0;
+    while ( m.emitters[ static_cast< std::size_t >( i ) ] != emitter )
+        if ( ++i >= n )
+            return;
+    if ( i + 1 < n )
+        std::swap( m.emitters[ static_cast< std::size_t >( i ) ], m.emitters[ static_cast< std::size_t >( n - 1 ) ] );
+    lens_water_emitters_resize( m, n - 1 );
+}
 
 // Slot 9 0x5142C0: no drops, no push, the targets cleared.
 inline void lens_water_clear( lens_water_manager_t& m )

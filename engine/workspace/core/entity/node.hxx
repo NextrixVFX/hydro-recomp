@@ -2,6 +2,7 @@
 
 #include <workspace/core/assets/tree.hxx>
 #include <workspace/core/entity/registry.hxx>
+#include <workspace/core/entity/sort.hxx>
 
 #include <algorithm>
 #include <cstdint>
@@ -123,15 +124,17 @@ inline entity_t* entity_find_child( entity_t& entity, const std::string& name )
     return nullptr;
 }
 
-// 0x501810 with 0x500690. SUBSTITUTION: std::sort for MSVC's (library code);
-// an UNKNOWN child has no known flags, so a list holding one cannot be ordered
-// and is left as created - the caller's tree reports it.
+// 0x501810 with 0x500690: retail's std::sort instantiation, recreated in
+// entity/sort.hxx (vc_sort - VC11's introsort, so ties land where retail's
+// leave them; batch 29: was std::sort, a SUBSTITUTION). An UNKNOWN child has
+// no known flags, so a list holding one cannot be ordered and is left as
+// created - the caller's tree reports it.
 inline bool entity_sort_children( entity_t& entity )
 {
     for ( const auto& child : entity.m_children )
         if ( !child->m_ctor )
             return false;
-    std::sort( entity.m_children.begin( ), entity.m_children.end( ),
+    vc_sort( entity.m_children.data( ), entity.m_children.data( ) + entity.m_children.size( ),
         []( const std::unique_ptr< entity_t >& a, const std::unique_ptr< entity_t >& b )
         { return entity_child_before( a.get( ), b.get( ) ); } );
     return true;

@@ -2723,6 +2723,7 @@ inline bool verify_water_all( )
     ok = verify_ocean_field( ) && ok;
     ok = verify_water_wake( ) && ok;
     ok = verify_wake_reuse( ) && ok;
+    ok = verify_water_texture( ) && ok;
     ok = verify_watchers_all( ) && ok;
     ok = verify_dynamics_impl( ) && ok;
     ok = verify_rigid_collide( ) && ok;
@@ -2740,6 +2741,9 @@ inline bool verify_water_all( )
     ok = verify_lens_water( ) && ok;
     ok = verify_lens_drop_fill( ) && ok;
     ok = verify_lens_water_tick( ) && ok;
+    ok = verify_lens_emitters( ) && ok;
+    ok = verify_entity_sort( ) && ok;
+    ok = verify_json_write( ) && ok;
     ok = verify_json_access( ) && ok;
     ok = verify_json_text( ) && ok;
     ok = verify_json_member( ) && ok;
