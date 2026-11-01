@@ -452,3 +452,80 @@ inline bool verify_game_ctors( )
         LOG_ERROR( "game ctors FAILED %d checks", failed );
     return failed == 0;
 }
+// vugame_results_* / vugame_awards_* (core/world rules.hxx) against VuGame's
+// Results / Awards exit, tick and draw 0x484250 .. 0x484580 run real (oracle
+// case vugame_handlers): per call the hooks reached in order (as text), the
+// four +0x0C conditions' value / pulse after, and the screens' presence after
+// - one failure per differing call.
+inline bool verify_vugame_handlers( )
+{
+    int failed = 0;
+    static const char* const k_names[ 4 ] = { "EventFinished", "OnUserNext", "NoResults", "AwardsDone" };
+    for ( std::size_t k = 0; k < g_golden_vh_count; ++k )
+    {
+        const golden_vh_t& g = g_golden_vh[ k ];
+        race_rules_t r;
+        vugame_fsms_construct( r );
+        bool shape = r.event.m_conditions.size( ) == 4;
+        for ( std::size_t c = 0; shape && c < 4; ++c )
+        {
+            shape = r.event.m_conditions[ c ].m_name == k_names[ c ];
+            r.event.m_conditions[ c ].m_value = static_cast< std::uint8_t >( g.m_before[ 2 * c ] );
+            r.event.m_conditions[ c ].m_pulse = static_cast< std::uint8_t >( g.m_before[ 2 * c + 1 ] );
+        }
+        r.results_screen = g.m_screen != 0;
+        r.award_screen = g.m_award != 0;
+        std::vector< std::string > got;
+        char text[ 64 ];
+        r.screen_hooks.screen = [ & ]( int screen, int verb, float dt ) {
+            const char* who = screen == 0 ? "screen" : "award";
+            unsigned bits;
+            std::memcpy( &bits, &dt, 4 );
+            if ( verb == 0 )
+                std::snprintf( text, sizeof( text ), screen == 0 ? "%s 0x8" : "%s 0x47F4C0", who );
+            else if ( verb == 1 )
+                std::snprintf( text, sizeof( text ), "%s dtor", who );
+            else if ( verb == 2 )
+                std::snprintf( text, sizeof( text ), "%s 0xC %08X", who, bits );
+            else
+                std::snprintf( text, sizeof( text ), "%s 0x10", who );
+            got.push_back( text );
+        };
+        r.screen_hooks.json_type = [ & ]( const char* name ) { got.push_back( std::string( "json " ) + name ); return g.m_json; };
+        r.screen_hooks.paused = [ & ] { return g.m_paused != 0; };
+        r.screen_hooks.game_results_tick = [ & ]( float dt ) {
+            unsigned bits;
+            std::memcpy( &bits, &dt, 4 );
+            std::snprintf( text, sizeof( text ), "game 0x30 %08X", bits );
+            got.push_back( text );
+        };
+        r.screen_hooks.award_done = [ & ] { got.push_back( "award 0x47F720" ); return g.m_done != 0; };
+        float dt;
+        std::memcpy( &dt, &g.m_dt, 4 );
+        switch ( g.m_fn )
+        {
+        case 0: vugame_results_exit( r ); break;
+        case 1: vugame_results_tick( r, dt ); break;
+        case 2: vugame_results_draw( r ); break;
+        case 3: vugame_awards_exit( r ); break;
+        case 4: vugame_awards_tick( r, dt ); break;
+        default: vugame_awards_draw( r ); break;
+        }
+        bool same = shape && got.size( ) == static_cast< std::size_t >( g.m_calls ) && r.results_screen == ( g.m_screen_after != 0 ) &&
+                    r.award_screen == ( g.m_award_after != 0 );
+        for ( std::size_t c = 0; same && c < got.size( ); ++c )
+            same = got[ c ] == g_golden_vh_calls[ g.m_call + static_cast< int >( c ) ];
+        for ( std::size_t c = 0; same && c < 4; ++c )
+            same = r.event.m_conditions[ c ].m_value == g.m_after[ 2 * c ] && r.event.m_conditions[ c ].m_pulse == g.m_after[ 2 * c + 1 ];
+        if ( !same && ++failed <= 10 )
+            LOG_ERROR( "vugame handlers: call %d (fn %d screen %d award %d paused %d json %d done %d): %d calls%s, retail %d%s", static_cast< int >( k ),
+                       g.m_fn, g.m_screen, g.m_award, g.m_paused, g.m_json, g.m_done, static_cast< int >( got.size( ) ),
+                       got.empty( ) ? "" : ( " first '" + got[ 0 ] + "'" ).c_str( ), g.m_calls,
+                       g.m_calls ? ( std::string( " first '" ) + g_golden_vh_calls[ g.m_call ] + "'" ).c_str( ) : "" );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "VuGame's Results / Awards exit, tick and draw match retail's 0x484250 .. 0x484580: %d calls", static_cast< int >( g_golden_vh_count ) );
+    else
+        LOG_ERROR( "vugame handlers FAILED %d calls", failed );
+    return failed == 0;
+}

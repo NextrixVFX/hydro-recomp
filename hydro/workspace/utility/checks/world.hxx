@@ -3091,6 +3091,7 @@ inline bool verify_world_all( )
     ok = verify_buoy_hit( ) && ok;
     ok = verify_tick_same_pass( ) && ok;
     ok = verify_game_ctors( ) && ok;
+    ok = verify_vugame_handlers( ) && ok;
     ok = verify_static_model_draw( ) && ok;
     ok = verify_static_world_aabb( ) && ok;
     return ok;

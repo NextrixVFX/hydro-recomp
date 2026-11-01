@@ -400,6 +400,24 @@ struct race_rules_hooks_t
     std::function< void( const std::string& call ) > platform;
 };
 
+// VuGame's Results / Awards handlers past their enters (0x484250 .. 0x484580):
+// what they call that is the UI's, the platform's or a game slot's. `screen`
+// is the screen object's (0 the results VuCommonScreen at +0x84, 1 the award
+// screen at +0x88): verb 0 its exit (results vt+8; the award screen's
+// 0x47F4C0), 1 its deletion (vt+0(1)), 2 its tick vt+0xC(dt), 3 its draw
+// vt+0x10. `json_type` answers gameutil g 0x758FF8 +0x50's 0x4FBDF0 lookup -
+// the value's type word (-1: not known here). `paused` is g 0x758FD4 +0x34 !=
+// 0. `game_results_tick` the game's vt+0x30(dt) (not read). `award_done` the
+// award screen's 0x47F720.
+struct vugame_screen_hooks_t
+{
+    std::function< void( int screen, int verb, float dt ) > screen;
+    std::function< int( const char* name ) > json_type;
+    std::function< bool( ) > paused;
+    std::function< void( float dt ) > game_results_tick;
+    std::function< bool( ) > award_done;
+};
+
 struct race_rules_t
 {
     // VuGame's own two machines (its ctor 0x480BA0; begun by 0x4829A0 - the first state, its enter; ticked by
@@ -407,6 +425,9 @@ struct race_rules_t
     c_fsm event;                     // +0x0C
     c_fsm split;                     // +0x67C
     std::function< void( std::uint32_t address, const char* what ) > unrecreated;   // a VuGame state handler reached
+    vugame_screen_hooks_t screen_hooks;   // what the Results / Awards handlers call that is not theirs
+    bool results_screen = false;     // +0x84 non-null (Results' enter 0x484110 - not recreated: never set here)
+    bool award_screen = false;       // +0x88 non-null (Awards' enter 0x484320 - not recreated: never set here)
     c_fsm fsm;                       // +0x6F8
     std::uint32_t buoys = 0;         // +0x744
     std::string track;               // the game's +0x68 (VuGame's track name)
@@ -535,12 +556,125 @@ inline void vugame_fsm_handlers( race_rules_t& r, fsm_state_t& s, std::uint32_t 
         s.m_draw = hook( draw, s.m_name, "draw" );
 }
 
+// ---- VuGame's Results / Awards handlers (world batch 21; case vugame_handlers)
+//
+// Results exit 0x484250: with a screen (+0x84) its vt+8, its deletion, +0x84
+// = 0. Results tick 0x484280(dt): the game's vt+0x30(dt); the screen's
+// vt+0xC(dt) when there is one and g 0x758FD4 +0x34 is 0; then gameutil +0x50's
+// "GameResults" value - type 0 (null) PULSES "NoResults" (+0x1D; 0x555C60
+// finds it - an absent name would write before the array: UNKNOWN). Results
+// draw 0x4842F0: "GameResults" of type 6 and a screen -> its vt+0x10 (the
+// lookup first, whatever the screen). Awards exit 0x4844F0: with an award
+// screen (+0x88) its 0x47F4C0, its deletion, +0x88 = 0. Awards tick
+// 0x484520(dt): no award screen -> "AwardsDone"'s VALUE (+0x1C) = 1; else,
+// unless +0x34 is set (then nothing), its vt+0xC(dt) and, when 0x47F720
+// answers true, "AwardsDone" = 1. Awards draw 0x484580: the award screen's
+// vt+0x10. A hook not given is UNKNOWN (`unrecreated`) and stops the handler.
+inline bool vugame_screen_need( race_rules_t& r, bool have, std::uint32_t address, const char* what )
+{
+    if ( !have && r.unrecreated )
+        r.unrecreated( address, what );
+    return have;
+}
+
+inline void vugame_condition_byte( c_fsm& f, const char* name, bool pulse )
+{
+    const int i = f.condition_index( name );
+    if ( i < 0 )
+        return;   // 0x555C60's -1: retail writes before the array (UNKNOWN) - not reproduced
+    if ( pulse )
+        f.m_conditions[ static_cast< std::size_t >( i ) ].m_pulse = 1;
+    else
+        f.m_conditions[ static_cast< std::size_t >( i ) ].m_value = 1;
+}
+
+inline void vugame_results_exit( race_rules_t& r )
+{
+    if ( !r.results_screen )
+        return;
+    if ( !vugame_screen_need( r, static_cast< bool >( r.screen_hooks.screen ), 0x484250u, "VuGame Results exit: the screen's vt+8 / deletion (UI)" ) )
+        return;
+    r.screen_hooks.screen( 0, 0, 0.0f );
+    r.screen_hooks.screen( 0, 1, 0.0f );
+    r.results_screen = false;
+}
+
+inline void vugame_results_tick( race_rules_t& r, float dt )
+{
+    if ( !vugame_screen_need( r, static_cast< bool >( r.screen_hooks.game_results_tick ), 0x484280u, "VuGame Results tick: the game's vt+0x30 (not read)" ) )
+        return;
+    r.screen_hooks.game_results_tick( dt );
+    if ( r.results_screen )
+    {
+        if ( !vugame_screen_need( r, r.screen_hooks.paused && r.screen_hooks.screen, 0x484280u, "VuGame Results tick: g 0x758FD4 +0x34 / the screen (UI)" ) )
+            return;
+        if ( !r.screen_hooks.paused( ) )
+            r.screen_hooks.screen( 0, 2, dt );
+    }
+    const int type = r.screen_hooks.json_type ? r.screen_hooks.json_type( "GameResults" ) : -1;
+    if ( !vugame_screen_need( r, type >= 0, 0x484280u, "VuGame Results tick: gameutil +0x50 \"GameResults\" (not known here)" ) )
+        return;
+    if ( type == 0 )
+        vugame_condition_byte( r.event, "NoResults", true );
+}
+
+inline void vugame_results_draw( race_rules_t& r )
+{
+    const int type = r.screen_hooks.json_type ? r.screen_hooks.json_type( "GameResults" ) : -1;
+    if ( !vugame_screen_need( r, type >= 0, 0x4842F0u, "VuGame Results draw: gameutil +0x50 \"GameResults\" (not known here)" ) )
+        return;
+    if ( type == 6 && r.results_screen && vugame_screen_need( r, static_cast< bool >( r.screen_hooks.screen ), 0x4842F0u, "VuGame Results draw: the screen (UI)" ) )
+        r.screen_hooks.screen( 0, 3, 0.0f );
+}
+
+inline void vugame_awards_exit( race_rules_t& r )
+{
+    if ( !r.award_screen )
+        return;
+    if ( !vugame_screen_need( r, static_cast< bool >( r.screen_hooks.screen ), 0x4844F0u, "VuGame Awards exit: the award screen's 0x47F4C0 / deletion (UI)" ) )
+        return;
+    r.screen_hooks.screen( 1, 0, 0.0f );
+    r.screen_hooks.screen( 1, 1, 0.0f );
+    r.award_screen = false;
+}
+
+inline void vugame_awards_tick( race_rules_t& r, float dt )
+{
+    if ( !r.award_screen )
+    {
+        vugame_condition_byte( r.event, "AwardsDone", false );
+        return;
+    }
+    if ( !vugame_screen_need( r, r.screen_hooks.paused && r.screen_hooks.screen && r.screen_hooks.award_done, 0x484520u,
+                              "VuGame Awards tick: g 0x758FD4 +0x34 / the award screen (UI)" ) )
+        return;
+    if ( r.screen_hooks.paused( ) )
+        return;
+    r.screen_hooks.screen( 1, 2, dt );
+    if ( r.screen_hooks.award_done( ) )
+        vugame_condition_byte( r.event, "AwardsDone", false );
+}
+
+inline void vugame_awards_draw( race_rules_t& r )
+{
+    if ( r.award_screen && vugame_screen_need( r, static_cast< bool >( r.screen_hooks.screen ), 0x484580u, "VuGame Awards draw: the award screen (UI)" ) )
+        r.screen_hooks.screen( 1, 3, 0.0f );
+}
+
 inline void vugame_fsms_construct( race_rules_t& r )
 {
     r.event = c_fsm{ };
     r.event.add_state( "Event" );
-    vugame_fsm_handlers( r, r.event.add_state( "Results" ), 0x484110u, 0x484250u, 0x484280u, 0x4842F0u );
-    vugame_fsm_handlers( r, r.event.add_state( "Awards" ), 0x484320u, 0x4844F0u, 0x484520u, 0x484580u );
+    fsm_state_t& results = r.event.add_state( "Results" );
+    vugame_fsm_handlers( r, results, 0x484110u, 0x484250u, 0x484280u, 0x4842F0u );
+    results.m_exit = [ &r ] { vugame_results_exit( r ); };
+    results.m_tick = [ &r ]( float dt ) { vugame_results_tick( r, dt ); };
+    results.m_draw = [ &r ] { vugame_results_draw( r ); };
+    fsm_state_t& awards = r.event.add_state( "Awards" );
+    vugame_fsm_handlers( r, awards, 0x484320u, 0x4844F0u, 0x484520u, 0x484580u );
+    awards.m_exit = [ &r ] { vugame_awards_exit( r ); };
+    awards.m_tick = [ &r ]( float dt ) { vugame_awards_tick( r, dt ); };
+    awards.m_draw = [ &r ] { vugame_awards_draw( r ); };
     r.event.add_state( "Exit" );
     r.event.add_transition( "Event", "Results", "EventFinished" );
     r.event.add_transition( "Results", "Awards", "OnUserNext" );
