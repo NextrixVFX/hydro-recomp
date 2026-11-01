@@ -49,6 +49,9 @@ struct boat_load_hooks_t
     // VuFluidsMeshAsset's +0x7C / +0x88 counts.
     bool ( *mesh )( void* user, std::uint32_t asset, striding_mesh_t& out ) = nullptr;
     bool ( *fluid_counts )( void* user, std::uint32_t asset, int& vertices, int& edges ) = nullptr;
+    // The VuFluidsMeshAsset's +0x58..+0x77 aabb (min 4, max 4) for 0x526090.
+    // meshes.hxx's boat_mesh_library_t answers all three from Base.apf.
+    bool ( *fluid_aabb )( void* user, std::uint32_t asset, float* aabb ) = nullptr;
 };
 
 struct boat_load_t
@@ -298,9 +301,15 @@ inline bool boat_load_sections( boat_load_t& io )
     float ez = state_f( b, 0x288 ) - state_f( b, 0x278 );
     if ( _mm_comigt_ss( _mm_set_ss( support_bits( 0x34000000u ) ), _mm_set_ss( ex ) ) )
     {
+        // 0x526090: the asset's +0x58 min / +0x68 max (fluids_mesh_asset_t's
+        // aabb), else zeros; the extents are max - min per lane.
+        float box[ 8 ] = { };
         if ( load_word( io.solver, 0 ) )
-            return false;   // the fluid mesh's own aabb: the asset image is not modelled here
-        ex = ey = ez = 0.0f;
+            if ( !io.hooks.fluid_aabb || !io.hooks.fluid_aabb( io.hooks.user, load_word( io.solver, 0 ), box ) )
+                return false;
+        ex = box[ 4 ] - box[ 0 ];
+        ey = box[ 5 ] - box[ 1 ];
+        ez = box[ 6 ] - box[ 2 ];
     }
     {
         const float mass = state_f( b, 0x134 );

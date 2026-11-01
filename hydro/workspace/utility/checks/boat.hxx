@@ -6,6 +6,7 @@
 #include <workspace/core/boat/ai.hxx>
 #include <workspace/core/boat/driver.hxx>
 #include <workspace/core/boat/load.hxx>
+#include <workspace/core/boat/meshes.hxx>
 #include <workspace/core/boat/sections.hxx>
 #include <workspace/core/boat/state.hxx>
 #include <workspace/core/boat/track.hxx>
@@ -865,6 +866,47 @@ inline bool verify_boat_load_sections( )
             return true;
         };
         int bad = boat_load_sections( io ) ? -1 : 0x9000;
+        // The pack-backed hooks the running game uses (meshes.hxx boat_mesh_library_t) must hand out exactly what
+        // retail's loads put in the case's assets: the collision mesh's vertices / indices, the fluids counts.
+        {
+            static c_archive archive;
+            static bool opened = false;
+            if ( !opened )
+            {
+                const std::string pack = world_check_pack( );
+                opened = !pack.empty( ) && archive.open( pack.c_str( ) );
+            }
+            boat_mesh_library_t lib;
+            lib.read_user = &archive;
+            lib.read = []( void* u, const std::string& key, std::vector< std::uint8_t >& blob ) {
+                return static_cast< c_archive* >( u )->read( key.c_str( ), blob );
+            };
+            boat_load_hooks_t lh;
+            boat_mesh_hooks( lib, lh );
+            for ( const std::string& r : ctx.requests )
+            {
+                const auto slash = r.find( '/' );
+                if ( bad >= 0 || r.compare( 0, 7, "exists " ) == 0 || r.compare( 0, 8, "release " ) == 0 || slash == std::string::npos )
+                    continue;
+                const std::string type = r.substr( 0, slash ), asset_name = r.substr( slash + 1 );
+                const std::uint32_t h = opened ? lh.create( lh.user, type.c_str( ), asset_name ) : 0;
+                if ( type == "VuCollisionMeshAsset" )
+                {
+                    striding_mesh_t m{ };
+                    if ( !h || !lh.mesh( lh.user, h, m ) || m.num_vertices != static_cast< int >( ctx.vertices.size( ) ) ||
+                         m.index_count != static_cast< int >( ctx.indices.size( ) ) ||
+                         std::memcmp( m.vertices, ctx.vertices.data( ), 16 * ctx.vertices.size( ) ) != 0 ||
+                         std::memcmp( m.indices, ctx.indices.data( ), 2 * ctx.indices.size( ) ) != 0 )
+                        bad = 0x9100;
+                }
+                else if ( type == "VuFluidsMeshAsset" )
+                {
+                    int v = -1, e = -1;
+                    if ( !h || !lh.fluid_counts( lh.user, h, v, e ) || v != ctx.fluid_vertices || e != ctx.fluid_edges )
+                        bad = 0x9200;
+                }
+            }
+        }
         std::memcpy( img[ 1 ].data( ), &body, sizeof( body ) );
         std::memcpy( img[ 5 ].data( ), engine.object.image, 0x104 );
         // Masked: string fields (24 bytes), the engine's container words.
@@ -943,7 +985,7 @@ inline bool verify_boat_load_sections( )
         ++compared;
         if ( bad >= 0 && ++failed <= 4 )
             LOG_ERROR( "boat load sections vector %d (%s) differs from retail at 0x%X (block x 0x1000 + byte; 0xAxxx strings, "
-                       "0xE engine containers, 0xF000 hooks / requests, 0xF1 shape, 0xF2 compound, 0xF3 arrays, 0x9000 refused)",
+                       "0xE engine containers, 0xF000 hooks / requests, 0xF1 shape, 0xF2 compound, 0xF3 arrays, 0x9000 refused, 0x9100 / 0x9200 the pack library's collision / fluids mesh)",
                        static_cast< int >( index ), name.c_str( ), bad );
     }
     if ( failed == 0 )

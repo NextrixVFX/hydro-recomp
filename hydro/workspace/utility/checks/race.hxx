@@ -7,6 +7,7 @@
 #include <workspace/core/boat/pilots.hxx>
 #include <workspace/core/boat/manager.hxx>
 #include <workspace/core/boat/powerup.hxx>
+#include <workspace/core/boat/meshes.hxx>
 
 #include <algorithm>
 #include <array>
@@ -1251,6 +1252,455 @@ inline bool verify_boost_apply( )
     return false;
 }
 
+// VuPowerUpEntity's Decision tick 0x43BDB0 against retail (oracle case powerup_tick): the time, +0x12C, the scale
+// spring (+0x130 / +0x134), the bobbed position and every hook call in order, bit for bit. The hooks answer as the
+// case's recorders did (the driver's vt+0x38 / +0x30 ran retail's own 0x404BD0 / 0x4052D0 there: boat_driver_kind).
+inline bool verify_powerup_tick( )
+{
+    const unsigned* g = g_golden_powerup_tick_words;
+    const unsigned ns = *g++;
+    int failed = 0, compared = 0, ticks = 0;
+    auto fl = []( unsigned u ) { float x; std::memcpy( &x, &u, 4 ); return x; };
+    auto bits = []( float x ) { std::uint32_t u; std::memcpy( &u, &x, 4 ); return u; };
+    for ( unsigned s = 0; s < ns; ++s )
+    {
+        const unsigned nt = *g++;
+        for ( unsigned t = 0; t < nt; ++t, ++ticks )
+        {
+            const float dt = fl( *g++ );
+            powerup_t p;
+            std::memcpy( &p.time, g, 8 );
+            g += 2;
+            p.in_world = static_cast< std::uint8_t >( *g++ );
+            p.handle_wave_height = static_cast< std::uint8_t >( *g++ );
+            p.height_above_water = fl( *g++ );
+            p.pickup = *g++;
+            p.scale_velocity = fl( *g++ );
+            p.scale = fl( *g++ );
+            p.spring = fl( *g++ );
+            p.damping = fl( *g++ );
+            p.scale_initial = fl( *g++ );
+            p.scale_initial_velocity = fl( *g++ );
+            p.pfx = *g++;
+            float position[ 4 ];
+            std::memcpy( position, g, 16 );
+            g += 4;
+            const unsigned boat = *g++, kind = *g++, rtti = *g++, c0 = *g++, valid = *g++;
+            const unsigned water = *g++, apply = *g++, bac0 = *g++, getevent = *g++;
+            std::uint8_t boats[ 4 ] = { };
+            std::vector< std::vector< unsigned > > log;
+            auto index = [ & ]( void* b ) { return static_cast< unsigned >( static_cast< std::uint8_t* >( b ) - boats ); };
+            powerup_tick_hooks_t hooks;
+            hooks.water_height = [ & ]( const float* pos ) {
+                log.push_back( { 1u, bits( pos[ 0 ] ), bits( pos[ 1 ] ), bits( pos[ 2 ] ), bits( pos[ 3 ] ) } );
+                return fl( water );
+            };
+            hooks.moved = [ & ]( ) {
+                log.push_back( { 2u, 1u } );
+                log.push_back( { 3u, 1u } );
+                if ( c0 )
+                    log.push_back( { 4u, 1u } );
+            };
+            hooks.find = [ & ]( std::uint32_t id ) { log.push_back( { 5u, id } ); return static_cast< void* >( boats + boat ); };
+            hooks.is_boat = [ & ]( void* b ) { log.push_back( { 6u, index( b ) } ); return rtti == 1 || rtti == 2; };
+            hooks.apply = [ & ]( void* b ) { log.push_back( { 7u, index( b ) } ); return ( apply & 0xFF ) != 0; };
+            hooks.apply_pfx = [ & ]( void* ) {
+                log.push_back( { 8u, 1u } );
+                if ( bac0 )
+                    log.push_back( { 9u } );
+            };
+            hooks.driver_38 = [ & ]( void* ) { return true; };
+            hooks.driver_30 = [ & ]( void* ) { boat_driver_kind_t k; return boat_driver_kind( kind, k ) && k.human; };
+            hooks.sound = [ & ]( const float* pos ) {
+                log.push_back( { 11u, 1u } );
+                if ( getevent == 0 )
+                {
+                    log.push_back( { 12u, 1u, bits( pos[ 0 ] ), bits( pos[ 1 ] ), bits( pos[ 2 ] ) } );
+                    log.push_back( { 13u, 1u } );
+                }
+            };
+            hooks.voice = [ & ]( void* b ) { log.push_back( { 14u, index( b ), 1u } ); };
+            hooks.pfx_scale = [ & ]( std::uint32_t, float sc ) {
+                if ( valid )
+                    log.push_back( { 15u, bits( sc ) } );
+            };
+            const bool ok = powerup_decision_tick( p, position, dt, hooks );
+            unsigned mine[ 9 ];
+            std::memcpy( mine, &p.time, 8 );
+            mine[ 2 ] = p.pickup;
+            mine[ 3 ] = bits( p.scale_velocity );
+            mine[ 4 ] = bits( p.scale );
+            std::memcpy( mine + 5, position, 16 );
+            static const char* const names[ 9 ] = { "time lo", "time hi", "+0x12C", "+0x130", "+0x134", "x", "y", "z", "w" };
+            for ( int k = 0; k < 9; ++k, ++g )
+                if ( ++compared, ( !ok || mine[ k ] != *g ) && ++failed <= 8 )
+                    LOG_ERROR( "powerup_tick sequence %u tick %u %s: 0x%08X, retail 0x%08X", s, t, names[ k ], mine[ k ], *g );
+            const unsigned nl = *g++;
+            ++compared;
+            if ( log.size( ) != nl && ++failed <= 8 )
+                LOG_ERROR( "powerup_tick sequence %u tick %u: %zu calls, retail %u", s, t, log.size( ), nl );
+            for ( unsigned j = 0; j < nl; ++j )
+            {
+                const unsigned len = *g++;
+                ++compared;
+                bool same = j < log.size( ) && log[ j ].size( ) == len;
+                for ( unsigned k = 0; k < len; ++k )
+                    same = same && log[ j ][ k ] == g[ k ];
+                if ( !same && ++failed <= 8 )
+                    LOG_ERROR( "powerup_tick sequence %u tick %u call %u: retail code %u", s, t, j, g[ 0 ] );
+                g += len;
+            }
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuPowerUpEntity's Decision tick 0x43BDB0 matches retail: %u sequences, %d ticks, %d values", ns, ticks, compared );
+        return true;
+    }
+    LOG_ERROR( "powerup_tick FAILED %d of %d values", failed, compared );
+    return false;
+}
+
+// The two mesh-asset loads against retail's (oracle case mesh_assets): every collision mesh BoatDB names and every
+// fluids mesh in Base.apf, read from the pack here and loaded by collision_mesh_load / fluids_mesh_load; compared:
+// the return, the stream's end, the surface names asked, every array's size / capacity (/ owns) and FNV-1a of its
+// bytes (the materials' after the surface ids went in), the aabbs, the flag, the bvh header and words. One failure
+// per asset.
+inline bool verify_mesh_assets( )
+{
+    c_archive archive;
+    const std::string pack = world_check_pack( );
+    if ( pack.empty( ) || !archive.open( pack.c_str( ) ) )
+    {
+        LOG_ERROR( "verify_mesh_assets: Base.apf not found" );
+        return false;
+    }
+    const unsigned* g = g_golden_mesh_assets_words;
+    auto text = [ & ]( ) {
+        const unsigned n = *g++;
+        std::string s( reinterpret_cast< const char* >( g ), n );
+        g += ( n + 3 ) / 4;
+        return s;
+    };
+    auto fnv = []( const std::vector< std::uint8_t >& b, std::int32_t n ) {
+        if ( n == 0 )
+            return 0u;
+        std::uint32_t h = 0x811C9DC5u;
+        for ( std::uint8_t c : b )
+            h = ( h ^ c ) * 0x01000193u;
+        return h;
+    };
+    int failed = 0, collisions = 0, fluids = 0;
+    std::vector< std::uint32_t > mine, want;
+    auto vu = [ & ]( const mesh_vu_array_t& a ) {
+        mine.push_back( static_cast< std::uint32_t >( a.size ) );
+        mine.push_back( static_cast< std::uint32_t >( a.capacity ) );
+        mine.push_back( fnv( a.bytes, a.size ) );
+    };
+    auto bt = [ & ]( const mesh_bt_array_t& a ) {
+        mine.push_back( static_cast< std::uint32_t >( a.size ) );
+        mine.push_back( static_cast< std::uint32_t >( a.capacity ) );
+        mine.push_back( a.owns );
+        mine.push_back( fnv( a.bytes, a.size ) );
+    };
+    auto words = [ & ]( const void* p, int n ) {
+        const std::uint32_t* w = static_cast< const std::uint32_t* >( p );
+        mine.insert( mine.end( ), w, w + n );
+    };
+    for ( int kind = 0; kind < 2; ++kind )
+    {
+        const unsigned count = *g++;
+        for ( unsigned k = 0; k < count; ++k )
+        {
+            const std::string name = text( );
+            const unsigned size = *g++, ret = *g++, end = *g++;
+            std::vector< std::string > want_names;
+            if ( kind == 0 )
+            {
+                want_names.resize( *g++ );
+                for ( auto& n : want_names )
+                    n = text( );
+            }
+            const unsigned nwords = kind == 0 ? 12 + 8 + 1 + 14 + 1 + 20 + 2 : 9 + 8 + 2;
+            want.assign( g, g + nwords );
+            g += nwords;
+            mine.clear( );
+            std::vector< std::uint8_t > blob;
+            const std::string key = std::string( kind == 0 ? "VuCollisionMeshAsset/" : "VuFluidsMeshAsset/" ) + name;
+            const bool read = archive.read( key.c_str( ), blob );
+            mesh_stream_t s{ blob.data( ), blob.size( ), 0 };
+            std::vector< std::string > names;
+            bool ok = false;
+            if ( kind == 0 )
+            {
+                collision_mesh_asset_t a;
+                ok = read && collision_mesh_load( s, a, [ & ]( const std::string& n ) -> std::uint8_t {
+                    names.push_back( n );
+                    return n == "Metal" ? 3 : n == "Wood" ? 5 : n == "Duck" ? 9 : 1;
+                } );
+                vu( a.vertices ), vu( a.indices ), vu( a.triangles ), vu( a.materials );
+                words( a.aabb, 8 );
+                mine.push_back( a.flag );
+                words( a.bvh.header, 14 );
+                mine.push_back( a.bvh.use_quantization );
+                bt( a.bvh.leaf ), bt( a.bvh.contiguous ), bt( a.bvh.quantized_leaf ), bt( a.bvh.quantized ), bt( a.bvh.subtrees );
+                mine.push_back( static_cast< std::uint32_t >( a.bvh.traversal ) );
+                mine.push_back( static_cast< std::uint32_t >( a.bvh.subtree_count ) );
+                ++collisions;
+            }
+            else
+            {
+                fluids_mesh_asset_t a;
+                ok = read && fluids_mesh_load( s, a );
+                vu( a.vertices ), vu( a.edges ), vu( a.records );
+                words( a.aabb, 8 );
+                mine.push_back( a.w9c );
+                mine.push_back( a.wa0 );
+                ++fluids;
+            }
+            const bool same = ok && ret == 1 && blob.size( ) == size && s.at == end && names == want_names && mine == want;
+            if ( !same && ++failed <= 8 )
+            {
+                std::size_t at = 0;
+                while ( at < mine.size( ) && at < want.size( ) && mine[ at ] == want[ at ] )
+                    ++at;
+                LOG_ERROR( "mesh_assets %s: load %d, end %zu (retail %u), %zu names (retail %zu), first differing word %zu",
+                           key.c_str( ), ok ? 1 : 0, s.at, end, names.size( ), want_names.size( ), at );
+            }
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuCollisionMeshAsset 0x51AF20 / VuFluidsMeshAsset 0x523770 loads match retail on Base.apf: %d collision, %d fluids meshes",
+                     collisions, fluids );
+        return true;
+    }
+    LOG_ERROR( "mesh_assets FAILED %d of %d assets", failed, collisions + fluids );
+    return false;
+}
+
+// VuRandom's ctor 0x50FC70 / seed 0x50FCA0 against retail (oracle case random_seed): seed, last, the table, +0x88
+// = 0 and +0x8C untouched, and whether the clock (VuMetroSys slot 12) was asked.
+inline bool verify_random_seed( )
+{
+    const unsigned* g = g_golden_random_seed_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    static std::uint64_t clock_value = 0;
+    static int asked = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const std::int32_t seed = static_cast< std::int32_t >( *g++ );
+        clock_value = static_cast< std::uint64_t >( g[ 0 ] ) | ( static_cast< std::uint64_t >( g[ 1 ] ) << 32 );
+        g += 2;
+        const unsigned want_asked = *g++;
+        asked = 0;
+        fleet_random_t r;
+        r.seed = static_cast< std::int32_t >( 0xCDCDCDCDu );
+        r.last = r.seed;
+        for ( auto& t : r.table )
+            t = r.seed;
+        fleet_random_seed( r, seed, [ ]( ) -> std::int64_t { ++asked; return static_cast< std::int64_t >( clock_value ); } );
+        unsigned mine[ 36 ];
+        mine[ 0 ] = static_cast< unsigned >( r.seed );
+        mine[ 1 ] = static_cast< unsigned >( r.last );
+        for ( int k = 0; k < 32; ++k )
+            mine[ 2 + k ] = static_cast< unsigned >( r.table[ k ] );
+        mine[ 34 ] = 0;             // the ctor's +0x88
+        mine[ 35 ] = 0xCDCDCDCDu;   // +0x8C: neither writes it
+        if ( static_cast< unsigned >( asked ) != want_asked && ++failed <= 8 )
+            LOG_ERROR( "random_seed vector %u: the clock asked %d times, retail %u", v, asked, want_asked );
+        for ( int k = 0; k < 36; ++k, ++g )
+            if ( mine[ k ] != *g && ++failed <= 8 )
+                LOG_ERROR( "random_seed vector %u word %d: 0x%08X, retail 0x%08X", v, k, mine[ k ], *g );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuRandom's seed 0x50FC70 / 0x50FCA0 (the engine init's reseed of 0x736810) matches retail: %u vectors x 37 values", nv );
+        return true;
+    }
+    LOG_ERROR( "random_seed FAILED %d of %u values", failed, nv * 37 );
+    return false;
+}
+
+// VuPowerUpEntity's contact callback 0x43C8C0 with its map 0x43C980 against retail (oracle case powerup_contact):
+// +0x12C and the whole per-boat map after every contact; the seeding is powerup_game_initialize's (no disabled
+// games, no hooks).
+inline bool verify_powerup_contact( )
+{
+    const unsigned* g = g_golden_powerup_contact_words;
+    const unsigned ns = *g++;
+    int failed = 0, contacts = 0;
+    for ( unsigned s = 0; s < ns; ++s )
+    {
+        powerup_t p;
+        std::memcpy( &p.recover_time, g++, 4 );
+        std::uint32_t ids[ 6 ];
+        std::memcpy( ids, g, 24 );
+        g += 6;
+        std::vector< std::uint32_t > seeded( *g++ );
+        for ( auto& i : seeded )
+            i = *g++;
+        p.initially_enabled = 0;
+        powerup_game_initialize( p, "", { }, seeded, { } );
+        const unsigned nc = *g++;
+        for ( unsigned c = 0; c < nc; ++c, ++contacts )
+        {
+            std::memcpy( &p.time, g, 8 );
+            g += 2;
+            const unsigned owner = *g++, rtti = *g++, before = *g++, after = *g++;
+            p.pickup = before;
+            if ( owner != 6 )
+                powerup_contact( p, rtti == 1 || rtti == 2, ids[ owner ] );
+            const unsigned nm = *g++;
+            bool same = p.pickup == after && p.last_pickup.size( ) == nm;
+            auto it = p.last_pickup.begin( );
+            for ( unsigned m = 0; m < nm; ++m, g += 3 )
+            {
+                if ( !same || it == p.last_pickup.end( ) )
+                {
+                    same = false;
+                    continue;
+                }
+                std::uint32_t v[ 2 ];
+                std::memcpy( v, &it->second, 8 );
+                same = it->first == g[ 0 ] && v[ 0 ] == g[ 1 ] && v[ 1 ] == g[ 2 ];
+                ++it;
+            }
+            if ( !same && ++failed <= 8 )
+                LOG_ERROR( "powerup_contact sequence %u contact %u: +0x12C 0x%X (retail 0x%X), %zu map entries (retail %u)", s, c,
+                           p.pickup, after, p.last_pickup.size( ), nm );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuPowerUpEntity's contact callback 0x43C8C0 + its per-boat map 0x43C980 match retail: %u sequences, %d contacts", ns, contacts );
+        return true;
+    }
+    LOG_ERROR( "powerup_contact FAILED %d of %d contacts", failed, contacts );
+    return false;
+}
+
+// VuPowerUpEntity slots 13 / 12 / 7 against retail (oracle case powerup_world): +0x128, +0x110, the body, +0x130 /
+// +0x134 and the call order. The pfx hooks stand for the pfx manager's internals as the case recorded them (which
+// effect calls a live handle made); what is compared of them is when they run and the scale the power-up hands over.
+inline bool verify_powerup_world( )
+{
+    const unsigned* g = g_golden_powerup_world_words;
+    const unsigned ns = *g++;
+    int failed = 0, calls = 0;
+    auto bits = []( float x ) { std::uint32_t u; std::memcpy( &u, &x, 4 ); return u; };
+    for ( unsigned s = 0; s < ns; ++s )
+    {
+        const unsigned nc = *g++;
+        for ( unsigned c = 0; c < nc; ++c, ++calls )
+        {
+            const unsigned slot = *g++;
+            powerup_t p;
+            p.in_world = static_cast< std::uint8_t >( *g++ );
+            p.active = static_cast< std::uint8_t >( *g++ );
+            p.pfx = *g++;
+            const bool has_body = *g++ != 0;
+            std::memcpy( &p.scale_velocity, g++, 4 );
+            std::memcpy( &p.scale, g++, 4 );
+            p.reflect = static_cast< std::uint8_t >( *g++ );
+            const unsigned want[ 6 ] = { g[ 0 ], g[ 1 ], g[ 2 ], g[ 3 ], g[ 4 ], g[ 5 ] };
+            g += 6;
+            std::vector< std::vector< unsigned > > glog( *g++ );
+            for ( auto& e : glog )
+            {
+                e.assign( g + 1, g + 1 + *g );
+                g += 1 + e.size( );
+            }
+            auto golden_of = [ & ]( std::initializer_list< unsigned > codes ) {
+                std::vector< std::vector< unsigned > > out;
+                for ( const auto& e : glog )
+                    for ( unsigned k : codes )
+                        if ( e[ 0 ] == k )
+                            out.push_back( e );
+                return out;
+            };
+            std::vector< std::vector< unsigned > > log;
+            unsigned eff64 = 0xCD;
+            bool body = has_body;
+            powerup_world_hooks_t hooks;
+            hooks.create_pfx = [ & ]( const std::string&, std::uint8_t reflect, float scale ) {
+                log.push_back( { 1u, 1u } );
+                for ( auto& e : golden_of( { 3u, 4u, 5u } ) )
+                {
+                    if ( e[ 0 ] == 4u )
+                        e[ 1 ] = bits( scale );
+                    else if ( e[ 0 ] == 5u )
+                        eff64 = reflect;
+                    log.push_back( e );
+                }
+                return want[ 1 ];
+            };
+            hooks.release_pfx = [ & ]( std::uint32_t ) { for ( auto& e : golden_of( { 6u, 2u } ) ) log.push_back( e ); };
+            // The dynamics world is handed +0x114 whatever it holds (0 without a body).
+            hooks.add_body = [ & ]( ) { log.push_back( { 7u, has_body ? 1u : 0u } ); };
+            hooks.remove_body = [ & ]( ) { log.push_back( { 8u, has_body ? 1u : 0u } ); };
+            hooks.destroy_body = [ & ]( ) {
+                for ( auto& e : golden_of( { 10u } ) )
+                    log.push_back( e );
+                log.push_back( { 11u, 1u } );
+                body = false;
+            };
+            hooks.unregister_tick = [ & ]( ) { log.push_back( { 9u, 1u } ); };
+            if ( slot == 13 )
+                powerup_add_to_world( p, hooks );
+            else if ( slot == 12 )
+                powerup_remove_from_world( p, hooks );
+            else
+                powerup_game_release( p, has_body, hooks );
+            const unsigned mine[ 6 ] = { p.in_world, p.pfx, body ? 1u : 0u, bits( p.scale_velocity ), bits( p.scale ), eff64 };
+            bool same = log == glog;
+            for ( int k = 0; k < 6; ++k )
+                same = same && mine[ k ] == want[ k ];
+            if ( !same && ++failed <= 8 )
+                LOG_ERROR( "powerup_world sequence %u call %u (slot %u): +0x128 %u (retail %u), +0x110 0x%X (0x%X), %zu calls (%zu)", s, c, slot,
+                           mine[ 0 ], want[ 0 ], mine[ 1 ], want[ 1 ], log.size( ), glog.size( ) );
+        }
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuPowerUpEntity slots 13 0x43BD40 / 12 0x43BD00 / 7 0x43BCA0 match retail: %u sequences, %d calls", ns, calls );
+        return true;
+    }
+    LOG_ERROR( "powerup_world FAILED %d of %d calls", failed, calls );
+    return false;
+}
+
+// VuPowerUpTriggerEntity slot 15 0x43E240 against retail (oracle case trigger_apply): the return and whether the
+// OnTrigger plug fired, per driver class (vt+0x30 = boat_driver_kind's human; vt+0x38 0x404BD0 = true).
+inline bool verify_trigger_apply( )
+{
+    const unsigned* g = g_golden_trigger_apply_words;
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned kind = *g++, ret = *g++, nl = *g++;
+        boat_driver_kind_t k;
+        const bool human = boat_driver_kind( kind, k ) && k.human;
+        unsigned fired = 0;
+        const unsigned mine = powerup_trigger_apply( human, true, [ & ]( ) { ++fired; } ) ? 1u : 0u;
+        // Retail's log for a firing: 1 VuParams(boat), 2 findPlug "OnTrigger", 3 the plug's vt+8 with them.
+        bool same = mine == ret && nl == ( fired ? 3u : 0u );
+        for ( unsigned j = 0; j < nl; ++j, g += 2 )
+            same = same && g[ 0 ] == j + 1 && g[ 1 ] == 1;
+        if ( !same && ++failed <= 8 )
+            LOG_ERROR( "trigger_apply vector %u (vtable 0x%X): %u, retail %u; %u calls", v, kind, mine, ret, nl );
+    }
+    if ( failed == 0 )
+    {
+        LOG_SUCCESS( "VuPowerUpTriggerEntity slot 15 0x43E240 matches retail: %u vectors (every driver class)", nv );
+        return true;
+    }
+    LOG_ERROR( "trigger_apply FAILED %d of %u vectors", failed, nv );
+    return false;
+}
+
 inline bool verify_race_all( )
 {
     bool ok = true;
@@ -1266,5 +1716,11 @@ inline bool verify_race_all( )
     ok = verify_boat_manager( ) && ok;
     ok = verify_viewport_tick( ) && ok;
     ok = verify_boost_apply( ) && ok;
+    ok = verify_powerup_tick( ) && ok;
+    ok = verify_mesh_assets( ) && ok;
+    ok = verify_random_seed( ) && ok;
+    ok = verify_powerup_contact( ) && ok;
+    ok = verify_powerup_world( ) && ok;
+    ok = verify_trigger_apply( ) && ok;
     return ok;
 }
