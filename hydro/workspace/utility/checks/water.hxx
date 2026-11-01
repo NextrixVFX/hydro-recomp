@@ -2561,6 +2561,62 @@ inline bool verify_water_surface_distance( )
     return bad == 0;
 }
 
+// surface.hxx water_reflection_nearest against retail's VuWater 0x529470 (case water_reflection) on Hydroelectric's water
+// as water_build_world builds it: each surface's ProceduralReflection word (+0x38, loaded), then every query's height and
+// distance words, with the query's disabled surfaces' +0x38 cleared as the case poked them.
+inline bool verify_water_reflection( )
+{
+    const std::unique_ptr< entity_t > tree = water_build_document_tree( );
+    if ( !tree )
+    {
+        LOG_ERROR( "water_reflection: the document did not load" );
+        return false;
+    }
+    water_built_t built{};
+    water_build_world( *tree, built, []( entity_t& e ) { return entity_transform( e ); } );
+    const unsigned* w = g_golden_wrefl_words;
+    const unsigned ns = *w++;
+    int bad = 0;
+    if ( ns != built.surfaces.size( ) )
+    {
+        LOG_ERROR( "water_reflection: %d surfaces, retail %u", static_cast< int >( built.surfaces.size( ) ), ns );
+        return false;
+    }
+    for ( unsigned k = 0; k < ns; ++k )
+        if ( built.surfaces[ k ].word[ 0x38 / 4 ] != w[ k ] && bad++ < 4 )
+            LOG_ERROR( "water_reflection surface %u +0x38: 0x%08X, retail 0x%08X", k, built.surfaces[ k ].word[ 0x38 / 4 ], w[ k ] );
+    w += ns;
+    const unsigned n = *w++;
+    for ( unsigned v = 0; v < n; ++v )
+    {
+        float p[ 3 ];
+        std::memcpy( p, w, 12 );
+        w += 3;
+        const unsigned nd = *w++;
+        std::vector< std::uint32_t > saved( ns );
+        for ( unsigned k = 0; k < ns; ++k )
+            saved[ k ] = built.surfaces[ k ].word[ 0x38 / 4 ];
+        for ( unsigned k = 0; k < nd; ++k )
+            built.surfaces[ w[ k ] ].word[ 0x38 / 4 ] &= ~0xFFu;
+        w += nd;
+        float height = 0.0f, distance = 0.0f;
+        water_reflection_nearest( built, p, height, distance );
+        for ( unsigned k = 0; k < ns; ++k )
+            built.surfaces[ k ].word[ 0x38 / 4 ] = saved[ k ];
+        unsigned hw, dw;
+        std::memcpy( &hw, &height, 4 );
+        std::memcpy( &dw, &distance, 4 );
+        if ( ( hw != w[ 0 ] || dw != w[ 1 ] ) && bad++ < 4 )
+            LOG_ERROR( "water_reflection query %u: height 0x%08X distance 0x%08X, retail 0x%08X 0x%08X", v, hw, dw, w[ 0 ], w[ 1 ] );
+        w += 2;
+    }
+    if ( bad == 0 )
+        LOG_SUCCESS( "VuWater's nearest reflecting surface (0x529470) matches retail on Hydroelectric's water: %u surfaces' ProceduralReflection, %u queries", ns, n );
+    else
+        LOG_ERROR( "water_reflection FAILED %d", bad );
+    return bad == 0;
+}
+
 #include <workspace/utility/checks/pfx.hxx>
 #include <workspace/utility/checks/wake.hxx>
 #include <workspace/utility/checks/watchers.hxx>
@@ -2603,6 +2659,7 @@ inline bool verify_water_all( )
     ok = verify_key_motion( ) && ok;
     ok = verify_key_curve( ) && ok;
     ok = verify_water_surface_distance( ) && ok;
+    ok = verify_water_reflection( ) && ok;
     ok = verify_ocean_kernels96( ) && ok;
     ok = verify_water_built_tick( ) && ok;
     ok = verify_water_query96( ) && ok;
