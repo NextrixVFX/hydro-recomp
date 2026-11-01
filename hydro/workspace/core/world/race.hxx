@@ -8,6 +8,7 @@
 #include <workspace/core/entity/node.hxx>
 #include <workspace/core/entity/property.hxx>
 #include <workspace/core/game/types.hxx>
+#include <workspace/core/world/tick.hxx>
 
 #include <cstdint>
 #include <cstdio>
@@ -259,6 +260,83 @@ inline bool race_load_boats( race_game_t& game, const value_t& game_data, const 
                 hooks.font_reload( fonts[ k ].first, game.fonts[ k ] );
         }
     return true;
+}
+
+// ---- VuBoatEntity gameInitialize 0x41D350 / gameRelease 0x41D470 ---------
+//
+// Slot 6 (0x500B10's vt+0x18): two VuMethod1<VuBoatEntity, void, float>
+// delegates (operator new(0x10): vtable 0x738348, the boat, the member, 0)
+// registered through g_vutickmanagerimpl 0x759008's slot 8 - 0x4077ED (a
+// thunk: vt+0x34, slot 13 = the Decision tick 0x41EFF0) in "Decision", then
+// 0x404AB2 (vt+0x38, slot 14 = 0x41F330, the Build tick) in "Build". Then, in
+// order, the draw component (+0x6C) handed to g_vu3ddrawmanager 0x7590B8's
+// slot 10 when its +0x1E is 0 (+0x1E = 1), the boat's slot 17 (0x421980),
+// the driver's (+0x220) slot 6, 0x4191F0 on the hull (+0x228), the engine
+// (+0x22C) event start - 0x50FBF0 on its +0xC4 with the name +0x4C, true ->
+// FMOD::Event::start(+0xC8) - 0x410610 on +0x230, 0x419FF0 on +0x234, the
+// boat manager g 0x758FB8's 0x4AAF60(boat), 0x531F50 on the instigator +0x70.
+// Slot 7 (gameRelease): the instigator manager g 0x759064's 0x5362A0 when the
+// instigator's +0x28 is set, then +0x28 = 0; 0x4AB040(boat) on the boat
+// manager; slot 10 unregister(boat) (every phase); the draw manager's slot 11
+// when +0x1E (then 0); the boat's slot 18 (0x421940); the driver's slot 7;
+// 0x419260 hull, 0x415330 engine, 0x4108C0 +0x230, a tail jmp 0x411950 on
+// +0x238. Every callee but the tick manager's is a HOOK here (`call` gets
+// its name and object, as the case names them); `engine_ready` is 0x50FBF0
+// (the audio layer, a hook).
+struct race_boat_init_hooks_t
+{
+    std::function< void( const std::string& row ) > call;
+    std::function< bool( ) > engine_ready;
+};
+
+inline void race_boat_game_initialize( const void* boat, tick_manager_t& tm, const tick_handler_t& decision, const tick_handler_t& build,
+                                       std::uint8_t& draw_added, const race_boat_init_hooks_t& hooks )
+{
+    const auto call = [ & ]( const std::string& row ) { if ( hooks.call ) hooks.call( row ); };
+    // The delegates' words as retail stores them (the owner stands for the boat).
+    if ( tick_register( tm, decision, "Decision" ) )
+        call( "tick register tick 0x738348 boat 0x4077ED 0 Decision" );
+    if ( tick_register( tm, build, "Build" ) )
+        call( "tick register tick 0x738348 boat 0x404AB2 0 Build" );
+    ( void )boat;
+    if ( !draw_added )
+    {
+        call( "draw add drawm draw" );
+        draw_added = 1;
+    }
+    call( "slot17 boat" );
+    call( "driver slot6 driver" );
+    call( "0x4191F0 hull" );
+    call( "0x50FBF0 engine+0xC4 Engine/Ev" );
+    if ( hooks.engine_ready && hooks.engine_ready( ) )
+        call( "FMOD start engine+0xC4 0xE7E7" );
+    call( "0x410610 anim" );
+    call( "0x419FF0 part234" );
+    call( "0x4AAF60 boatm boat" );
+    call( "0x531F50 inst" );
+}
+
+inline void race_boat_game_release( const void* boat, tick_manager_t& tm, std::uint8_t& draw_added, std::uint8_t& instigator_registered,
+                                    const race_boat_init_hooks_t& hooks )
+{
+    const auto call = [ & ]( const std::string& row ) { if ( hooks.call ) hooks.call( row ); };
+    if ( instigator_registered )
+        call( "0x5362A0 instm inst" );
+    instigator_registered = 0;
+    call( "0x4AB040 boatm boat" );
+    tick_unregister_all( tm, boat );
+    call( "tick unregister tick boat" );
+    if ( draw_added )
+    {
+        call( "draw remove drawm draw" );
+        draw_added = 0;
+    }
+    call( "slot18 boat" );
+    call( "driver slot7 driver" );
+    call( "0x419260 hull" );
+    call( "0x415330 engine" );
+    call( "0x4108C0 anim" );
+    call( "0x411950 damage" );
 }
 
 // The project asset's AssetData "File" path (0x55FBE0), or empty.

@@ -1443,9 +1443,71 @@ inline bool verify_game_boat_load( )
     return failed == 0;
 }
 
+// race_boat_game_initialize / race_boat_game_release (world/race.hxx) against
+// retail's 0x41D350 / 0x41D470 (oracle case boat_game_init) in a world of
+// recording fakes: per vector every call row in order (the two tick
+// registrations with the delegate's words and phase), the draw component's
+// +0x1E and the instigator's +0x28 after; and the hydro tick manager's own
+// state - after an initialize the boat's one handler in "Decision" and one in
+// "Build" (another owner's kept), after a release none of its handlers left.
+inline bool verify_boat_game_init( )
+{
+    const unsigned* w = g_golden_boat_game_init_words;
+    const char* const* rows = g_golden_boat_game_init_rows;
+    int failed = 0, total = 0;
+    for ( std::size_t v = 0; v < g_golden_boat_game_init_vectors; ++v, w += 6 )
+    {
+        const bool init = w[ 0 ] == 0x41D350u;
+        std::uint8_t draw = static_cast< std::uint8_t >( w[ 1 ] ), inst = static_cast< std::uint8_t >( w[ 2 ] );
+        int boat = 0, other = 0;
+        tick_manager_t tm;
+        tick_manager_init( tm );
+        const auto nop = []( void*, float ) {};
+        tick_register( tm, { &other, nop, nullptr }, "Decision" );
+        if ( !init )
+        {
+            tick_register( tm, { &boat, nop, nullptr }, "Decision" );
+            tick_register( tm, { &boat, nop, nullptr }, "Build" );
+        }
+        std::vector< std::string > got;
+        race_boat_init_hooks_t hooks;
+        hooks.call = [ &got ]( const std::string& r ) { got.push_back( r ); };
+        hooks.engine_ready = [ w ] { return w[ 2 ] != 0; };
+        if ( init )
+            race_boat_game_initialize( &boat, tm, { &boat, nop, nullptr }, { &boat, nop, nullptr }, draw, hooks );
+        else
+            race_boat_game_release( &boat, tm, draw, inst, hooks );
+        bool same = draw == w[ 3 ] && inst == w[ 4 ] && got.size( ) == w[ 5 ];
+        for ( unsigned k = 0; k < w[ 5 ]; ++k )
+            same = same && k < got.size( ) && got[ k ] == rows[ k ];
+        rows += w[ 5 ];
+        total += static_cast< int >( w[ 5 ] );
+        int mine = 0, others = 0, decision = 0, build = 0;
+        for ( const tick_phase_t& p : tm.phases )
+            for ( const tick_handler_t& h : p.handlers )
+            {
+                mine += h.owner == &boat ? 1 : 0;
+                others += h.owner == &other ? 1 : 0;
+                decision += h.owner == &boat && p.name == "Decision" ? 1 : 0;
+                build += h.owner == &boat && p.name == "Build" ? 1 : 0;
+            }
+        same = same && others == 1 && ( init ? ( mine == 2 && decision == 1 && build == 1 ) : mine == 0 );
+        if ( !same && ++failed <= 6 )
+            LOG_ERROR( "boat game init vector %d (0x%X) differs from retail: %d calls (retail %u), draw %d inst %d (retail %u %u), "
+                       "boat handlers %d", static_cast< int >( v ), w[ 0 ], static_cast< int >( got.size( ) ), w[ 5 ], draw, inst, w[ 3 ], w[ 4 ], mine );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "race_boat_game_initialize / _release match retail's VuBoatEntity 0x41D350 / 0x41D470: %d vectors, %d calls in order, "
+                     "the Decision / Build registrations in the tick manager", static_cast< int >( g_golden_boat_game_init_vectors ), total );
+    else
+        LOG_ERROR( "boat game init FAILED %d of %d vectors", failed, static_cast< int >( g_golden_boat_game_init_vectors ) );
+    return failed == 0;
+}
+
 inline bool verify_world_all( )
 {
     bool ok = true;
+    ok = verify_boat_game_init( ) && ok;
     ok = verify_game_boat_load( ) && ok;
     ok = verify_race_track( ) && ok;
     ok = verify_race_track_start( ) && ok;
