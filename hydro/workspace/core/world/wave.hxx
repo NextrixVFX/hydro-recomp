@@ -1428,22 +1428,44 @@ inline void wave_rect_bounds( wave_image_t& w )
 // decay ratios - then the allocator @0x528910 (zeroes +76 .. +124), the ctor
 // @0x59acd0 (flat copy to +76, the frame at +128, its inverse at +192) and
 // the bounds 0x59ae00.
+// The descriptor @0x5d9eb0 (thiscall entity; desc*): words 0..3 the
+// transform's +0x80 position, 4 its +0xA8, 5 / 6 its +0xB0 / +0xB4, 7 the
+// entity's +0x6C, 8 = +0x70 / +0x74, 9 = (word 6 * 0.5) / +0x74, 10 / 11 the
+// entity's +0x78 / +0x7C.
+inline void directional_desc( const wave_source_t& s, std::uint32_t* d )
+{
+    for ( int k = 0; k < 4; ++k )
+        d[ k ] = s.t( 0x80 + 4 * k );
+    d[ 4 ] = s.t( 0xA8 );
+    d[ 5 ] = s.t( 0xB0 );
+    d[ 6 ] = s.t( 0xB4 );
+    d[ 7 ] = s.e( 0x6C );
+    const float a = wave_bits( s.e( 0x70 ) ) / wave_bits( s.e( 0x74 ) );
+    const float b = ( wave_bits( d[ 6 ] ) * 0.5f ) / wave_bits( s.e( 0x74 ) );
+    std::memcpy( &d[ 8 ], &a, 4 );
+    std::memcpy( &d[ 9 ], &b, 4 );
+    d[ 10 ] = s.e( 0x78 );
+    d[ 11 ] = s.e( 0x7C );
+}
+
+// @0x59acd0 (thiscall wave; desc*; retn 4) - the ctor's half and the entity's
+// re-describe 0x5d9dd0's: the 48 bytes to +76 .. +123 (six movq), then the
+// frame at +128 and its inverse at +192. The clock +124 is not touched.
+inline void directional_set( wave_image_t& w, const std::uint32_t* d )
+{
+    for ( int k = 0; k < 12; ++k )
+        w.set( 76 + 4 * k, d[ k ] );
+    wave_frame( w, 128, 192, 1.0f );
+}
+
 inline wave_image_t directional_create( const wave_source_t& s )
 {
     wave_image_t w{};
     wave_base( w );
-    for ( int k = 0; k < 4; ++k )
-        w.set( 76 + 4 * k, s.t( 0x80 + 4 * k ) );
-    w.set( 92, s.t( 0xA8 ) );
-    w.set( 96, s.t( 0xB0 ) );
-    w.set( 100, s.t( 0xB4 ) );
-    w.set( 104, s.e( 0x6C ) );
-    w.setf( 108, wave_bits( s.e( 0x70 ) ) / wave_bits( s.e( 0x74 ) ) );
-    w.setf( 112, ( w.f( 100 ) * 0.5f ) / wave_bits( s.e( 0x74 ) ) );
-    w.set( 116, s.e( 0x78 ) );
-    w.set( 120, s.e( 0x7C ) );
+    std::uint32_t d[ 12 ];
+    directional_desc( s, d );
     w.set( 124, 0 );
-    wave_frame( w, 128, 192, 1.0f );
+    directional_set( w, d );
     wave_rect_bounds( w );
     return w;
 }

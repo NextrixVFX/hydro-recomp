@@ -1608,3 +1608,4 @@ inline const water_type_t g_water_types[] = {
 };
 
 #include <workspace/core/world/wake.hxx>
+#include <workspace/core/world/watchers.hxx>
