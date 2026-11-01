@@ -704,4 +704,22 @@ inline const logic_type_t g_logic_types[] = {
     { 0x5F05A0u, 0x736DB8u, "VuGroupEntity|VuEntity" },
     { 0x5CCA40u, 0x736B90u, "VuControlEntity|VuEntity" },
     { 0x5CC700u, 0x736B88u, "VuControlKeyframeEntity|VuEntity" },
+    // batch 23: VuControlComponent's vtable 0x757EA0 slot 0 (slot 1 0x619F50 answers its name "Control" 0x6F6FC8, slot 2
+    // 0x619F70 the deleting dtor over 0x619FA0: the records freed, VuComponent 0x738CE0, the +4 property list destroyed -
+    // control_component_t's own destructor), the motion / audio / settings classes of sound.hxx / keymotion.hxx /
+    // settings.hxx.
+    { 0x619F60u, 0x736E48u, "VuControlComponent|VuComponent" },
+    { 0x619FF0u, 0x736E50u, "VuMotionEntity|VuEntity" },
+    { 0x5CE2C0u, 0x736BA8u, "VuKeyframeMotionEntity|VuMotionEntity|VuEntity" },
+    { 0x5CE080u, 0x736BA0u, "VuKeyframeEntity|VuEntity" },
+    { 0x5F3550u, 0x736DE8u, "VuAudioEmitterEntity|VuEntity" },
+    { 0x5EF500u, 0x736D98u, "VuAmbientLightEntity|VuEntity" },
+    { 0x5EEA00u, 0x736D90u, "VuDirectionalLightEntity|VuEntity" },
+    { 0x5F4790u, 0x736E00u, "VuSubstituteAssetEntity|VuEntity" },
 };
+
+// VuControlComponent's slot 1 0x619F50 (mov eax, 0x6F6FC8; ret): the component's name.
+inline const char* control_component_name( )
+{
+    return "Control";
+}
