@@ -793,3 +793,72 @@ inline std::uint32_t asset_create( asset_create_kind_t kind, const asset_words_t
     }
     return p;
 }
+// ---- The asset properties' small virtuals on retail's words (boat batch 26) ----
+//
+// VuAssetNameProperty (the same slots in VuBaseAssetProperty / VuAssetProperty<...>): +0x48 points at a std::vector of
+// std::string (24 bytes each) - the asset names of its type.
+//   slot 1 0x423860 getType: 11.
+//   slot 12 0x423870 choice count: ( end - begin ) / 24 as a signed division (imul 0x2AAAAAAB, sar 2, + the sign bit).
+//   slot 13 0x423890( i ) choice i: the i-th string's c_str (its heap text when the capacity +0x14 is >= 16, else the
+//            string itself) - no bounds check.
+// VuDBEntryProperty: +0x48 the VuDBAsset (or null).
+//   slot 12 0x506BB0: null asset -> 0; else its +0x58 document's member "VuDBAsset" (0x4FBDF0: the caller's); type 6 (an
+//            object) -> its map's (+8) size (+4), else 0.
+//   slot 13 0x506BE0( i ): null asset -> 0; else that member's i-th key (0x4FC000: the caller's) as a c_str.
+//   slot 0 0x506B30( flags ): +0 = 0x74C4C0, the +0x48 asset released through [0x759004] slot 9 EVEN WHEN NULL, the
+//            property base's dtor 0x405260, delete with flags & 1; eax = this.
+struct asset_property_hooks_t
+{
+    std::function< std::uint32_t( std::uint32_t, const char* ) > json_member;    // 0x4FBDF0 ( container, key )
+    std::function< std::uint32_t( std::uint32_t, std::uint32_t ) > json_key;     // 0x4FC000 ( container, index )
+};
+
+inline std::uint32_t asset_string_c_str( const asset_words_t& w, std::uint32_t s )
+{
+    return w.get( s + 0x14 ) >= 0x10u ? w.get( s ) : s;
+}
+
+inline std::uint32_t asset_name_property_type( )
+{
+    return 11u;
+}
+
+inline std::int32_t asset_name_property_count( const asset_words_t& w, std::uint32_t self )
+{
+    const std::uint32_t v = w.get( self + 0x48 );
+    return static_cast< std::int32_t >( w.get( v + 4 ) - w.get( v ) ) / 24;
+}
+
+inline std::uint32_t asset_name_property_choice( const asset_words_t& w, std::uint32_t self, std::int32_t i )
+{
+    return asset_string_c_str( w, w.get( w.get( self + 0x48 ) ) + 24u * static_cast< std::uint32_t >( i ) );
+}
+
+inline std::uint32_t db_entry_property_count( const asset_words_t& w, std::uint32_t self, const asset_property_hooks_t& h )
+{
+    const std::uint32_t a = w.get( self + 0x48 );
+    if ( a == 0 || !h.json_member )
+        return 0;
+    const std::uint32_t c = h.json_member( a + 0x58, "VuDBAsset" );
+    return w.get( c ) == 6u ? w.get( w.get( c + 8 ) + 4 ) : 0u;
+}
+
+inline std::uint32_t db_entry_property_choice( const asset_words_t& w, std::uint32_t self, std::uint32_t i, const asset_property_hooks_t& h )
+{
+    const std::uint32_t a = w.get( self + 0x48 );
+    if ( a == 0 || !h.json_member || !h.json_key )
+        return 0;
+    return asset_string_c_str( w, h.json_key( h.json_member( a + 0x58, "VuDBAsset" ), i ) );
+}
+
+inline std::uint32_t db_entry_property_destroy( const asset_words_t& w, std::uint32_t self, std::uint32_t flags, const asset_dtor_hooks_t& h )
+{
+    w.put( self, 0x74C4C0u );
+    if ( h.factory_release )
+        h.factory_release( w.get( self + 0x48 ) );
+    if ( h.property_base_dtor )
+        h.property_base_dtor( );
+    if ( ( flags & 1u ) && h.free_block )
+        h.free_block( self );
+    return self;
+}

@@ -442,6 +442,101 @@ inline bool verify_asset_dtors2( )
     return failed == 0;
 }
 
+// The asset properties' virtuals (engine assets/factory.hxx) against retail's 0x423860 / 0x423870 / 0x423890 / 0x506BB0 /
+// 0x506BE0 / 0x506B30 run whole (case asset_props, cases/package.py): eax, the hook log, +0 after the dtor.
+inline bool verify_asset_props( )
+{
+    const unsigned* g = g_golden_asset_props_words;
+    const std::uint32_t prop = 0x100, vec = 0x200, names = 0x400, asset = 0x1000, cont = 0x1100, cmap = 0x1140, key = 0x1180, fac = 0x1200;
+    auto sym = [ & ]( std::uint32_t x ) -> unsigned {
+        if ( x == 0 ) return 0;
+        if ( x == prop ) return 1;
+        if ( x == asset ) return 2;
+        if ( x == asset + 0x58 ) return 3;
+        if ( x == cont ) return 4;
+        if ( x == key ) return 5;
+        if ( x == fac ) return 6;
+        return 0x100 + ( x & 0xFF );
+    };
+    const unsigned nv = *g++;
+    int failed = 0;
+    for ( unsigned v = 0; v < nv; ++v )
+    {
+        const unsigned fn = *g++, arg = *g++, eax = *g++, word0 = *g++, held = *g++, kind = *g++, size = *g++, span = *g++;
+        const unsigned nt = *g++;
+        std::map< std::uint32_t, std::uint32_t > mem;
+        asset_words_t w;
+        w.get = [ & ]( std::uint32_t a ) { auto it = mem.find( a ); return it == mem.end( ) ? 0x5A5A5A5Au : it->second; };
+        w.put = [ & ]( std::uint32_t a, std::uint32_t x ) { mem[ a ] = x; };
+        for ( unsigned k = 0; k < nt; ++k )
+        {
+            const std::uint32_t at = fn <= 2 ? names + 24u * k : key;
+            const std::uint32_t heap = fn <= 2 ? 0x800u + 0x40u * k : 0x1300u;
+            const unsigned n = *g++;
+            const unsigned first = n != 0 ? *g : 0u;
+            g += ( n + 3 ) / 4;
+            mem[ at ] = n < 16 ? first : heap;
+            mem[ at + 0x10 ] = n;
+            mem[ at + 0x14 ] = n < 16 ? 15u : ( n | 15u );
+        }
+        std::vector< std::vector< unsigned > > glog( *g++ ), log;
+        for ( auto& e : glog )
+        {
+            e.assign( g + 1, g + 1 + *g );
+            g += 1 + e.size( );
+        }
+        if ( fn <= 2 )
+        {
+            mem[ prop + 0x48 ] = vec;
+            mem[ vec ] = names;
+            mem[ vec + 4 ] = names + span;
+        }
+        else
+        {
+            mem[ prop + 0x48 ] = held == 2 ? asset : 0u;
+            mem[ cont ] = kind;
+            mem[ cont + 8 ] = cmap;
+            mem[ cmap + 4 ] = size;
+        }
+        asset_property_hooks_t ph;
+        ph.json_member = [ & ]( std::uint32_t c, const char* k ) {
+            log.push_back( { 7u, sym( c ), std::string( k ) == "VuDBAsset" ? 1u : 0u } );
+            return cont;
+        };
+        ph.json_key = [ & ]( std::uint32_t c, std::uint32_t i ) {
+            log.push_back( { 8u, sym( c ), i } );
+            return key;
+        };
+        asset_dtor_hooks_t dh;
+        dh.free_block = [ & ]( std::uint32_t a ) { log.push_back( { 1u, sym( a ) } ); };
+        dh.factory_release = [ & ]( std::uint32_t a ) { log.push_back( { 3u, sym( fac ), sym( a ) } ); };
+        dh.property_base_dtor = [ & ]( ) { log.push_back( { 4u, 1u } ); };
+        auto ptr = [ & ]( std::uint32_t r, std::uint32_t self_at ) -> unsigned { return r == 0 ? 0u : r == self_at ? 1u : 2u; };
+        unsigned r = 0;
+        bool ok = true;
+        switch ( fn )
+        {
+        case 0: r = asset_name_property_type( ); break;
+        case 1: r = static_cast< unsigned >( asset_name_property_count( w, prop ) ); break;
+        case 2: r = ptr( asset_name_property_choice( w, prop, static_cast< std::int32_t >( arg ) ), names + 24u * arg ); break;
+        case 3: r = db_entry_property_count( w, prop, ph ); break;
+        case 4: r = ptr( db_entry_property_choice( w, prop, arg, ph ), key ); break;
+        default:
+            r = sym( db_entry_property_destroy( w, prop, arg, dh ) );
+            ok = w.get( prop ) == word0;
+            break;
+        }
+        ok = ok && r == eax && log == glog;
+        if ( !ok && ++failed <= 4 )
+            LOG_ERROR( "asset property vector %u (virtual %u, argument %u) differs from retail: eax %u, retail %u", v, fn, arg, r, eax );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the asset properties' virtuals match retail's 0x423860 / 0x423870 / 0x423890 / 0x506BB0 / 0x506BE0 / 0x506B30 on %u calls: eax, the hook log, +0", nv );
+    else
+        LOG_ERROR( "asset property virtuals FAILED %d of %u", failed, nv );
+    return failed == 0;
+}
+
 // asset_create (engine assets/factory.hxx) against retail's create functions 0x515E90 / 0x554ED0 / 0x55C280 / 0x5644E0 /
 // 0x5A9800 / 0x5BB0E0 run whole (case asset_creates, cases/package.py): the size asked, eax, all 32 words of the block.
 inline bool verify_asset_creates( )
