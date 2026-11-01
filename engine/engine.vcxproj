@@ -47,19 +47,23 @@
        hydro-tools/oracle/golden.py writes them here. Override with /p:HydroGoldenDir=... -->
   <PropertyGroup>
     <HydroGoldenDir Condition="'$(HydroGoldenDir)' == ''">$(MSBuildThisFileDirectory)..\..\hydro-tools\oracle\generated\</HydroGoldenDir>
+    <!-- The golden vectors (~46 MB of constants) are compiled in ONLY for the self-test build:
+         /p:HydroSelftest=true builds it into build\<project>-selftest\. The default build is the game. -->
+    <HydroFlavor Condition="'$(HydroSelftest)' == 'true'">-selftest</HydroFlavor>
+    <HydroGolden Condition="'$(HydroSelftest)' == 'true' And Exists('$(HydroGoldenDir)golden_data.hxx')">true</HydroGolden>
   </PropertyGroup>
-  <ItemDefinitionGroup Condition="Exists('$(HydroGoldenDir)golden_data.hxx')">
+  <ItemDefinitionGroup Condition="'$(HydroGolden)' == 'true'">
     <ClCompile>
       <PreprocessorDefinitions>HYDRO_GOLDEN_PRESENT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <OutDir>$(ProjectDir)..\build\$(ProjectName)\$(Configuration)\</OutDir>
-    <IntDir>$(ProjectDir)..\build\$(ProjectName)\$(Configuration)\Intermediates\</IntDir>
+    <OutDir>$(ProjectDir)..\build\$(ProjectName)$(HydroFlavor)\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)..\build\$(ProjectName)$(HydroFlavor)\$(Configuration)\Intermediates\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <OutDir>$(ProjectDir)..\build\$(ProjectName)\$(Configuration)\</OutDir>
-    <IntDir>$(ProjectDir)..\build\$(ProjectName)\$(Configuration)\Intermediates\</IntDir>
+    <OutDir>$(ProjectDir)..\build\$(ProjectName)$(HydroFlavor)\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)..\build\$(ProjectName)$(HydroFlavor)\$(Configuration)\Intermediates\</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
@@ -90,22 +94,22 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup>
     <PostBuildEvent>
-      <Command>if not exist "$(ProjectDir)..\hydro\impl\engine\$(Configuration)" mkdir "$(ProjectDir)..\hydro\impl\engine\$(Configuration)"
-copy /Y "$(TargetPath)" "$(ProjectDir)..\hydro\impl\engine\$(Configuration)\engine.lib"
+      <Command>if not exist "$(ProjectDir)..\hydro\impl\engine\$(Configuration)$(HydroFlavor)" mkdir "$(ProjectDir)..\hydro\impl\engine\$(Configuration)$(HydroFlavor)"
+copy /Y "$(TargetPath)" "$(ProjectDir)..\hydro\impl\engine\$(Configuration)$(HydroFlavor)\engine.lib"
 copy /Y "$(ProjectDir)impl\engine.hxx" "$(ProjectDir)..\hydro\impl\engine\engine.hxx"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="entry.cxx" />
     <MASM Include="x87.asm" />
-    <ClCompile Include="$(HydroGoldenDir)part0.cxx" Condition="Exists('$(HydroGoldenDir)part0.cxx')" />
-    <ClCompile Include="$(HydroGoldenDir)part1.cxx" Condition="Exists('$(HydroGoldenDir)part1.cxx')" />
-    <ClCompile Include="$(HydroGoldenDir)part2.cxx" Condition="Exists('$(HydroGoldenDir)part2.cxx')" />
-    <ClCompile Include="$(HydroGoldenDir)part3.cxx" Condition="Exists('$(HydroGoldenDir)part3.cxx')" />
-    <ClCompile Include="$(HydroGoldenDir)part4.cxx" Condition="Exists('$(HydroGoldenDir)part4.cxx')" />
-    <ClCompile Include="$(HydroGoldenDir)part5.cxx" Condition="Exists('$(HydroGoldenDir)part5.cxx')" />
-    <ClCompile Include="$(HydroGoldenDir)part6.cxx" Condition="Exists('$(HydroGoldenDir)part6.cxx')" />
-    <ClCompile Include="$(HydroGoldenDir)part7.cxx" Condition="Exists('$(HydroGoldenDir)part7.cxx')" />
+    <ClCompile Include="$(HydroGoldenDir)part0.cxx" Condition="'$(HydroGolden)' == 'true' And Exists('$(HydroGoldenDir)part0.cxx')" />
+    <ClCompile Include="$(HydroGoldenDir)part1.cxx" Condition="'$(HydroGolden)' == 'true' And Exists('$(HydroGoldenDir)part1.cxx')" />
+    <ClCompile Include="$(HydroGoldenDir)part2.cxx" Condition="'$(HydroGolden)' == 'true' And Exists('$(HydroGoldenDir)part2.cxx')" />
+    <ClCompile Include="$(HydroGoldenDir)part3.cxx" Condition="'$(HydroGolden)' == 'true' And Exists('$(HydroGoldenDir)part3.cxx')" />
+    <ClCompile Include="$(HydroGoldenDir)part4.cxx" Condition="'$(HydroGolden)' == 'true' And Exists('$(HydroGoldenDir)part4.cxx')" />
+    <ClCompile Include="$(HydroGoldenDir)part5.cxx" Condition="'$(HydroGolden)' == 'true' And Exists('$(HydroGoldenDir)part5.cxx')" />
+    <ClCompile Include="$(HydroGoldenDir)part6.cxx" Condition="'$(HydroGolden)' == 'true' And Exists('$(HydroGoldenDir)part6.cxx')" />
+    <ClCompile Include="$(HydroGoldenDir)part7.cxx" Condition="'$(HydroGolden)' == 'true' And Exists('$(HydroGoldenDir)part7.cxx')" />
     <ClCompile Include="impl\inflate\puff.c" />
   </ItemGroup>
   <ItemGroup>

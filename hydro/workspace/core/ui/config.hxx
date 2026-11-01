@@ -516,6 +516,19 @@ inline ui_game_config_t ui_game_config( const std::string& next_mode, value_t& r
 // the caller's generator advances exactly as retail's global does) and the two
 // hooks (the string DB's AI names, the signed-in player's name). `result`
 // reports the builder reached.
+// THE EXPORT (batch 16) for a whole front-end root (ui_front_end_root's -
+// e.g. under the test profile ui_profile_all_unlocked): 0x4BF9B0's data step
+// (ui_game_config "Action") on `root` itself, so every member the builders
+// read (GameConfig.Championship / GameType / Course included) comes from it.
+// Returns root["GameData"].
+inline value_t ui_front_end_game_data_root( value_t& root, const ui_game_env_t& env, ui_game_config_t* result = nullptr )
+{
+    const ui_game_config_t r = ui_game_config( "Action", root, env );
+    if ( result )
+        *result = r;
+    return ui_json_find( root, "GameData" );
+}
+
 inline value_t ui_front_end_game_data( const std::string& mode, const std::string& track, const std::string& course, const std::string& boat,
                                        const std::string& skin, const ui_game_env_t& env, ui_game_config_t* result = nullptr )
 {
