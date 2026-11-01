@@ -625,10 +625,8 @@ inline void race_session_dev_trace( const race_session_t& s, int before )
     }
     if ( s.world.water )
     {
-        int wakes = 0;
-        for ( std::size_t k = 0; k < s.world.water->wave_kind.size( ); ++k )
-            wakes += s.world.water->wave_kind[ k ] == water_kind_wake || s.world.water->wave_kind[ k ] == water_kind_flat_wake ? 1 : 0;
-        LOG_VERBOSE( "race (dev trace): sync %d: VuWater holds %d wave record(s), %d of them wake / flat wake (made, live or not)", n,
+        const int wakes = water_live_wakes( *s.world.water );
+        LOG_VERBOSE( "race (dev trace): sync %d: VuWater holds %d wave record(s), %d live wake / flat wake (water_live_wakes)", n,
                      static_cast< int >( s.world.water->waves.size( ) ), wakes );
     }
     for ( const auto& b : s.boats )
