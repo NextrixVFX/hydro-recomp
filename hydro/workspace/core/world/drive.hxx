@@ -805,6 +805,28 @@ inline void race_contact_added( void* user, solver_contact_point_t& cp, solver_r
                     // A mine's +0xB4 part is its own 0x438E10 (world/mine.hxx mine_contact; the base 0x437F40 is not called).
                     // The other body's owner (+0x2C0): a session boat (its driver vt+0x38 0x404BD0: true for the five known
                     // driver vtables) or a level body (its component's entity: not a boat - its +0x2D0 bit 0 decides).
+                    // A VuBreakableDynamicGamePropEntity's +0xB4 part is 0x4335A0: VuBreakablePropEntity's 0x434730 arithmetic
+                    // whole (world/breakable.hxx breakable_contact - the same instructions, its fields at +0x10C threshold,
+                    // the component +0x70, +0x1A0 the kept velocity, +0x168 the weak ref, +0x164 the request); the base
+                    // 0x437F40 is not called.
+                    if ( d->breakable )
+                    {
+                        bool owner = false;
+                        for ( const auto& x : s.boats )
+                            owner = owner || &x->body.body == other;
+                        for ( const auto& lbp : s.level_bodies )
+                            owner = owner || &lbp->body.body == other;
+                        if ( !owner )
+                        {
+                            race_unwired( s, "a breakable dynamic prop contact with a body that is no session boat / level body - its owner UNKNOWN, not run" );
+                            return;
+                        }
+                        std::uint8_t* own = reinterpret_cast< std::uint8_t* >( &d->body->body );
+                        if ( breakable_contact( d->p->threshold_mph, own, reinterpret_cast< const std::uint8_t* >( other ), rec.pos, rec.normal,
+                                                d->break_request, d->break_velocity, *d->c, own ) != 0 )
+                            d->break_target = other;
+                        return;
+                    }
                     if ( d->mine )
                     {
                         mine_contact_t mc;
@@ -1251,6 +1273,22 @@ inline bool race_event_dispatch( race_session_t& s, const std::string& entity, c
             dp->request = 1;
             return true;
         }
+    // VuBreakableDynamicGamePropEntity's "Break" (the ctor's plug 0x433BA0, method 0x433860): the weak ref +0x168 released
+    // (vt+0), +0x164 = 1, VuRetVal 0.
+    if ( plug == "Break" )
+        for ( const auto& dp : s.dyn_props )
+        {
+            if ( !dp->breakable )
+                continue;
+            std::string path;
+            for ( const entity_t* e = dp->entity; e && e->m_parent; e = e->m_parent )
+                path = path.empty( ) ? e->m_name : e->m_name + "/" + path;
+            if ( path != entity )
+                continue;
+            dp->break_target = nullptr;
+            dp->break_request = 1;
+            return true;
+        }
     const auto g = s.gfx_by_path.find( entity );
     if ( g != s.gfx_by_path.end( ) && plug == "Trigger" )
     {
@@ -1300,6 +1338,25 @@ inline void race_session_game_mode( void* user, float dt )
     if ( !s.rules_running || !s.track )
         return;
     ++s.rules_frames;
+    {
+        // Ours (a test driver): `--cheat-finish N` broadcasts VuGame's "OnCheatFinish" (retail's developer cheat, 0x483190 ->
+        // 0x4848C0: rules.hxx race_rules_cheat_finish) on game tick N, before this tick's bookkeeping - a forced finish that
+        // takes the race to PostGame and the results writer without driving the whole race.
+        static const char* cheat = c_engine::option( "cheat-finish" );
+        if ( cheat && cheat[ 0 ] && s.rules_frames == std::atoi( cheat ) )
+        {
+            std::vector< std::uint8_t* > humans;
+            for ( const void* b : s.manager.lists.humans.boats )
+                humans.push_back( const_cast< std::uint8_t* >( static_cast< const std::uint8_t* >( b ) ) );
+            race_rules_cheat_finish( humans, [ & ]( std::size_t h )
+            {
+                for ( std::size_t k = 0; k < s.rules_boats.size( ); ++k )
+                    if ( s.rules_boats[ k ].boat == humans[ h ] )
+                        fleet_remove_driver( s.fleet, static_cast< int >( k ) );   // the AI manager's slot 12 0x4036C0
+            } );
+            LOG_INFO( "race: OnCheatFinish (--cheat-finish %d): %d human boats finished", s.rules_frames, static_cast< int >( humans.size( ) ) );
+        }
+    }
     const track_manager_t& tm = *s.track;
     for ( std::size_t k = 0; k < s.rules_boats.size( ); ++k )
     {

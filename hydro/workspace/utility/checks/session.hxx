@@ -5,7 +5,9 @@
 #include <workspace/core/world/background.hxx>
 #include <workspace/core/world/action.hxx>
 #include <workspace/core/world/mine.hxx>
+#include <workspace/core/world/rules.hxx>
 
+#include <algorithm>
 #include <cstdio>
 
 // The world area's second checks file (checks/world.hxx is at its size limit): the race session's
@@ -471,12 +473,38 @@ inline bool verify_breakable_properties( )
 // breakable_contact (world/breakable.hxx) against retail's 0x434730 on 600 hand-built contacts (oracle case
 // breakable_contact): the request byte, the kept velocity (when one is kept), the component's +0xD0, the own body's
 // +0xD8 and whether the target became the other's owner (the caller's weak ref: set iff a request and an owner).
+inline int breakable_contact_failures( const golden_breakable_contact_t* table, std::size_t count );
+
 inline bool verify_breakable_contact( )
 {
+    const int failed = breakable_contact_failures( g_golden_breakable_contact, g_golden_breakable_contact_count );
+    if ( failed == 0 )
+        LOG_SUCCESS( "breakable_contact matches VuBreakablePropEntity's contact callback 0x434730 on %d contacts, bit for bit",
+                     static_cast< int >( g_golden_breakable_contact_count ) );
+    else
+        LOG_ERROR( "the breakable contact FAILED on %d of %d contacts", failed, static_cast< int >( g_golden_breakable_contact_count ) );
+    return failed == 0;
+}
+
+// The same function against VuBreakableDynamicGamePropEntity's 0x4335A0 on the same vectors (case breakable_dynamic_contact:
+// its outputs equal 0x434730's on every vector) - the dynamic breakable's contact (drive.hxx) calls breakable_contact.
+inline bool verify_breakable_dynamic_contact( )
+{
+    const int failed = breakable_contact_failures( g_golden_breakable_dynamic_contact, g_golden_breakable_dynamic_contact_count );
+    if ( failed == 0 )
+        LOG_SUCCESS( "breakable_contact matches VuBreakableDynamicGamePropEntity's contact callback 0x4335A0 on %d contacts, bit for bit",
+                     static_cast< int >( g_golden_breakable_dynamic_contact_count ) );
+    else
+        LOG_ERROR( "the breakable dynamic contact FAILED on %d of %d contacts", failed, static_cast< int >( g_golden_breakable_dynamic_contact_count ) );
+    return failed == 0;
+}
+
+inline int breakable_contact_failures( const golden_breakable_contact_t* table, std::size_t count )
+{
     int failed = 0;
-    for ( std::size_t k = 0; k < g_golden_breakable_contact_count; ++k )
+    for ( std::size_t k = 0; k < count; ++k )
     {
-        const golden_breakable_contact_t& want = g_golden_breakable_contact[ k ];
+        const golden_breakable_contact_t& want = table[ k ];
         std::uint8_t own[ 0x2E0 ] = { }, other[ 0x2E0 ] = { };
         const int at[ 9 ] = { 0x40, 0x44, 0x48, 0x140, 0x144, 0x148, 0x150, 0x154, 0x158 };
         for ( int i = 0; i < 9; ++i )
@@ -507,19 +535,399 @@ inline bool verify_breakable_contact( )
                        static_cast< int >( k ), request, want.request, c.flags_d0, want.out_d0, d8, want.out_d8, vw[ 0 ], vw[ 1 ], vw[ 2 ],
                        want.velocity[ 0 ], want.velocity[ 1 ], want.velocity[ 2 ] );
     }
+    return failed;
+}
+
+// The canonical text of a tree, as oracle case results_writer prints retail's containers: n null, i / f / b / l the
+// payload in hex (an int, float bits, the bool byte, an int64), s<len>:<text>, [..] an array, {key=..} a map in key
+// order (std::map's), t<tag> anything else.
+inline std::string race_results_canonical( const value_t& v )
+{
+    char t[ 32 ];
+    switch ( v.tag )
+    {
+    case 0: return "n";
+    case 1: std::snprintf( t, sizeof( t ), "i%X", static_cast< unsigned >( v.integer ) ); return t;
+    case 2:
+    {
+        std::uint32_t w;
+        std::memcpy( &w, &v.real, 4 );
+        std::snprintf( t, sizeof( t ), "f%X", w );
+        return t;
+    }
+    case 3: std::snprintf( t, sizeof( t ), "b%X", static_cast< unsigned >( v.integer & 0xFF ) ); return t;
+    case 4: return "s" + std::to_string( v.text.size( ) ) + ":" + v.text;
+    case 5:
+    {
+        std::string s = "[";
+        for ( std::size_t k = 0; k < v.list.size( ); ++k )
+            s += ( k ? "," : "" ) + race_results_canonical( v.list[ k ] );
+        return s + "]";
+    }
+    case 6:
+    {
+        std::vector< const std::pair< std::string, value_t >* > fields;
+        for ( const auto& f : v.object )
+            fields.push_back( &f );
+        std::sort( fields.begin( ), fields.end( ), [ ]( const auto* a, const auto* b ) { return a->first < b->first; } );
+        std::string s = "{";
+        for ( std::size_t k = 0; k < fields.size( ); ++k )
+            s += ( k ? "," : "" ) + std::string( "s" ) + std::to_string( fields[ k ]->first.size( ) ) + ":" + fields[ k ]->first + "=" +
+                 race_results_canonical( fields[ k ]->second );
+        return s + "}";
+    }
+    case 7: std::snprintf( t, sizeof( t ), "l%llX", static_cast< unsigned long long >( v.int64 ) ); return t;
+    default: return "t" + std::to_string( v.tag );
+    }
+}
+
+inline std::string race_results_unhex( const char* h )
+{
+    std::string s;
+    for ( ; h[ 0 ] && h[ 1 ]; h += 2 )
+    {
+        const auto nib = [ ]( char c ) { return c <= '9' ? c - '0' : ( c | 0x20 ) - 'a' + 10; };
+        s.push_back( static_cast< char >( nib( h[ 0 ] ) * 16 + nib( h[ 1 ] ) ) );
+    }
+    return s;
+}
+
+// race_game_write_results (world/rules.hxx) against retail's VuRaceGame slot 12 0x489C60 run whole (oracle case
+// results_writer): sessions of calls on one gameutil root (fresh; GameResults a string; GameResults.Table an int), each
+// boat's fields / texts (inline, heap, empty, an embedded NUL) / driver class (the five vtables' slots 12 / 14 through
+// boat_driver_of, and two fake (human, not local), (neither)); compared: every boat's place and the whole tree after.
+inline bool verify_race_results( )
+{
+    int failed = 0;
+    value_t root;
+    for ( std::size_t k = 0; k < g_golden_results_writer_count; ++k )
+    {
+        const golden_results_writer_call_t& want = g_golden_results_writer[ k ];
+        if ( want.first )
+        {
+            root = value_t{ };
+            if ( std::strcmp( want.pre, "string" ) == 0 )
+                ui_json_set_string( ui_json_child( root, "GameResults" ), "junk text" );
+            else if ( std::strcmp( want.pre, "table_int" ) == 0 )
+                race_results_set( ui_json_child( ui_json_child( root, "GameResults" ), "Table" ), 1, 77 );
+        }
+        std::vector< std::vector< std::uint8_t > > images( static_cast< std::size_t >( want.nb ), std::vector< std::uint8_t >( 0x520, 0 ) );
+        std::vector< race_rules_boat_t > boats( static_cast< std::size_t >( want.nb ) );
+        std::vector< race_results_entry_t > entries( static_cast< std::size_t >( want.nb ) );
+        race_rules_game_t g;
+        g.circuit = static_cast< std::uint8_t >( want.circuit );
+        static const std::uint32_t k_vt[ 5 ] = { 0x737B5Cu, 0x737F44u, 0x737CDCu, 0x737C4Cu, 0x737DDCu };
+        for ( int b = 0; b < want.nb; ++b )
+        {
+            const golden_results_writer_boat_t& w = want.boats[ b ];
+            std::uint8_t* img = images[ static_cast< std::size_t >( b ) ].data( );
+            img[ 0x32F ] = static_cast< std::uint8_t >( w.finished );
+            std::memcpy( img + 0x4B4, &w.time, 4 );
+            std::memcpy( img + 0x4B8, &w.best, 4 );
+            std::memcpy( img + 0x4D4, &w.laps, 4 );
+            boats[ static_cast< std::size_t >( b ) ].boat = img;
+            g.order.push_back( want.order[ b ] );
+            race_results_entry_t& e = entries[ static_cast< std::size_t >( b ) ];
+            e.boat_class = race_results_unhex( w.cls );
+            e.boat_name = race_results_unhex( w.boat );
+            e.driver_name = race_results_unhex( w.name );
+            if ( w.kind < 5 )
+            {
+                const boat_driver_t d = boat_driver_of( k_vt[ w.kind ] );
+                e.human = d.slot[ 0 ], e.local = d.slot[ 2 ];
+            }
+            else
+                e.human = w.kind == 5, e.local = false;
+        }
+        float dt;
+        std::memcpy( &dt, &want.dt, 4 );
+        race_game_write_results( root, g, boats, entries, dt );
+        bool same = race_results_canonical( root ) == want.root;
+        for ( int b = 0; b < want.nb; ++b )
+            same = same && rules_i32( images[ static_cast< std::size_t >( b ) ].data( ), 0x4CC ) == want.places[ b ];
+        if ( !same && ++failed <= 4 )
+            LOG_ERROR( "race results call %d (session %d): ours %.300s\n retail %.300s", static_cast< int >( k ), want.session,
+                       race_results_canonical( root ).c_str( ), want.root );
+    }
     if ( failed == 0 )
-        LOG_SUCCESS( "breakable_contact matches VuBreakablePropEntity's contact callback 0x434730 on %d contacts, bit for bit",
-                     static_cast< int >( g_golden_breakable_contact_count ) );
+        LOG_SUCCESS( "race_game_write_results matches VuRaceGame slot 12 0x489C60 on %d calls (the places and the whole GameResults tree)",
+                     static_cast< int >( g_golden_results_writer_count ) );
     else
-        LOG_ERROR( "the breakable contact FAILED on %d of %d contacts", failed, static_cast< int >( g_golden_breakable_contact_count ) );
+        LOG_ERROR( "the race results writer FAILED on %d of %d calls", failed, static_cast< int >( g_golden_results_writer_count ) );
+    return failed == 0;
+}
+
+// race_rules_cheat_finish (world/rules.hxx) against retail's OnCheatFinish 0x483190 -> 0x4848C0 (oracle case
+// cheat_finish): 300 human lists of 0..4 boats - the six words of each boat after, and the AI manager's vt+0x30 calls.
+inline bool verify_cheat_finish( )
+{
+    static const int k_at[ 6 ] = { 0x308, 0x32F, 0x334, 0x4AC, 0x4B0, 0x4B8 };
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_cheat_finish_count; ++k )
+    {
+        const golden_cheat_finish_t& want = g_golden_cheat_finish[ k ];
+        std::vector< std::vector< std::uint8_t > > images( static_cast< std::size_t >( want.n ), std::vector< std::uint8_t >( 0x520, 0 ) );
+        std::vector< std::uint8_t* > humans;
+        for ( int b = 0; b < want.n; ++b )
+        {
+            std::uint8_t* img = images[ static_cast< std::size_t >( b ) ].data( );
+            for ( int i = 0; i < 6; ++i )
+            {
+                if ( i == 1 || i == 2 )
+                    img[ k_at[ i ] ] = static_cast< std::uint8_t >( want.in[ b ][ i ] );
+                else
+                    std::memcpy( img + k_at[ i ], &want.in[ b ][ i ], 4 );
+            }
+            humans.push_back( img );
+        }
+        std::vector< int > calls;
+        race_rules_cheat_finish( humans, [ & ]( std::size_t h ) { calls.push_back( static_cast< int >( h ) ); } );
+        bool same = static_cast< int >( calls.size( ) ) == want.calls;
+        for ( std::size_t c = 0; same && c < calls.size( ); ++c )
+            same = calls[ c ] == want.call[ c ];
+        for ( int b = 0; b < want.n; ++b )
+            for ( int i = 0; i < 6; ++i )
+            {
+                const std::uint8_t* img = images[ static_cast< std::size_t >( b ) ].data( );
+                std::uint32_t w = 0;
+                if ( i == 1 || i == 2 )
+                    w = img[ k_at[ i ] ];
+                else
+                    std::memcpy( &w, img + k_at[ i ], 4 );
+                same = same && w == want.out[ b ][ i ];
+            }
+        if ( !same && ++failed <= 6 )
+            LOG_ERROR( "cheat finish %d: %d boats - a word or the vt+0x30 calls differ", static_cast< int >( k ), want.n );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "race_rules_cheat_finish matches VuGame's OnCheatFinish 0x4848C0 on %d human lists, bit for bit",
+                     static_cast< int >( g_golden_cheat_finish_count ) );
+    else
+        LOG_ERROR( "the cheat finish FAILED on %d of %d lists", failed, static_cast< int >( g_golden_cheat_finish_count ) );
+    return failed == 0;
+}
+
+// rigid_kinematic_step (world/session.hxx) against retail's VuRigidBodyComponent kinematic step 0x544C50 (oracle case
+// kinematic_step): 200 seeded btRigidBody images - the body's 0x2D4 bytes after (retail's size: our image is larger) and
+// whether updateSingleAabb ran (retail: +0x100 and the record non-null, +0x104 set).
+inline bool verify_kinematic_step( )
+{
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_kinematic_step_count; ++k )
+    {
+        const golden_kinematic_step_t& want = g_golden_kinematic_step[ k ];
+        static vu_rigid_body_t b;
+        std::memset( &b, 0, sizeof( b ) );
+        std::memcpy( &b, want.body, 0x2D4 );
+        float rec[ 24 ];
+        std::memcpy( rec, want.rec, sizeof( rec ) );
+        const bool run = want.has_body && want.has_rec;
+        if ( run )
+            rigid_kinematic_step( b.body, rec, rec + 16, rec + 20 );
+        const int aabb = run && want.in_world ? 1 : 0;
+        if ( ( std::memcmp( &b, want.out, 0x2D4 ) != 0 || aabb != want.aabb ) && ++failed <= 6 )
+        {
+            int first = -1;
+            for ( int i = 0; i < 0x2D4 / 4 && first < 0; ++i )
+                if ( std::memcmp( reinterpret_cast< const std::uint8_t* >( &b ) + 4 * i, &want.out[ i ], 4 ) != 0 )
+                    first = 4 * i;
+            LOG_ERROR( "kinematic step %d: first differing body word +0x%X, aabb %d (retail %d)", static_cast< int >( k ), first, aabb, want.aabb );
+        }
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "rigid_kinematic_step matches VuRigidBodyComponent's kinematic step 0x544C50 on %d bodies (the 0x2D4 image, the aabb update)",
+                     static_cast< int >( g_golden_kinematic_step_count ) );
+    else
+        LOG_ERROR( "the kinematic step FAILED on %d of %d bodies", failed, static_cast< int >( g_golden_kinematic_step_count ) );
+    return failed == 0;
+}
+
+// dynamic_prop_load_properties on VuBreakableDynamicGamePropEntity (world/dynprop.hxx: the base nodes + "Breakable Pfx
+// Name") against retail's VuEntity::load 0x5009D0 (ctor 0x433160) on its entities in the templates / projects and two
+// hand-built ones (oracle case breakable_dynamic_properties): 30 words and the Splash / Breakable Pfx Names.
+inline bool verify_breakable_dynamic_properties( )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_breakable_dynamic_properties_document );
+    static std::vector< value_t > documents;
+    documents.push_back( c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_breakable_dynamic_properties_document_bytes ) ).parse( ) );
+    static const entity_registry_t registry = build_entity_registry( { } );
+    entity_world_t world = race_entity_world( registry, nullptr );
+    const std::unique_ptr< entity_t > tree = entity_load_project( member( documents.back( ), "VuProject" ), "Data/Projects/Check.vuprj", world );
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_breakable_dynamic_properties_count; ++k )
+    {
+        const golden_entity_targets_t& want = g_golden_breakable_dynamic_properties[ k ];
+        const entity_t* e = nullptr;
+        if ( tree )
+            for ( auto& child : tree->m_children )
+                if ( child->m_name == want.m_child )
+                    e = child.get( );
+        const dynamic_prop_state_t* s = e && e->m_state && e->m_type == "VuBreakableDynamicGamePropEntity"
+                                            ? static_cast< const dynamic_prop_state_t* >( e->m_state.get( ) ) : nullptr;
+        if ( !s || !s->breakable || want.m_count != 30 )
+        {
+            LOG_ERROR( "breakable dynamic properties: %s (%s) missing, without state or not 30 words", want.m_child, want.m_source );
+            ++failed;
+            continue;
+        }
+        const dynamic_prop_t& v = s->value;
+        std::uint32_t got[ 30 ];
+        int n = 0;
+        const auto f = [ & ]( float x ) { std::memcpy( &got[ n++ ], &x, 4 ); };
+        got[ n++ ] = v.visible;
+        f( v.mass );
+        f( v.centre[ 0 ] ), f( v.centre[ 1 ] ), f( v.centre[ 2 ] );
+        f( v.fluids_radius ), f( v.fluids_density ), f( v.fluids_drag ), f( v.fluids_lift );
+        f( v.hydro_centre[ 0 ] ), f( v.hydro_centre[ 1 ] ), f( v.hydro_centre[ 2 ] );
+        f( v.splash_speed ), f( v.linear_damping ), f( v.angular_damping );
+        got[ n++ ] = v.linear_anchor;
+        got[ n++ ] = v.angular_anchor;
+        f( v.anchor_spring ), f( v.anchor_damping );
+        got[ n++ ] = v.hard_hit;
+        f( v.threshold_mph );
+        f( v.shake_magnitude ), f( v.shake_duration ), f( v.shake_falloff ), f( v.shake_frequency );
+        f( v.rumble_low ), f( v.rumble_high );
+        got[ n++ ] = v.throw_ai;
+        got[ n++ ] = v.initially_active;
+        got[ n++ ] = v.collide_static;
+        bool bad = v.splash_pfx != want.m_texts[ 0 ] || v.breakable_pfx != want.m_texts[ 1 ];
+        for ( int w = 0; w < 30; ++w )
+            bad = bad || got[ w ] != want.m_values[ w ];
+        if ( bad && ++failed <= 8 )
+            LOG_ERROR( "breakable dynamic properties: %s (%s) differ from retail's", want.m_child, want.m_source );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "dynamic_prop_load_properties matches VuBreakableDynamicGamePropEntity's loads on %d entities (30 words + 2 names), bit for bit",
+                     static_cast< int >( g_golden_breakable_dynamic_properties_count ) );
+    else
+        LOG_ERROR( "the breakable dynamic properties FAILED on %d of %d entities", failed,
+                   static_cast< int >( g_golden_breakable_dynamic_properties_count ) );
+    return failed == 0;
+}
+
+// vugame_release (world/rules.hxx) against retail's VuGame release 0x482D50 with VuRaceGame's slot 6 0x489A10 run (oracle
+// case vugame_release): 60 games - which machines have a current state, the humans, the boats' +0x14 - compared as the
+// whole call log (the analytics container canonical, as race_results_canonical prints it); the cameras retail zeroes.
+inline bool verify_vugame_release( )
+{
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_vugame_release_count; ++k )
+    {
+        const golden_vugame_release_t& want = g_golden_vugame_release[ k ];
+        race_rules_t r;
+        race_rules_construct( r );
+        c_fsm* m[ 3 ] = { &r.event, &r.split, &r.fsm };
+        for ( int i = 0; i < 3; ++i )
+            m[ i ]->m_current = want.states[ i ] ? 0 : -1;
+        std::vector< std::uint8_t > human( 0x520, 0 );
+        human[ 0x32F ] = static_cast< std::uint8_t >( want.finished );
+        std::memcpy( human.data( ) + 0x4B4, &want.time, 4 );
+        for ( int i = 0; i < want.humans; ++i )
+            r.humans.push_back( human.data( ) );
+        const std::vector< std::uint32_t > flags( want.flags, want.flags + want.nb );
+        std::string log;
+        const auto add = [ &log ]( const std::string& e ) { log += ( log.empty( ) ? "" : "|" ) + e; };
+        vugame_release_hooks_t h;
+        h.exit = [ & ]( int machine ) { add( "exit " + std::to_string( machine ) ); };
+        h.ai = [ & ]( int slot ) { add( slot == 8 ? "ai20" : "ai24" ); };
+        h.analytics = [ & ]( const char* name, const value_t& data ) { add( std::string( "analytics " ) + name + " " + race_results_canonical( data ) ); };
+        h.release = [ & ]( std::size_t b ) { add( "release " + std::to_string( b ) ); };
+        h.call = [ & ]( const char* what ) {
+            const std::string w( what );
+            if ( w == "collision" )
+                add( "collision 1" );
+            else if ( w == "listener" )
+                add( "listener 1 1" );
+            else if ( w != "cameras" )
+                add( w );
+        };
+        vugame_release( r, flags, h );
+        if ( log != want.log && ++failed <= 4 )
+            LOG_ERROR( "vugame release %d:\n ours   %s\n retail %s", static_cast< int >( k ), log.c_str( ), want.log );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "vugame_release matches VuGame's release 0x482D50 (VuRaceGame slot 6 0x489A10) on %d games: the whole call log",
+                     static_cast< int >( g_golden_vugame_release_count ) );
+    else
+        LOG_ERROR( "the VuGame release FAILED on %d of %d games", failed, static_cast< int >( g_golden_vugame_release_count ) );
+    return failed == 0;
+}
+
+// rigid_body_destroy (world/bodies.hxx) against retail's VuRigidBody dtor 0x50FAC0(0) -> 0x50FAF0 (oracle case
+// rigid_body_dtor): 64 seeded images - the five words after, btAlignedFree's call, gNumAlignedFree.
+inline bool verify_rigid_body_dtor( )
+{
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_rigid_body_dtor_count; ++k )
+    {
+        const golden_rigid_body_dtor_t& want = g_golden_rigid_body_dtor[ k ];
+        std::uint8_t img[ 0x2D4 ] = { };
+        std::memcpy( img + 0x1FC, want.in, 12 );
+        img[ 0x208 ] = static_cast< std::uint8_t >( want.in[ 3 ] );
+        std::uint32_t counter = 0, freed = 0;
+        int frees = 0;
+        rigid_body_destroy( img, counter, [ & ]( std::uint32_t p ) { ++frees, freed = p; } );
+        std::uint32_t out[ 5 ];
+        std::memcpy( out, img, 4 );
+        std::memcpy( out + 1, img + 0x1FC, 12 );
+        out[ 4 ] = img[ 0x208 ];
+        if ( ( std::memcmp( out, want.out, sizeof( out ) ) != 0 || frees != want.frees || freed != want.freed || counter != want.counter ) && ++failed <= 6 )
+            LOG_ERROR( "rigid body dtor %d: a word, the free or the counter differs", static_cast< int >( k ) );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "rigid_body_destroy matches VuRigidBody's dtor 0x50FAF0 on %d bodies", static_cast< int >( g_golden_rigid_body_dtor_count ) );
+    else
+        LOG_ERROR( "the rigid body dtor FAILED on %d of %d bodies", failed, static_cast< int >( g_golden_rigid_body_dtor_count ) );
+    return failed == 0;
+}
+
+// VuSubstituteAssetEntity's state (world/emitters.hxx: Asset Type, and the postLoad's two names) against retail's
+// VuEntity::load 0x5009D0 (ctor 0x5F48A0, postLoad 0x5F4B70 -> 0x5F4C10) on the levels' / projects' entities and three
+// hand-built (oracle case substitute_asset_properties; the factory's createAsset answered null - the names are compared).
+inline bool verify_substitute_asset_properties( )
+{
+    const unsigned char* raw = reinterpret_cast< const unsigned char* >( g_golden_substitute_asset_document );
+    static std::vector< value_t > documents;
+    documents.push_back( c_reader( std::vector< std::uint8_t >( raw, raw + g_golden_substitute_asset_document_bytes ) ).parse( ) );
+    static const entity_registry_t registry = build_entity_registry( { } );
+    entity_world_t world = race_entity_world( registry, nullptr );
+    const std::unique_ptr< entity_t > tree = entity_load_project( member( documents.back( ), "VuProject" ), "Data/Projects/Check.vuprj", world );
+    int failed = 0;
+    for ( std::size_t k = 0; k < g_golden_substitute_asset_count; ++k )
+    {
+        const golden_substitute_asset_t& want = g_golden_substitute_asset[ k ];
+        const entity_t* e = nullptr;
+        if ( tree )
+            for ( auto& child : tree->m_children )
+                if ( child->m_name == want.child )
+                    e = child.get( );
+        const substitute_asset_state_t* s = e && e->m_state && e->m_type == "VuSubstituteAssetEntity"
+                                                ? static_cast< const substitute_asset_state_t* >( e->m_state.get( ) ) : nullptr;
+        if ( ( !s || s->type != want.names[ 0 ] || s->name != want.names[ 1 ] || s->subst != want.names[ 2 ] ) && ++failed <= 6 )
+            LOG_ERROR( "substitute asset %s (%s): '%s' / '%s' / '%s', retail '%s' / '%s' / '%s'", want.child, want.source, s ? s->type.c_str( ) : "-",
+                       s ? s->name.c_str( ) : "-", s ? s->subst.c_str( ) : "-", want.names[ 0 ], want.names[ 1 ], want.names[ 2 ] );
+    }
+    if ( failed == 0 )
+        LOG_SUCCESS( "the VuSubstituteAssetEntity state matches retail's loads (0x5F48A0 / 0x5F4B70) on %d entities: its three names",
+                     static_cast< int >( g_golden_substitute_asset_count ) );
+    else
+        LOG_ERROR( "the substitute asset properties FAILED on %d of %d entities", failed, static_cast< int >( g_golden_substitute_asset_count ) );
     return failed == 0;
 }
 
 inline bool verify_session_all( )
 {
     bool ok = true;
+    ok = verify_substitute_asset_properties( ) && ok;
+    ok = verify_rigid_body_dtor( ) && ok;
+    ok = verify_vugame_release( ) && ok;
+    ok = verify_breakable_dynamic_properties( ) && ok;
+    ok = verify_kinematic_step( ) && ok;
+    ok = verify_cheat_finish( ) && ok;
+    ok = verify_race_results( ) && ok;
     ok = verify_breakable_properties( ) && ok;
     ok = verify_breakable_contact( ) && ok;
+    ok = verify_breakable_dynamic_contact( ) && ok;
     ok = verify_mine_explode( ) && ok;
     ok = verify_mine_properties( ) && ok;
     ok = verify_action_mode( ) && ok;

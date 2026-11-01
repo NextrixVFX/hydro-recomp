@@ -439,21 +439,8 @@ private:
             // VuSkyBoxEntity is read from the retail entity tree (load_entity_tree).
             // VuAmbientLightEntity / VuDirectionalLightEntity feed the rig from the
             // retail entity tree (load_entity_tree).
-            // Every Proxy_* name in a material is a placeholder, and this is
-            // what replaces it: Proxy_cube -> Hydro/Outside on Hydroelectric.
-            // So the per-track environment map is authored, not chosen here.
-            if ( type->text == "VuSubstituteAssetEntity" && properties != nullptr )
-            {
-                const value_t* from = find( *properties, "Asset Name" );
-                const value_t* kind = find( *properties, "Asset Type" );
-                const value_t* to = find( *properties, "Subst Asset Name" );
-                if ( from != nullptr && from->kind == value_t::kind_t::text
-                    && to != nullptr && to->kind == value_t::kind_t::text
-                    && kind != nullptr && kind->kind == value_t::kind_t::text )
-                {
-                    m_rig.add_substitution( kind->text + "/" + from->text, to->text );
-                }
-            }
+            // VuSubstituteAssetEntity (Proxy_cube -> Hydro/Outside on Hydroelectric) is its game-start Trigger 0x5F4BD0 on the
+            // loaded entity (graph.hxx), no longer a load-time read here.
             // VuTriggerPlaneEntity / VuTriggerBoxEntity, VuOneShotFilterEntity, VuDelayEntity,
             // VuGenericEventEntity, VuOnProjectInitializedEntity, VuIfEntity, VuAttachEntity,
             // VuBooleanEntity, VuCoronaEntity, VuRotateMotionEntity and VuPlayAnimationEntity
@@ -666,6 +653,8 @@ private:
         m_collect = nullptr;
         m_adopters.clear( );
         m_rig.clear( );
+        m_shaded.clear( );
+        m_asset_objects.clear( );
         m_type_census.clear( );
         m_authored_keys.clear( );
         m_entity_type.clear( );
@@ -1325,6 +1314,13 @@ public:
         else
             m_race.world.game_mode = nullptr;
         race_session_frame( m_race, dt );
+        // Ours (a test driver): `--end-race N` ends the session after its frame N (session.hxx race_session_end: VuGame's
+        // release and the bodies' dtors) - retail's action-mode exit is not reached by our flow.
+        {
+            static const char* end = c_engine::option( "end-race" );
+            if ( end && end[ 0 ] && m_race.active && m_race.frames == std::atoi( end ) )
+                race_session_end( m_race );
+        }
         // g_vufademanager's "Final" tick 0x4AEE50 (ui/flow.hxx ui_fade_t; delta = the tick manager's = dt): after the
         // frame's other phases. Its two broadcasts (OnFadeOutComplete / OnFadeInComplete) reach no subscriber here.
         if ( m_action )
@@ -1486,6 +1482,20 @@ private:
     std::map< std::string, std::string > m_entity_type;
     std::map< std::string, int > m_textures;
     std::map< std::string, int > m_cubes;
+    // Every placement shaded with a cube (models.hxx), by its authored cube name: an asset substitution re-shades them.
+    struct shaded_t
+    {
+        int handle = -1;
+        std::string cube;
+        float specular[ 3 ]{};
+        float diffuse[ 3 ]{};
+        float specular_amount = 0.0f;
+        float environment_amount = 0.0f;
+    };
+    std::vector< shaded_t > m_shaded;
+    // The asset factory's identity of an asset (doesAssetExist / createAsset - the asset manager's, a hook): one object
+    // per "Type/Name" that exists in the pack.
+    std::set< std::string > m_asset_objects;
     std::string m_sky;
     float m_eye[ 3 ]{};
     float m_target[ 3 ]{};
@@ -1494,13 +1504,12 @@ private:
     // VuWaterTextureSettingsEntity_ctor @0x5d2bd0, read in property order:
     // Gravity 9.801, WorldSize 10, WindSpeed 10, DirectionalPower 0,
     // SuppressionWaveLength 0, HeightFactor 1, TimeFactor 1,
-    // NormalTextureScale 0.5. All four below were invented and all four are
-    // reached - Hydroelectric does not author them, so the load log showed the
-    // guessed 12 / 2.0 / 15 going straight into the ocean.
-    float m_wave_height = 1.0f;
-    float m_wave_scale = 0.5f;
-    float m_wave_wind = 10.0f;
-    float m_wave_size = 10.0f;
+    // NormalTextureScale 0.5 (the defaults; Hydroelectric authors none).
+    // The water renderer's texture settings (VuWater +0x1C -> [0] +4 .. +0x23): VuWaterTextureSettingsEntity's Trigger
+    // 0x5D2B00 copies the entity's +0x60 .. +0x7F there (the eight floats above, in that order). The renderer (the
+    // platform's) is not recreated: nothing reads them yet. `m_water_texture_set` = a Trigger has written them.
+    std::uint32_t m_water_texture[ 8 ]{};
+    bool m_water_texture_set = false;
     std::map< std::string, value_t > m_templates;
     // The project's entity tree as retail's VuProject::load builds it.
     std::unique_ptr< entity_t > m_tree;

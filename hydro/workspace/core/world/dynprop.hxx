@@ -25,9 +25,12 @@
 // (vt 0x73A260 / 0x73A580 slot 1 0x545C00) and gameInitialize (vt slot 6
 // 0x437580 -> VuDynamicPropEntity's 0x545A80 -> createRigidBody 0x544100 ->
 // the show vt+0x30 0x4381B0 -> 0x545EC0), checked against retail by the case
-// dynamic_prop_bodies. VuBreakableDynamicGamePropEntity (its own ctor, not in the
-// captured schema) and VuFloatingMineEntity (slot 6 0x438CF0) are NOT
-// recreated: UNKNOWN.
+// dynamic_prop_bodies. VuFloatingMineEntity (world/mine.hxx) and
+// VuBreakableDynamicGamePropEntity (create 0x433040, ctor 0x433160 over 0x4367E0:
+// vtable 0x739F14 - slots 6 / 7 / 12 / 13 the base's, 15 Build 0x433AE0, 16
+// Decision 0x433890 (session.hxx race_session_breakable_dynamic_tick); its
+// +0xB4 contact 0x4335A0 = breakable_contact, case breakable_dynamic_contact;
+// its properties case breakable_dynamic_properties) ride the same walk.
 
 // VuDynamicPropEntity's three nodes (ctor 0x545360, in its +0x44 order):
 //   "Initially Visible" +0x74 bool (vt 0x737450)  default 1
@@ -68,6 +71,9 @@ struct dynamic_prop_t
     std::uint8_t initially_active = 1;   // +0x141
     std::uint8_t collide_static = 1;     // +0x142
     std::int32_t checkpoint_index = 0;   // +0x184 (the buoy only)
+    // VuBreakableDynamicGamePropEntity (ctor 0x433160 over 0x4367E0): "Breakable Pfx Name" +0x188 (VuStringProperty 0x406B70,
+    // 0x406C20's load: property_string), after the base nodes.
+    std::string breakable_pfx;
     // VuFloatingMineEntity (ctor 0x438690): the explosion part at +0x184 (defaults 0x438BA0, nodes 0x5476D0 - nine
     // VuBasicProperty<float> +0x194 .. +0x1B4 and two VuStringProperty +0x1B8 / +0x1D0) and the point wave's seven
     // floats +0x1F8 .. +0x210 (the descriptor +0x1E8 .. +0x213 VuWater_createPointWave 0x528E10 takes).
@@ -100,11 +106,13 @@ struct dynamic_prop_state_t
     dynamic_prop_t defaults;
     bool buoy = false;
     bool mine = false;
+    bool breakable = false;   // VuBreakableDynamicGamePropEntity
 };
 
 inline bool dynamic_prop_class( const std::string& cls )
 {
-    return cls == "VuDynamicGamePropEntity" || cls == "VuCheckpointBuoyEntity" || cls == "VuFloatingMineEntity";
+    return cls == "VuDynamicGamePropEntity" || cls == "VuCheckpointBuoyEntity" || cls == "VuFloatingMineEntity" ||
+           cls == "VuBreakableDynamicGamePropEntity";
 }
 
 inline std::shared_ptr< void > dynamic_prop_state_for( const std::string& cls )
@@ -116,6 +124,7 @@ inline std::shared_ptr< void > dynamic_prop_state_for( const std::string& cls )
     dynamic_prop_construct( s->defaults );
     s->buoy = cls == "VuCheckpointBuoyEntity";
     s->mine = cls == "VuFloatingMineEntity";
+    s->breakable = cls == "VuBreakableDynamicGamePropEntity";
     return s;
 }
 
@@ -157,6 +166,8 @@ inline void dynamic_prop_load_properties( entity_t& e, const value_t& p )
     property_bool( p, "Collide With Static Props", v.collide_static, d.collide_static );
     if ( s.buoy )
         property_int( p, "CheckPoint Index", v.checkpoint_index, d.checkpoint_index );
+    if ( s.breakable )
+        property_string( p, "Breakable Pfx Name", v.breakable_pfx, d.breakable_pfx );
     if ( s.mine )
     {
         for ( int k = 0; k < 9; ++k )
