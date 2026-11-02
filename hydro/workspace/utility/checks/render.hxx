@@ -2,6 +2,7 @@
 
 #include <workspace/core/world/dbrt.hxx>
 #include <workspace/core/world/gfxsort.hxx>
+#include <workspace/core/world/lights.hxx>
 #include <workspace/core/world/skeleton.hxx>
 
 #include <cstdint>
@@ -881,6 +882,122 @@ inline bool verify_gfx_dbrt( )
     return false;
 }
 
+// Case gfx_lights: the dynamic lights through world/lights.hxx against retail's 0x5C2F30 / 0x5C30D0, 0x5EDD90 / 0x5EDDF0, submit 0x562B10 (0x5630F0, 0x563490,
+// 0x563400) and gather 0x562C40: the record, the aabb, every list and every shader block word by word.
+inline bool verify_gfx_lights( )
+{
+    anim_cursor_t g;
+    g.w = g_golden_gfl_words;
+    g.size = g_golden_gfl_size;
+    g.where = "gfx_lights";
+    const auto bits = []( float f ) { std::uint32_t u; std::memcpy( &u, &f, 4 ); return u; };
+    const auto real = []( std::uint32_t u ) { float f; std::memcpy( &f, &u, 4 ); return f; };
+    gfx_light_manager_t manager;
+    g.eq( manager.m_fill, g.take( ) );
+    g.eq( manager.m_render, g.take( ) );
+    g.eq( manager.m_ambient, g.take( ) );
+    g.eq( bits( manager.m_ambient_b ), g.take( ) );
+    g.eq( bits( manager.m_ambient_c ), g.take( ) );
+    g.eq( bits( manager.m_d8 ), g.take( ) );
+    for ( const float v : manager.m_dir_light )
+        g.eq( bits( v ), g.take( ) );
+    g.eq( manager.m_front, g.take( ) );
+    g.eq( manager.m_back, g.take( ) );
+    g.eq( manager.m_specular, g.take( ) );
+    g.eq( 0u, g.take( ) );
+    static gfx_light_t lights[ 24 ];
+    for ( gfx_light_t& l : lights )
+        manager.update( l );
+    for ( const float v : lights[ 0 ].m_record.m_words )
+        g.eq( bits( v ), g.take( ) );
+    const unsigned frames = g.take( );
+    int listed = 0, taken = 0;
+    for ( unsigned fi = 0; fi < frames; ++fi )
+    {
+        const unsigned ops = g.take( );
+        for ( unsigned o = 0; o < ops; ++o )
+        {
+            const unsigned kind = g.take( ), i = g.take( );
+            std::uint32_t v[ 15 ];
+            for ( std::uint32_t& w : v )
+                w = g.take( );
+            gfx_light_t& l = lights[ i ];
+            if ( kind == 1 )
+            {
+                manager.light_off( l );
+                continue;
+            }
+            for ( int k = 0; k < 3; ++k )
+            {
+                l.m_position[ k ] = real( v[ k ] );
+                l.m_direction[ k ] = real( v[ 3 + k ] );
+            }
+            l.m_diffuse = v[ 6 ];
+            l.m_specular = v[ 7 ];
+            l.m_factor = real( v[ 8 ] );
+            l.m_range_a = real( v[ 9 ] );
+            l.m_range_b = real( v[ 10 ] );
+            l.m_cone = real( v[ 11 ] );
+            l.m_penumbra = real( v[ 12 ] );
+            l.m_draw_distance = real( v[ 13 ] );
+            l.m_reflecting = static_cast< std::uint8_t >( v[ 14 ] );
+            manager.update( l );
+            manager.light_on( l );
+            for ( const float r : l.m_record.m_words )
+                g.eq( bits( r ), g.take( ) );
+            for ( int k = 0; k < 3; ++k )
+                g.eq( bits( l.m_aabb[ k ] ), g.take( ) );
+            for ( int k = 0; k < 3; ++k )
+                g.eq( bits( l.m_aabb[ 4 + k ] ), g.take( ) );
+        }
+        manager.m_fill = g.take( );
+        manager.m_render = g.take( );
+        const unsigned key = g.take( );
+        const std::uint8_t reflecting = static_cast< std::uint8_t >( g.take( ) );
+        float eye[ 3 ], planes[ 28 ];
+        for ( float& f : eye )
+            f = real( g.take( ) );
+        for ( float& f : planes )
+            f = real( g.take( ) );
+        const int index = static_cast< int >( g.take( ) );
+        const unsigned count = g.take( );
+        manager.submit( eye, planes, reflecting, key );
+        g.eq( static_cast< unsigned >( gfx_light_manager_t::list_index( manager.m_fill, key ) ), static_cast< unsigned >( index ) );
+        const std::vector< gfx_light_record_t >& list = manager.m_lists[ index ];
+        g.eq( static_cast< unsigned >( list.size( ) ), count );
+        for ( unsigned i = 0; i < 20 * count; ++i )
+            g.eq( i / 20 < list.size( ) ? bits( list[ i / 20 ].m_words[ i % 20 ] ) : 0xDEADBEEFu, g.take( ) );
+        listed += static_cast< int >( count );
+        manager.m_render = manager.m_fill;
+        for ( int t = 0; t < 4; ++t )
+        {
+            float box[ 8 ], matrix[ 16 ];
+            for ( float& f : box )
+                f = real( g.take( ) );
+            for ( float& f : matrix )
+                f = real( g.take( ) );
+            std::uint32_t pattern[ 80 ];
+            for ( std::uint32_t& w : pattern )
+                w = 0xAAAAAAAAu;
+            float block[ 80 ];
+            std::memcpy( block, pattern, sizeof( block ) );
+            const int n = manager.gather( matrix, box, key, block );
+            g.eq( static_cast< unsigned >( n ), g.take( ) );
+            for ( const float f : block )
+                g.eq( bits( f ), g.take( ) );
+            taken += n;
+        }
+    }
+    if ( g.failed == 0 && g.at == g.size )
+    {
+        LOG_SUCCESS( "gfx_lights matches retail's VuLightManager CPU side (ctor 0x562890, light 0x5C2F30 / 0x5C30D0, 0x5EDD90, 0x5EDDF0, submit 0x562B10, walk 0x5630F0 / "
+                     "0x563490 / 0x563400, gather 0x562C40) on %u frames, %d listed lights, %d gathered: %d words exact", frames, listed, taken, g.compared );
+        return true;
+    }
+    LOG_ERROR( "gfx_lights FAILED %d of %d words (cursor %zu of %zu)", g.failed, g.compared, g.at, g.size );
+    return false;
+}
+
 inline bool verify_render_all( )
 {
     bool ok = true;
@@ -888,5 +1005,6 @@ inline bool verify_render_all( )
     ok = verify_gfx_sort( ) && ok;
     ok = verify_gfx_cache( ) && ok;
     ok = verify_gfx_dbrt( ) && ok;
+    ok = verify_gfx_lights( ) && ok;
     return ok;
 }
