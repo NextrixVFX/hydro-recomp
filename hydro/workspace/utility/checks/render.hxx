@@ -1,5 +1,6 @@
 #pragma once
 
+#include <workspace/core/world/dbrt.hxx>
 #include <workspace/core/world/gfxsort.hxx>
 #include <workspace/core/world/skeleton.hxx>
 
@@ -760,11 +761,132 @@ inline bool verify_gfx_cache( )
     return false;
 }
 
+inline void gfx_dbrt_dump( const dbrt_node_t* n, const dbrt_node_t* const* leaves, std::vector< std::uint32_t >& out )
+{
+    if ( !n )
+        return;
+    const auto push_box = [ & ]( const float* f )
+    {
+        for ( int i = 0; i < 3; ++i )
+        {
+            std::uint32_t b;
+            std::memcpy( &b, f + i, 4 );
+            out.push_back( b );
+        }
+    };
+    out.push_back( n->leaf( ) ? 0u : 1u );
+    push_box( n->m_min );
+    push_box( n->m_max );
+    if ( n->leaf( ) )
+        out.push_back( static_cast< std::uint32_t >( reinterpret_cast< std::uintptr_t >( n->m_data ) ) );
+    else
+    {
+        gfx_dbrt_dump( n->m_child[ 0 ], leaves, out );
+        gfx_dbrt_dump( n->m_child[ 1 ], leaves, out );
+    }
+}
+
+// Case gfx_dbrt: seeded adds, removes and moves through world/dbrt.hxx against retail's Vu3dDrawManager 0x5A78B0 / 0x5A78F0 / 0x5A7930
+// (tree 0x5C2860 / 0x5C28E0 / 0x5C2A30 / 0x5C2D40): the whole tree after each; the walks 0x5A7B30 / 0x5A7DB0 in visiting order; 0x562510 alone.
+// The object table: the case's slot +0x10 is empty for i % 11 == 10, +0x14 for i % 13 == 12, as there.
+inline bool verify_gfx_dbrt( )
+{
+    anim_cursor_t g;
+    g.w = g_golden_gfd_words;
+    g.size = g_golden_gfd_size;
+    g.where = "gfx_dbrt";
+    dbrt_tree_t tree;
+    dbrt_node_t* leaves[ 48 ] = { };
+    unsigned masks[ 48 ] = { };
+    const unsigned steps = g.take( );
+    int walks = 0, visits = 0;
+    for ( unsigned s = 0; s < steps; ++s )
+    {
+        const unsigned op = g.take( ), id = g.take( ), mask = g.take( );
+        float aabb[ 8 ];
+        for ( float& f : aabb )
+        {
+            const unsigned w = g.take( );
+            std::memcpy( &f, &w, 4 );
+        }
+        if ( op == 0 )
+        {
+            leaves[ id ] = tree.add( aabb, reinterpret_cast< void* >( static_cast< std::uintptr_t >( id ) ) );
+            masks[ id ] = mask;
+        }
+        else if ( op == 1 )
+        {
+            tree.erase( leaves[ id ] );
+            leaves[ id ] = nullptr;
+        }
+        else
+            tree.move( leaves[ id ], aabb );
+        std::vector< std::uint32_t > mine;
+        mine.push_back( static_cast< std::uint32_t >( tree.m_count ) );
+        gfx_dbrt_dump( tree.m_root, leaves, mine );
+        const unsigned size = g.take( );
+        g.eq( static_cast< unsigned >( mine.size( ) ), size );
+        for ( unsigned i = 0; i < size; ++i )
+            g.eq( i < mine.size( ) ? mine[ i ] : 0xDEADBEEFu, g.take( ) );
+        if ( !g.take( ) )
+            continue;
+        const unsigned want = g.take( ), count = g.take( );
+        std::vector< float > planes( count * 4 );
+        for ( float& f : planes )
+        {
+            const unsigned w = g.take( );
+            std::memcpy( &f, &w, 4 );
+        }
+        for ( int pass = 0; pass < 2; ++pass )
+        {
+            std::vector< std::uint32_t > visited;
+            unsigned reached = 0;
+            dbrt_walk( tree.m_root, planes.data( ), static_cast< int >( count ), [ & ]( void* data )
+            {
+                const unsigned i = static_cast< unsigned >( reinterpret_cast< std::uintptr_t >( data ) );
+                const bool empty = pass == 0 ? i % 11 == 10 : i % 13 == 12;
+                ++reached;                     // retail's counter takes every leaf the walk reaches
+                if ( ( masks[ i ] & want ) == want && !empty )
+                    visited.push_back( i );
+            } );
+            g.eq( reached, g.take( ) );
+            const unsigned n = g.take( );
+            g.eq( static_cast< unsigned >( visited.size( ) ), n );
+            for ( unsigned i = 0; i < n; ++i )
+                g.eq( i < visited.size( ) ? visited[ i ] : 0xDEADBEEFu, g.take( ) );
+            visits += static_cast< int >( n );
+        }
+        ++walks;
+    }
+    const unsigned tests = g.take( );
+    for ( unsigned t = 0; t < tests; ++t )
+    {
+        float f[ 10 ];
+        for ( float& v : f )
+        {
+            const unsigned w = g.take( );
+            std::memcpy( &v, &w, 4 );
+        }
+        const int sign = static_cast< int >( g.take( ) );
+        g.eq( static_cast< unsigned >( dbrt_plane_box( f, f + 3, f + 6, sign ) ), g.take( ) );
+    }
+    if ( g.failed == 0 && g.at == g.size )
+    {
+        LOG_SUCCESS( "gfx_dbrt matches retail's render tree (0x5C2860, 0x5C28E0, 0x5C2A30, 0x5C2D40, 0x5A78B0, 0x5A78F0, 0x5A7930), walks 0x5A7B30 / 0x5A8010 / "
+                     "0x5A7A90 / 0x5A7DB0 / 0x5A8040 and plane test 0x562510 on %u steps, %d walks (%d leaf visits), %u plane tests: %d words exact",
+                     steps, walks, visits, tests, g.compared );
+        return true;
+    }
+    LOG_ERROR( "gfx_dbrt FAILED %d of %d words (cursor %zu of %zu)", g.failed, g.compared, g.at, g.size );
+    return false;
+}
+
 inline bool verify_render_all( )
 {
     bool ok = true;
     ok = verify_anim_model( ) && ok;
     ok = verify_gfx_sort( ) && ok;
     ok = verify_gfx_cache( ) && ok;
+    ok = verify_gfx_dbrt( ) && ok;
     return ok;
 }
