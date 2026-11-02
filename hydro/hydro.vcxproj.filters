@@ -360,6 +360,9 @@
     <ClInclude Include="workspace\core\world\frontcam.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
+    <ClInclude Include="workspace\core\world\ghost.hxx">
+      <Filter>workspace\core\world</Filter>
+    </ClInclude>
     <ClInclude Include="workspace\core\world\graph.hxx">
       <Filter>workspace\core\world</Filter>
     </ClInclude>
